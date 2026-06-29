@@ -1,0 +1,3 @@
+﻿[dotenv@17.2.3] injecting env (13) from .env -- tip: ≡ƒ¢á∩╕Å  run anywhere with `dotenvx run -- yourcommand`
+Connected to MSSQL Database
+Creator: Mohan(personal)

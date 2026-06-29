@@ -1,0 +1,32 @@
+[
+  {
+    "item": "Civil Project",
+    "lead": "Civil Project",
+    "id": 360,
+    "price": 90001
+  },
+  {
+    "item": "Electrical",
+    "lead": "Civil Project",
+    "id": 361,
+    "price": "N/A"
+  },
+  {
+    "item": "Electrical",
+    "lead": "Electrical",
+    "id": 364,
+    "price": 9002
+  },
+  {
+    "item": "BMS",
+    "lead": "Civil Project",
+    "id": 366,
+    "price": "N/A"
+  },
+  {
+    "item": "BMS",
+    "lead": "BMS",
+    "id": 368,
+    "price": 902
+  }
+]

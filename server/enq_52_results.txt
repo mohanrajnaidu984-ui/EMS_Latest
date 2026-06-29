@@ -1,0 +1,5 @@
+--- ENQUIRY 52 DATA ---
+RequestNo: 52
+EnquiryDate: Sun Feb 15 2026 03:00:00 GMT+0300 (Arabian Standard Time)
+DueDate: Mon Feb 23 2026 03:00:00 GMT+0300 (Arabian Standard Time)
+SiteVisitDate: Wed Feb 18 2026 03:00:00 GMT+0300 (Arabian Standard Time)

@@ -1,0 +1,23 @@
+
+Status   Name               D
+                            i
+                            s
+                            p
+                            l
+                            a
+                            y
+                            N
+                            a
+                            m
+                            e
+------   ----               -
+Stopped  MSSQL$SQLEXPRESS   S
+Stopped  MSSQLFDLauncher    S
+Stopped  MSSQLLaunchpad     S
+Running  MSSQLSERVER        S
+Running  SQLBrowser         S
+Stopped  SQLSERVERAGENT     S
+Running  SQLTELEMETRY       S
+Running  SQLWriter          S
+
+

@@ -1,0 +1,10 @@
+﻿[dotenv@17.2.3] injecting env (13) from .env -- tip: ≡ƒùé∩╕Å backup and recover secrets: https://dotenvx.com/ops
+Connected to MSSQL Database
+[
+  {
+    "ItemName": "Civil Project",
+    "CompanyName": "Almoayyed Contracting",
+    "DivisionCode": "CVLP",
+    "DepartmentCode": "ACC"
+  }
+]

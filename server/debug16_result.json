@@ -1,0 +1,152 @@
+{
+  "options": [
+    {
+      "ID": 317,
+      "OptionName": "Base Price",
+      "SortOrder": 1,
+      "ItemName": "Civil Project",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 318,
+      "OptionName": "Base Price",
+      "SortOrder": 2,
+      "ItemName": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "BMS"
+    },
+    {
+      "ID": 319,
+      "OptionName": "Base Price",
+      "SortOrder": 1,
+      "ItemName": "Civil Project",
+      "CustomerName": "Electrical",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 320,
+      "OptionName": "Base Price",
+      "SortOrder": 2,
+      "ItemName": "BMS",
+      "CustomerName": "Electrical",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 321,
+      "OptionName": "Base Price",
+      "SortOrder": 3,
+      "ItemName": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 322,
+      "OptionName": "Base Price",
+      "SortOrder": 3,
+      "ItemName": "Electrical",
+      "CustomerName": "Electrical",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 323,
+      "OptionName": "Base Price",
+      "SortOrder": 4,
+      "ItemName": "Electrical",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 324,
+      "OptionName": "Base Price",
+      "SortOrder": 4,
+      "ItemName": "BMS",
+      "CustomerName": "Electrical",
+      "LeadJobName": "BMS"
+    },
+    {
+      "ID": 325,
+      "OptionName": "Option-1",
+      "SortOrder": 5,
+      "ItemName": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "BMS"
+    },
+    {
+      "ID": 326,
+      "OptionName": "Option-1",
+      "SortOrder": 5,
+      "ItemName": "BMS",
+      "CustomerName": "Electrical",
+      "LeadJobName": "BMS"
+    },
+    {
+      "ID": 327,
+      "OptionName": "Option-1",
+      "SortOrder": 6,
+      "ItemName": "BMS",
+      "CustomerName": "Electrical",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 328,
+      "OptionName": "Option-1",
+      "SortOrder": 6,
+      "ItemName": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    }
+  ],
+  "values": [
+    {
+      "OptionID": 318,
+      "EnquiryForID": 204,
+      "EnquiryForItem": "BMS",
+      "Price": 25100,
+      "CustomerName": "Cebarco Bahrain"
+    },
+    {
+      "OptionID": 320,
+      "EnquiryForID": 203,
+      "EnquiryForItem": "BMS",
+      "Price": 25000,
+      "CustomerName": "Electrical"
+    },
+    {
+      "OptionID": 325,
+      "EnquiryForID": 204,
+      "EnquiryForItem": "BMS",
+      "Price": 26100,
+      "CustomerName": "Cebarco Bahrain"
+    },
+    {
+      "OptionID": 327,
+      "EnquiryForID": 203,
+      "EnquiryForItem": "BMS",
+      "Price": 26000,
+      "CustomerName": "Electrical"
+    }
+  ],
+  "jobs": [
+    {
+      "ID": 201,
+      "ParentID": null,
+      "ItemName": "Civil Project"
+    },
+    {
+      "ID": 202,
+      "ParentID": 201,
+      "ItemName": "Electrical"
+    },
+    {
+      "ID": 203,
+      "ParentID": 202,
+      "ItemName": "BMS"
+    },
+    {
+      "ID": 204,
+      "ParentID": null,
+      "ItemName": "BMS"
+    }
+  ]
+}

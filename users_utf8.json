@@ -1,0 +1,33 @@
+﻿[dotenv@17.2.3] injecting env (9) from server\.env -- tip: ≡ƒ¢á∩╕Å  run anywhere with `dotenvx run -- yourcommand`
+Connected to MSSQL Database
+[
+  {
+    "Designation": "Admin",
+    "Department": null,
+    "FullName": "Admin",
+    "EmailId": "mohanraj.naidu984@gmail.com",
+    "Roles": "Admin"
+  },
+  {
+    "Designation": "Sales Engineer",
+    "Department": "BMS",
+    "FullName": "BMS",
+    "EmailId": "bmselveng1@almoayyedcg.com",
+    "Roles": "Enquiry,Pricing,Quote,Probability,Sales Target"
+  },
+  {
+    "Designation": "Estimation Engineer",
+    "Department": "Civil Project",
+    "FullName": "Civil",
+    "EmailId": "civil@almoayyedcg.com",
+    "Roles": "Enquiry,Pricing,Quote,Probability,Sales Target"
+  },
+  {
+    "Designation": "Quantity Surveyor",
+    "Department": "Electrical",
+    "FullName": "Electrical",
+    "EmailId": "electrical@almoayyedcg.com",
+    "Roles": "Enquiry,Pricing,Quote,Probability,Sales Target"
+  }
+]
+

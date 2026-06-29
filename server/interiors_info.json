@@ -1,0 +1,14 @@
+[
+  {
+    "ItemName": "Interiors Project",
+    "DepartmentName": "Interiors Project",
+    "CommonMailIds": "ai@almoayyedcg.com",
+    "CCMailIds": "sunil.mp@almoayyedcg.com,aiqs2@almoayyedcg.com"
+  },
+  {
+    "ItemName": "Interiors Maint",
+    "DepartmentName": "Interiors Maint",
+    "CommonMailIds": "ai@almoayyedcg.com",
+    "CCMailIds": "sunil.mp@almoayyedcg.com,aiqs2@almoayyedcg.com"
+  }
+]

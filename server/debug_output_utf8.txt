@@ -1,0 +1,48 @@
+﻿=== PRICING DEBUG FOR ENQUIRY 16 ===
+
+--- JOBS (EnquiryFor) ---
+  ID=201, ParentID=ROOT, Name="Civil Project", Code=L1
+  ID=202, ParentID=201, Name="Electrical", Code=null
+  ID=203, ParentID=202, Name="BMS", Code=null
+  ID=204, ParentID=ROOT, Name="BMS", Code=L2
+
+--- MASTER EMAIL ASSIGNMENTS ---
+  "Civil Project": Common=[civil@almoayyedcg.com] CC=[civil@almoayyedcg.com]
+  "Electrical": Common=[electrical@almoayyedcg.com] CC=[electrical_HOD@almoayyedcg.com]
+  "BMS": Common=[bms@almoayyedcg.com,bmselveng1@almoayyedcg.com] CC=[mohan.naidu@almoayyedcg.com]
+  "BMS": Common=[bms@almoayyedcg.com,bmselveng1@almoayyedcg.com] CC=[mohan.naidu@almoayyedcg.com]
+
+--- PRICING OPTIONS ---
+  ID=317, Name="Base Price", Item="Civil Project", Customer="Cebarco Bahrain", Lead="Civil Project"
+  ID=318, Name="Base Price", Item="BMS", Customer="Cebarco Bahrain", Lead="BMS"
+  ID=319, Name="Base Price", Item="Civil Project", Customer="Electrical", Lead="Civil Project"
+  ID=320, Name="Base Price", Item="BMS", Customer="Electrical", Lead="Civil Project"
+  ID=321, Name="Base Price", Item="BMS", Customer="Cebarco Bahrain", Lead="Civil Project"
+  ID=322, Name="Base Price", Item="Electrical", Customer="Electrical", Lead="Civil Project"
+  ID=323, Name="Base Price", Item="Electrical", Customer="Cebarco Bahrain", Lead="Civil Project"
+  ID=324, Name="Base Price", Item="BMS", Customer="Electrical", Lead="BMS"
+  ID=325, Name="Option-1", Item="BMS", Customer="Cebarco Bahrain", Lead="BMS"
+  ID=326, Name="Option-1", Item="BMS", Customer="Electrical", Lead="BMS"
+  ID=327, Name="Option-1", Item="BMS", Customer="Electrical", Lead="Civil Project"
+  ID=328, Name="Option-1", Item="BMS", Customer="Cebarco Bahrain", Lead="Civil Project"
+  ID=334, Name="Base Price", Item="Electrical", Customer="Civil Project", Lead="Civil Project"
+  ID=335, Name="Base Price", Item="Civil Project", Customer="Civil Project", Lead="Civil Project"
+  ID=336, Name="Option-1", Item="BMS", Customer="Civil Project", Lead="BMS"
+  ID=337, Name="Base Price", Item="BMS", Customer="Civil Project", Lead="Civil Project"
+  ID=338, Name="Base Price", Item="BMS", Customer="Civil Project", Lead="BMS"
+  ID=339, Name="Option-1", Item="BMS", Customer="Civil Project", Lead="Civil Project"
+
+--- PRICING VALUES ---
+  OptID=318 (Base Price), JobID=204 (BMS), Cust="Cebarco Bahrain", Price=25100
+  OptID=320 (Base Price), JobID=203 (BMS), Cust="Electrical", Price=25000
+  OptID=325 (Option-1), JobID=204 (BMS), Cust="Cebarco Bahrain", Price=26100
+  OptID=327 (Option-1), JobID=203 (BMS), Cust="Electrical", Price=26000
+
+--- ENQUIRY ---
+  #16: Susyan Cafe | Customer: Cebarco Bahrain,
+
+--- EXTRA CUSTOMERS (EnquiryCustomer) ---
+  "Cebarco Bahrain,"
+
+--- ELECTRICAL USERS ---
+  Electrical | Email: electrical@almoayyedcg.com | Dept: Electrical | Role: Enquiry,Pricing,Quote,Probability,Sales Report,Sales Target

@@ -1,0 +1,177 @@
+{
+  "EnquiryQuotes": [
+    {
+      "COLUMN_NAME": "ID",
+      "DATA_TYPE": "int"
+    },
+    {
+      "COLUMN_NAME": "RequestNo",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "QuoteNumber",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "QuoteNo",
+      "DATA_TYPE": "int"
+    },
+    {
+      "COLUMN_NAME": "RevisionNo",
+      "DATA_TYPE": "int"
+    },
+    {
+      "COLUMN_NAME": "QuoteDate",
+      "DATA_TYPE": "date"
+    },
+    {
+      "COLUMN_NAME": "ValidityDays",
+      "DATA_TYPE": "int"
+    },
+    {
+      "COLUMN_NAME": "PreparedBy",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "PreparedByEmail",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "ShowScopeOfWork",
+      "DATA_TYPE": "bit"
+    },
+    {
+      "COLUMN_NAME": "ShowBasisOfOffer",
+      "DATA_TYPE": "bit"
+    },
+    {
+      "COLUMN_NAME": "ShowExclusions",
+      "DATA_TYPE": "bit"
+    },
+    {
+      "COLUMN_NAME": "ShowPricingTerms",
+      "DATA_TYPE": "bit"
+    },
+    {
+      "COLUMN_NAME": "ShowSchedule",
+      "DATA_TYPE": "bit"
+    },
+    {
+      "COLUMN_NAME": "ShowWarranty",
+      "DATA_TYPE": "bit"
+    },
+    {
+      "COLUMN_NAME": "ShowResponsibilityMatrix",
+      "DATA_TYPE": "bit"
+    },
+    {
+      "COLUMN_NAME": "ShowTermsConditions",
+      "DATA_TYPE": "bit"
+    },
+    {
+      "COLUMN_NAME": "ShowAcceptance",
+      "DATA_TYPE": "bit"
+    },
+    {
+      "COLUMN_NAME": "ScopeOfWork",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "BasisOfOffer",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "Exclusions",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "PricingTerms",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "Schedule",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "Warranty",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "ResponsibilityMatrix",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "TermsConditions",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "Acceptance",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "TotalAmount",
+      "DATA_TYPE": "decimal"
+    },
+    {
+      "COLUMN_NAME": "Status",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "CreatedAt",
+      "DATA_TYPE": "datetime"
+    },
+    {
+      "COLUMN_NAME": "UpdatedAt",
+      "DATA_TYPE": "datetime"
+    },
+    {
+      "COLUMN_NAME": "CustomClauses",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "ClauseOrder",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "CustomerReference",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "Subject",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "Signatory",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "SignatoryDesignation",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "ToName",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "ToAddress",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "ToPhone",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "ToEmail",
+      "DATA_TYPE": "nvarchar"
+    },
+    {
+      "COLUMN_NAME": "ShowBillOfQuantity",
+      "DATA_TYPE": "bit"
+    },
+    {
+      "COLUMN_NAME": "BillOfQuantity",
+      "DATA_TYPE": "nvarchar"
+    }
+  ],
+  "Users": []
+}

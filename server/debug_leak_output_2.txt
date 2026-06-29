@@ -1,0 +1,57 @@
+[dotenv@17.2.3] injecting env (9) from server\.env -- tip: 🔑 add access controls to secrets: https://dotenvx.com/ops
+--- USER DATA ---
+┌─────────┬──────────────┬──────────────────────────────┬───────────────────────────────────────────────────────────────┬───────────┐
+│ (index) │ FullName     │ EmailId                      │ Roles                                                         │ RequestNo │
+├─────────┼──────────────┼──────────────────────────────┼───────────────────────────────────────────────────────────────┼───────────┤
+│ 0       │ 'Civil'      │ 'civil@almoayyedcg.com'      │ 'Enquiry,Pricing,Quote,Probability,Sales Report,Sales Target' │ '15'      │
+│ 1       │ 'Electrical' │ 'electrical@almoayyedcg.com' │ 'Enquiry,Pricing,Quote,Probability,Sales Report,Sales Target' │ '9'       │
+└─────────┴──────────────┴──────────────────────────────┴───────────────────────────────────────────────────────────────┴───────────┘
+Division for Civil: Civil Project
+Division for Electrical: Civil Project
+
+--- ATTACHMENTS FOR ENQ 9 ---
+┌─────────┬────┬────────────────────────────────────────────────────────────────────────────────────┬────────────┬────────────┬─────────────────┐
+│ (index) │ ID │ FileName                                                                           │ Visibility │ UploadedBy │ Division        │
+├─────────┼────┼────────────────────────────────────────────────────────────────────────────────────┼────────────┼────────────┼─────────────────┤
+│ 0       │ 3  │ 'EMS Logo.pptx'                                                                    │ 'Public'   │ null       │ null            │
+│ 1       │ 4  │ 'AAC KSA.pdf'                                                                      │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 2       │ 5  │ 'AAC KSA.pptx'                                                                     │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 3       │ 6  │ 'AAC KSA.pdf'                                                                      │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 4       │ 7  │ 'AAC KSA.pptx'                                                                     │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 5       │ 8  │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 6       │ 9  │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 7       │ 10 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 8       │ 11 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 9       │ 12 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 10      │ 13 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 11      │ 14 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 12      │ 15 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 13      │ 16 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 14      │ 17 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 15      │ 18 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 16      │ 19 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 17      │ 20 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 18      │ 21 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 19      │ 22 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 20      │ 23 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 21      │ 24 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Public'   │ 'Civil'    │ 'Civil Project' │
+│ 22      │ 25 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 23      │ 26 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 24      │ 27 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 25      │ 28 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 26      │ 29 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 27      │ 30 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 28      │ 31 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 29      │ 32 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 30      │ 33 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 31      │ 34 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 32      │ 35 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 33      │ 36 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 34      │ 37 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 35      │ 38 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 36      │ 39 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 37      │ 40 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 38      │ 41 │ 'C:\\Users\\mohan.naidu\\OneDrive - Almoayyed Contracting Group\\Desktop\\EMS Web' │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 39      │ 42 │ 'AAC KSA.pdf'                                                                      │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+│ 40      │ 43 │ 'AAC KSA.pptx'                                                                     │ 'Private'  │ 'Civil'    │ 'Civil Project' │
+└─────────┴────┴────────────────────────────────────────────────────────────────────────────────────┴────────────┴────────────┴─────────────────┘

@@ -1,0 +1,71 @@
+Connected to DB
+
+--- Tables ---
+[
+  {
+    "TABLE_NAME": "Master_ConcernedSE"
+  },
+  {
+    "TABLE_NAME": "EnquiryQuotes"
+  },
+  {
+    "TABLE_NAME": "Master_CustomerName"
+  },
+  {
+    "TABLE_NAME": "Master_ClientName"
+  },
+  {
+    "TABLE_NAME": "Master_ConsultantName"
+  },
+  {
+    "TABLE_NAME": "QuoteTemplates"
+  },
+  {
+    "TABLE_NAME": "Master_AdditionalEmails"
+  },
+  {
+    "TABLE_NAME": "EnquiryNotes"
+  },
+  {
+    "TABLE_NAME": "EnquiryMaster"
+  },
+  {
+    "TABLE_NAME": "Notifications"
+  },
+  {
+    "TABLE_NAME": "EnquiryType"
+  },
+  {
+    "TABLE_NAME": "EnquiryFor"
+  },
+  {
+    "TABLE_NAME": "ReceivedFrom"
+  },
+  {
+    "TABLE_NAME": "ConcernedSE"
+  },
+  {
+    "TABLE_NAME": "EnquiryCustomer"
+  },
+  {
+    "TABLE_NAME": "EnquiryPricingOptions"
+  },
+  {
+    "TABLE_NAME": "Attachments"
+  },
+  {
+    "TABLE_NAME": "EnquiryPricingValues"
+  },
+  {
+    "TABLE_NAME": "Master_SourceOfEnquiry"
+  },
+  {
+    "TABLE_NAME": "Master_EnquiryType"
+  },
+  {
+    "TABLE_NAME": "Master_EnquiryFor"
+  },
+  {
+    "TABLE_NAME": "Master_ReceivedFrom"
+  }
+]

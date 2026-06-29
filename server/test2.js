@@ -1,0 +1,1 @@
+const fs=require('fs'); const path=require('path'); const os=require('os'); const dir=path.join(os.tmpdir(), 'test_eml2'); fs.mkdirSync(dir, {recursive:true}); const file=path.join(dir, 'test.eml'); fs.writeFileSync(file, 'test'); require('child_process').exec('cmd.exe /c start "" "' + file + '"', (e) => console.log('Err:', e));

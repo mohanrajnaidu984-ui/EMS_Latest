@@ -1,0 +1,17 @@
+Columns: ["ID","Category","CompanyName","Address1","Address2","Rating","Type","FaxNo","Phone1","Phone2","EmailId","Website","Status","RequestNo"]
+Sample: {
+  "ID": 11,
+  "Category": "Contractor",
+  "CompanyName": "TCS",
+  "Address1": "Electronic city",
+  "Address2": "Electronic city",
+  "Rating": "10",
+  "Type": "MEP",
+  "FaxNo": "12345",
+  "Phone1": "09047287749",
+  "Phone2": "09080054733",
+  "EmailId": "vigneshgovardhan5163@gmail.com",
+  "Website": "TCS@blr.com",
+  "Status": "Active",
+  "RequestNo": "92"
+}

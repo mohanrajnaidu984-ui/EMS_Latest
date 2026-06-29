@@ -1,0 +1,19 @@
+SERVER STARTING - ACK V3 - Registering Sales Target Routes
+[dotenv@17.3.1] injecting env (13) from .env -- tip: 🤖 agentic secret storage: https://dotenvx.com/as2
+--- Email Config ---
+SMTP_HOST: smtp.gmail.com
+SMTP_USER: vigneshgovardhan5163@gmail.com
+SMTP_PORT: 587
+[2026-03-14 04:03:57] DEBUG Creating transport: nodemailer (7.0.13; +https://nodemailer.com/; SMTP/7.0.13[client:7.0.13])
+[dotenv@17.3.1] injecting env (0) from .env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+[2026-03-14 04:03:57] DEBUG Creating transport: nodemailer (7.0.13; +https://nodemailer.com/; SMTP/7.0.13[client:7.0.13])
+Loaded 40 vectors from local file.
+[dotenv@17.3.1] injecting env (0) from .env -- tip: ⚡️ secrets for agents: https://dotenvx.com/as2
+Starting server initialization...
+PORT: 5001
+Server running on port 5001
+Connected to MSSQL Database
+Connected to MSSQL Database
+Database connected successfully.
+Adding CustomerRefNo column to EnquiryMaster...
+CustomerRefNo column added.

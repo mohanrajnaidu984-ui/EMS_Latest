@@ -1,0 +1,27 @@
+[dotenv@17.2.3] injecting env (9) from .env -- tip: 🔐 prevent committing .env to code: https://dotenvx.com/precommit
+--- OPTIONS ---
+ID:112 | Name:Base Price | Item:L1 - Civil Project | Cust:KARTEC SERVICES WLL
+ID:113 | Name:Base Price | Item:Electrical | Cust:Cebarco Bahrain
+ID:114 | Name:Base Price | Item:Electrical | Cust:Cebarco Bahrain
+ID:115 | Name:Base Price | Item:BMS | Cust:Cebarco Bahrain
+ID:116 | Name:Base Price | Item:Electrical | Cust:KARTEC SERVICES WLL
+ID:117 | Name:Base Price | Item:L1 - Civil Project | Cust:Cebarco Bahrain
+ID:118 | Name:Base Price | Item:BMS | Cust:KARTEC SERVICES WLL
+ID:119 | Name:Base Price | Item:BMS | Cust:KARTEC SERVICES WLL
+ID:120 | Name:Base Price | Item:Electrical | Cust:Electrical
+ID:121 | Name:Base Price | Item:L1 - Civil Project | Cust:Electrical
+ID:122 | Name:Base Price | Item:BMS | Cust:Electrical
+ID:124 | Name:Base Price | Item:L1 - Civil Project | Cust:Civil Project
+ID:125 | Name:Base Price | Item:Electrical | Cust:Civil Project
+ID:126 | Name:Base Price | Item:BMS | Cust:Civil Project
+--- VALUES ---
+OptID:112 | Item:L1 - Civil Project | Price:2000
+OptID:117 | Item:L1 - Civil Project | Price:1000
+OptID:116 | Item:L1 - Civil Project | Price:2000
+OptID:118 | Item:L1 - Civil Project | Price:2000
+OptID:115 | Item:BMS | Price:10
+OptID:118 | Item:BMS | Price:30
+OptID:122 | Item:BMS | Price:20
+OptID:125 | Item:Electrical | Price:100
+OptID:116 | Item:Electrical | Price:300
+OptID:113 | Item:Electrical | Price:200

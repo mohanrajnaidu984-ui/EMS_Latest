@@ -1,0 +1,10 @@
+--- REPORT for Enq 50 ---
+
+--- CUSTOMERS ---
+ID: 85, Name: "Mr. Bader Mohammed K. Albalaawy"
+ID: 86, Name: "China Machinery Engineering Corporation (CMEC)"
+
+--- ITEMS ---
+ID: 126, Name: "Civil Project", PID: null
+ID: 127, Name: "Electrical", PID: 126
+ID: 128, Name: "BMS", PID: 127

@@ -1,0 +1,63 @@
+﻿[dotenv@17.2.3] injecting env (9) from .env -- tip: ≡ƒöÉ encrypt with Dotenvx: https://dotenvx.com
+Connected to MSSQL Database
+=== ENQUIRY 45 STATUS ===
+
+Enquiry Master:
+[
+  {
+    RequestNo: '45',
+    ProjectName: 'Civil Project 5',
+    Status: 'Quote',
+    CustomerName: 'EMCO,BEMCO'
+  }
+]
+
+=== ENQUIRY 45 JOBS ===
+[
+  {
+    ID: 111,
+    ParentID: null,
+    ItemName: 'L1 - Civil Project',
+    CommonMailIds: 'civil@almoayyedcg.com',
+    CCMailIds: 'civil@almoayyedcg.com'
+  },
+  {
+    ID: 112,
+    ParentID: 111,
+    ItemName: 'Electrical',
+    CommonMailIds: 'electrical@almoayyedcg.com',
+    CCMailIds: 'electrical_HOD@almoayyedcg.com'
+  },
+  {
+    ID: 113,
+    ParentID: 112,
+    ItemName: 'BMS',
+    CommonMailIds: 'bms@almoayyedcg.com,bmselveng1@almoayyedcg.com',
+    CCMailIds: 'mohan.naidu@almoayyedcg.com'
+  }
+]
+
+=== PRICING VALUES ===
+[
+  {
+    EnquiryForID: 113,
+    EnquiryForItem: 'BMS',
+    Price: 2,
+    UpdatedAt: 2026-02-13T08:13:15.287Z
+  },
+  {
+    EnquiryForID: 113,
+    EnquiryForItem: 'BMS',
+    Price: 1,
+    UpdatedAt: 2026-02-13T08:13:15.290Z
+  },
+  {
+    EnquiryForID: 113,
+    EnquiryForItem: 'BMS',
+    Price: 3,
+    UpdatedAt: 2026-02-13T08:13:15.357Z
+  }
+]
+
+=== ELECTRICAL USER ===
+[ { FullName: 'Electrical', EmailId: 'electrical@almoayyedcg.com' } ]

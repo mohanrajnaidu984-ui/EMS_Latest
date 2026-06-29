@@ -1,0 +1,11 @@
+﻿[dotenv@17.2.3] injecting env (9) from .env -- tip: ΓÜÖ∩╕Å  load multiple .env files with { path: ['.env.local', '.env'] }
+Connected to MSSQL Database
+Latest Enquiry:
+{
+  "RequestNo": "9",
+  "EnquiryStatus": "Active",
+  "AcknowledgementSE": null,
+  "AdditionalNotificationEmails": null,
+  "Status": "Enquiry",
+  "CreatedBy": "mohan"
+}

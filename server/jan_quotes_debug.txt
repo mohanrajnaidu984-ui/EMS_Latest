@@ -1,0 +1,10 @@
+TOTAL_JAN: 9
+REQ: 13 | DATE: Wed Jan 14 2026 03:00:00 GMT+0300 (Arabian Standard Time)
+REQ: 13 | DATE: Sun Jan 11 2026 03:00:00 GMT+0300 (Arabian Standard Time)
+REQ: 13 | DATE: Mon Jan 05 2026 03:00:00 GMT+0300 (Arabian Standard Time)
+REQ: 15 | DATE: Sun Jan 11 2026 03:00:00 GMT+0300 (Arabian Standard Time)
+REQ: 15 | DATE: Sun Jan 11 2026 03:00:00 GMT+0300 (Arabian Standard Time)
+REQ: 15 | DATE: Sun Jan 11 2026 03:00:00 GMT+0300 (Arabian Standard Time)
+REQ: 15 | DATE: Sun Jan 11 2026 03:00:00 GMT+0300 (Arabian Standard Time)
+REQ: 17 | DATE: Wed Jan 21 2026 03:00:00 GMT+0300 (Arabian Standard Time)
+REQ: 17 | DATE: Wed Jan 28 2026 03:00:00 GMT+0300 (Arabian Standard Time)

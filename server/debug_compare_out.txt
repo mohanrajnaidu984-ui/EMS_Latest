@@ -1,0 +1,18 @@
+﻿[dotenv@17.2.3] injecting env (9) from .env -- tip: ΓÜÖ∩╕Å  specify custom .env file path with { path: '/custom/path/.env' }
+[dotenv@17.2.3] injecting env (0) from .env -- tip: ≡ƒôí add observability to secrets: https://dotenvx.com/ops
+Connected to MSSQL Database
+--- Master_EnquiryFor Items ---
+[Master] BMS -> HasEmails
+[Master] Civil Project -> HasEmails
+[Master] Electrical -> HasEmails
+[Master] BMS - PICV -> HasEmails
+[Master] BMS - BTU Meter -> HasEmails
+[Master] BMS - Thermostat -> HasEmails
+[Master] BMS - ELV -> HasEmails
+
+--- EnquiryFor Items (Req 42) ---
+[Req42] L1 - Civil Project
+[Req42] Electrical
+[Req42] BMS - ELV
+[Req42] BMS - BTU Meter
+[Req42] BMS - PICV

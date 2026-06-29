@@ -1,0 +1,26 @@
+--- Debugging Enq 14 Hierarchy ---
+ID: 358, ParentID: null, Name: Civil Project
+ID: 359, ParentID: 358, Name: HVAC Project
+ID: 360, ParentID: 359, Name: BMS Project
+ID: 361, ParentID: 358, Name: Electrical Project
+ID: 362, ParentID: 358, Name: Plumbing & Fire Fighting Project
+ID: 363, ParentID: null, Name: Interiors Project
+ID: 364, ParentID: 363, Name: HVAC Project
+ID: 365, ParentID: 364, Name: BMS Project
+ID: 366, ParentID: null, Name: HVAC Project
+ID: 367, ParentID: 366, Name: BMS Project
+ID: 368, ParentID: null, Name: BMS Project
+ID: 369, ParentID: null, Name: AC Maint-Elec
+EnqMaster CustomerName: Alshehab Ceramic 
+Job ID 358: Level 1, Customer: Alshehab Ceramic
+Job ID 359: Level 2, Customer: Civil Project
+Job ID 360: Level 3, Customer: HVAC Project
+Job ID 361: Level 2, Customer: Civil Project
+Job ID 362: Level 2, Customer: Civil Project
+Job ID 363: Level 1, Customer: Alshehab Ceramic
+Job ID 364: Level 2, Customer: Interiors Project
+Job ID 365: Level 3, Customer: HVAC Project
+Job ID 366: Level 1, Customer: Alshehab Ceramic
+Job ID 367: Level 2, Customer: HVAC Project
+Job ID 368: Level 1, Customer: Alshehab Ceramic
+Job ID 369: Level 1, Customer: Alshehab Ceramic

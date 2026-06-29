@@ -1,0 +1,121 @@
+Connected to DB
+
+--- Schema for Master_ConcernedSE ---
+[
+  {
+    "COLUMN_NAME": "ID",
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "FullName",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "Designation",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "EmailId",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "LoginPassword",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "Status",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "Department",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "Roles",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "RequestNo",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "ProfilePicture",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "ProfileImage",
+    "DATA_TYPE": "nvarchar"
+  }
+]
+
+--- Schema for EnquiryPricingOptions ---
+[
+  {
+    "COLUMN_NAME": "ID",
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "RequestNo",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "OptionName",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "SortOrder",
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "CreatedAt",
+    "DATA_TYPE": "datetime"
+  },
+  {
+    "COLUMN_NAME": "ItemName",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "CustomerName",
+    "DATA_TYPE": "nvarchar"
+  }
+]
+
+--- Schema for EnquiryPricingValues ---
+[
+  {
+    "COLUMN_NAME": "ID",
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "RequestNo",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "OptionID",
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "EnquiryForItem",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "Price",
+    "DATA_TYPE": "decimal"
+  },
+  {
+    "COLUMN_NAME": "UpdatedBy",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "UpdatedAt",
+    "DATA_TYPE": "datetime"
+  },
+  {
+    "COLUMN_NAME": "CustomerName",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "EnquiryForID",
+    "DATA_TYPE": "int"
+  }
+]

@@ -1,0 +1,15 @@
+Connected
+
+--- OPTIONS (Request 13) ---
+OPT: ID=9, Name=Base Price, Item=BMS
+OPT: ID=10, Name=Base Price, Item=L1 - Civil Project
+OPT: ID=11, Name=Base Price, Item=Electrical
+
+--- JOBS (Request 13) ---
+JOB: ID=7, Name=L1 - Civil Project, Parent=null
+JOB: ID=8, Name=Electrical, Parent=7
+JOB: ID=9, Name=BMS, Parent=8
+
+--- VALUES (Request 13) ---
+VAL: ID=1, OptID=9, Job=BMS, JobID=9, Price=11
+VAL: ID=2, OptID=11, Job=Electrical, JobID=8, Price=22

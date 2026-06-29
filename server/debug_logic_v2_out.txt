@@ -1,0 +1,12 @@
+﻿[dotenv@17.2.3] injecting env (9) from .env -- tip: ΓÜÖ∩╕Å  override existing env vars with { override: true }
+[dotenv@17.2.3] injecting env (0) from .env -- tip: ΓÜÖ∩╕Å  override existing env vars with { override: true }
+Connected to MSSQL Database
+--- Fetching Data with Left Join ---
+Total Items: 5
+Found BMS Item: {
+  ID: 104,
+  ParentID: 103,
+  ItemName: 'BMS - ELV',
+  CommonMailIds: 'bms@almoayyedcg.com,bmselveng1@almoayyedcg.com',
+  CCMailIds: 'mohan.naidu@almoayyedcg.com'
+}

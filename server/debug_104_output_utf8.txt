@@ -1,0 +1,30 @@
+﻿[dotenv@17.2.3] injecting env (13) from .env -- tip: ≡ƒæÑ sync secrets across teammates & machines: https://dotenvx.com/ops
+Connected to MSSQL Database
+--- EnquiryFor (104) ---
+[
+  {
+    "ItemName": "L1 - Civil Project"
+  },
+  {
+    "ItemName": "Plumbing & FF"
+  },
+  {
+    "ItemName": "BMS"
+  },
+  {
+    "ItemName": "L2 - BMS"
+  },
+  {
+    "ItemName": "Electrical"
+  }
+]
+
+--- Master_EnquiryFor Search (BMS) ---
+[
+  {
+    "ItemName": "BMS",
+    "DivisionCode": "BMS",
+    "DepartmentCode": "AAC",
+    "CompanyName": "Almoayyed Air Conditioning"
+  }
+]

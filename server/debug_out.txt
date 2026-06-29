@@ -1,0 +1,25 @@
+﻿[dotenv@17.2.3] injecting env (9) from .env -- tip: ΓÜÖ∩╕Å  override existing env vars with { override: true }
+
+=== EnquiryFor rows for RequestNo=14 (with LEFT JOIN Master_EnquiryFor) ===
+{"ID":185,"ParentID":null,"ItemName":"Civil Project","CommonMailIds":"civil@almoayyedcg.com","CCMailIds":"civil@almoayyedcg.com"}
+{"ID":185,"ParentID":null,"ItemName":"Civil Project","CommonMailIds":"civil@almoayyedcg.com","CCMailIds":"civil@almoayyedcg.com,civilem@almoayyedcg.com"}
+{"ID":186,"ParentID":185,"ItemName":"Electrical","CommonMailIds":"electrical@almoayyedcg.com","CCMailIds":"electrical_HOD@almoayyedcg.com"}
+
+=== All Master_EnquiryFor - ItemName + CommonMailIds ===
+BMS | bms@almoayyedcg.com,bmselveng1@almoayyedcg.com
+Civil Project | civil@almoayyedcg.com
+Electrical | electrical@almoayyedcg.com
+BMS - PICV | bms@almoayyedcg.com,bmselveng1@almoayyedcg.com
+BMS - BTU Meter | bms@almoayyedcg.com,bmselveng1@almoayyedcg.com
+BMS - Thermostat | bms@almoayyedcg.com,bmselveng1@almoayyedcg.com
+BMS - ELV | bms@almoayyedcg.com,bmselveng1@almoayyedcg.com
+Civil Project | civil@almoayyedcg.com
+
+=== Electrical user in Master_ConcernedSE ===
+{"EmailId":"mohanraj.naidu984@gmail.com","FullName":"Admin","Department":null,"Roles":"Admin"}
+{"EmailId":"bmselveng1@almoayyedcg.com","FullName":"BMS","Department":"BMS","Roles":"Enquiry,Pricing,Quote,Probability,Sales Report,Sales Target"}
+{"EmailId":"civil@almoayyedcg.com","FullName":"Civil","Department":"Civil Project","Roles":"Enquiry,Pricing,Quote,Probability,Sales Report,Sales Target"}
+{"EmailId":"electrical@almoayyedcg.com","FullName":"Electrical","Department":"Electrical","Roles":"Enquiry,Pricing,Quote,Probability,Sales Report,Sales Target"}
+{"EmailId":"mohan.naidu@almoayyedcg.com","FullName":"BMS Manager","Department":"BMS","Roles":"Enquiry,Pricing,Quote,Probability,Sales Report,Sales Target"}
+{"EmailId":"santhosh.kumar@almoayyedcg.com","FullName":"Santhosh Kumar","Department":"Civil Project","Roles":"Pricing,Quote,Probability"}
+{"EmailId":"siju.varghese@almoayyedcg.com","FullName":"Siju Varghese","Department":"Civil Project","Roles":"Enquiry"}

@@ -1,0 +1,48 @@
+Connected
+
+--- Jobs (EnquiryFor joined with Master) ---
+[
+  {
+    "ID": 259,
+    "ParentID": null,
+    "ItemName": "L1 - Civil Project",
+    "ParentItemName": null,
+    "CommonMailIds": null,
+    "CCMailIds": null
+  },
+  {
+    "ID": 260,
+    "ParentID": 259,
+    "ItemName": "Electrical",
+    "ParentItemName": "L1 - Civil Project",
+    "CommonMailIds": "vigneshgovardhan5163@gmail.com",
+    "CCMailIds": "vigneshgovardhan5163@gmail.com"
+  },
+  {
+    "ID": 261,
+    "ParentID": 259,
+    "ItemName": "Plumbing & FF",
+    "ParentItemName": "L1 - Civil Project",
+    "CommonMailIds": "mohanraj.naidu984@gmail.com",
+    "CCMailIds": "mohanraj.naidu984@gmail.com"
+  },
+  {
+    "ID": 262,
+    "ParentID": 260,
+    "ItemName": "BMS",
+    "ParentItemName": "Electrical",
+    "CommonMailIds": "c.balakumar93@gmail.com",
+    "CCMailIds": "c.balakumar93@gmail.com"
+  },
+  {
+    "ID": 263,
+    "ParentID": null,
+    "ItemName": "L2 - BMS",
+    "ParentItemName": null,
+    "CommonMailIds": null,
+    "CCMailIds": null
+  }
+]
+
+User Job Items: ["Plumbing & FF"]
+Has Hierarchy: true

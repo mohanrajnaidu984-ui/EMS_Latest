@@ -1,0 +1,89 @@
+SERVER STARTING - ACK V3 - Registering Sales Target Routes
+[dotenv@17.3.1] injecting env (13) from .env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+--- Email Config ---
+SMTP_HOST: smtp.gmail.com
+SMTP_USER: vigneshgovardhan5163@gmail.com
+SMTP_PORT: 587
+[2026-03-14 03:23:56] DEBUG Creating transport: nodemailer (7.0.13; +https://nodemailer.com/; SMTP/7.0.13[client:7.0.13])
+[dotenv@17.3.1] injecting env (0) from .env -- tip: ⚙️  override existing env vars with { override: true }
+[2026-03-14 03:23:56] DEBUG Creating transport: nodemailer (7.0.13; +https://nodemailer.com/; SMTP/7.0.13[client:7.0.13])
+Loaded 40 vectors from local file.
+[dotenv@17.3.1] injecting env (0) from .env -- tip: ⚙️  load multiple .env files with { path: ['.env.local', '.env'] }
+Starting server initialization...
+PORT: 5001
+Server running on port 5001
+Server Error: Error: listen EADDRINUSE: address already in use :::5001
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at app.listen (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\express\lib\application.js:605:24)
+    at Object.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\index.js:2170:20)
+    at Module._compile (node:internal/modules/cjs/loader:1761:14)
+    at Object..js (node:internal/modules/cjs/loader:1893:10)
+    at Module.load (node:internal/modules/cjs/loader:1481:32)
+    at Module._load (node:internal/modules/cjs/loader:1300:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 5001
+}
+Database connection failed: ConnectionError: Failed to connect to 127.0.0.1:1433 - Could not connect (sequence)
+    at D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\connection-pool.js:85:17
+    at Connection.onConnect (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:874:9)
+    at Object.onceWrapper (node:events:623:26)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:892:14
+    at process.processTicksAndRejections (node:internal/process/task_queues:84:11) {
+  code: 'ESOCKET',
+  originalError: ConnectionError: Failed to connect to 127.0.0.1:1433 - Could not connect (sequence)
+      at Connection.wrapSocketError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1394:14)
+      at Connection.initialiseConnection (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1066:20)
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5) {
+    code: 'ESOCKET',
+    [cause]: AggregateError: Could not connect (sequence)
+        at connectInSequence (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connector.js:108:9)
+        at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+        at async Connection.connectOnPort (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1249:18)
+        at async Connection.initialiseConnection (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1063:18) {
+      [errors]: [Array]
+    }
+  }
+}
+Database connection failed: ConnectionError: Failed to connect to 127.0.0.1:1433 - Could not connect (sequence)
+    at D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\connection-pool.js:85:17
+    at Connection.onConnect (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:874:9)
+    at Object.onceWrapper (node:events:623:26)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:892:14
+    at process.processTicksAndRejections (node:internal/process/task_queues:84:11) {
+  code: 'ESOCKET',
+  originalError: ConnectionError: Failed to connect to 127.0.0.1:1433 - Could not connect (sequence)
+      at Connection.wrapSocketError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1394:14)
+      at Connection.initialiseConnection (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1066:20)
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5) {
+    code: 'ESOCKET',
+    [cause]: AggregateError: Could not connect (sequence)
+        at connectInSequence (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connector.js:108:9)
+        at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+        at async Connection.connectOnPort (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1249:18)
+        at async Connection.initialiseConnection (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1063:18) {
+      [errors]: [Array]
+    }
+  }
+}
+Database connected successfully.
+Schema check error: RequestError: No connection is specified for that request.
+    at Request._query (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\base\request.js:496:37)
+    at Request._query (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:363:11)
+    at D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\base\request.js:464:12
+    at new Promise (<anonymous>)
+    at Request.query (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\base\request.js:463:12)
+    at Request._template (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\base\request.js:95:26)
+    at Object.query (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\global-connection.js:148:38)
+    at initApp (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\index.js:2008:48) {
+  code: 'ENOCONN'
+}

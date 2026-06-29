@@ -1,0 +1,23 @@
+[
+  {
+    "RequestNo": "52",
+    "ProjectName": "Royal Garden",
+    "CustomerName": "Santy Excavation and Construction Company W.L.L,Aerolam Middle East W.L.L,Engineer Duha Mohamed Almadhoob",
+    "ClientName": "Mr. Aamer Jafar Alqaydoom",
+    "ConsultantName": "Arab Architects",
+    "DueDate": "2026-02-23T00:00:00.000Z",
+    "SiteVisitDate": "2026-02-18T00:00:00.000Z",
+    "EnquiryDetails": "Request for Ele & BMS Pricings",
+    "EnquiryDate": "2026-02-15T00:00:00.000Z",
+    "Status": "Quote",
+    "ReceivedFrom": "Rajesh V,Neville Dsouza,Engineer Duha Mohamed Almadhoob",
+    "ConcernedSE": "Civil, Electrical, BMS",
+    "EnquiryFor": "Civil Project, Electrical, BMS",
+    "QuoteDate": "2026-02-18T21:00:00.000Z",
+    "QuoteRefNo": "AAC/BMS/52-L1/42-R0 (18 Feb 2026)",
+    "TotalQuotedPrice": 15500,
+    "NetQuotedPrice": 15500,
+    "CreatedBy": "Civil",
+    "PricingBreakdown": "[{\"EnquiryForItem\":\"BMS\",\"Price\":15500,\"UpdatedAt\":\"2026-02-16T05:51:36.567Z\"},{\"EnquiryForItem\":\"Electrical\",\"Price\":25200,\"UpdatedAt\":\"2026-02-16T06:01:06.607Z\"}]"
+  }
+]

@@ -1,0 +1,7 @@
+--- ENQUIRY 45 HIERARCHY ---
+Node: "L1 - Civil Project" (ID: 111, Parent: null), Emails: "", Match: false
+Node: "Electrical" (ID: 112, Parent: 111), Emails: "electrical@almoayyedcg.com,electrical_hod@almoayyedcg.com", Match: true
+Node: "BMS" (ID: 113, Parent: 112), Emails: "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com,mohan.naidu@almoayyedcg.com", Match: false
+
+--- AVAILABLE PROFILES ---
+["L1 - Civil Project","Electrical","BMS"]

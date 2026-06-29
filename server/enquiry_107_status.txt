@@ -1,0 +1,9 @@
+
+=== ENQUIRY 107 DETAILS ===
+RequestNo: 107
+ProjectName: Job 1
+Status: "FollowUp" (Type: string)
+ProbabilityOption: "High Chance (90%)"
+ExpectedOrderDate: Thu Jan 22 2026 05:30:00 GMT+0530 (India Standard Time)
+WonQuoteRef: AAC/BMS/107-L2/4-R2
+ProbabilityRemarks: null

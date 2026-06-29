@@ -1,0 +1,17 @@
+﻿[dotenv@17.2.3] injecting env (9) from .env -- tip: ≡ƒöä add secrets lifecycle management: https://dotenvx.com/ops
+[dotenv@17.2.3] injecting env (0) from .env -- tip: ΓÜÖ∩╕Å  suppress all logs with { quiet: true }
+Connected to MSSQL Database
+--- Hierarchy Dump ---
+102 (L1 - Civil Project) -> Parent: null (ROOT)
+103 (Electrical) -> Parent: 102 (L1 - Civil Project)
+104 (BMS - ELV) -> Parent: 103 (Electrical)
+105 (BMS - BTU Meter) -> Parent: 103 (Electrical)
+106 (BMS - PICV) -> Parent: 103 (Electrical)
+
+--- Analysis ---
+BMS Item: BMS - ELV (104)
+Path to Root: BMS - ELV -> Electrical -> L1 - Civil Project
+BMS Item: BMS - BTU Meter (105)
+Path to Root: BMS - BTU Meter -> Electrical -> L1 - Civil Project
+BMS Item: BMS - PICV (106)
+Path to Root: BMS - PICV -> Electrical -> L1 - Civil Project

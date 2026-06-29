@@ -1,0 +1,12 @@
+---
+description: EMS app root — all client/server edits use this folder only
+alwaysApply: true
+---
+
+# EMS application root
+
+Treat **`EMS_Active/New-EMS-de9b154a3f16b49898b382f5d7bad10bd9734b51/`** as the only application codebase for this project.
+
+- Edit **`src/`**, **`server/`**, config, and assets **under this path only**.
+- Do **not** mirror or rely on sibling trees (for example `EMS_Production_recovered/`) unless the user explicitly asks to sync them.
+- When suggesting `npm run dev`, build, or server commands, assume the working directory is this folder (client and/or `server/` as applicable).

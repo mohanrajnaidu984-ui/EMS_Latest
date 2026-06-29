@@ -1,0 +1,119 @@
+{
+  "EnquiryPricingValues": [
+    {
+      "ID": 22,
+      "RequestNo": "97",
+      "OptionID": 18,
+      "EnquiryForItem": "Electrical",
+      "Price": 678,
+      "UpdatedBy": "mohan(work)",
+      "UpdatedAt": "2026-01-13T18:09:55.697Z",
+      "CustomerName": "Almoayyed Air Conditioning"
+    },
+    {
+      "ID": 23,
+      "RequestNo": "97",
+      "OptionID": 19,
+      "EnquiryForItem": "BMS",
+      "Price": 6000,
+      "UpdatedBy": "vignesh",
+      "UpdatedAt": "2026-01-16T05:00:19.550Z",
+      "CustomerName": "Almoayyed Air Conditioning"
+    },
+    {
+      "ID": 24,
+      "RequestNo": "97",
+      "OptionID": 23,
+      "EnquiryForItem": "BMS",
+      "Price": 1234567,
+      "UpdatedBy": "vignesh",
+      "UpdatedAt": "2026-01-16T05:01:09.740Z",
+      "CustomerName": "Genpact"
+    },
+    {
+      "ID": 25,
+      "RequestNo": "97",
+      "OptionID": 25,
+      "EnquiryForItem": "Electrical",
+      "Price": 12345,
+      "UpdatedBy": "mohan(work)",
+      "UpdatedAt": "2026-01-14T10:33:01.340Z",
+      "CustomerName": "Genpact"
+    },
+    {
+      "ID": 27,
+      "RequestNo": "97",
+      "OptionID": 29,
+      "EnquiryForItem": "BMS",
+      "Price": 3456,
+      "UpdatedBy": "vignesh",
+      "UpdatedAt": "2026-01-16T05:01:09.740Z",
+      "CustomerName": "Genpact"
+    }
+  ],
+  "EnquiryPricingOptions": [
+    {
+      "ID": 18,
+      "RequestNo": "97",
+      "OptionName": "Price",
+      "SortOrder": 3,
+      "CreatedAt": "2026-01-13T18:09:51.500Z",
+      "ItemName": "Electrical",
+      "CustomerName": "Almoayyed Air Conditioning"
+    },
+    {
+      "ID": 19,
+      "RequestNo": "97",
+      "OptionName": "Price",
+      "SortOrder": 4,
+      "CreatedAt": "2026-01-13T18:37:15.230Z",
+      "ItemName": "BMS",
+      "CustomerName": "Almoayyed Air Conditioning"
+    },
+    {
+      "ID": 23,
+      "RequestNo": "97",
+      "OptionName": "adaDS",
+      "SortOrder": 1,
+      "CreatedAt": "2026-01-14T08:27:21.497Z",
+      "ItemName": "BMS / Lead Job",
+      "CustomerName": "Genpact"
+    },
+    {
+      "ID": 25,
+      "RequestNo": "97",
+      "OptionName": "Price",
+      "SortOrder": 2,
+      "CreatedAt": "2026-01-14T10:32:55.500Z",
+      "ItemName": "Electrical",
+      "CustomerName": "Genpact"
+    },
+    {
+      "ID": 27,
+      "RequestNo": "97",
+      "OptionName": "Option-1",
+      "SortOrder": 1,
+      "CreatedAt": "2026-01-16T05:00:48.867Z",
+      "ItemName": "BMS",
+      "CustomerName": null
+    },
+    {
+      "ID": 28,
+      "RequestNo": "97",
+      "OptionName": "Optiona-1",
+      "SortOrder": 2,
+      "CreatedAt": "2026-01-16T05:00:56.610Z",
+      "ItemName": "BMS",
+      "CustomerName": null
+    },
+    {
+      "ID": 29,
+      "RequestNo": "97",
+      "OptionName": "Option-1",
+      "SortOrder": 3,
+      "CreatedAt": "2026-01-16T05:01:03.940Z",
+      "ItemName": "BMS",
+      "CustomerName": "Genpact"
+    }
+  ]
+}

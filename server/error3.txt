@@ -1,0 +1,1106 @@
+SERVER STARTING - ACK V3 - Registering Sales Target Routes
+[dotenv@17.3.1] injecting env (13) from .env -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
+--- Email Config ---
+SMTP_HOST: smtp.gmail.com
+SMTP_USER: vigneshgovardhan5163@gmail.com
+SMTP_PORT: 587
+[2026-03-14 03:43:44] DEBUG Creating transport: nodemailer (7.0.13; +https://nodemailer.com/; SMTP/7.0.13[client:7.0.13])
+[dotenv@17.3.1] injecting env (0) from .env -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+[2026-03-14 03:43:44] DEBUG Creating transport: nodemailer (7.0.13; +https://nodemailer.com/; SMTP/7.0.13[client:7.0.13])
+Loaded 40 vectors from local file.
+[dotenv@17.3.1] injecting env (0) from .env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+Starting server initialization...
+PORT: 5001
+Server running on port 5001
+Connected to MSSQL Database
+Connected to MSSQL Database
+Database connected successfully.
+[2026-03-14T03:45:33.359Z] GET /api/enquiries
+[2026-03-14T03:45:33.363Z] GET /api/customers
+[2026-03-14T03:45:33.365Z] GET /api/contacts
+[2026-03-14T03:45:33.365Z] GET /api/users
+[2026-03-14T03:45:33.366Z] GET /api/enquiry-items
+[/api/customers] Contractors: 2
+[/api/customers] Clients: 1
+[/api/customers] Consultants: 1
+[/api/customers] Sample client: {
+  ID: 8,
+  CompanyName: 'Eagle Hill',
+  Address1: 'jgigiusxdcfvgbhnj',
+  Address2: 'igigixecvtyhuji',
+  Rating: '4',
+  Type: 'Civil',
+  FaxNo: '1234567',
+  Phone1: '13142345678',
+  Phone2: '098765432',
+  EmailId: '123456789@eagle.com',
+  Website: 'xcfvgbhnjmk',
+  Status: 'Active',
+  RequestNo: '12',
+  Category: 'Client'
+}
+RequestError: Invalid object name 'EnquiryConsultant'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid object name 'EnquiryConsultant'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 208,
+      state: 1,
+      class: 16,
+      message: "Invalid object name 'EnquiryConsultant'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 1
+    }
+  },
+  number: 208,
+  lineNumber: 1,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: []
+}
+[2026-03-14T03:45:38.275Z] POST /api/auth/check-user
+=== CHECK USER REQUEST ===
+Email received: vigneshgovardhan5163@gmail.com
+Email type: string
+Email length: 30
+Query result count: 1
+User found: vignesh vigneshgovardhan5163@gmail.com
+Is first login: false
+[2026-03-14T03:45:40.000Z] POST /api/auth/login
+[2026-03-14T03:45:40.209Z] GET /api/master/divisions
+[API] /api/master/divisions HIT (Top Level)
+[2026-03-14T03:45:40.211Z] GET /api/notifications/36
+[2026-03-14T03:45:40.213Z] GET /api/system/next-request-no?t=1773459940208
+[API] Found 3 divisions: [ 'BMS Project', 'Civil Project', 'Elec Project' ]
+[2026-03-14T03:45:40.219Z] GET /api/master/divisions
+[API] /api/master/divisions HIT (Top Level)
+[API] Found 3 divisions: [ 'BMS Project', 'Civil Project', 'Elec Project' ]
+[NextID] MaxID found in DB: 12
+[NextID] Returning: 13
+[2026-03-14T03:45:40.271Z] GET /api/attachments?requestNo=13
+RequestError: Invalid column name 'Division'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'Division'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'Division'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 1
+    }
+  },
+  number: 207,
+  lineNumber: 1,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'Visibility'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'AttachmentType'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'LinkURL'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'UploadedBy'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[2026-03-14T03:45:50.219Z] GET /api/notifications/36
+[2026-03-14T03:46:00.217Z] GET /api/notifications/36
+[2026-03-14T03:46:10.222Z] GET /api/notifications/36
+[2026-03-14T03:46:20.229Z] GET /api/notifications/36
+[2026-03-14T03:46:26.336Z] GET /api/dashboard/calendar?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin&month=3&year=2026
+Calendar Access Filter: 
+Calendar Params: {
+  month: '3',
+  year: '2026',
+  division: 'All',
+  salesEngineer: 'All',
+  userEmail: 'vigneshgovardhan5163@gmail.com',
+  userName: 'vignesh',
+  userRole: 'Admin'
+}
+Calendar baseFilter: 
+[2026-03-14T03:46:26.415Z] GET /api/dashboard/summary?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin
+[2026-03-14T03:46:26.440Z] GET /api/dashboard/enquiries?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin&mode=future&dateType=Enquiry+Date
+API /enquiries params: {
+  division: 'All',
+  salesEngineer: 'All',
+  date: undefined,
+  fromDate: undefined,
+  toDate: undefined,
+  status: undefined,
+  dateType: 'Enquiry Date',
+  search: undefined,
+  userEmail: 'vigneshgovardhan5163@gmail.com',
+  userName: 'vignesh',
+  userRole: 'Admin'
+}
+--- Filtering Logic ---
+fromDate: undefined toDate: undefined date: undefined mode: future search: undefined
+Path: Mode/Default
+Mode: future
+Generated WHERE:  WHERE 1=1  AND CONVERT(VARCHAR(10), em.DueDate, 23) >= CONVERT(VARCHAR(10), @today, 23) 
+[2026-03-14T03:46:30.219Z] GET /api/notifications/36
+[2026-03-14T03:46:30.312Z] GET /api/dashboard/calendar?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin&month=3&year=2026
+Calendar Access Filter: 
+Calendar Params: {
+  month: '3',
+  year: '2026',
+  division: 'All',
+  salesEngineer: 'All',
+  userEmail: 'vigneshgovardhan5163@gmail.com',
+  userName: 'vignesh',
+  userRole: 'Admin'
+}
+Calendar baseFilter: 
+[2026-03-14T03:46:30.331Z] GET /api/dashboard/summary?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin
+[2026-03-14T03:46:30.338Z] GET /api/dashboard/enquiries?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin&mode=future&date=2026-03-09
+API /enquiries params: {
+  division: 'All',
+  salesEngineer: 'All',
+  date: '2026-03-09',
+  fromDate: undefined,
+  toDate: undefined,
+  status: undefined,
+  dateType: undefined,
+  search: undefined,
+  userEmail: 'vigneshgovardhan5163@gmail.com',
+  userName: 'vignesh',
+  userRole: 'Admin'
+}
+--- Filtering Logic ---
+fromDate: undefined toDate: undefined date: 2026-03-09 mode: future search: undefined
+Path: Specific Date
+Generated WHERE:  WHERE 1=1  AND (
+                CONVERT(VARCHAR(10), em.EnquiryDate, 23) = CONVERT(VARCHAR(10), @date, 23) OR
+                CONVERT(VARCHAR(10), em.DueDate, 23) = CONVERT(VARCHAR(10), @date, 23) OR
+                CONVERT(VARCHAR(10), em.SiteVisitDate, 23) = CONVERT(VARCHAR(10), @date, 23) OR
+                EXISTS (SELECT 1 FROM EnquiryQuotes eq WHERE eq.RequestNo = em.RequestNo AND CONVERT(VARCHAR(10), ISNULL(eq.QuoteDate, eq.CreatedAt), 23) = CONVERT(VARCHAR(10), @date, 23))
+            ) 
+[2026-03-14T03:46:40.217Z] GET /api/notifications/36
+[2026-03-14T03:46:50.215Z] GET /api/notifications/36
+[2026-03-14T03:46:51.172Z] GET /api/master/divisions
+[API] /api/master/divisions HIT (Top Level)
+[API] Found 3 divisions: [ 'BMS Project', 'Civil Project', 'Elec Project' ]
+[2026-03-14T03:46:51.177Z] GET /api/enquiries/E2E-SUCCESS-99
+[GET /api/enquiries/E2E-SUCCESS-99] Fetching single enquiry...
+[2026-03-14T03:46:51.183Z] GET /api/system/next-request-no?t=1773460011172
+[2026-03-14T03:46:51.183Z] GET /api/attachments?requestNo=13
+[NextID] MaxID found in DB: 12
+[NextID] Returning: 13
+RequestError: Invalid column name 'Division'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'Division'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'Division'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 1
+    }
+  },
+  number: 207,
+  lineNumber: 1,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'Visibility'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'AttachmentType'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'LinkURL'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'UploadedBy'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+Error fetching single enquiry: RequestError: Invalid object name 'EnquiryConsultant'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid object name 'EnquiryConsultant'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 208,
+      state: 1,
+      class: 16,
+      message: "Invalid object name 'EnquiryConsultant'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 1
+    }
+  },
+  number: 208,
+  lineNumber: 1,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: []
+}
+[2026-03-14T03:46:53.859Z] GET /api/enquiries/E2E-SUCCESS-99
+[GET /api/enquiries/E2E-SUCCESS-99] Fetching single enquiry...
+Error fetching single enquiry: RequestError: Invalid object name 'EnquiryConsultant'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid object name 'EnquiryConsultant'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 208,
+      state: 1,
+      class: 16,
+      message: "Invalid object name 'EnquiryConsultant'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 1
+    }
+  },
+  number: 208,
+  lineNumber: 1,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: []
+}
+[2026-03-14T03:46:55.128Z] GET /api/enquiries/E2E-SUCCESS-99
+[GET /api/enquiries/E2E-SUCCESS-99] Fetching single enquiry...
+Error fetching single enquiry: RequestError: Invalid object name 'EnquiryConsultant'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid object name 'EnquiryConsultant'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 208,
+      state: 1,
+      class: 16,
+      message: "Invalid object name 'EnquiryConsultant'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 1
+    }
+  },
+  number: 208,
+  lineNumber: 1,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: []
+}
+[2026-03-14T03:47:00.219Z] GET /api/notifications/36
+[2026-03-14T03:47:01.603Z] GET /api/dashboard/calendar?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin&month=3&year=2026
+Calendar Access Filter: 
+Calendar Params: {
+  month: '3',
+  year: '2026',
+  division: 'All',
+  salesEngineer: 'All',
+  userEmail: 'vigneshgovardhan5163@gmail.com',
+  userName: 'vignesh',
+  userRole: 'Admin'
+}
+Calendar baseFilter: 
+[2026-03-14T03:47:01.617Z] GET /api/dashboard/summary?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin
+[2026-03-14T03:47:01.627Z] GET /api/dashboard/enquiries?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin&mode=future&dateType=Enquiry+Date
+API /enquiries params: {
+  division: 'All',
+  salesEngineer: 'All',
+  date: undefined,
+  fromDate: undefined,
+  toDate: undefined,
+  status: undefined,
+  dateType: 'Enquiry Date',
+  search: undefined,
+  userEmail: 'vigneshgovardhan5163@gmail.com',
+  userName: 'vignesh',
+  userRole: 'Admin'
+}
+--- Filtering Logic ---
+fromDate: undefined toDate: undefined date: undefined mode: future search: undefined
+Path: Mode/Default
+Mode: future
+Generated WHERE:  WHERE 1=1  AND CONVERT(VARCHAR(10), em.DueDate, 23) >= CONVERT(VARCHAR(10), @today, 23) 
+[2026-03-14T03:47:05.086Z] GET /api/dashboard/calendar?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin&month=3&year=2026
+Calendar Access Filter: 
+Calendar Params: {
+  month: '3',
+  year: '2026',
+  division: 'All',
+  salesEngineer: 'All',
+  userEmail: 'vigneshgovardhan5163@gmail.com',
+  userName: 'vignesh',
+  userRole: 'Admin'
+}
+Calendar baseFilter: 
+[2026-03-14T03:47:05.101Z] GET /api/dashboard/summary?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin
+[2026-03-14T03:47:05.109Z] GET /api/dashboard/enquiries?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin&mode=future&date=2026-03-09
+API /enquiries params: {
+  division: 'All',
+  salesEngineer: 'All',
+  date: '2026-03-09',
+  fromDate: undefined,
+  toDate: undefined,
+  status: undefined,
+  dateType: undefined,
+  search: undefined,
+  userEmail: 'vigneshgovardhan5163@gmail.com',
+  userName: 'vignesh',
+  userRole: 'Admin'
+}
+--- Filtering Logic ---
+fromDate: undefined toDate: undefined date: 2026-03-09 mode: future search: undefined
+Path: Specific Date
+Generated WHERE:  WHERE 1=1  AND (
+                CONVERT(VARCHAR(10), em.EnquiryDate, 23) = CONVERT(VARCHAR(10), @date, 23) OR
+                CONVERT(VARCHAR(10), em.DueDate, 23) = CONVERT(VARCHAR(10), @date, 23) OR
+                CONVERT(VARCHAR(10), em.SiteVisitDate, 23) = CONVERT(VARCHAR(10), @date, 23) OR
+                EXISTS (SELECT 1 FROM EnquiryQuotes eq WHERE eq.RequestNo = em.RequestNo AND CONVERT(VARCHAR(10), ISNULL(eq.QuoteDate, eq.CreatedAt), 23) = CONVERT(VARCHAR(10), @date, 23))
+            ) 
+[2026-03-14T03:47:10.222Z] GET /api/notifications/36
+[2026-03-14T03:47:17.999Z] GET /api/enquiries/E2E-FINAL-01
+[GET /api/enquiries/E2E-FINAL-01] Fetching single enquiry...
+Error fetching single enquiry: RequestError: Invalid object name 'EnquiryConsultant'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid object name 'EnquiryConsultant'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 208,
+      state: 1,
+      class: 16,
+      message: "Invalid object name 'EnquiryConsultant'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 1
+    }
+  },
+  number: 208,
+  lineNumber: 1,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: []
+}
+[2026-03-14T03:47:20.020Z] GET /api/enquiries/E2E-FINAL-01
+[GET /api/enquiries/E2E-FINAL-01] Fetching single enquiry...
+Error fetching single enquiry: RequestError: Invalid object name 'EnquiryConsultant'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid object name 'EnquiryConsultant'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 208,
+      state: 1,
+      class: 16,
+      message: "Invalid object name 'EnquiryConsultant'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 1
+    }
+  },
+  number: 208,
+  lineNumber: 1,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: []
+}
+[2026-03-14T03:47:20.221Z] GET /api/notifications/36
+[2026-03-14T03:47:29.072Z] GET /api/pricing/list/pending?userEmail=vigneshgovardhan5163%40gmail.com
+Pending Pricing (Helper) requested for: vigneshgovardhan5163@gmail.com
+Error fetching pending pricing: RequestError: Invalid column name 'LeadJobCode'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'LeadJobCode'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'LeadJobCode'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 3
+    }
+  },
+  number: 207,
+  lineNumber: 3,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: []
+}
+[2026-03-14T03:47:30.217Z] GET /api/notifications/36
+[2026-03-14T03:47:30.420Z] GET /api/dashboard/calendar?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin&month=3&year=2026
+Calendar Access Filter: 
+Calendar Params: {
+  month: '3',
+  year: '2026',
+  division: 'All',
+  salesEngineer: 'All',
+  userEmail: 'vigneshgovardhan5163@gmail.com',
+  userName: 'vignesh',
+  userRole: 'Admin'
+}
+Calendar baseFilter: 
+[2026-03-14T03:47:30.431Z] GET /api/dashboard/summary?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin
+[2026-03-14T03:47:30.437Z] GET /api/dashboard/enquiries?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin&mode=future&dateType=Enquiry+Date
+API /enquiries params: {
+  division: 'All',
+  salesEngineer: 'All',
+  date: undefined,
+  fromDate: undefined,
+  toDate: undefined,
+  status: undefined,
+  dateType: 'Enquiry Date',
+  search: undefined,
+  userEmail: 'vigneshgovardhan5163@gmail.com',
+  userName: 'vignesh',
+  userRole: 'Admin'
+}
+--- Filtering Logic ---
+fromDate: undefined toDate: undefined date: undefined mode: future search: undefined
+Path: Mode/Default
+Mode: future
+Generated WHERE:  WHERE 1=1  AND CONVERT(VARCHAR(10), em.DueDate, 23) >= CONVERT(VARCHAR(10), @today, 23) 
+[2026-03-14T03:47:32.555Z] GET /api/dashboard/calendar?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin&month=3&year=2026
+Calendar Access Filter: 
+Calendar Params: {
+  month: '3',
+  year: '2026',
+  division: 'All',
+  salesEngineer: 'All',
+  userEmail: 'vigneshgovardhan5163@gmail.com',
+  userName: 'vignesh',
+  userRole: 'Admin'
+}
+Calendar baseFilter: 
+[2026-03-14T03:47:32.569Z] GET /api/dashboard/summary?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin
+[2026-03-14T03:47:32.576Z] GET /api/dashboard/enquiries?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin&mode=future&date=2026-03-09
+API /enquiries params: {
+  division: 'All',
+  salesEngineer: 'All',
+  date: '2026-03-09',
+  fromDate: undefined,
+  toDate: undefined,
+  status: undefined,
+  dateType: undefined,
+  search: undefined,
+  userEmail: 'vigneshgovardhan5163@gmail.com',
+  userName: 'vignesh',
+  userRole: 'Admin'
+}
+--- Filtering Logic ---
+fromDate: undefined toDate: undefined date: 2026-03-09 mode: future search: undefined
+Path: Specific Date
+Generated WHERE:  WHERE 1=1  AND (
+                CONVERT(VARCHAR(10), em.EnquiryDate, 23) = CONVERT(VARCHAR(10), @date, 23) OR
+                CONVERT(VARCHAR(10), em.DueDate, 23) = CONVERT(VARCHAR(10), @date, 23) OR
+                CONVERT(VARCHAR(10), em.SiteVisitDate, 23) = CONVERT(VARCHAR(10), @date, 23) OR
+                EXISTS (SELECT 1 FROM EnquiryQuotes eq WHERE eq.RequestNo = em.RequestNo AND CONVERT(VARCHAR(10), ISNULL(eq.QuoteDate, eq.CreatedAt), 23) = CONVERT(VARCHAR(10), @date, 23))
+            ) 
+[2026-03-14T03:47:40.219Z] GET /api/notifications/36
+[2026-03-14T03:47:46.461Z] GET /api/dashboard/calendar?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin&month=3&year=2026
+Calendar Access Filter: 
+Calendar Params: {
+  month: '3',
+  year: '2026',
+  division: 'All',
+  salesEngineer: 'All',
+  userEmail: 'vigneshgovardhan5163@gmail.com',
+  userName: 'vignesh',
+  userRole: 'Admin'
+}
+Calendar baseFilter: 
+[2026-03-14T03:47:46.475Z] GET /api/dashboard/summary?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin
+[2026-03-14T03:47:46.481Z] GET /api/dashboard/enquiries?division=All&salesEngineer=All&userEmail=vigneshgovardhan5163%40gmail.com&userName=vignesh&userRole=Admin&mode=future&dateType=Enquiry+Date
+API /enquiries params: {
+  division: 'All',
+  salesEngineer: 'All',
+  date: undefined,
+  fromDate: undefined,
+  toDate: undefined,
+  status: undefined,
+  dateType: 'Enquiry Date',
+  search: undefined,
+  userEmail: 'vigneshgovardhan5163@gmail.com',
+  userName: 'vignesh',
+  userRole: 'Admin'
+}
+--- Filtering Logic ---
+fromDate: undefined toDate: undefined date: undefined mode: future search: undefined
+Path: Mode/Default
+Mode: future
+Generated WHERE:  WHERE 1=1  AND CONVERT(VARCHAR(10), em.DueDate, 23) >= CONVERT(VARCHAR(10), @today, 23) 
+[2026-03-14T03:47:50.215Z] GET /api/notifications/36
+[2026-03-14T03:47:51.942Z] GET /api/master/divisions
+[API] /api/master/divisions HIT (Top Level)
+[2026-03-14T03:47:51.944Z] GET /api/system/next-request-no?t=1773460071941
+[API] Found 3 divisions: [ 'BMS Project', 'Civil Project', 'Elec Project' ]
+[NextID] MaxID found in DB: 12
+[NextID] Returning: 13
+[2026-03-14T03:47:52.010Z] GET /api/attachments?requestNo=13
+RequestError: Invalid column name 'Division'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'Division'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'Division'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 1
+    }
+  },
+  number: 207,
+  lineNumber: 1,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'Visibility'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'AttachmentType'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'LinkURL'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'UploadedBy'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[2026-03-14T03:48:00.212Z] GET /api/notifications/36
+[2026-03-14T03:48:10.211Z] GET /api/notifications/36
+[2026-03-14T03:48:20.220Z] GET /api/notifications/36
+[2026-03-14T03:48:30.212Z] GET /api/notifications/36
+[2026-03-14T03:48:40.217Z] GET /api/notifications/36
+[2026-03-14T03:48:50.219Z] GET /api/notifications/36
+[2026-03-14T03:49:00.215Z] GET /api/notifications/36
+[2026-03-14T03:49:10.211Z] GET /api/notifications/36
+[2026-03-14T03:49:20.222Z] GET /api/notifications/36
+[2026-03-14T03:49:30.224Z] GET /api/notifications/36
+[2026-03-14T03:49:40.213Z] GET /api/notifications/36
+[2026-03-14T03:49:50.221Z] GET /api/notifications/36
+[2026-03-14T03:50:00.211Z] GET /api/notifications/36
+[2026-03-14T03:50:10.216Z] GET /api/notifications/36
+[2026-03-14T03:50:11.562Z] POST /api/customers
+[2026-03-14T03:50:20.220Z] GET /api/notifications/36
+[2026-03-14T03:50:30.213Z] GET /api/notifications/36
+[2026-03-14T03:50:34.522Z] POST /api/contacts
+POST /api/contacts - Payload: {
+  Category: 'Contractor',
+  CompanyName: 'TCS',
+  Prefix: 'Mr',
+  ContactName: '98765432',
+  Designation: 'engineer',
+  CategoryOfDesignation: 'Technical',
+  Address1: 'fcgvbhjn',
+  Address2: 'bvcfedx',
+  FaxNo: '1234',
+  Phone: '9865432',
+  Mobile1: '987654321',
+  Mobile2: '98765432',
+  EmailId: 'jhevre@gmail.com',
+  RequestNo: '13'
+}
+[2026-03-14T03:50:40.216Z] GET /api/notifications/36
+[2026-03-14T03:50:50.227Z] GET /api/notifications/36
+[2026-03-14T03:50:58.425Z] PUT /api/contacts/24
+PUT /api/contacts/:id - Payload: {
+  Category: 'Contractor',
+  CompanyName: 'TCS',
+  Prefix: 'Mr',
+  ContactName: 'vignesh',
+  Designation: 'engineer',
+  CategoryOfDesignation: 'Technical',
+  Address1: 'fcgvbhjn',
+  Address2: 'bvcfedx',
+  FaxNo: '1234',
+  Phone: '9865432',
+  Mobile1: '987654321',
+  Mobile2: '98765432',
+  EmailId: 'jhevre@gmail.com',
+  ID: 24
+}
+[2026-03-14T03:51:00.216Z] GET /api/notifications/36
+[2026-03-14T03:51:10.224Z] GET /api/notifications/36
+[2026-03-14T03:51:20.216Z] GET /api/notifications/36
+[2026-03-14T03:51:30.211Z] GET /api/notifications/36
+[2026-03-14T03:51:40.213Z] GET /api/notifications/36
+[2026-03-14T03:51:43.623Z] POST /api/customers
+[2026-03-14T03:51:50.224Z] GET /api/notifications/36
+[2026-03-14T03:52:00.210Z] GET /api/notifications/36
+[2026-03-14T03:52:10.216Z] GET /api/notifications/36
+[2026-03-14T03:52:20.225Z] GET /api/notifications/36
+[2026-03-14T03:52:26.355Z] POST /api/customers
+[2026-03-14T03:52:30.214Z] GET /api/notifications/36
+[2026-03-14T03:52:40.220Z] GET /api/notifications/36
+[2026-03-14T03:52:50.216Z] GET /api/notifications/36
+[2026-03-14T03:53:00.221Z] GET /api/notifications/36
+[2026-03-14T03:53:10.225Z] GET /api/notifications/36
+[2026-03-14T03:53:20.221Z] GET /api/notifications/36
+[2026-03-14T03:53:30.219Z] GET /api/notifications/36
+[2026-03-14T03:53:40.222Z] GET /api/notifications/36
+[2026-03-14T03:53:47.706Z] POST /api/enquiries
+ReferenceError: transaction is not defined
+    at D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\index.js:1205:9
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+[2026-03-14T03:54:12.915Z] GET /api/notifications/36
+[2026-03-14T03:54:20.222Z] GET /api/notifications/36
+[2026-03-14T03:54:30.223Z] GET /api/notifications/36
+[2026-03-14T03:54:40.995Z] GET /api/notifications/36
+[2026-03-14T03:54:46.895Z] POST /api/enquiries
+ReferenceError: transaction is not defined
+    at D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\index.js:1205:9
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+[2026-03-14T03:54:50.221Z] GET /api/notifications/36
+[2026-03-14T03:55:00.996Z] GET /api/notifications/36
+[2026-03-14T03:55:10.911Z] GET /api/notifications/36
+[2026-03-14T03:55:20.214Z] GET /api/notifications/36
+[2026-03-14T03:55:30.215Z] GET /api/notifications/36
+[2026-03-14T03:55:41.002Z] GET /api/notifications/36
+[2026-03-14T03:55:50.992Z] GET /api/notifications/36
+[2026-03-14T03:56:01.005Z] GET /api/notifications/36
+[2026-03-14T03:56:10.998Z] GET /api/notifications/36
+[2026-03-14T03:56:20.997Z] GET /api/notifications/36
+[2026-03-14T03:56:30.999Z] GET /api/notifications/36
+[2026-03-14T03:56:56.002Z] GET /api/notifications/36
+[2026-03-14T03:57:55.999Z] GET /api/notifications/36

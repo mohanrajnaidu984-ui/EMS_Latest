@@ -1,0 +1,84 @@
+﻿[dotenv@17.2.3] injecting env (9) from .env -- tip: ≡ƒöÉ prevent committing .env to code: https://dotenvx.com/precommit
+node : Error: TypeError: 
+The "config.server" 
+property is required and 
+must be of type string.
+At line:1 char:1
++ node 
+debug_enquiry_43_pricing.js 
+2>&1 | Out-File -FilePath 
+debug_43_o ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~
+    + CategoryInfo          
+    : NotSpecified: (Error  
+  : TypeErro...of type st   
+ ring.:String) [], Remot    
+eException
+    + FullyQualifiedErrorId 
+    : NativeCommandError
+ 
+    at new Connection 
+(D:\Data\Anti gravity\EMS_De
+mo-by-Antigravity-master\EMS
+\New-EMS-de9b154a3f16b49898b
+382f5d7bad10bd9734b51\server
+\node_modules\tedious\lib\co
+nnection.js:289:13)
+    at D:\Data\Anti gravity\
+EMS_Demo-by-Antigravity-mast
+er\EMS\New-EMS-de9b154a3f16b
+49898b382f5d7bad10bd9734b51\
+server\node_modules\mssql\li
+b\tedious\connection-pool.js
+:78:19
+    at new Promise 
+(<anonymous>)
+    at 
+ConnectionPool._poolCreate 
+(D:\Data\Anti gravity\EMS_De
+mo-by-Antigravity-master\EMS
+\New-EMS-de9b154a3f16b49898b
+382f5d7bad10bd9734b51\server
+\node_modules\mssql\lib\tedi
+ous\connection-pool.js:67:12
+)
+    at 
+ConnectionPool._connect 
+(D:\Data\Anti gravity\EMS_De
+mo-by-Antigravity-master\EMS
+\New-EMS-de9b154a3f16b49898b
+382f5d7bad10bd9734b51\server
+\node_modules\mssql\lib\base
+\connection-pool.js:445:10)
+    at D:\Data\Anti gravity\
+EMS_Demo-by-Antigravity-mast
+er\EMS\New-EMS-de9b154a3f16b
+49898b382f5d7bad10bd9734b51\
+server\node_modules\mssql\li
+b\base\connection-pool.js:41
+7:19
+    at new Promise 
+(<anonymous>)
+    at 
+ConnectionPool.connect 
+(D:\Data\Anti gravity\EMS_De
+mo-by-Antigravity-master\EMS
+\New-EMS-de9b154a3f16b49898b
+382f5d7bad10bd9734b51\server
+\node_modules\mssql\lib\base
+\connection-pool.js:416:12)
+    at Object.connect 
+(D:\Data\Anti gravity\EMS_De
+mo-by-Antigravity-master\EMS
+\New-EMS-de9b154a3f16b49898b
+382f5d7bad10bd9734b51\server
+\node_modules\mssql\lib\glob
+al-connection.js:59:27)
+    at debugEnquiry43 
+(D:\Data\Anti gravity\EMS_De
+mo-by-Antigravity-master\EMS
+\New-EMS-de9b154a3f16b49898b
+382f5d7bad10bd9734b51\server
+\debug_enquiry_43_pricing.js
+:6:19)

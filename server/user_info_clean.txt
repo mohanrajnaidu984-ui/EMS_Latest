@@ -1,0 +1,2 @@
+DEPT: Electrical
+ROLES: Enquiry,Pricing,Quote,Probability,Sales Report,Sales Target

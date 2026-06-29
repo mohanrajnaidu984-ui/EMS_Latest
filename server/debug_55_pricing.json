@@ -1,0 +1,83 @@
+﻿Pricing Data for 55:
+Options: [
+  {
+    id: 233,
+    name: 'Base Price',
+    itemName: 'Civil Project',
+    customerName: 'Unitco Al Bahrain Company WLL'
+  },
+  {
+    id: 237,
+    name: 'Base Price',
+    itemName: 'Civil Project',
+    customerName: 'Electrical'
+  },
+  {
+    id: 241,
+    name: 'Base Price',
+    itemName: 'BMS',
+    customerName: 'Glory Contracting'
+  },
+  {
+    id: 242,
+    name: 'Base Price',
+    itemName: 'Electrical',
+    customerName: 'Glory Contracting'
+  },
+  {
+    id: 234,
+    name: 'Base Price',
+    itemName: 'Electrical',
+    customerName: 'Unitco Al Bahrain Company WLL'
+  },
+  {
+    id: 238,
+    name: 'Base Price',
+    itemName: 'Electrical',
+    customerName: 'Electrical'
+  },
+  {
+    id: 240,
+    name: 'Base Price',
+    itemName: 'Civil Project',
+    customerName: 'Glory Contracting'
+  },
+  {
+    id: 235,
+    name: 'Base Price',
+    itemName: 'BMS',
+    customerName: 'Unitco Al Bahrain Company WLL'
+  },
+  {
+    id: 239,
+    name: 'Base Price',
+    itemName: 'BMS',
+    customerName: 'Electrical'
+  }
+]
+Jobs: [
+  { id: 145, itemName: 'Civil Project', parentId: null },
+  { id: 146, itemName: 'Electrical', parentId: 145 },
+  { id: 147, itemName: 'BMS', parentId: 146 },
+  { id: 148, itemName: 'BMS', parentId: null }
+]
+Values count: 7
+Values for Option 233 (Base Price): []
+Values for Option 237 (Base Price): [
+  { job: 147, price: 1, customer: 'Electrical' },
+  { job: 148, price: 1, customer: 'Electrical' }
+]
+Values for Option 241 (Base Price): []
+Values for Option 242 (Base Price): []
+Values for Option 234 (Base Price): []
+Values for Option 238 (Base Price): [
+  { job: 147, price: 1, customer: 'Electrical' },
+  { job: 148, price: 1, customer: 'Electrical' }
+]
+Values for Option 240 (Base Price): []
+Values for Option 235 (Base Price): []
+Values for Option 239 (Base Price): [
+  { job: 143, price: 1, customer: 'Electrical' },
+  { job: 147, price: 1, customer: 'Electrical' },
+  { job: 148, price: 1, customer: 'Electrical' }
+]

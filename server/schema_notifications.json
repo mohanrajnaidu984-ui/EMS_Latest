@@ -1,0 +1,42 @@
+[
+  {
+    "COLUMN_NAME": "ID",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "UserID",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "Type",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "Message",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "LinkID",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "IsRead",
+    "COLUMN_DEFAULT": "((0))",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "CreatedAt",
+    "COLUMN_DEFAULT": "(getdate())",
+    "DATA_TYPE": "datetime"
+  },
+  {
+    "COLUMN_NAME": "CreatedBy",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  }
+]

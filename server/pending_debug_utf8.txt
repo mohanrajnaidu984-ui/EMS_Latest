@@ -1,0 +1,27 @@
+﻿[dotenv@17.2.3] injecting env (9) from .env -- tip: ≡ƒöÉ prevent committing .env to code: https://dotenvx.com/precommit
+Connected to MSSQL Database
+User: {
+  userEmail: 'maintenance1@almoayyedcg.com',
+  userFullName: 'JISHIL KUMAR UPPUNGAL VIJAYAN\r\n',
+  userDepartment: 'ac maint-hvac',
+  isAdmin: false
+}
+Found 10 potential enquiries
+--- PENDING REPORT ---
+[
+  {
+    "RequestNo": "21",
+    "ProjectName": "Test project",
+    "MyJobs": [
+      "AC Maint-HVAC",
+      "AC Maint-Elec"
+    ],
+    "IsPending": false,
+    "PricingFound": [
+      {
+        "job": "AC Maint-Elec",
+        "price": 10
+      }
+    ]
+  }
+]

@@ -1,0 +1,202 @@
+[
+  {
+    "COLUMN_NAME": "RequestNo",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "EnquiryDate",
+    "DATA_TYPE": "datetime"
+  },
+  {
+    "COLUMN_NAME": "DueDate",
+    "DATA_TYPE": "datetime"
+  },
+  {
+    "COLUMN_NAME": "SiteVisitDate",
+    "DATA_TYPE": "datetime"
+  },
+  {
+    "COLUMN_NAME": "SourceOfEnquiry",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "CustomerName",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "ProjectName",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "ClientName",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "ConsultantName",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "EnquiryDetails",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "Doc_HardCopies",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "Doc_Drawing",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "Doc_CD_DVD",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "Doc_Spec",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "Doc_EquipmentSchedule",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "OthersSpecify",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "Remarks",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "SendAcknowledgementMail",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "ED_CEOSignatureRequired",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "Status",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "CreatedAt",
+    "DATA_TYPE": "datetime"
+  },
+  {
+    "COLUMN_NAME": "CreatedBy",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "ReceivedFrom",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "AdditionalNotificationEmails",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "AcknowledgementSE",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "EnquiryStatus",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "ProbabilityOption",
+    "DATA_TYPE": "varchar"
+  },
+  {
+    "COLUMN_NAME": "Probability",
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "AACQuotedContractor",
+    "DATA_TYPE": "varchar"
+  },
+  {
+    "COLUMN_NAME": "CustomerPreferredPrice",
+    "DATA_TYPE": "varchar"
+  },
+  {
+    "COLUMN_NAME": "PreferredPriceOption1",
+    "DATA_TYPE": "varchar"
+  },
+  {
+    "COLUMN_NAME": "PreferredPriceOption2",
+    "DATA_TYPE": "varchar"
+  },
+  {
+    "COLUMN_NAME": "PreferredPriceOption3",
+    "DATA_TYPE": "varchar"
+  },
+  {
+    "COLUMN_NAME": "ExpectedOrderDate",
+    "DATA_TYPE": "datetime"
+  },
+  {
+    "COLUMN_NAME": "ProbabilityRemarks",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "WonOrderValue",
+    "DATA_TYPE": "varchar"
+  },
+  {
+    "COLUMN_NAME": "WonJobNo",
+    "DATA_TYPE": "varchar"
+  },
+  {
+    "COLUMN_NAME": "WonCustomerName",
+    "DATA_TYPE": "varchar"
+  },
+  {
+    "COLUMN_NAME": "WonContactName",
+    "DATA_TYPE": "varchar"
+  },
+  {
+    "COLUMN_NAME": "WonContactNo",
+    "DATA_TYPE": "varchar"
+  },
+  {
+    "COLUMN_NAME": "LostCompetitor",
+    "DATA_TYPE": "varchar"
+  },
+  {
+    "COLUMN_NAME": "LostReason",
+    "DATA_TYPE": "varchar"
+  },
+  {
+    "COLUMN_NAME": "LostCompetitorPrice",
+    "DATA_TYPE": "varchar"
+  },
+  {
+    "COLUMN_NAME": "RetenderDate",
+    "DATA_TYPE": "datetime"
+  },
+  {
+    "COLUMN_NAME": "OnHoldDate",
+    "DATA_TYPE": "datetime"
+  },
+  {
+    "COLUMN_NAME": "CancelDate",
+    "DATA_TYPE": "datetime"
+  },
+  {
+    "COLUMN_NAME": "WonQuoteRef",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "WonOption",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "CustomerRefNo",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "LostDate",
+    "DATA_TYPE": "datetime"
+  }
+]

@@ -1,0 +1,57 @@
+﻿--- ENQUIRY FOR ---
+[
+  {
+    "ID": 165,
+    "ParentID": null,
+    "ItemName": "Civil Project",
+    "LeadJobCode": "L1"
+  },
+  {
+    "ID": 166,
+    "ParentID": 165,
+    "ItemName": "Electrical",
+    "LeadJobCode": null
+  },
+  {
+    "ID": 167,
+    "ParentID": 166,
+    "ItemName": "BMS",
+    "LeadJobCode": null
+  },
+  {
+    "ID": 168,
+    "ParentID": null,
+    "ItemName": "BMS",
+    "LeadJobCode": "L2"
+  }
+]
+--- CUSTOMERS IN OPTIONS ---
+[
+  {
+    "CustomerName": "Civil Project"
+  },
+  {
+    "CustomerName": "Electrical"
+  },
+  {
+    "CustomerName": "KARTEC SERVICES WLL"
+  },
+  {
+    "CustomerName": "Ms. Amal Almurbati"
+  }
+]
+--- CUSTOMERS IN VALUES ---
+[
+  {
+    "CustomerName": "Civil Project"
+  },
+  {
+    "CustomerName": "Electrical"
+  },
+  {
+    "CustomerName": "KARTEC SERVICES WLL"
+  },
+  {
+    "CustomerName": "Ms. Amal Almurbati"
+  }
+]

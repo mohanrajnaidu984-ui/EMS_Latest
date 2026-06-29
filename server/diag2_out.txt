@@ -1,0 +1,22 @@
+﻿[dotenv@17.2.3] injecting env (9) from .env -- tip: ΓÜÖ∩╕Å  suppress all logs with { quiet: true }
+=== Enquiry 14 items + CommonMailIds ===
+185 | null | Civil Project | civil@almoayyedcg.com
+185 | null | Civil Project | civil@almoayyedcg.com
+186 | 185 | Electrical | electrical@almoayyedcg.com
+=== All ConcernedSE users ===
+mohanraj.naidu984@gmail.com | null
+bmselveng1@almoayyedcg.com | BMS
+civil@almoayyedcg.com | Civil Project
+electrical@almoayyedcg.com | Electrical
+mohan.naidu@almoayyedcg.com | BMS
+santhosh.kumar@almoayyedcg.com | Civil Project
+siju.varghese@almoayyedcg.com | Civil Project
+=== All Master_EnquiryFor ===
+BMS | bms@almoayyedcg.com,bmselveng1@almoayyedcg.com
+Civil Project | civil@almoayyedcg.com
+Electrical | electrical@almoayyedcg.com
+BMS - PICV | bms@almoayyedcg.com,bmselveng1@almoayyedcg.com
+BMS - BTU Meter | bms@almoayyedcg.com,bmselveng1@almoayyedcg.com
+BMS - Thermostat | bms@almoayyedcg.com,bmselveng1@almoayyedcg.com
+BMS - ELV | bms@almoayyedcg.com,bmselveng1@almoayyedcg.com
+Civil Project | civil@almoayyedcg.com

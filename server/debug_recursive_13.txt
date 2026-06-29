@@ -1,0 +1,18 @@
+--- DEBUGGING REQUEST 13 ---
+
+--- JOBS ---
+ID: 7, Parent: null, Name: 'L1 - Civil Project'
+ID: 8, Parent: 7, Name: 'Electrical'
+ID: 9, Parent: 8, Name: 'BMS'
+
+--- OPTIONS ---
+ID: 9, Name: 'Base Price', ItemName: 'BMS', Cust: 'Mr. Bader Mohammed K. Albalaawy'
+ID: 10, Name: 'Base Price', ItemName: 'L1 - Civil Project', Cust: 'Mr. Bader Mohammed K. Albalaawy'
+ID: 11, Name: 'Base Price', ItemName: 'Electrical', Cust: 'Mr. Bader Mohammed K. Albalaawy'
+
+--- VALUES ---
+ID: 1, OptID: 9, EnqForID: 9, Item: 'BMS', Price: 11, Cust: 'Mr. Bader Mohammed K. Albalaawy'
+ID: 2, OptID: 11, EnqForID: 8, Item: 'Electrical', Price: 22, Cust: 'Mr. Bader Mohammed K. Albalaawy'
+ID: 3, OptID: 9, EnqForID: 7, Item: 'L1 - Civil Project', Price: 89, Cust: 'Mr. Bader Mohammed K. Albalaawy'
+ID: 4, OptID: 10, EnqForID: 7, Item: 'L1 - Civil Project', Price: 56, Cust: 'Mr. Bader Mohammed K. Albalaawy'
+ID: 5, OptID: 11, EnqForID: 7, Item: 'L1 - Civil Project', Price: 89, Cust: 'Mr. Bader Mohammed K. Albalaawy'

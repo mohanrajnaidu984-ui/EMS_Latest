@@ -1,0 +1,17 @@
+[
+  {
+    "QuoteNumber": "ACC/ELE/13-L1/3-R0",
+    "QuoteDate": "2026-01-05T00:00:00.000Z",
+    "CreatedAt": "2026-01-26T17:01:23.500Z"
+  },
+  {
+    "QuoteNumber": "ACC/CVLP/13-L1/2-R0",
+    "QuoteDate": "2026-01-11T00:00:00.000Z",
+    "CreatedAt": "2026-01-26T16:59:04.120Z"
+  },
+  {
+    "QuoteNumber": "AAC/BMS/13-L1/1-R0",
+    "QuoteDate": "2026-01-14T00:00:00.000Z",
+    "CreatedAt": "2026-01-26T15:35:26.633Z"
+  }
+]

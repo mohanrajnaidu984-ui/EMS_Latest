@@ -1,0 +1,129 @@
+{
+  "enquiry": {
+    "RequestNo": "45",
+    "ProjectName": "Civil Project 5",
+    "CustomerName": "EMCO,BEMCO",
+    "ReceivedFrom": "Ashique,Kumad Ranjan",
+    "EnquiryDate": "2026-02-13T00:00:00.000Z",
+    "DueDate": "2026-02-14T00:00:00.000Z",
+    "CustomerRefNo": "2314345",
+    "EnquiryType": "New Tender"
+  },
+  "customerDetails": null,
+  "divisions": [],
+  "companyDetails": {
+    "code": "ACC",
+    "logo": "uploads/logos/1769321540859-ACC Logo.png",
+    "name": "Almoayyed Contracting",
+    "divisionCode": "CVLP",
+    "departmentCode": "ACC",
+    "address": "Khamis, Bahrain",
+    "phone": "12345",
+    "fax": "23424"
+  },
+  "availableProfiles": [
+    {
+      "code": "ACC",
+      "departmentCode": "ACC",
+      "divisionCode": "CVLP",
+      "name": "Almoayyed Contracting",
+      "logo": "uploads/logos/1769321540859-ACC Logo.png",
+      "address": "Khamis, Bahrain",
+      "phone": "12345",
+      "fax": "23424",
+      "email": "civil@almoayyedcg.com",
+      "itemName": "L1 - Civil Project"
+    },
+    {
+      "code": "AAC",
+      "departmentCode": "AAC",
+      "divisionCode": "ELEP",
+      "name": "Almoayyed Air Conditioning",
+      "logo": "uploads/logos/1769321608211-AAC Logo.png",
+      "address": "Khamis, Bahrain",
+      "phone": "123345",
+      "fax": "12312425",
+      "email": "electrical@almoayyedcg.com",
+      "itemName": "Electrical"
+    },
+    {
+      "code": "AAC",
+      "departmentCode": "AAC",
+      "divisionCode": "BMS",
+      "name": "Almoayyed Air Conditioning",
+      "logo": "uploads/logos/1769321435260-AAC Logo.png",
+      "address": "P.O. Box 32232, Manama, Khamis, Kingdom of Bahrain",
+      "phone": "17404949",
+      "fax": "17400396",
+      "email": "bms@almoayyedcg.com",
+      "itemName": "BMS"
+    }
+  ],
+  "preparedByOptions": [
+    {
+      "value": "Civil",
+      "label": "Civil",
+      "type": "SE"
+    },
+    {
+      "value": "Electrical",
+      "label": "Electrical",
+      "type": "SE"
+    },
+    {
+      "value": "BMS",
+      "label": "BMS",
+      "type": "SE"
+    }
+  ],
+  "customerOptions": [
+    "EMCO",
+    "BEMCO"
+  ],
+  "customerContacts": {
+    "EMCO": "Ashique",
+    "BEMCO": "Kumad Ranjan"
+  },
+  "leadJobPrefix": "L1",
+  "divisionEmails": [
+    {
+      "itemName": "L1 - Civil Project",
+      "ccMailIds": "",
+      "commonMailIds": ""
+    },
+    {
+      "itemName": "Electrical",
+      "ccMailIds": "electrical@almoayyedcg.com,electrical_HOD@almoayyedcg.com",
+      "commonMailIds": "electrical@almoayyedcg.com"
+    },
+    {
+      "itemName": "BMS",
+      "ccMailIds": "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com,mohan.naidu@almoayyedcg.com",
+      "commonMailIds": "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com"
+    }
+  ],
+  "quoteNumber": "Draft",
+  "divisionsHierarchy": [
+    {
+      "id": 111,
+      "parentId": null,
+      "itemName": "L1 - Civil Project",
+      "commonMailIds": null,
+      "ccMailIds": null
+    },
+    {
+      "id": 112,
+      "parentId": 111,
+      "itemName": "Electrical",
+      "commonMailIds": "electrical@almoayyedcg.com",
+      "ccMailIds": "electrical_HOD@almoayyedcg.com"
+    },
+    {
+      "id": 113,
+      "parentId": 112,
+      "itemName": "BMS",
+      "commonMailIds": "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com",
+      "ccMailIds": "mohan.naidu@almoayyedcg.com"
+    }
+  ]
+}

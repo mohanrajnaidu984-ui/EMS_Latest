@@ -1,0 +1,6 @@
+﻿[dotenv@17.2.3] injecting env (13) from .env -- tip: ΓÜÖ∩╕Å  write to custom object with { processEnv: myObject }
+Connected to MSSQL Database
+ITEM: [Electrical] PRICE: [678] OPTION: [Price]
+ITEM: [BMS] PRICE: [6000] OPTION: [Price]
+ITEM: [BMS] PRICE: [1234567] OPTION: [adaDS]
+ITEM: [Electrical] PRICE: [12345] OPTION: [Price]

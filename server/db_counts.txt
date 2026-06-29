@@ -1,0 +1,11 @@
+EnquiryMaster: 3
+EnquiryCustomer: 6
+Master_CustomerName: 6
+ReceivedFrom: 6
+Master_ReceivedFrom: 4
+ConcernedSE: 4
+Master_ConcernedSE: 3
+EnquiryType: 6
+Master_EnquiryType: 4
+EnquiryFor: 5
+Master_EnquiryFor: 4

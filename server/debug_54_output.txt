@@ -1,0 +1,44 @@
+Connecting to: 151.50.1.116 EMS_DB
+=== QUOTES FOR ENQUIRY 54 ===
+[
+  {
+    "ID": 89,
+    "QuoteNumber": "AAC/BMS/54-L1/48-R0",
+    "ToName": "Electrical",
+    "PreparedBy": "BMS",
+    "Status": "Saved",
+    "RevisionNo": 0,
+    "PreparedByEmail": "bmselveng1@almoayyedcg.com"
+  },
+  {
+    "ID": 90,
+    "QuoteNumber": "ACC/ELE/54-L1/49-R0",
+    "ToName": "Civil Project",
+    "PreparedBy": "Electrical",
+    "Status": "Saved",
+    "RevisionNo": 0,
+    "PreparedByEmail": "electrical@almoayyedcg.com"
+  }
+]
+
+=== ENQUIRY 54 HIERARCHY ===
+[
+  {
+    "ID": 138,
+    "ParentID": null,
+    "ItemName": "Civil Project",
+    "LeadJobCode": "L1"
+  },
+  {
+    "ID": 139,
+    "ParentID": 138,
+    "ItemName": "Electrical",
+    "LeadJobCode": null
+  },
+  {
+    "ID": 140,
+    "ParentID": 139,
+    "ItemName": "BMS",
+    "LeadJobCode": null
+  }
+]

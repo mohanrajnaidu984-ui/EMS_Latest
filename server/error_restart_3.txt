@@ -1,0 +1,3856 @@
+SERVER STARTING - ACK V3 - Registering Sales Target Routes
+[dotenv@17.3.1] injecting env (13) from .env -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
+--- Email Config ---
+SMTP_HOST: smtp.gmail.com
+SMTP_USER: vigneshgovardhan5163@gmail.com
+SMTP_PORT: 587
+[2026-03-14 04:08:29] DEBUG Creating transport: nodemailer (7.0.13; +https://nodemailer.com/; SMTP/7.0.13[client:7.0.13])
+[dotenv@17.3.1] injecting env (0) from .env -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
+[2026-03-14 04:08:29] DEBUG Creating transport: nodemailer (7.0.13; +https://nodemailer.com/; SMTP/7.0.13[client:7.0.13])
+Loaded 40 vectors from local file.
+[dotenv@17.3.1] injecting env (0) from .env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+Starting server initialization...
+PORT: 5001
+Server running on port 5001
+Connected to MSSQL Database
+Connected to MSSQL Database
+Database connected successfully.
+Adding LeadJobCode column to EnquiryFor...
+LeadJobCode column added.
+Creating EnquiryConsultant table...
+EnquiryConsultant table created.
+[2026-03-14T04:08:32.916Z] GET /api/notifications/36
+[2026-03-14T04:08:34.509Z] POST /api/enquiries
+Updating Master_CustomerName for: [ 'TCS' ]
+Updated Master_CustomerName for TCS. Rows affected: 1
+Updating Master_ClientName for: wipro
+Starting Email Logic...
+SelectedEnquiryFor: [
+  {
+    itemName: 'Electrical',
+    leadJobCode: 'L1',
+    parentId: null,
+    parentName: null,
+    id: 'uqmm64m2l'
+  },
+  {
+    itemName: 'Mechanical',
+    parentId: 'uqmm64m2l',
+    parentName: 'Electrical',
+    id: 'hgq2wxgb9'
+  },
+  {
+    itemName: 'Mechanical',
+    leadJobCode: 'L2',
+    parentId: null,
+    parentName: null,
+    id: '2odz7ge7t'
+  },
+  {
+    itemName: 'Electrical',
+    parentId: '2odz7ge7t',
+    parentName: 'Mechanical',
+    id: 'ep72i7eqo'
+  }
+]
+SelectedConcernedSEs: [ 'SE1 - John Doe' ]
+Recipients To: [ 'se1@comp.com' ]
+Recipients CC: []
+[Email Debug] Checking AutoAck: 'false' (Type: boolean)
+--- START NOTIFICATION GENERATION ---
+Request: 13, Type: New Enquiry, Trigger: vignesh (vigneshgovardhan5163@gmail.com)
+Enquiry Created By: vignesh
+Added Creator Email: vigneshgovardhan5163@gmail.com
+Found 1 Concerned SEs linked.
+Added Concerned SE Email: se1@comp.com (Name: SE1 - John Doe)
+Found 4 Enquiry Items linked.
+Removed Trigger User Email: vigneshgovardhan5163@gmail.com
+Final Recipient List: [ 'se1@comp.com' ]
+Notification inserted for UserID: 33 (se1@comp.com)
+--- END NOTIFICATION GENERATION ---
+[2026-03-14T04:08:34.756Z] POST /api/attachments/upload?requestNo=13&userName=vignesh&visibility=Public&type=File&division=
+Upload request: {
+  requestNo: '13',
+  visibility: 'Public',
+  type: 'File',
+  uploadedBy: 'vignesh',
+  division: null
+}
+Upload error: RequestError: Invalid column name 'Division'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'Division'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'Division'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 1
+    }
+  },
+  number: 207,
+  lineNumber: 1,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'Visibility'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'AttachmentType'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'LinkURL'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'UploadedBy'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[2026-03-14T04:08:34.866Z] GET /api/attachments?requestNo=13
+RequestError: Invalid column name 'Division'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'Division'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'Division'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 1
+    }
+  },
+  number: 207,
+  lineNumber: 1,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'Visibility'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'AttachmentType'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'LinkURL'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'UploadedBy'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[2026-03-14T04:08:34.911Z] POST /api/enquiries/notify
+Received notification request for: 13
+Found 0 attachments for RequestNo 13
+[Notify Debug] Found 1 Concerned SEs for RequestNo 13
+[Notify Debug] Processing Concerned SE: SE1 - John Doe
+[Notify Debug] Added email: se1@comp.com
+Notification To: se1@comp.com
+Notification CC: 
+[2026-03-14 04:08:34] DEBUG Sending mail using SMTP/7.0.13[client:7.0.13]
+[2026-03-14 04:08:35] DEBUG [77psxhwD41s] Resolved smtp.gmail.com as 192.178.211.109 [cache miss]
+[2026-03-14 04:08:35] INFO  [77psxhwD41s] Connection established to 192.178.211.109:587
+[2026-03-14 04:08:35] DEBUG [77psxhwD41s] S: 220 smtp.gmail.com ESMTP 98e67ed59e1d1-35a0f6d190csm8249798a91.14 - gsmtp
+[2026-03-14 04:08:35] DEBUG [77psxhwD41s] C: EHLO [127.0.0.1]
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250-smtp.gmail.com at your service, [157.50.165.209]
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250-SIZE 35882577
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250-8BITMIME
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250-STARTTLS
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250-ENHANCEDSTATUSCODES
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250-PIPELINING
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250-CHUNKING
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250 SMTPUTF8
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] C: STARTTLS
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 220 2.0.0 Ready to start TLS
+[2026-03-14 04:08:36] INFO  [77psxhwD41s] Connection upgraded with STARTTLS
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] C: EHLO [127.0.0.1]
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250-smtp.gmail.com at your service, [157.50.165.209]
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250-SIZE 35882577
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250-8BITMIME
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250-AUTH LOGIN PLAIN XOAUTH2 PLAIN-CLIENTTOKEN OAUTHBEARER XOAUTH
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250-ENHANCEDSTATUSCODES
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250-PIPELINING
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250-CHUNKING
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] S: 250 SMTPUTF8
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] SMTP handshake finished
+[2026-03-14 04:08:36] DEBUG [77psxhwD41s] C: AUTH PLAIN AHZpZ25lc2hnb3ZhcmRoYW41MTYzQGdtYWlsLmNvbQAvKiBzZWNyZXQgKi8=
+[2026-03-14 04:08:37] DEBUG [77psxhwD41s] S: 235 2.7.0 Accepted
+[2026-03-14 04:08:37] INFO  [77psxhwD41s] User "vigneshgovardhan5163@gmail.com" authenticated
+[2026-03-14 04:08:37] INFO  Sending message <001e1e0c-efd4-e8fc-1300-5393d92d2d50@almoayyedcg.com> to <se1@comp.com>
+[2026-03-14 04:08:37] DEBUG [77psxhwD41s] C: MAIL FROM:<ems@almoayyedcg.com>
+[2026-03-14 04:08:37] DEBUG [77psxhwD41s] S: 250 2.1.0 OK 98e67ed59e1d1-35a0f6d190csm8249798a91.14 - gsmtp
+[2026-03-14 04:08:37] DEBUG [77psxhwD41s] C: RCPT TO:<se1@comp.com>
+[2026-03-14 04:08:37] DEBUG [77psxhwD41s] S: 250 2.1.5 OK 98e67ed59e1d1-35a0f6d190csm8249798a91.14 - gsmtp
+[2026-03-14 04:08:37] DEBUG [77psxhwD41s] C: DATA
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] S: 354 Go ahead 98e67ed59e1d1-35a0f6d190csm8249798a91.14 - gsmtp
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] From: ems@almoayyedcg.com
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] To: se1@comp.com
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] Subject: New Enquiry No.13 dated: 14-Mar-26
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] Message-ID: <001e1e0c-efd4-e8fc-1300-5393d92d2d50@almoayyedcg.com>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] Content-Transfer-Encoding: quoted-printable
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] Date: Sat, 14 Mar 2026 04:08:34 +0000
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] MIME-Version: 1.0
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] Content-Type: text/html; charset=utf-8
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] 
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] 
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]             <p>Dear Sir/Madam,</p>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]             <p>Greetings !!!</p>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]             <p>Please find given below, details pertaining to a customer =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] Enquiry no. 13 on 14-Mar-26. Please report closure in Enquiry Management =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] System.</p>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]             <table border=3D"1" cellpadding=3D"5" =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] cellspacing=3D"0" style=3D"border-collapse: collapse; width: 100%;">
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]                 <tr><td style=3D"background-color: #d4edda; font-weight: =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] bold;">Enquiry Ref No. :</td><td>13</td></tr>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]                 <tr><td =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] style=3D"background-color: #d4edda; font-weight: bold;">Enquiry =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] Date:</td><td>14-Mar-26</td></tr>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]                 <tr><td =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] style=3D"background-color: #d4edda; font-weight: bold;">Received =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] From:</td><td>vignesh</td></tr>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]                 <tr><td =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] style=3D"background-color: #d4edda; font-weight: bold;">Category =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] :</td><td>undefined</td></tr>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]                 <tr><td =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] style=3D"background-color: #d4edda; font-weight: bold;">Project =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] Name:</td><td>Caldim</td></tr>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]                 <tr><td =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] style=3D"background-color: #d4edda; font-weight: bold;">Client =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] Name:</td><td>wipro</td></tr>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]                 <tr><td =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] style=3D"background-color: #d4edda; font-weight: bold;">Consultant =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] Name:</td><td>infosys</td></tr>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]                 <tr><td =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] style=3D"background-color: #d4edda; font-weight: bold;">Enquiry Details =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] :</td><td>undefined</td></tr>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]                 <tr><td =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] style=3D"background-color: #d4edda; font-weight: bold;">Due =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] Date:</td><td></td></tr>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]                 <tr><td style=3D"background-color:=
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]  #d4edda; font-weight: bold;">Supplementary received =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] with:</td><td></td></tr>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]                 <tr><td style=3D"background-color:=
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]  #d4edda; font-weight: bold;">Remarks:</td><td></td></tr>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]                =20
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]             </table>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]             <br/>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]             <p>Thanx in advance,</p>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]             <p>Best regards,</p>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]             <p>* This is an Auto Generated E-mail by Enquiry Management =
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] System *</p>
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s]        =20
+[2026-03-14 04:08:38] DEBUG [77psxhwD41s] .
+[2026-03-14 04:08:38] INFO  [77psxhwD41s] <2282 bytes encoded mime message (source size 2257 bytes)>
+[2026-03-14 04:08:40] DEBUG [77psxhwD41s] S: 250 2.0.0 OK  1773461319 98e67ed59e1d1-35a0f6d190csm8249798a91.14 - gsmtp
+[2026-03-14 04:08:40] DEBUG [77psxhwD41s] Closing connection to the server using "end"
+Email sent: 250 2.0.0 OK  1773461319 98e67ed59e1d1-35a0f6d190csm8249798a91.14 - gsmtp
+[2026-03-14 04:08:40] INFO  [77psxhwD41s] Connection closed
+[2026-03-14T04:08:42.703Z] GET /api/system/next-request-no?t=1773461322698
+[NextID] MaxID found in DB: 13
+[NextID] Returning: 14
+[2026-03-14T04:08:42.779Z] GET /api/notifications/36
+[2026-03-14T04:08:42.916Z] GET /api/attachments?requestNo=14
+RequestError: Invalid column name 'Division'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'Division'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'Division'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 1
+    }
+  },
+  number: 207,
+  lineNumber: 1,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'Visibility'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'AttachmentType'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'LinkURL'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'UploadedBy'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[2026-03-14T04:08:50.224Z] GET /api/notifications/36
+[2026-03-14T04:08:58.791Z] GET /api/enquiries/13
+[GET /api/enquiries/13] Fetching single enquiry...
+[2026-03-14T04:08:58.828Z] GET /api/attachments?requestNo=13
+RequestError: Invalid column name 'Division'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'Division'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'Division'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 1
+    }
+  },
+  number: 207,
+  lineNumber: 1,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'Visibility'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'AttachmentType'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'LinkURL'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'UploadedBy'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[2026-03-14T04:08:58.839Z] GET /api/attachments?requestNo=13
+RequestError: Invalid column name 'Division'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'Division'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'Division'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 1
+    }
+  },
+  number: 207,
+  lineNumber: 1,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'Visibility'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'AttachmentType'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'LinkURL'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'UploadedBy'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 1,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[2026-03-14T04:08:58.872Z] GET /api/master/divisions
+[API] /api/master/divisions HIT (Top Level)
+[2026-03-14T04:08:58.873Z] GET /api/enquiries/13/notes
+[API] Found 3 divisions: [ 'BMS Project', 'Civil Project', 'Elec Project' ]
+[2026-03-14T04:09:00.220Z] GET /api/notifications/36
+[2026-03-14T04:09:10.218Z] GET /api/notifications/36
+[2026-03-14T04:09:20.211Z] GET /api/notifications/36
+[2026-03-14T04:09:28.875Z] GET /api/enquiries/13/notes
+[2026-03-14T04:09:29.407Z] POST /api/enquiries/13/notes
+--- START NOTIFICATION GENERATION ---
+Request: 13, Type: Note, Trigger: vignesh (vigneshgovardhan5163@gmail.com)
+Enquiry Created By: vignesh
+Added Creator Email: vigneshgovardhan5163@gmail.com
+Found 1 Concerned SEs linked.
+Added Concerned SE Email: se1@comp.com (Name: SE1 - John Doe)
+Found 4 Enquiry Items linked.
+Removed Trigger User Email: vigneshgovardhan5163@gmail.com
+Final Recipient List: [ 'se1@comp.com' ]
+Notification inserted for UserID: 33 (se1@comp.com)
+--- END NOTIFICATION GENERATION ---
+[2026-03-14T04:09:29.466Z] GET /api/enquiries/13/notes
+[2026-03-14T04:09:30.213Z] GET /api/notifications/36
+[2026-03-14T04:09:40.220Z] GET /api/notifications/36
+[2026-03-14T04:09:50.212Z] GET /api/notifications/36
+[2026-03-14T04:09:58.876Z] GET /api/enquiries/13/notes
+[2026-03-14T04:09:59.292Z] PUT /api/enquiries/13
+--- START NOTIFICATION GENERATION ---
+Request: 13, Type: Enquiry Update, Trigger: vignesh (vigneshgovardhan5163@gmail.com)
+Enquiry Created By: vignesh
+Added Creator Email: vigneshgovardhan5163@gmail.com
+Found 1 Concerned SEs linked.
+Added Concerned SE Email: se1@comp.com (Name: SE1 - John Doe)
+Found 4 Enquiry Items linked.
+Removed Trigger User Email: vigneshgovardhan5163@gmail.com
+Final Recipient List: [ 'se1@comp.com' ]
+Notification inserted for UserID: 33 (se1@comp.com)
+--- END NOTIFICATION GENERATION ---
+[2026-03-14T04:10:01.420Z] GET /api/notifications/36
+[2026-03-14T04:10:03.603Z] GET /api/pricing/list/pending?userEmail=vigneshgovardhan5163%40gmail.com
+Pending Pricing (Helper) requested for: vigneshgovardhan5163@gmail.com
+[Pricing] Enquiry E2E-SUCCESS-99 - Checking pending for user jobs: [ 'L1 - HVAC Controls', 'L2 - Lighting Systems' ]
+[Pricing] Enquiry E2E-SUCCESS-99 - ✓ NOT PENDING: Found price 45000 for job (OptionID: 227)
+[Pricing] Enquiry E2E-SUCCESS-99 filtered out - all prices entered for user's division (Status: Open)
+[Pricing] Enquiry E2E-FINAL-01 - Checking pending for user jobs: [ 'L1 - HVAC Controls', 'L2 - Lighting Systems' ]
+[Pricing] Enquiry E2E-FINAL-01 - ⚠️ PENDING: No prices found for user's division
+[Pricing] Enquiry E2E-TEST-001 filtered out - no matching jobs for user vigneshgovardhan5163@gmail.com
+[Pricing]   Total jobs in enquiry: 0
+[Pricing]   User is admin: true, is creator: false, is concerned SE: false
+[Pricing] Enquiry 12 - Checking pending for user jobs: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+[Pricing] Enquiry 12 - ✓ NOT PENDING: Found price 123 for job (OptionID: 217)
+[Pricing] Enquiry 12 filtered out - all prices entered for user's division (Status: Enquiry)
+[Pricing] Enquiry 9 - Checking pending for user jobs: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+[Pricing] Enquiry 9 - ⚠️ PENDING: No prices found for user's division
+[2026-03-14T04:10:10.218Z] GET /api/notifications/36
+[2026-03-14T04:10:12.629Z] GET /api/pricing/9?userEmail=vigneshgovardhan5163%40gmail.com
+Pricing API: Loading pricing for 9 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 9
+Pricing API: Found 3 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'Elec Project',
+  'BMS Project'
+]
+Pricing API: Found 3 options (unique)
+Pricing API: Found 0 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Final Editable: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:10:12.680Z] POST /api/pricing/option
+[2026-03-14T04:10:12.683Z] POST /api/pricing/option
+[2026-03-14T04:10:12.683Z] POST /api/pricing/option
+[2026-03-14T04:10:12.683Z] POST /api/pricing/option
+[2026-03-14T04:10:12.687Z] POST /api/pricing/option
+[2026-03-14T04:10:12.687Z] POST /api/pricing/option
+[2026-03-14T04:10:12.718Z] POST /api/pricing/option
+[2026-03-14T04:10:12.729Z] POST /api/pricing/option
+[2026-03-14T04:10:12.740Z] POST /api/pricing/option
+[2026-03-14T04:10:12.748Z] POST /api/pricing/option
+[2026-03-14T04:10:12.748Z] POST /api/pricing/option
+[2026-03-14T04:10:12.749Z] POST /api/pricing/option
+[2026-03-14T04:10:20.222Z] GET /api/notifications/36
+[2026-03-14T04:10:25.235Z] GET /api/pricing/list/pending?userEmail=vigneshgovardhan5163%40gmail.com
+Pending Pricing (Helper) requested for: vigneshgovardhan5163@gmail.com
+[Pricing] Enquiry E2E-SUCCESS-99 - Checking pending for user jobs: [ 'L1 - HVAC Controls', 'L2 - Lighting Systems' ]
+[Pricing] Enquiry E2E-SUCCESS-99 - ✓ NOT PENDING: Found price 45000 for job (OptionID: 227)
+[Pricing] Enquiry E2E-SUCCESS-99 filtered out - all prices entered for user's division (Status: Open)
+[Pricing] Enquiry E2E-FINAL-01 - Checking pending for user jobs: [ 'L1 - HVAC Controls', 'L2 - Lighting Systems' ]
+[Pricing] Enquiry E2E-FINAL-01 - ⚠️ PENDING: No prices found for user's division
+[Pricing] Enquiry E2E-TEST-001 filtered out - no matching jobs for user vigneshgovardhan5163@gmail.com
+[Pricing]   Total jobs in enquiry: 0
+[Pricing]   User is admin: true, is creator: false, is concerned SE: false
+[Pricing] Enquiry 12 - Checking pending for user jobs: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+[Pricing] Enquiry 12 - ✓ NOT PENDING: Found price 123 for job (OptionID: 217)
+[Pricing] Enquiry 12 filtered out - all prices entered for user's division (Status: Enquiry)
+[Pricing] Enquiry 9 - Checking pending for user jobs: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+[Pricing] Enquiry 9 - ⚠️ PENDING: No prices found for user's division
+[2026-03-14T04:10:30.220Z] GET /api/pricing/list?search=13&userEmail=vigneshgovardhan5163%40gmail.com&pendingOnly=false
+Pricing List Search: { search: '13', userEmail: 'vigneshgovardhan5163@gmail.com' }
+[2026-03-14T04:10:30.225Z] GET /api/notifications/36
+[Pricing] Enquiry 13 - Checking pending for user jobs: [ 'Electrical', 'Mechanical' ]
+[Pricing] Enquiry 13 - ⚠️ PENDING: No prices found for user's division
+[2026-03-14T04:10:37.695Z] GET /api/pricing/list/pending?userEmail=vigneshgovardhan5163%40gmail.com
+Pending Pricing (Helper) requested for: vigneshgovardhan5163@gmail.com
+[Pricing] Enquiry E2E-SUCCESS-99 - Checking pending for user jobs: [ 'L1 - HVAC Controls', 'L2 - Lighting Systems' ]
+[Pricing] Enquiry E2E-SUCCESS-99 - ✓ NOT PENDING: Found price 45000 for job (OptionID: 227)
+[Pricing] Enquiry E2E-SUCCESS-99 filtered out - all prices entered for user's division (Status: Open)
+[Pricing] Enquiry E2E-FINAL-01 - Checking pending for user jobs: [ 'L1 - HVAC Controls', 'L2 - Lighting Systems' ]
+[Pricing] Enquiry E2E-FINAL-01 - ⚠️ PENDING: No prices found for user's division
+[Pricing] Enquiry E2E-TEST-001 filtered out - no matching jobs for user vigneshgovardhan5163@gmail.com
+[Pricing]   Total jobs in enquiry: 0
+[Pricing]   User is admin: true, is creator: false, is concerned SE: false
+[Pricing] Enquiry 12 - Checking pending for user jobs: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+[Pricing] Enquiry 12 - ✓ NOT PENDING: Found price 123 for job (OptionID: 217)
+[Pricing] Enquiry 12 filtered out - all prices entered for user's division (Status: Enquiry)
+[Pricing] Enquiry 9 - Checking pending for user jobs: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+[Pricing] Enquiry 9 - ⚠️ PENDING: No prices found for user's division
+[2026-03-14T04:10:40.228Z] GET /api/notifications/36
+[2026-03-14T04:10:50.217Z] GET /api/notifications/36
+[2026-03-14T04:11:00.218Z] GET /api/notifications/36
+[2026-03-14T04:11:10.229Z] GET /api/notifications/36
+[2026-03-14T04:11:15.586Z] GET /api/pricing/list/pending?userEmail=vigneshgovardhan5163%40gmail.com
+Pending Pricing (Helper) requested for: vigneshgovardhan5163@gmail.com
+[Pricing] Enquiry E2E-SUCCESS-99 - Checking pending for user jobs: [ 'L1 - HVAC Controls', 'L2 - Lighting Systems' ]
+[Pricing] Enquiry E2E-SUCCESS-99 - ✓ NOT PENDING: Found price 45000 for job (OptionID: 227)
+[Pricing] Enquiry E2E-SUCCESS-99 filtered out - all prices entered for user's division (Status: Open)
+[Pricing] Enquiry E2E-FINAL-01 - Checking pending for user jobs: [ 'L1 - HVAC Controls', 'L2 - Lighting Systems' ]
+[Pricing] Enquiry E2E-FINAL-01 - ⚠️ PENDING: No prices found for user's division
+[Pricing] Enquiry E2E-TEST-001 filtered out - no matching jobs for user vigneshgovardhan5163@gmail.com
+[Pricing]   Total jobs in enquiry: 0
+[Pricing]   User is admin: true, is creator: false, is concerned SE: false
+[Pricing] Enquiry 12 - Checking pending for user jobs: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+[Pricing] Enquiry 12 - ✓ NOT PENDING: Found price 123 for job (OptionID: 217)
+[Pricing] Enquiry 12 filtered out - all prices entered for user's division (Status: Enquiry)
+[Pricing] Enquiry 9 - Checking pending for user jobs: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+[Pricing] Enquiry 9 - ⚠️ PENDING: No prices found for user's division
+[2026-03-14T04:11:18.869Z] GET /api/pricing/list/pending?userEmail=vigneshgovardhan5163%40gmail.com
+Pending Pricing (Helper) requested for: vigneshgovardhan5163@gmail.com
+[Pricing] Enquiry E2E-SUCCESS-99 - Checking pending for user jobs: [ 'L1 - HVAC Controls', 'L2 - Lighting Systems' ]
+[Pricing] Enquiry E2E-SUCCESS-99 - ✓ NOT PENDING: Found price 45000 for job (OptionID: 227)
+[Pricing] Enquiry E2E-SUCCESS-99 filtered out - all prices entered for user's division (Status: Open)
+[Pricing] Enquiry E2E-FINAL-01 - Checking pending for user jobs: [ 'L1 - HVAC Controls', 'L2 - Lighting Systems' ]
+[Pricing] Enquiry E2E-FINAL-01 - ⚠️ PENDING: No prices found for user's division
+[Pricing] Enquiry E2E-TEST-001 filtered out - no matching jobs for user vigneshgovardhan5163@gmail.com
+[Pricing]   Total jobs in enquiry: 0
+[Pricing]   User is admin: true, is creator: false, is concerned SE: false
+[Pricing] Enquiry 12 - Checking pending for user jobs: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+[Pricing] Enquiry 12 - ✓ NOT PENDING: Found price 123 for job (OptionID: 217)
+[Pricing] Enquiry 12 filtered out - all prices entered for user's division (Status: Enquiry)
+[Pricing] Enquiry 9 - Checking pending for user jobs: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+[Pricing] Enquiry 9 - ⚠️ PENDING: No prices found for user's division
+[2026-03-14T04:11:20.218Z] GET /api/notifications/36
+[2026-03-14T04:11:25.942Z] GET /api/enquiries
+[2026-03-14T04:11:25.943Z] GET /api/customers
+[2026-03-14T04:11:25.943Z] GET /api/contacts
+[2026-03-14T04:11:25.943Z] GET /api/users
+[2026-03-14T04:11:25.944Z] GET /api/enquiry-items
+[2026-03-14T04:11:25.965Z] GET /api/master/divisions
+[API] /api/master/divisions HIT (Top Level)
+[2026-03-14T04:11:25.974Z] GET /api/pricing/list/pending?userEmail=vigneshgovardhan5163%40gmail.com
+Pending Pricing (Helper) requested for: vigneshgovardhan5163@gmail.com
+[2026-03-14T04:11:25.974Z] GET /api/notifications/36
+[API] Found 3 divisions: [ 'BMS Project', 'Civil Project', 'Elec Project' ]
+[/api/customers] Contractors: 3
+[/api/customers] Clients: 2
+[/api/customers] Consultants: 2
+[/api/customers] Sample client: {
+  ID: 9,
+  CompanyName: 'wipro',
+  Address1: 'erdtgyhjiko',
+  Address2: 'ertgyhuji',
+  Rating: '',
+  Type: '',
+  FaxNo: '123456',
+  Phone1: '987654321',
+  Phone2: '12345678',
+  EmailId: 'vignesh@gmail.com',
+  Website: 'jhgffygbj.com',
+  Status: 'Active',
+  RequestNo: '13',
+  Category: 'Client'
+}
+[Pricing] Enquiry E2E-SUCCESS-99 - Checking pending for user jobs: [ 'L1 - HVAC Controls', 'L2 - Lighting Systems' ]
+[Pricing] Enquiry E2E-SUCCESS-99 - ✓ NOT PENDING: Found price 45000 for job (OptionID: 227)
+[Pricing] Enquiry E2E-SUCCESS-99 filtered out - all prices entered for user's division (Status: Open)
+[Pricing] Enquiry E2E-FINAL-01 - Checking pending for user jobs: [ 'L1 - HVAC Controls', 'L2 - Lighting Systems' ]
+[Pricing] Enquiry E2E-FINAL-01 - ⚠️ PENDING: No prices found for user's division
+[Pricing] Enquiry E2E-TEST-001 filtered out - no matching jobs for user vigneshgovardhan5163@gmail.com
+[Pricing]   Total jobs in enquiry: 0
+[Pricing]   User is admin: true, is creator: false, is concerned SE: false
+[Pricing] Enquiry 12 - Checking pending for user jobs: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+[Pricing] Enquiry 12 - ✓ NOT PENDING: Found price 123 for job (OptionID: 217)
+[Pricing] Enquiry 12 filtered out - all prices entered for user's division (Status: Enquiry)
+[Pricing] Enquiry 9 - Checking pending for user jobs: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+[Pricing] Enquiry 9 - ⚠️ PENDING: No prices found for user's division
+[GET /api/enquiries] Search term: 'null'
+[GET /api/enquiries] Total filtered items: 8
+[2026-03-14T04:11:34.488Z] GET /api/pricing/9?userEmail=vigneshgovardhan5163%40gmail.com
+Pricing API: Loading pricing for 9 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 9
+Pricing API: Found 3 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'Elec Project',
+  'BMS Project'
+]
+Pricing API: Found 12 options (unique)
+Pricing API: Found 0 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Final Editable: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:11:35.975Z] GET /api/notifications/36
+[2026-03-14T04:11:45.974Z] GET /api/notifications/36
+[2026-03-14T04:11:55.967Z] GET /api/notifications/36
+[2026-03-14T04:12:05.969Z] GET /api/notifications/36
+[2026-03-14T04:12:15.984Z] GET /api/notifications/36
+[2026-03-14T04:12:22.220Z] PUT /api/pricing/value
+[2026-03-14T04:12:22.221Z] PUT /api/pricing/value
+[2026-03-14T04:12:22.222Z] PUT /api/pricing/value
+[2026-03-14T04:12:22.226Z] PUT /api/pricing/value
+[2026-03-14T04:12:22.229Z] PUT /api/pricing/value
+[2026-03-14T04:12:22.230Z] PUT /api/pricing/value
+[2026-03-14T04:12:24.457Z] GET /api/pricing/9?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Nass
+Pricing API: Loading pricing for 9 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 9
+Pricing API: Found 3 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'Elec Project',
+  'BMS Project'
+]
+Pricing API: Found 12 options (unique)
+Pricing API: Found 6 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Final Editable: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:12:25.983Z] GET /api/notifications/36
+[2026-03-14T04:12:26.745Z] GET /api/pricing/9?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Civil%20Project
+Pricing API: Loading pricing for 9 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 9
+Pricing API: Found 3 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'Elec Project',
+  'BMS Project'
+]
+Pricing API: Found 12 options (unique)
+Pricing API: Found 6 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Final Editable: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:12:35.969Z] GET /api/notifications/36
+[2026-03-14T04:12:45.966Z] GET /api/notifications/36
+[2026-03-14T04:12:55.983Z] GET /api/notifications/36
+[2026-03-14T04:13:05.975Z] GET /api/notifications/36
+[2026-03-14T04:13:15.973Z] GET /api/notifications/36
+[2026-03-14T04:13:25.980Z] GET /api/notifications/36
+[2026-03-14T04:13:35.984Z] GET /api/notifications/36
+[2026-03-14T04:13:45.979Z] GET /api/notifications/36
+[2026-03-14T04:13:55.983Z] GET /api/notifications/36
+[2026-03-14T04:14:05.969Z] GET /api/notifications/36
+[2026-03-14T04:14:15.971Z] GET /api/notifications/36
+[2026-03-14T04:14:25.982Z] GET /api/notifications/36
+[2026-03-14T04:14:35.979Z] GET /api/notifications/36
+[2026-03-14T04:14:45.976Z] GET /api/notifications/36
+[2026-03-14T04:14:55.980Z] GET /api/notifications/36
+[2026-03-14T04:15:05.971Z] GET /api/notifications/36
+[2026-03-14T04:15:15.976Z] GET /api/notifications/36
+[2026-03-14T04:15:25.970Z] GET /api/notifications/36
+[2026-03-14T04:15:36.002Z] GET /api/notifications/36
+[2026-03-14T04:15:45.998Z] GET /api/notifications/36
+[2026-03-14T04:15:56.003Z] GET /api/notifications/36
+[2026-03-14T04:16:06.000Z] GET /api/notifications/36
+[2026-03-14T04:16:15.995Z] GET /api/notifications/36
+[2026-03-14T04:16:26.001Z] GET /api/notifications/36
+[2026-03-14T04:16:56.015Z] GET /api/notifications/36
+[2026-03-14T04:17:52.955Z] GET /api/notifications/36
+[2026-03-14T04:17:55.970Z] GET /api/notifications/36
+[2026-03-14T04:18:05.966Z] GET /api/notifications/36
+[2026-03-14T04:18:15.970Z] GET /api/notifications/36
+[2026-03-14T04:18:22.320Z] PUT /api/pricing/value
+[2026-03-14T04:18:22.321Z] PUT /api/pricing/value
+[2026-03-14T04:18:22.323Z] PUT /api/pricing/value
+[2026-03-14T04:18:25.619Z] GET /api/pricing/9?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Civil%20Project
+Pricing API: Loading pricing for 9 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 9
+Pricing API: Found 3 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'Elec Project',
+  'BMS Project'
+]
+Pricing API: Found 12 options (unique)
+Pricing API: Found 9 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Final Editable: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:18:25.963Z] GET /api/notifications/36
+[2026-03-14T04:18:27.235Z] GET /api/pricing/9?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Elec%20Project
+Pricing API: Loading pricing for 9 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 9
+Pricing API: Found 3 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'Elec Project',
+  'BMS Project'
+]
+Pricing API: Found 12 options (unique)
+Pricing API: Found 9 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Final Editable: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:18:35.970Z] GET /api/notifications/36
+[2026-03-14T04:18:45.279Z] GET /api/pricing/9?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Civil%20Project
+Pricing API: Loading pricing for 9 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 9
+Pricing API: Found 3 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'Elec Project',
+  'BMS Project'
+]
+Pricing API: Found 12 options (unique)
+Pricing API: Found 9 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Final Editable: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:18:45.967Z] GET /api/notifications/36
+[2026-03-14T04:18:47.398Z] GET /api/pricing/9?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Nass
+Pricing API: Loading pricing for 9 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 9
+Pricing API: Found 3 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'Elec Project',
+  'BMS Project'
+]
+Pricing API: Found 12 options (unique)
+Pricing API: Found 9 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Final Editable: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:18:55.980Z] GET /api/notifications/36
+[2026-03-14T04:19:05.980Z] GET /api/notifications/36
+[2026-03-14T04:19:15.978Z] GET /api/notifications/36
+[2026-03-14T04:19:25.976Z] GET /api/notifications/36
+[2026-03-14T04:19:28.686Z] GET /api/quotes/list/pending?userEmail=vigneshgovardhan5163%40gmail.com
+[API] Check Pending Quotes for vigneshgovardhan5163@gmail.com...
+[2026-03-14T04:19:28.688Z] GET /api/quotes/lists/metadata
+[2026-03-14T04:19:28.688Z] GET /api/quotes/config/templates
+[API] Found 16 jobs and 21 prices for 4 enquiries.
+[API] FINAL DATA Enq 0: {
+  ReqNo: '12',
+  Client: 'Eagle Hill',
+  Consultant: 'MSCEB',
+  SubJobPricesLen: 267
+}
+[API] Pending Quotes found: 4
+[2026-03-14T04:19:33.498Z] GET /api/enquiries?search=13
+[GET /api/enquiries] Search term: '13'
+[GET /api/enquiries] Total filtered items: 1
+[2026-03-14T04:19:34.865Z] GET /api/quotes/enquiry-data/13?userEmail=
+[Quote API] Fetching data for RequestNo: 13
+[Quote API] Enquiry found: Caldim
+[Quote API] Customer details found for: TCS
+[Quote API] Found 4 divisions. Resolved items: 4. Default Profile: undefined
+[Quote API] ReceivedFrom records: [ { ContactName: 'vignesh', CompanyName: 'TCS' } ]
+[Quote API] Final customerOptions: [ 'TCS', 'Electrical', 'Mechanical' ]
+[2026-03-14T04:19:35.010Z] GET /api/quotes/by-enquiry/13
+[Quote API] Fetching all quotes for RequestNo: 13
+[2026-03-14T04:19:35.011Z] GET /api/pricing/13?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 13 user: vigneshgovardhan5163@gmail.com
+[Quote API] Error fetching quotes for enquiry: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'LeadJob'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'LeadJob'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 5
+    }
+  },
+  number: 207,
+  lineNumber: 5,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'OwnJob'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 5,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[Quote API] Error details: Invalid column name 'LeadJob'.
+[Quote API] Stack: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22)
+Pricing API: Found enquiry: 13
+[2026-03-14T04:19:35.018Z] GET /api/quotes/by-enquiry/13
+[Quote API] Fetching all quotes for RequestNo: 13
+Pricing API: Found 4 jobs
+[Quote API] Error fetching quotes for enquiry: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'LeadJob'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'LeadJob'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 5
+    }
+  },
+  number: 207,
+  lineNumber: 5,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'OwnJob'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 5,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[Quote API] Error details: Invalid column name 'LeadJob'.
+[Quote API] Stack: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22)
+Pricing API: Filtering out internal/descendant customers: [ 'Electrical', 'Mechanical' ]
+Pricing API: Found 0 options (unique)
+Pricing API: Found 0 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Final Editable: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "Electrical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Electrical",
+    "logo": null
+  }
+]
+[2026-03-14T04:19:35.039Z] GET /api/pricing/13?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 13 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 13
+Pricing API: Found 4 jobs
+Pricing API: Filtering out internal/descendant customers: [ 'Electrical', 'Mechanical' ]
+Pricing API: Found 0 options (unique)
+Pricing API: Found 0 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Final Editable: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "Electrical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Electrical",
+    "logo": null
+  }
+]
+[2026-03-14T04:19:35.970Z] GET /api/notifications/36
+[2026-03-14T04:19:37.183Z] GET /api/pricing/13?userEmail=vigneshgovardhan5163%40gmail.com&customerName=TCS
+Pricing API: Loading pricing for 13 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 13
+Pricing API: Found 4 jobs
+Pricing API: Filtering out internal/descendant customers: [ 'Electrical', 'Mechanical' ]
+Pricing API: Found 0 options (unique)
+Pricing API: Found 0 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Final Editable: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "Electrical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Electrical",
+    "logo": null
+  }
+]
+[2026-03-14T04:19:37.214Z] GET /api/pricing/13?userEmail=vigneshgovardhan5163%40gmail.com&customerName=TCS
+Pricing API: Loading pricing for 13 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 13
+Pricing API: Found 4 jobs
+Pricing API: Filtering out internal/descendant customers: [ 'Electrical', 'Mechanical' ]
+Pricing API: Found 0 options (unique)
+Pricing API: Found 0 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Final Editable: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "Electrical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Electrical",
+    "logo": null
+  }
+]
+[2026-03-14T04:19:45.975Z] GET /api/notifications/36
+[2026-03-14T04:19:55.982Z] GET /api/notifications/36
+[2026-03-14T04:20:05.964Z] GET /api/notifications/36
+[2026-03-14T04:20:07.539Z] GET /api/pricing/13?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 13 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 13
+Pricing API: Found 4 jobs
+Pricing API: Filtering out internal/descendant customers: [ 'Electrical', 'Mechanical' ]
+Pricing API: Found 0 options (unique)
+Pricing API: Found 0 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Final Editable: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "Electrical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Electrical",
+    "logo": null
+  }
+]
+[2026-03-14T04:20:10.173Z] GET /api/pricing/13?userEmail=vigneshgovardhan5163%40gmail.com&customerName=TCS
+Pricing API: Loading pricing for 13 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 13
+Pricing API: Found 4 jobs
+Pricing API: Filtering out internal/descendant customers: [ 'Electrical', 'Mechanical' ]
+Pricing API: Found 0 options (unique)
+Pricing API: Found 0 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Final Editable: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "Electrical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Electrical",
+    "logo": null
+  }
+]
+[2026-03-14T04:20:10.199Z] GET /api/pricing/13?userEmail=vigneshgovardhan5163%40gmail.com&customerName=TCS
+Pricing API: Loading pricing for 13 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 13
+Pricing API: Found 4 jobs
+Pricing API: Filtering out internal/descendant customers: [ 'Electrical', 'Mechanical' ]
+Pricing API: Found 0 options (unique)
+Pricing API: Found 0 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Final Editable: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "Electrical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Electrical",
+    "logo": null
+  }
+]
+[2026-03-14T04:20:15.980Z] GET /api/notifications/36
+[2026-03-14T04:20:22.329Z] GET /api/pricing/13?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 13 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 13
+Pricing API: Found 4 jobs
+Pricing API: Filtering out internal/descendant customers: [ 'Electrical', 'Mechanical' ]
+Pricing API: Found 0 options (unique)
+Pricing API: Found 0 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Final Editable: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "Electrical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Electrical",
+    "logo": null
+  }
+]
+[2026-03-14T04:20:24.431Z] GET /api/pricing/13?userEmail=vigneshgovardhan5163%40gmail.com&customerName=TCS
+Pricing API: Loading pricing for 13 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 13
+Pricing API: Found 4 jobs
+Pricing API: Filtering out internal/descendant customers: [ 'Electrical', 'Mechanical' ]
+Pricing API: Found 0 options (unique)
+Pricing API: Found 0 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Final Editable: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "Electrical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Electrical",
+    "logo": null
+  }
+]
+[2026-03-14T04:20:24.458Z] GET /api/pricing/13?userEmail=vigneshgovardhan5163%40gmail.com&customerName=TCS
+Pricing API: Loading pricing for 13 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 13
+Pricing API: Found 4 jobs
+Pricing API: Filtering out internal/descendant customers: [ 'Electrical', 'Mechanical' ]
+Pricing API: Found 0 options (unique)
+Pricing API: Found 0 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Final Editable: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "Electrical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Electrical",
+    "logo": null
+  }
+]
+[2026-03-14T04:20:25.970Z] GET /api/notifications/36
+[2026-03-14T04:20:35.982Z] GET /api/notifications/36
+[2026-03-14T04:20:45.971Z] GET /api/notifications/36
+[2026-03-14T04:20:55.977Z] GET /api/notifications/36
+[2026-03-14T04:21:05.975Z] GET /api/notifications/36
+[2026-03-14T04:21:15.977Z] GET /api/notifications/36
+[2026-03-14T04:21:25.980Z] GET /api/notifications/36
+[2026-03-14T04:21:35.978Z] GET /api/notifications/36
+[2026-03-14T04:21:45.973Z] GET /api/notifications/36
+[2026-03-14T04:21:55.971Z] GET /api/notifications/36
+[2026-03-14T04:22:05.968Z] GET /api/notifications/36
+[2026-03-14T04:22:15.968Z] GET /api/notifications/36
+[2026-03-14T04:22:25.967Z] GET /api/notifications/36
+[2026-03-14T04:22:35.974Z] GET /api/notifications/36
+[2026-03-14T04:22:45.975Z] GET /api/notifications/36
+[2026-03-14T04:22:55.975Z] GET /api/notifications/36
+[2026-03-14T04:23:05.977Z] GET /api/notifications/36
+[2026-03-14T04:23:15.982Z] GET /api/notifications/36
+[2026-03-14T04:23:16.415Z] GET /api/pricing/13?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 13 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 13
+Pricing API: Found 4 jobs
+Pricing API: Filtering out internal/descendant customers: [ 'Electrical', 'Mechanical' ]
+Pricing API: Found 0 options (unique)
+Pricing API: Found 0 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Final Editable: [ 'Electrical', 'Mechanical', 'Mechanical', 'Electrical' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "Electrical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Mechanical",
+    "logo": null
+  },
+  {
+    "name": "Electrical",
+    "logo": null
+  }
+]
+[2026-03-14T04:23:17.636Z] GET /api/probability/list?mode=Pending&fromDate=&toDate=&probability=&userEmail=vigneshgovardhan5163%40gmail.com&userDepartment=
+[Probability API V5] Fetching list. Mode: Pending, User: vigneshgovardhan5163@gmail.com
+API Error /list: RequestError: Invalid column name 'WonGrossProfit'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'WonGrossProfit'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'WonGrossProfit'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 5
+    }
+  },
+  number: 207,
+  lineNumber: 5,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: []
+}
+[2026-03-14T04:23:19.815Z] GET /api/quotes/list/pending?userEmail=vigneshgovardhan5163%40gmail.com
+[API] Check Pending Quotes for vigneshgovardhan5163@gmail.com...
+[2026-03-14T04:23:19.815Z] GET /api/quotes/lists/metadata
+[2026-03-14T04:23:19.816Z] GET /api/quotes/config/templates
+[API] Found 16 jobs and 21 prices for 4 enquiries.
+[API] FINAL DATA Enq 0: {
+  ReqNo: '12',
+  Client: 'Eagle Hill',
+  Consultant: 'MSCEB',
+  SubJobPricesLen: 267
+}
+[API] Pending Quotes found: 4
+[2026-03-14T04:23:25.966Z] GET /api/notifications/36
+[2026-03-14T04:23:26.832Z] GET /api/quotes/enquiry-data/9?userEmail=
+[Quote API] Fetching data for RequestNo: 9
+[Quote API] Enquiry found: Job 1
+[Quote API] Customer details found for: Nass
+[Quote API] Found 3 divisions. Resolved items: 3. Default Profile: CVLP
+[Quote API] ReceivedFrom records: [ { ContactName: 'Sanjay', CompanyName: 'Nass' } ]
+[Quote API] Final customerOptions: [ 'Nass', 'Civil Project', 'Elec Project' ]
+[2026-03-14T04:23:26.978Z] GET /api/quotes/by-enquiry/9
+[Quote API] Fetching all quotes for RequestNo: 9
+[2026-03-14T04:23:26.978Z] GET /api/pricing/9?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 9 user: vigneshgovardhan5163@gmail.com
+[Quote API] Error fetching quotes for enquiry: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'LeadJob'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'LeadJob'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 5
+    }
+  },
+  number: 207,
+  lineNumber: 5,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'OwnJob'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 5,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[Quote API] Error details: Invalid column name 'LeadJob'.
+[Quote API] Stack: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22)
+Pricing API: Found enquiry: 9
+Pricing API: Found 3 jobs
+[2026-03-14T04:23:26.989Z] GET /api/quotes/by-enquiry/9
+[Quote API] Fetching all quotes for RequestNo: 9
+[Quote API] Error fetching quotes for enquiry: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'LeadJob'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'LeadJob'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 5
+    }
+  },
+  number: 207,
+  lineNumber: 5,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'OwnJob'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 5,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[Quote API] Error details: Invalid column name 'LeadJob'.
+[Quote API] Stack: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22)
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'Elec Project',
+  'BMS Project'
+]
+Pricing API: Found 12 options (unique)
+Pricing API: Found 9 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Final Editable: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:23:27.006Z] GET /api/pricing/9?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 9 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 9
+Pricing API: Found 3 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'Elec Project',
+  'BMS Project'
+]
+Pricing API: Found 12 options (unique)
+Pricing API: Found 9 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Final Editable: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:23:29.197Z] GET /api/pricing/9?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Nass
+Pricing API: Loading pricing for 9 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 9
+Pricing API: Found 3 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'Elec Project',
+  'BMS Project'
+]
+Pricing API: Found 12 options (unique)
+Pricing API: Found 9 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Final Editable: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:23:29.226Z] GET /api/pricing/9?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Nass
+Pricing API: Loading pricing for 9 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 9
+Pricing API: Found 3 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'Elec Project',
+  'BMS Project'
+]
+Pricing API: Found 12 options (unique)
+Pricing API: Found 9 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Final Editable: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:23:35.979Z] GET /api/notifications/36
+[2026-03-14T04:23:45.979Z] GET /api/notifications/36
+[2026-03-14T04:23:55.970Z] GET /api/notifications/36
+[2026-03-14T04:24:05.982Z] GET /api/notifications/36
+[2026-03-14T04:24:15.974Z] GET /api/notifications/36
+[2026-03-14T04:24:19.051Z] GET /api/pricing/list/pending?userEmail=vigneshgovardhan5163%40gmail.com
+Pending Pricing (Helper) requested for: vigneshgovardhan5163@gmail.com
+[Pricing] Enquiry E2E-SUCCESS-99 - Checking pending for user jobs: [ 'L1 - HVAC Controls', 'L2 - Lighting Systems' ]
+[Pricing] Enquiry E2E-SUCCESS-99 - ✓ NOT PENDING: Found price 45000 for job (OptionID: 227)
+[Pricing] Enquiry E2E-SUCCESS-99 filtered out - all prices entered for user's division (Status: Open)
+[Pricing] Enquiry E2E-FINAL-01 - Checking pending for user jobs: [ 'L1 - HVAC Controls', 'L2 - Lighting Systems' ]
+[Pricing] Enquiry E2E-FINAL-01 - ⚠️ PENDING: No prices found for user's division
+[Pricing] Enquiry E2E-TEST-001 filtered out - no matching jobs for user vigneshgovardhan5163@gmail.com
+[Pricing]   Total jobs in enquiry: 0
+[Pricing]   User is admin: true, is creator: false, is concerned SE: false
+[Pricing] Enquiry 12 - Checking pending for user jobs: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+[Pricing] Enquiry 12 - ✓ NOT PENDING: Found price 123 for job (OptionID: 217)
+[Pricing] Enquiry 12 filtered out - all prices entered for user's division (Status: Enquiry)
+[Pricing] Enquiry 9 - Checking pending for user jobs: [ 'L1 - Civil Project', 'Elec Project', 'BMS Project' ]
+[Pricing] Enquiry 9 - ✓ NOT PENDING: Found price 20 for job (OptionID: 214)
+[Pricing] Enquiry 9 filtered out - all prices entered for user's division (Status: Enquiry)
+[2026-03-14T04:24:24.901Z] GET /api/quotes/list/pending?userEmail=vigneshgovardhan5163%40gmail.com
+[API] Check Pending Quotes for vigneshgovardhan5163@gmail.com...
+[2026-03-14T04:24:24.901Z] GET /api/quotes/lists/metadata
+[2026-03-14T04:24:24.901Z] GET /api/quotes/config/templates
+[API] Found 16 jobs and 21 prices for 4 enquiries.
+[API] FINAL DATA Enq 0: {
+  ReqNo: '12',
+  Client: 'Eagle Hill',
+  Consultant: 'MSCEB',
+  SubJobPricesLen: 267
+}
+[API] Pending Quotes found: 4
+[2026-03-14T04:24:25.972Z] GET /api/notifications/36
+[2026-03-14T04:24:35.968Z] GET /api/notifications/36
+[2026-03-14T04:24:44.603Z] GET /api/quotes/enquiry-data/12?userEmail=
+[Quote API] Fetching data for RequestNo: 12
+[Quote API] Enquiry found: Job 3
+[Quote API] Customer details found for: Nass
+[Quote API] Found 5 divisions. Resolved items: 5. Default Profile: CVLP
+[Quote API] ReceivedFrom records: [ { ContactName: 'Sanjay', CompanyName: 'Nass' } ]
+[Quote API] Final customerOptions: [ 'Nass', 'Civil Project', 'BMS Project' ]
+[2026-03-14T04:24:44.744Z] GET /api/quotes/by-enquiry/12
+[Quote API] Fetching all quotes for RequestNo: 12
+[2026-03-14T04:24:44.745Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+[Quote API] Error fetching quotes for enquiry: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'LeadJob'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'LeadJob'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 5
+    }
+  },
+  number: 207,
+  lineNumber: 5,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'OwnJob'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 5,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[Quote API] Error details: Invalid column name 'LeadJob'.
+[Quote API] Stack: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22)
+Pricing API: Found enquiry: 12
+[2026-03-14T04:24:44.755Z] GET /api/quotes/by-enquiry/12
+[Quote API] Fetching all quotes for RequestNo: 12
+Pricing API: Found 5 jobs
+[Quote API] Error fetching quotes for enquiry: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'LeadJob'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'LeadJob'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 5
+    }
+  },
+  number: 207,
+  lineNumber: 5,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'OwnJob'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 5,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[Quote API] Error details: Invalid column name 'LeadJob'.
+[Quote API] Stack: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22)
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:24:44.778Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:24:45.968Z] GET /api/notifications/36
+[2026-03-14T04:24:48.343Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Nass
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:24:48.360Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Nass
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:24:50.179Z] GET /api/enquiries?search=12
+[GET /api/enquiries] Search term: '12'
+[GET /api/enquiries] Total filtered items: 1
+[2026-03-14T04:24:51.584Z] GET /api/quotes/enquiry-data/12?userEmail=
+[Quote API] Fetching data for RequestNo: 12
+[Quote API] Enquiry found: Job 3
+[Quote API] Customer details found for: Nass
+[Quote API] Found 5 divisions. Resolved items: 5. Default Profile: CVLP
+[Quote API] ReceivedFrom records: [ { ContactName: 'Sanjay', CompanyName: 'Nass' } ]
+[Quote API] Final customerOptions: [ 'Nass', 'Civil Project', 'BMS Project' ]
+[2026-03-14T04:24:51.676Z] GET /api/quotes/by-enquiry/12
+[Quote API] Fetching all quotes for RequestNo: 12
+[2026-03-14T04:24:51.676Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+[Quote API] Error fetching quotes for enquiry: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'LeadJob'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'LeadJob'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 5
+    }
+  },
+  number: 207,
+  lineNumber: 5,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'OwnJob'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 5,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[Quote API] Error details: Invalid column name 'LeadJob'.
+[Quote API] Stack: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22)
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:24:51.697Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:24:53.855Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Civil%20Project
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:24:53.870Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Civil%20Project
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:24:55.659Z] GET /api/enquiries?search=12
+[GET /api/enquiries] Search term: '12'
+[GET /api/enquiries] Total filtered items: 1
+[2026-03-14T04:24:55.974Z] GET /api/notifications/36
+[2026-03-14T04:24:56.976Z] GET /api/quotes/enquiry-data/12?userEmail=
+[Quote API] Fetching data for RequestNo: 12
+[Quote API] Enquiry found: Job 3
+[Quote API] Customer details found for: Nass
+[Quote API] Found 5 divisions. Resolved items: 5. Default Profile: CVLP
+[Quote API] ReceivedFrom records: [ { ContactName: 'Sanjay', CompanyName: 'Nass' } ]
+[Quote API] Final customerOptions: [ 'Nass', 'Civil Project', 'BMS Project' ]
+[2026-03-14T04:24:57.097Z] GET /api/quotes/by-enquiry/12
+[Quote API] Fetching all quotes for RequestNo: 12
+[2026-03-14T04:24:57.098Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+[Quote API] Error fetching quotes for enquiry: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'LeadJob'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'LeadJob'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 5
+    }
+  },
+  number: 207,
+  lineNumber: 5,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'OwnJob'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 5,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[Quote API] Error details: Invalid column name 'LeadJob'.
+[Quote API] Stack: RequestError: Invalid column name 'LeadJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22)
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:24:57.118Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:24:58.616Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Nass
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:24:58.632Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Nass
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:25:02.033Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:25:04.278Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Nass
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:25:04.309Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Nass
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:25:05.980Z] GET /api/notifications/36
+[2026-03-14T04:25:15.968Z] GET /api/notifications/36
+[2026-03-14T04:25:21.292Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:25:23.767Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Nass
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:25:23.792Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Nass
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:25:25.983Z] GET /api/notifications/36
+[2026-03-14T04:25:32.446Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:25:33.837Z] GET /api/enquiries?search=12
+[GET /api/enquiries] Search term: '12'
+[GET /api/enquiries] Total filtered items: 1
+[2026-03-14T04:25:35.346Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Nass
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:25:35.386Z] GET /api/pricing/12?userEmail=vigneshgovardhan5163%40gmail.com&customerName=Nass
+Pricing API: Loading pricing for 12 user: vigneshgovardhan5163@gmail.com
+Pricing API: Found enquiry: 12
+Pricing API: Found 5 jobs
+Pricing API: Filtering out internal/descendant customers: [
+  'Civil Project',
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Found 5 options (unique)
+Pricing API: Found 7 values (total)
+Pricing API: Admin Access -> View All
+Final Visible: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Final Editable: [
+  'L1 - Civil Project',
+  'BMS Project',
+  'Elec Project',
+  'L2 - Elec Project',
+  'L3 - BMS Project'
+]
+Pricing API: Sending Response with jobs: [
+  {
+    "name": "L1 - Civil Project",
+    "logo": "uploads/logos/1769097773799-Almoayyed Contracting.png"
+  },
+  {
+    "name": "BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L2 - Elec Project",
+    "logo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "name": "L3 - BMS Project",
+    "logo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png"
+  }
+]
+[2026-03-14T04:25:35.967Z] GET /api/notifications/36
+[2026-03-14T04:25:45.984Z] GET /api/notifications/36
+[2026-03-14T04:25:55.975Z] GET /api/notifications/36
+[2026-03-14T04:26:05.972Z] GET /api/notifications/36
+[2026-03-14T04:26:15.997Z] GET /api/notifications/36
+[2026-03-14T04:26:25.969Z] GET /api/notifications/36
+[2026-03-14T04:26:35.969Z] GET /api/notifications/36
+[2026-03-14T04:26:45.971Z] GET /api/notifications/36
+[2026-03-14T04:26:55.967Z] GET /api/notifications/36
+[2026-03-14T04:27:05.977Z] GET /api/notifications/36
+[2026-03-14T04:27:15.059Z] POST /api/quotes/config/templates
+[2026-03-14T04:27:17.186Z] GET /api/quotes/config/templates
+[2026-03-14T04:27:17.220Z] GET /api/notifications/36
+[2026-03-14T04:27:25.966Z] GET /api/notifications/36
+[2026-03-14T04:27:35.896Z] POST /api/quotes
+[Quote Creation] req.body.divisionCode: CVLP, effective division: CVLP
+[Quote Creation] Customer: Nass, Division: CVLP, QuoteNo: 5, Full: ACC/CVLP/12-L3/5-R0
+Error creating quote: RequestError: Invalid column name 'OwnJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'OwnJob'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'OwnJob'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 10
+    }
+  },
+  number: 207,
+  lineNumber: 10,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'ToFax'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 10,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'ToAttention'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 10,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'LeadJob'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 10,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[2026-03-14T04:29:44.869Z] GET /api/notifications/36
+[2026-03-14T04:29:45.965Z] GET /api/notifications/36
+[2026-03-14T04:29:55.966Z] GET /api/notifications/36
+[2026-03-14T04:30:05.979Z] GET /api/notifications/36
+[2026-03-14T04:30:15.980Z] GET /api/notifications/36
+[2026-03-14T04:30:25.971Z] GET /api/notifications/36
+[2026-03-14T04:30:38.276Z] POST /api/quotes
+[Quote Creation] req.body.divisionCode: CVLP, effective division: CVLP
+[Quote Creation] Customer: Nass, Division: CVLP, QuoteNo: 5, Full: ACC/CVLP/12-L3/5-R0
+Error creating quote: RequestError: Invalid column name 'OwnJob'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'OwnJob'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'OwnJob'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 10
+    }
+  },
+  number: 207,
+  lineNumber: 10,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: [
+    RequestError: Invalid column name 'ToFax'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 10,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'ToAttention'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 10,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    },
+    RequestError: Invalid column name 'LeadJob'.
+        at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+        at Connection.emit (node:events:508:28)
+        at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+        at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+        at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+        at Readable.emit (node:events:508:28)
+        at addChunk (node:internal/streams/readable:559:12)
+        at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+        at Readable.push (node:internal/streams/readable:391:5)
+        at nextAsync (node:internal/streams/from:194:22) {
+      code: 'EREQUEST',
+      originalError: [Error],
+      number: 207,
+      lineNumber: 10,
+      state: 1,
+      class: 16,
+      serverName: 'DESKTOP-N08RTTR',
+      procName: ''
+    }
+  ]
+}
+[2026-03-14T04:30:38.368Z] GET /api/notifications/36

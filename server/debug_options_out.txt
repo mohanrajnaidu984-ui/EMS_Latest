@@ -1,0 +1,129 @@
+﻿[dotenv@17.2.3] injecting env (9) from .env -- tip: ΓÜÖ∩╕Å  specify custom .env file path with { path: '/custom/path/.env' }
+Connected to DB
+
+--- EnquiryPricingOptions with "Option 1" (space) ---
+[]
+
+--- EnquiryPricingOptions with "Option-1" (hyphen) ---
+[
+  {
+    "ID": 325,
+    "RequestNo": "16",
+    "OptionName": "Option-1",
+    "SortOrder": 5,
+    "ItemName": "BMS",
+    "CustomerName": "Cebarco Bahrain",
+    "LeadJobName": "BMS",
+    "CreatedAt": "2026-02-23T09:08:13.800Z"
+  },
+  {
+    "ID": 326,
+    "RequestNo": "16",
+    "OptionName": "Option-1",
+    "SortOrder": 5,
+    "ItemName": "BMS",
+    "CustomerName": "Electrical",
+    "LeadJobName": "BMS",
+    "CreatedAt": "2026-02-23T09:08:13.923Z"
+  },
+  {
+    "ID": 327,
+    "RequestNo": "16",
+    "OptionName": "Option-1",
+    "SortOrder": 6,
+    "ItemName": "BMS",
+    "CustomerName": "Electrical",
+    "LeadJobName": "Civil Project",
+    "CreatedAt": "2026-02-23T09:08:23.967Z"
+  },
+  {
+    "ID": 328,
+    "RequestNo": "16",
+    "OptionName": "Option-1",
+    "SortOrder": 6,
+    "ItemName": "BMS",
+    "CustomerName": "Cebarco Bahrain",
+    "LeadJobName": "Civil Project",
+    "CreatedAt": "2026-02-23T09:17:45.277Z"
+  },
+  {
+    "ID": 336,
+    "RequestNo": "16",
+    "OptionName": "Option-1",
+    "SortOrder": 2,
+    "ItemName": "BMS",
+    "CustomerName": "Civil Project",
+    "LeadJobName": "BMS",
+    "CreatedAt": "2026-02-23T12:08:25.430Z"
+  },
+  {
+    "ID": 339,
+    "RequestNo": "16",
+    "OptionName": "Option-1",
+    "SortOrder": 5,
+    "ItemName": "BMS",
+    "CustomerName": "Civil Project",
+    "LeadJobName": "Civil Project",
+    "CreatedAt": "2026-02-23T12:08:25.560Z"
+  },
+  {
+    "ID": 353,
+    "RequestNo": "16",
+    "OptionName": "Option-1",
+    "SortOrder": 11,
+    "ItemName": "Civil Project",
+    "CustomerName": "Cebarco Bahrain",
+    "LeadJobName": "Civil Project",
+    "CreatedAt": "2026-02-23T15:09:41.600Z"
+  },
+  {
+    "ID": 354,
+    "RequestNo": "16",
+    "OptionName": "Option-1",
+    "SortOrder": 10,
+    "ItemName": "Civil Project",
+    "CustomerName": "Civil Project",
+    "LeadJobName": "Civil Project",
+    "CreatedAt": "2026-02-23T15:09:41.630Z"
+  },
+  {
+    "ID": 355,
+    "RequestNo": "16",
+    "OptionName": "Option-1",
+    "SortOrder": 11,
+    "ItemName": "Electrical",
+    "CustomerName": "Electrical",
+    "LeadJobName": "Civil Project",
+    "CreatedAt": "2026-02-23T15:09:41.650Z"
+  },
+  {
+    "ID": 356,
+    "RequestNo": "16",
+    "OptionName": "Option-1",
+    "SortOrder": 11,
+    "ItemName": "Civil Project",
+    "CustomerName": "Electrical",
+    "LeadJobName": "Civil Project",
+    "CreatedAt": "2026-02-23T15:09:41.650Z"
+  },
+  {
+    "ID": 357,
+    "RequestNo": "16",
+    "OptionName": "Option-1",
+    "SortOrder": 11,
+    "ItemName": "Electrical",
+    "CustomerName": "Civil Project",
+    "LeadJobName": "Civil Project",
+    "CreatedAt": "2026-02-23T15:09:41.650Z"
+  },
+  {
+    "ID": 358,
+    "RequestNo": "16",
+    "OptionName": "Option-1",
+    "SortOrder": 12,
+    "ItemName": "Electrical",
+    "CustomerName": "Cebarco Bahrain",
+    "LeadJobName": "Civil Project",
+    "CreatedAt": "2026-02-23T15:09:41.650Z"
+  }
+]

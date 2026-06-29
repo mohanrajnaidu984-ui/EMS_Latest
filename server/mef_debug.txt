@@ -1,0 +1,37 @@
+[
+  {
+    "ItemName": "BMS",
+    "CommonMailIds": "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com",
+    "CCMailIds": "mohan.naidu@almoayyedcg.com"
+  },
+  {
+    "ItemName": "Civil Project",
+    "CommonMailIds": "civil@almoayyedcg.com",
+    "CCMailIds": "civil@almoayyedcg.com"
+  },
+  {
+    "ItemName": "Electrical",
+    "CommonMailIds": "electrical@almoayyedcg.com",
+    "CCMailIds": "electrical_HOD@almoayyedcg.com"
+  },
+  {
+    "ItemName": "BMS - PICV",
+    "CommonMailIds": "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com",
+    "CCMailIds": "mohan.naidu@almoayyedcg.com"
+  },
+  {
+    "ItemName": "BMS - BTU Meter",
+    "CommonMailIds": "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com",
+    "CCMailIds": "mohan.naidu@almoayyedcg.com"
+  },
+  {
+    "ItemName": "BMS - Thermostat",
+    "CommonMailIds": "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com",
+    "CCMailIds": "mohan.naidu@almoayyedcg.com"
+  },
+  {
+    "ItemName": "BMS - ELV",
+    "CommonMailIds": "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com",
+    "CCMailIds": "mohan.naidu@almoayyedcg.com"
+  }
+]

@@ -1,0 +1,913 @@
+/**
+ * Vector PDF from HTML using headless Chromium (selectable text, not canvas screenshots).
+ */
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { pathToFileURL } = require('url');
+const express = require('express');
+const { applyQuotePdfRestrictions, isQuotePdfRestrictEnabled } = require('../lib/restrictQuotePdf');
+const { resolvePuppeteerChromeExecutable } = require('../lib/resolvePuppeteerChrome');
+const {
+    newPage: newPooledPdfPage,
+    releaseAfterJob: releasePooledBrowser,
+    closePooledBrowser,
+} = require('../lib/quotePdfBrowserPool.cjs');
+const { msSince, logStage, headerJson, isPerfLogEnabled } = require('../lib/quotePdfPerf.cjs');
+const { logQuotePdfPaginationDiagnostics, isPaginationDebugEnabled } = require('../lib/quotePdfPaginationDebug.cjs');
+
+const router = express.Router();
+
+/** Beyond this, use file:// load instead of setContent (CDP limits / IIS hangs). */
+const SETCONTENT_SAFE_MAX = 8_000_000;
+
+/** Outside the Vite project tree so dev HMR does not reload on every PDF HTML write. */
+function getPdfTempDir() {
+    const dir = path.join(os.tmpdir(), 'ems-quote-pdf');
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+    return dir;
+}
+
+function puppeteerLaunchTimeoutMs() {
+    const n = Number(process.env.PUPPETEER_LAUNCH_TIMEOUT_MS);
+    return Number.isFinite(n) && n > 0 ? n : 120000;
+}
+
+function quotePdfPageTimeoutMs() {
+    const n = Number(process.env.QUOTE_PDF_PAGE_TIMEOUT_MS);
+    return Number.isFinite(n) && n > 0 ? n : 120000;
+}
+
+function useSingleProcessChrome() {
+    /** Windows Server / PM2: --single-process often hangs launch (120s timeout). Default off on win32. */
+    const winDefault = process.platform === 'win32' ? '0' : '1';
+    const raw = String(process.env.QUOTE_PDF_SINGLE_PROCESS ?? winDefault).trim().toLowerCase();
+    return raw !== '0' && raw !== 'false' && raw !== 'no';
+}
+
+/** Always log critical Puppeteer steps (PM2 stdout). Verbose when EMS_QUOTE_PDF_PERF_LOG=1. */
+function pdfStepLog(step, detail) {
+    const suffix = detail != null ? ` ${typeof detail === 'string' ? detail : JSON.stringify(detail)}` : '';
+    console.log(`[quote-pdf][step] ${step}${suffix}`);
+}
+
+function useFileHtmlLoad(htmlLength) {
+    const force = String(process.env.QUOTE_PDF_USE_FILE_LOAD ?? '1').trim().toLowerCase();
+    if (force === '0' || force === 'false' || force === 'no') {
+        return htmlLength > SETCONTENT_SAFE_MAX;
+    }
+    /** Default on IIS/PM2: file:// avoids setContent hangs on loopback /uploads subresources. */
+    return true;
+}
+
+/**
+ * Block slow/hanging network loads (fonts, external images). Logos are embedded from disk after load.
+ */
+async function setupPdfRequestInterception(page) {
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+        try {
+            const url = req.url();
+            const type = req.resourceType();
+            if (url.startsWith('data:') || url.startsWith('file:') || url.startsWith('about:')) {
+                req.continue();
+                return;
+            }
+            if (/fonts\.googleapis\.com|fonts\.gstatic\.com/i.test(url)) {
+                req.abort();
+                return;
+            }
+            /** Rewritten /uploads URLs — disk embed handles logos; do not wait on loopback HTTP. */
+            if (/^https?:\/\/(?:127\.0\.0\.1|localhost)[^/]*\/uploads\//i.test(url)) {
+                req.abort();
+                return;
+            }
+            if (type === 'image' || type === 'font' || type === 'media') {
+                req.abort();
+                return;
+            }
+            req.continue();
+        } catch {
+            try {
+                req.continue();
+            } catch {
+                /* ignore */
+            }
+        }
+    });
+}
+
+/**
+ * Shared launch options for /health probe and /generate (IIS/PM2 service accounts).
+ * Hardened for Windows Server session isolation — see PUPPETEER_* / QUOTE_PDF_* in server/.env.
+ */
+function buildChromeLaunchOptions(executablePath, userDataDir) {
+    const args = [
+        '--headless=new',
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-extensions',
+        '--hide-scrollbars',
+        '--mute-audio',
+        /** Prevent visible "Restore pages?" bubble when profile was touched while Chrome still running. */
+        '--disable-session-crashed-bubble',
+        '--disable-features=InfiniteSessionRestore,Translate',
+        '--noerrdialogs',
+        '--disable-restore-session-state',
+        '--no-zygote',
+        '--disable-software-rasterizer',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-hang-monitor',
+        '--disable-ipc-flooding-protection',
+        '--disable-popup-blocking',
+        '--disable-prompt-on-repost',
+        '--disable-client-side-phishing-detection',
+        '--disable-default-apps',
+        '--disable-sync',
+        '--metrics-recording-only',
+        '--disable-print-preview',
+        '--no-proxy-server',
+        '--proxy-bypass-list=*',
+        '--proxy-server="direct://"',
+        '--disable-web-security',
+        /** CRITICAL: Prevent occlusion hang on Windows Server Session 0 & block CORS loopback blocks */
+        '--disable-features=CalculateNativeWinOcclusion,BlockInsecurePrivateNetworkRequests',
+    ];
+    if (useSingleProcessChrome()) {
+        args.push('--single-process');
+    }
+    return {
+        headless: true,
+        executablePath,
+        timeout: puppeteerLaunchTimeoutMs(),
+        userDataDir,
+        /** pipe:true can flash a window on Windows; pipe:false is more stable when profile is not deleted mid-flight. */
+        pipe: false,
+        args,
+        /** Do not inherit the user's desktop Chrome profile (avoids restore-session dialogs). */
+        ignoreDefaultArgs: ['--enable-automation'],
+    };
+}
+
+/**
+ * Validate Puppeteer browser launch stability under Windows service session.
+ */
+async function runLaunchProbe(puppeteer, chromePath) {
+    if (!chromePath) return { ok: false, error: 'No chrome path resolved.' };
+    const probeDir = path.join(getPdfTempDir(), `ems-puppeteer-probe-${process.pid}-${Date.now()}`);
+    const t0 = Date.now();
+    let probeBrowser;
+    try {
+        probeBrowser = await puppeteer.launch(buildChromeLaunchOptions(chromePath, probeDir));
+        const probePage = await probeBrowser.newPage();
+        await probePage.goto('about:blank', {
+            waitUntil: 'domcontentloaded',
+            timeout: quotePdfPageTimeoutMs(),
+        });
+        return { ok: true, ms: Date.now() - t0 };
+    } catch (probeErr) {
+        return {
+            ok: false,
+            ms: Date.now() - t0,
+            error: probeErr && probeErr.message ? String(probeErr.message) : String(probeErr),
+        };
+    } finally {
+        if (probeBrowser) await probeBrowser.close().catch(() => {});
+        try {
+            fs.rmSync(probeDir, { recursive: true, force: true });
+        } catch {
+            /* ignore */
+        }
+    }
+}
+
+/** Quick reachability check for Quote tab PDF download (Vite proxies /api → Express). */
+router.get('/health', async (req, res) => {
+    let puppeteerOk = false;
+    let chromePath = null;
+    let chromeReady = false;
+    let chromeHint = '';
+    let launchProbe;
+    let chromeSpawnProbe;
+    let trustedEnvPath;
+    let spawnProbeWarning;
+    let chromeSource;
+    try {
+        require.resolve('puppeteer');
+        puppeteerOk = true;
+        const puppeteer = require('puppeteer');
+        const resolved = resolvePuppeteerChromeExecutable(puppeteer);
+        trustedEnvPath = resolved.trustedEnvPath;
+        spawnProbeWarning = resolved.spawnProbeWarning;
+        chromeSource = resolved.source;
+        chromeSpawnProbe = resolved.spawnProbe;
+        chromePath = resolved.executablePath;
+        chromeReady =
+            !!chromePath &&
+            (resolved.trustedEnvPath || resolved.spawnProbe?.ok !== false || resolved.spawnProbe?.skipped);
+        if (!chromeReady) chromeHint = resolved.reason || '';
+        if (resolved.spawnProbe && !resolved.spawnProbe.ok && !resolved.trustedEnvPath) {
+            chromeHint = resolved.spawnProbe.error || resolved.reason || 'Chrome spawn probe failed (EFTYPE?)';
+        }
+        if (resolved.spawnProbeWarning) {
+            chromeHint = resolved.spawnProbeWarning;
+        }
+
+        if (String(req.query.launch || '').trim() === '1' && chromePath) {
+            const probeDir = path.join(getPdfTempDir(), `ems-puppeteer-probe-${process.pid}-${Date.now()}`);
+            const t0 = Date.now();
+            let probeBrowser;
+            try {
+                probeBrowser = await puppeteer.launch(buildChromeLaunchOptions(chromePath, probeDir));
+                const probePage = await probeBrowser.newPage();
+                await probePage.goto('about:blank', {
+                    waitUntil: 'domcontentloaded',
+                    timeout: quotePdfPageTimeoutMs(),
+                });
+                launchProbe = { ok: true, ms: Date.now() - t0 };
+            } catch (probeErr) {
+                launchProbe = {
+                    ok: false,
+                    ms: Date.now() - t0,
+                    error: probeErr && probeErr.message ? String(probeErr.message) : String(probeErr),
+                };
+            } finally {
+                if (probeBrowser) await probeBrowser.close().catch(() => {});
+                try {
+                    fs.rmSync(probeDir, { recursive: true, force: true });
+                } catch {
+                    /* ignore */
+                }
+            }
+        }
+    } catch {
+        puppeteerOk = false;
+        chromeHint = 'Install: cd server && npm install puppeteer';
+    }
+    const serverPdfEnabled = process.env.EMS_QUOTE_PDF_SERVER_ENABLED === '1';
+    const chromeLabel = chromePath
+        ? /msedge\.exe/i.test(chromePath)
+            ? 'edge'
+            : /chrome\.exe/i.test(chromePath)
+              ? 'chrome'
+              : 'chromium'
+        : undefined;
+    return res.json({
+        ok: true,
+        port: serverListenPort(),
+        puppeteer: puppeteerOk,
+        chromeReady,
+        chromePath: chromePath || undefined,
+        chromeEngine: chromeLabel,
+        chromeHint: chromeHint || undefined,
+        chromeSource: chromeSource || undefined,
+        launchProbe,
+        chromeSpawnProbe,
+        trustedEnvPath: trustedEnvPath || undefined,
+        spawnProbeWarning: spawnProbeWarning || undefined,
+        emsQuotePdfServerEnabled: serverPdfEnabled,
+        emsQuotePdfPerfLog: isPerfLogEnabled(),
+        emsQuotePdfDebugPagination: isPaginationDebugEnabled(),
+        quotePdfCssVersion: '2026-06-05-footer-auto',
+        quotePdfAssetOrigin: (process.env.QUOTE_PDF_ASSET_ORIGIN || `http://127.0.0.1:${serverListenPort()}`).replace(
+            /\/$/,
+            ''
+        ),
+    });
+});
+
+const serverListenPort = () => String(process.env.PORT || 5002);
+
+/** Same font as on-screen #quote-preview (QuoteForm.jsx) — do not switch to Inter in PDF. */
+const QUOTE_PREVIEW_FONT_STACK =
+    "'Segoe UI', 'Segoe UI Web (West European)', system-ui, -apple-system, sans-serif";
+
+const { QUOTE_UNIFIED_SHEET_EXPORT_CSS } = require('../lib/quotePrintExportCss.cjs');
+
+/** Injected last in <head> — strip compositing that rasterizes text; keep Segoe UI from hoisted CSS. */
+function buildPdfSharpTextHeadCss() {
+    return `<style id="ems-pdf-sharp-text">
+html[data-preview-pdf="1"] #quote-preview {
+    background: #fff !important;
+    padding: 0 !important;
+    gap: 0 !important;
+    font-family: ${QUOTE_PREVIEW_FONT_STACK} !important;
+    -webkit-font-smoothing: antialiased !important;
+    -moz-osx-font-smoothing: grayscale !important;
+    text-rendering: auto !important;
+}
+html[data-preview-pdf="1"] #quote-preview *:not(.quote-digital-signature-stamp):not(.quote-signature-stamp-caption):not(.quote-signature-stamp-body) {
+    -webkit-font-smoothing: antialiased !important;
+    -moz-osx-font-smoothing: grayscale !important;
+    text-rendering: auto !important;
+    transform: none !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+}
+html[data-preview-pdf="1"] .quote-a4-sheet {
+    position: relative !important;
+}
+html[data-preview-pdf="1"] .quote-digital-signature-stamp {
+    position: absolute !important;
+    /* left/top: inline calc(xPct/yPct) — never override for preview/PDF parity */
+}
+html[data-preview-pdf="1"] .quote-a4-sheet,
+html[data-preview-pdf="1"] .quote-preview-panel-shell,
+html[data-preview-pdf="1"] .quote-cover-body-panel,
+html[data-preview-pdf="1"] .quote-clause-heading-panel,
+html[data-preview-pdf="1"] .quote-cover-meta-table {
+    box-shadow: none !important;
+}
+html[data-preview-pdf="1"] .clause-content,
+html[data-preview-pdf="1"] .clause-content p,
+html[data-preview-pdf="1"] .clause-content li,
+html[data-preview-pdf="1"] .clause-content td,
+html[data-preview-pdf="1"] .clause-content th,
+html[data-preview-pdf="1"] .quote-clause-heading-panel h3 {
+    font-family: inherit !important;
+}
+${QUOTE_UNIFIED_SHEET_EXPORT_CSS}
+</style>`;
+}
+
+function injectPdfSharpTextHead(html) {
+    let out = String(html);
+    out = out.replace(/<link[^>]*fonts\.googleapis\.com[^>]*>\s*/gi, '');
+    out = out.replace(/<link[^>]*fonts\.gstatic\.com[^>]*>\s*/gi, '');
+    const block = buildPdfSharpTextHeadCss();
+    if (out.includes('</head>')) {
+        return out.replace('</head>', `${block}</head>`);
+    }
+    return `${block}${out}`;
+}
+
+/**
+ * HTML is built in the browser; `<base href>` and `/uploads` URLs often use the LAN host (e.g. 192.168.x.x).
+ * Puppeteer runs on the API machine and must load logos from a host it can reach — default loopback + PORT.
+ * Override with QUOTE_PDF_ASSET_ORIGIN (e.g. http://127.0.0.1:5002) if needed.
+ */
+function rewriteHtmlAssetHostsForPuppeteer(html) {
+    const port = serverListenPort();
+    const local = (process.env.QUOTE_PDF_ASSET_ORIGIN || `http://127.0.0.1:${port}`).replace(/\/$/, '');
+    let out = String(html);
+    out = out.replace(/<base\s+href\s*=\s*["'][^"']*["']/i, `<base href="${local}/">`);
+    const reAbsUploads = new RegExp(`https?:\\/\\/[^\\s"'<>]+:${port}\\/uploads`, 'gi');
+    out = out.replace(reAbsUploads, `${local}/uploads`);
+    /**
+     * Dev: logos often use the Vite origin (`:5174/uploads`, etc.). Puppeteer must hit Express `/uploads`
+     * (same machine) — rewrite common dev-server ports so Chromium does not hang or fail loading assets.
+     */
+    out = out.replace(
+        /https?:\/\/(?:localhost|127\.0\.0\.1|[\w.-]+):\s*(?:5173|5174|5175|5176|5177|5178|5179)\/uploads/gi,
+        `${local}/uploads`
+    );
+    /** IIS proxy (:5173) or LAN API host — Puppeteer must use loopback, not the server’s public IP. */
+    out = out.replace(
+        new RegExp(`https?:\\/\\/(?:localhost|127\\.0\\.0\\.1|[\\w.-]+):\\s*${port}\\/uploads`, 'gi'),
+        `${local}/uploads`
+    );
+    return out;
+}
+
+function extractBaseHrefFromHtml(html) {
+    const m = String(html).match(/<base\s+href\s*=\s*["']([^"']+)["']/i);
+    if (!m) return undefined;
+    const u = m[1].trim().replace(/\/+$/, '');
+    return u || undefined;
+}
+
+const QUOTE_LOGO_IMG_SELECTOR = '.quote-sheet-logo-row img, .quote-continuation-header img';
+
+function mimeForLogoPath(filePath) {
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+    if (ext === '.gif') return 'image/gif';
+    if (ext === '.webp') return 'image/webp';
+    if (ext === '.svg') return 'image/svg+xml';
+    return 'image/png';
+}
+
+/**
+ * When HTML still references /uploads over HTTP, Puppeteer may fail while the browser preview worked.
+ * Read logos from disk on the API server and set data URLs (matches embedded client capture).
+ */
+function uploadsRelativePathFromImgSrc(src) {
+    const raw = String(src || '').trim();
+    if (!raw || /^data:/i.test(raw)) return '';
+    try {
+        const u = new URL(raw);
+        const m = u.pathname.match(/\/uploads\/(.+)$/i);
+        if (m) return decodeURIComponent(m[1]);
+    } catch {
+        const m = raw.replace(/\\/g, '/').match(/uploads\/(.+)$/i);
+        if (m) return decodeURIComponent(m[1]);
+    }
+    return '';
+}
+
+/**
+ * Embed division logos from server disk (IIS: Puppeteer cannot load LAN/Vite /uploads URLs).
+ * Runs for every logo img, not only failed network loads.
+ */
+async function embedLocalUploadLogosInPage(page) {
+    const rows = await page.evaluate((sel) => {
+        return [...document.querySelectorAll(sel)].map((img, index) => ({
+            index,
+            src: img.getAttribute('src') || img.src || '',
+        }));
+    }, QUOTE_LOGO_IMG_SELECTOR);
+
+    const uploadsRoot = path.join(__dirname, '..', 'uploads');
+    let embedded = 0;
+
+    for (const row of rows) {
+        if (/^data:/i.test(row.src)) continue;
+
+        let rel = uploadsRelativePathFromImgSrc(row.src);
+        if (!rel && row.src && !/^https?:/i.test(row.src)) {
+            rel = String(row.src).replace(/\\/g, '/').replace(/^\/+/, '');
+        }
+        if (!rel) {
+            pdfStepLog('logo skip (no path)', { src: String(row.src).slice(0, 120) });
+            continue;
+        }
+
+        let diskPath = path.join(uploadsRoot, rel);
+        if (!fs.existsSync(diskPath) && !rel.includes('/')) {
+            diskPath = path.join(uploadsRoot, 'logos', rel);
+        }
+        if (!fs.existsSync(diskPath)) {
+            console.warn('[quote-pdf] logo file missing on server:', diskPath, 'src:', row.src);
+            continue;
+        }
+
+        let dataUrl;
+        try {
+            const buf = fs.readFileSync(diskPath);
+            dataUrl = `data:${mimeForLogoPath(diskPath)};base64,${buf.toString('base64')}`;
+        } catch (e) {
+            console.warn('[quote-pdf] logo read failed:', diskPath, e && e.message);
+            continue;
+        }
+
+        await page.evaluate(
+            (sel, dataUrl, targetIndex) => {
+                const imgs = [...document.querySelectorAll(sel)];
+                const img = imgs[targetIndex];
+                if (img) {
+                    img.src = dataUrl;
+                    img.removeAttribute('srcset');
+                }
+            },
+            QUOTE_LOGO_IMG_SELECTOR,
+            dataUrl,
+            row.index
+        );
+        embedded += 1;
+        pdfStepLog('logo embedded', { rel, diskPath });
+    }
+    return embedded;
+}
+
+/** Brief wait after logos are embedded as data URLs (no long network waits). */
+async function waitForImagesLoaded(page) {
+    const capMs = Math.min(quotePdfPageTimeoutMs(), 8000);
+    await page.evaluate((maxMs) => {
+        const imgs = Array.from(document.images || []);
+        const perImgMs = 1500;
+        return Promise.race([
+            Promise.all(
+                imgs.map(
+                    (img) =>
+                        img.complete
+                            ? Promise.resolve()
+                            : new Promise((resolve) => {
+                                  const done = () => resolve();
+                                  img.addEventListener('load', done, { once: true });
+                                  img.addEventListener('error', done, { once: true });
+                                  setTimeout(done, perImgMs);
+                              })
+                )
+            ),
+            new Promise((resolve) => setTimeout(resolve, maxMs)),
+        ]);
+    }, capMs);
+}
+
+/**
+ * Load quote HTML in Chromium.
+ * @returns {{ tmpPath: string|null, navigationUrl: string, mode: 'file'|'setContent' }}
+ */
+async function loadHtmlInPage(page, html) {
+    const baseURL = extractBaseHrefFromHtml(html);
+    const timeoutMs = quotePdfPageTimeoutMs();
+    const useFile = useFileHtmlLoad(html.length);
+
+    if (useFile) {
+        const tmpPath = path.join(
+            getPdfTempDir(),
+            `ems-quote-pdf-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 10)}.html`
+        );
+        fs.writeFileSync(tmpPath, html, 'utf8');
+        const navigationUrl = pathToFileURL(tmpPath).href;
+        pdfStepLog('page.goto (file)', { navigationUrl, htmlChars: html.length, baseURL: baseURL || null });
+        await page.goto(navigationUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: timeoutMs,
+        });
+        return { tmpPath, navigationUrl, mode: 'file' };
+    }
+
+    const navigationUrl = baseURL ? `${baseURL.replace(/\/$/, '')}/` : 'about:blank (setContent)';
+    pdfStepLog('page.setContent', { navigationUrl, htmlChars: html.length, baseURL: baseURL || null });
+    await page.setContent(html, {
+        waitUntil: 'domcontentloaded',
+        timeout: timeoutMs,
+        ...(baseURL ? { baseURL } : {}),
+    });
+    return { tmpPath: null, navigationUrl, mode: 'setContent' };
+}
+
+async function renderPdfBuffer(page) {
+    const stableA4 = {
+        printBackground: true,
+        format: 'A4',
+        margin: { top: '0', right: '0', bottom: '0', left: '0' },
+        preferCSSPageSize: false,
+    };
+    const timeoutMs = quotePdfPageTimeoutMs();
+    pdfStepLog('page.pdf start', { timeoutMs });
+
+    const runPdf = () => page.pdf(stableA4);
+    const buf = await Promise.race([
+        runPdf(),
+        new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`page.pdf timed out after ${timeoutMs}ms`)), timeoutMs)
+        ),
+    ]).catch(async (e1) => {
+        console.warn('[quote-pdf] pdf stable A4 retry:', e1 && e1.message);
+        return page.pdf({
+            printBackground: true,
+            format: 'A4',
+            margin: { top: '0', right: '0', bottom: '0', left: '0' },
+            preferCSSPageSize: true,
+        });
+    });
+
+    pdfStepLog('page.pdf done', { bytes: buf?.length || 0 });
+    return buf;
+}
+
+router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
+    const { html, filename, emulateScreen } = req.body || {};
+    /** When true (default), @media print is ignored — layout matches Quote tab on-screen CSS (grid/flex A4 sheets). */
+    const useScreenMedia = emulateScreen !== false;
+    if (!html || typeof html !== 'string') {
+        return res.status(400).json({ error: 'html_required' });
+    }
+
+    const perfT0 = Date.now();
+    const perf = {
+        htmlChars: String(html).length,
+        dataPrepMs: 0,
+        browserLaunchMs: 0,
+        pageLoadMs: 0,
+        imagesMs: 0,
+        renderMs: 0,
+        restrictMs: 0,
+        totalMs: 0,
+    };
+
+    const tPrep = Date.now();
+    let htmlForPdf = rewriteHtmlAssetHostsForPuppeteer(html);
+    htmlForPdf = injectPdfSharpTextHead(htmlForPdf);
+    perf.dataPrepMs = msSince(tPrep);
+    logStage('generate', 'Stage 1 Data prep (rewrite/inject)', perf.dataPrepMs, { htmlChars: perf.htmlChars });
+
+    if (process.env.DEBUG_QUOTE_PDF_HTML === '1') {
+        try {
+            fs.writeFileSync(path.join(__dirname, '../debug_pdf_structure.html'), htmlForPdf, 'utf8');
+        } catch (e) {
+            console.error('Debug save failed', e);
+        }
+    }
+
+    let puppeteer;
+    try {
+        puppeteer = require('puppeteer');
+    } catch (e) {
+        return res.status(501).json({
+            error: 'puppeteer_unavailable',
+            message: 'Install server dependency: cd server && npm install puppeteer',
+        });
+    }
+
+    let browser;
+    let tmpHtmlPath = null;
+    let puppeteerUserDataDir = null;
+    let page = null;
+    try {
+        const resolvedChrome = resolvePuppeteerChromeExecutable(puppeteer);
+        const { executablePath: chromeExe, checked, reason, spawnProbe, trustedEnvPath, source } = resolvedChrome;
+        if (!chromeExe) {
+            console.error('[quote-pdf] Chrome executable not found.', {
+                reason: reason || '(no reason)',
+                envPath: process.env.PUPPETEER_EXECUTABLE_PATH || '(unset)',
+                cwd: process.cwd(),
+                checkedPaths: (checked || []).slice(0, 12),
+            });
+            return res.status(503).json({
+                error: 'chrome_not_configured',
+                message: reason || 'Chrome/Chromium is not installed on this API server.',
+                hint:
+                    'On Windows Server 2012 R2: set PUPPETEER_EXECUTABLE_PATH to Chrome 109 and run helpers\\fix_puppeteer_pdf_ws2012.bat. ' +
+                    'Do not use npx puppeteer browsers install chrome (installs Chrome 146).',
+                checkedPaths: checked.slice(0, 12),
+            });
+        }
+        if (spawnProbe && !spawnProbe.ok && trustedEnvPath) {
+            pdfStepLog('chrome.resolve trusted env path despite spawn probe failure', {
+                executable: chromeExe,
+                source,
+                spawnProbe,
+            });
+        }
+
+        puppeteerUserDataDir = path.join(
+            getPdfTempDir(),
+            `ems-puppeteer-pool-${process.pid}`
+        );
+        pdfStepLog('browser.launch/acquire start', { executable: chromeExe, userDataDir: puppeteerUserDataDir });
+        const tBrowser = Date.now();
+        const launchOpts = buildChromeLaunchOptions(chromeExe, puppeteerUserDataDir);
+        let acquireAttempt = 0;
+        for (;;) {
+            try {
+                ({ browser, page } = await newPooledPdfPage(puppeteer, launchOpts));
+                break;
+            } catch (launchErr) {
+                const launchMsg = launchErr && launchErr.message ? String(launchErr.message) : String(launchErr);
+                if (acquireAttempt >= 1 || !/Timed out after waiting \d+ms/i.test(launchMsg)) {
+                    throw launchErr;
+                }
+                acquireAttempt += 1;
+                await closePooledBrowser().catch(() => {});
+                pdfStepLog('browser.launch retry after timeout', { attempt: acquireAttempt });
+            }
+        }
+        perf.browserLaunchMs = msSince(tBrowser);
+        pdfStepLog('browser.launch/acquire done', { ms: perf.browserLaunchMs });
+        logStage('generate', 'Stage 2 Browser acquire', perf.browserLaunchMs, { pooled: true, executable: chromeExe });
+        const pageTimeoutMs = quotePdfPageTimeoutMs();
+        page.setDefaultTimeout(pageTimeoutMs);
+        page.setDefaultNavigationTimeout(pageTimeoutMs);
+
+        pdfStepLog('page.setup', { emulateScreen: useScreenMedia, viewport: '794x1123' });
+        await setupPdfRequestInterception(page);
+        await page.emulateMediaType(useScreenMedia ? 'screen' : 'print');
+        await page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 1 });
+
+        const tLoad = Date.now();
+        const loadResult = await loadHtmlInPage(page, htmlForPdf);
+        tmpHtmlPath = loadResult.tmpPath;
+        perf.pageLoadMs = msSince(tLoad);
+        perf.pageLoadMode = loadResult.mode;
+        perf.navigationUrl = loadResult.navigationUrl;
+        logStage('generate', 'Stage 2 Page load', perf.pageLoadMs, {
+            mode: loadResult.mode,
+            url: loadResult.navigationUrl,
+        });
+
+        const tImg = Date.now();
+        try {
+            pdfStepLog('embedLocalUploadLogos start');
+            const embedded = await embedLocalUploadLogosInPage(page);
+            pdfStepLog('embedLocalUploadLogos done', { count: embedded });
+            await waitForImagesLoaded(page);
+        } catch (imgErr) {
+            console.warn('[quote-pdf] image/logo load warning:', imgErr && imgErr.message);
+        }
+        perf.imagesMs = msSince(tImg);
+        logStage('generate', 'Stage 2 Images/logos', perf.imagesMs);
+
+        console.log('[quote-pdf] Evaluating font/style cleaning...');
+        try {
+            await page.evaluate(async () => {
+                if (document.fonts && document.fonts.ready) {
+                    await Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 5000))]);
+                }
+                const root = document.getElementById('quote-print-root');
+                if (!root) return;
+                root.querySelectorAll('[style]').forEach((el) => {
+                    if (!el.style) return;
+                    const fam = el.style.fontFamily || '';
+                    if (/inter|calibri|arial/i.test(fam)) {
+                        el.style.removeProperty('font-family');
+                    }
+                    if (el.style.transform && el.style.transform !== 'none') {
+                        el.style.removeProperty('transform');
+                    }
+                    if (el.style.filter && el.style.filter !== 'none') {
+                        el.style.removeProperty('filter');
+                    }
+                    if (el.style.webkitFontSmoothing) {
+                        el.style.removeProperty('-webkit-font-smoothing');
+                    }
+                });
+            });
+        } catch (evalErr) {
+            console.warn('[quote-pdf] evaluate style cleaning warning:', evalErr && evalErr.message);
+        }
+
+        console.log('[quote-pdf] Pruning empty A4 sheets before render...');
+        try {
+            const { pruneEmptyQuoteSheetsInDocument } = require('../lib/quotePrintSheetValidation.cjs');
+            const removed = await page.evaluate(pruneEmptyQuoteSheetsInDocument);
+            if (removed > 0) {
+                console.log(`[quote-pdf] Removed ${removed} empty continuation sheet(s).`);
+            }
+        } catch (pruneErr) {
+            console.warn('[quote-pdf] prune empty sheets warning:', pruneErr && pruneErr.message);
+        }
+
+        try {
+            await page.evaluate(() => {
+                const pinSheetGrid = (sheetEl, isCover) => {
+                    sheetEl.style.setProperty('box-sizing', 'border-box', 'important');
+                    sheetEl.style.setProperty('width', '210mm', 'important');
+                    sheetEl.style.setProperty('padding', '15mm', 'important');
+                    sheetEl.style.setProperty('margin', '0 auto', 'important');
+                    sheetEl.style.setProperty('height', '297mm', 'important');
+                    sheetEl.style.setProperty('min-height', '297mm', 'important');
+                    sheetEl.style.setProperty('max-height', '297mm', 'important');
+                    sheetEl.style.setProperty('display', 'grid', 'important');
+                    sheetEl.style.setProperty('grid-template-columns', 'minmax(0, 1fr)', 'important');
+                    sheetEl.style.setProperty('grid-template-rows', 'auto minmax(0, 1fr) auto', 'important');
+                    sheetEl.style.setProperty('align-content', 'stretch', 'important');
+                    sheetEl.style.setProperty('overflow', 'hidden', 'important');
+                    const logo = sheetEl.querySelector(':scope > .quote-sheet-logo-row');
+                    if (logo) logo.style.setProperty('grid-row', '1', 'important');
+                    const main = sheetEl.querySelector(':scope > .quote-sheet-main-flex');
+                    const content = sheetEl.querySelector('.quote-sheet-main-flex > .content-section');
+                    const spacer = sheetEl.querySelector('.quote-cover-page1-spacer');
+                    const header = sheetEl.querySelector('.header-section');
+                    if (main) {
+                        main.style.setProperty('grid-row', '2', 'important');
+                        main.style.setProperty('min-height', '0', 'important');
+                        main.style.setProperty('height', '100%', 'important');
+                        main.style.setProperty('display', 'flex', 'important');
+                        main.style.setProperty('flex-direction', 'column', 'important');
+                        main.style.setProperty('overflow', 'hidden', 'important');
+                    }
+                    if (content) {
+                        content.style.setProperty('flex', isCover ? '1 1 0' : '0 1 auto', 'important');
+                        content.style.setProperty('min-height', '0', 'important');
+                        if (isCover) {
+                            content.style.setProperty('display', 'flex', 'important');
+                            content.style.setProperty('flex-direction', 'column', 'important');
+                        }
+                    }
+                    if (header) header.style.setProperty('flex', '0 0 auto', 'important');
+                    if (isCover && spacer) {
+                        spacer.style.setProperty('flex', '1 1 0', 'important');
+                        spacer.style.setProperty('min-height', '0', 'important');
+                    }
+                    const footer = sheetEl.querySelector(':scope > .footer-section');
+                    if (footer) {
+                        footer.style.setProperty('grid-row', '3', 'important');
+                        footer.style.setProperty('align-self', 'end', 'important');
+                    }
+                };
+                document.querySelectorAll('#quote-print-root .quote-a4-sheet').forEach((sheetEl) => {
+                    const isCover = !sheetEl.classList.contains('quote-a4-sheet--continuation');
+                    pinSheetGrid(sheetEl, isCover);
+                });
+                document.querySelectorAll('.quote-preview-zoom-viewport, .quote-preview-zoom-shell').forEach((el) => {
+                    el.style.setProperty('transform', 'none', 'important');
+                    el.style.setProperty('width', '100%', 'important');
+                    el.style.setProperty('flex', 'none', 'important');
+                    el.style.setProperty('height', 'auto', 'important');
+                    el.style.setProperty('overflow', 'visible', 'important');
+                });
+                document.querySelectorAll('.quote-a4-sheet').forEach((sheetEl) => {
+                    ['page-break-before', 'page-break-after', 'break-before', 'break-after'].forEach((prop) => {
+                        sheetEl.style.setProperty(prop, 'auto', 'important');
+                    });
+                    sheetEl.style.removeProperty('page-break-inside');
+                    sheetEl.style.removeProperty('break-inside');
+                });
+                const sheets = [...document.querySelectorAll('#quote-preview .quote-a4-sheet')];
+                const lastSheet = sheets[sheets.length - 1];
+                if (lastSheet) {
+                    lastSheet.style.setProperty('page-break-after', 'avoid', 'important');
+                    lastSheet.style.setProperty('break-after', 'avoid', 'important');
+                }
+                document
+                    .querySelectorAll('.quote-sheet-logo-row img, .quote-continuation-header img')
+                    .forEach((img) => {
+                        img.style.setProperty('max-height', '68px', 'important');
+                        img.style.setProperty('height', 'auto', 'important');
+                        img.style.setProperty('width', 'auto', 'important');
+                        img.style.setProperty('max-width', '212px', 'important');
+                        img.style.setProperty('object-fit', 'contain', 'important');
+                    });
+            });
+        } catch (coverLayoutErr) {
+            console.warn('[quote-pdf] page-break cleanup warning:', coverLayoutErr && coverLayoutErr.message);
+        }
+
+        try {
+            const pagStats = await logQuotePdfPaginationDiagnostics(page);
+            if (pagStats && isPerfLogEnabled()) {
+                perf.sheetCount = pagStats.sheetCount;
+            }
+        } catch (pagLogErr) {
+            console.warn('[quote-pdf] pagination diagnostics warning:', pagLogErr && pagLogErr.message);
+        }
+
+        const tRender = Date.now();
+        let buf = Buffer.from(await renderPdfBuffer(page));
+        perf.renderMs = msSince(tRender);
+        logStage('generate', 'Stage 2 PDF render', perf.renderMs);
+
+        const tRestrict = Date.now();
+        buf = await applyQuotePdfRestrictions(buf);
+        perf.restrictMs = msSince(tRestrict);
+
+        perf.totalMs = msSince(perfT0);
+        logStage('generate', 'TOTAL', perf.totalMs, perf);
+
+        const safeName = String(filename || 'quote.pdf').replace(/[^\w.\-]+/g, '_');
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+        const perfHeader = headerJson(perf);
+        if (perfHeader) res.setHeader('X-EMS-PDF-Timing', perfHeader);
+        if (isQuotePdfRestrictEnabled()) {
+            res.setHeader('X-EMS-PDF-Restricted', '1');
+        }
+        return res.send(buf);
+    } catch (err) {
+        const raw = err && err.message ? String(err.message) : String(err);
+        if (/Timed out after waiting \d+ms/i.test(raw)) {
+            await closePooledBrowser().catch(() => {});
+        }
+        if (/Target closed|Protocol error|Browser closed|Session closed|Connection closed/i.test(raw)) {
+            await closePooledBrowser().catch(() => {});
+        }
+        console.error('[quote-pdf] PDF generation error handler caught:', err);
+        let msg = raw.trim() || 'pdf_generation_failed';
+        let hint =
+            'If logos fail to load, set QUOTE_PDF_ASSET_ORIGIN in server/.env (e.g. http://127.0.0.1:5002). ' +
+            'Ensure Puppeteer can launch Chrome: cd server && npx puppeteer browsers install chrome (or set PUPPETEER_EXECUTABLE_PATH).';
+        if (/Could not find Chrome|browser.*executable|Executable doesn't exist|Browser closed|spawn .* ENOENT/i.test(raw)) {
+            hint =
+                'Chrome for Puppeteer is missing or blocked. From the server folder run: npx puppeteer browsers install chrome. ' +
+                'On locked-down PCs set PUPPETEER_EXECUTABLE_PATH to a Chrome/Chromium exe.';
+        }
+        if (/spawn EFTYPE|EFTYPE|exec format error/i.test(raw)) {
+            hint =
+                'The Chrome path on this server is invalid (wrong file or copied from another machine). ' +
+                'On the API server run: cd server && npx puppeteer browsers install chrome. ' +
+                'Or set PUPPETEER_EXECUTABLE_PATH in server/.env to a real chrome.exe on this server.';
+        }
+        if (/Timed out after waiting \d+ms/i.test(raw)) {
+            hint =
+                'Chrome did not start or load the quote in time (common on IIS/PM2). Run GET /api/quote-pdf/health?launch=1. ' +
+                'Set PUPPETEER_EXECUTABLE_PATH, QUOTE_PDF_ASSET_ORIGIN=http://127.0.0.1:5002, grant the PM2 user write access to %TEMP%, ' +
+                'or use Print → Save as PDF from the quote tab. To disable --single-process set QUOTE_PDF_SINGLE_PROCESS=0 and restart PM2.';
+        }
+        console.error('[quote-pdf]', err && err.stack ? err.stack : err);
+        if (!res.headersSent) {
+            return res.status(500).json({
+                error: 'pdf_generation_failed',
+                message: msg,
+                hint,
+            });
+        }
+        return;
+    } finally {
+        if (page) {
+            await page.close().catch(() => {});
+        }
+        releasePooledBrowser();
+        if (tmpHtmlPath) {
+            try {
+                fs.unlinkSync(tmpHtmlPath);
+            } catch {
+                /* ignore */
+            }
+        }
+        /** Profile dir is owned by the browser pool — deleted only in closePooledBrowser(). */
+    }
+});
+
+module.exports = router;

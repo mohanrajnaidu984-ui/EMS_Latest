@@ -1,0 +1,30 @@
+﻿[dotenv@17.2.3] injecting env (9) from .env -- tip: ≡ƒöÉ prevent committing .env to code: https://dotenvx.com/precommit
+[dotenv@17.2.3] injecting env (0) from .env -- tip: ≡ƒôí add observability to secrets: https://dotenvx.com/ops
+Connected to MSSQL Database
+--- Fetching Master_EnquiryFor Columns ---
+[
+  'ID',           'ItemName',
+  'CompanyName',  'DepartmentName',
+  'Status',       'CommonMailIds',
+  'CCMailIds',    'RequestNo',
+  'DivisionCode', 'DepartmentCode',
+  'Phone',        'Address',
+  'FaxNo',        'CompanyLogo'
+]
+--- Fetching Master_EnquiryFor Sample ---
+{
+  ID: 4,
+  ItemName: 'BMS',
+  CompanyName: 'Almoayyed Air Conditioning',
+  DepartmentName: 'BMS',
+  Status: 'Active',
+  CommonMailIds: 'bms@almoayyedcg.com,bmselveng1@almoayyedcg.com',
+  CCMailIds: 'mohan.naidu@almoayyedcg.com',
+  RequestNo: '41',
+  DivisionCode: 'BMS',
+  DepartmentCode: 'AAC',
+  Phone: '17404949',
+  Address: 'P.O. Box 32232, Manama, Khamis, Kingdom of Bahrain',
+  FaxNo: '17400396',
+  CompanyLogo: 'uploads/logos/1769321435260-AAC Logo.png'
+}

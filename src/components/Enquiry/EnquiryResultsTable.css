@@ -1,0 +1,308 @@
+/**
+ * Search Enquiry results grid + Dashboard modal (same component).
+ * Loaded as a real CSS module path so Vite always bundles these rules.
+ * Scoped under .enquiry-results-table-root to beat Bootstrap table defaults.
+ */
+
+.enquiry-results-table-root > .enquiry-results-table-project-total {
+    background: linear-gradient(180deg, #f8fafc 0%, #eef2f9 100%);
+    border: 1px solid rgba(203, 213, 225, 0.85);
+    border-bottom: none;
+    border-radius: 10px 10px 0 0;
+    margin-bottom: 0;
+}
+
+/* Same funnel+X icon as Sales Report Jobs table toolbar (lucide FilterX) */
+.enquiry-results-table-root .ert-clear-column-filters-btn {
+    width: 1.75rem;
+    height: 1.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    flex-shrink: 0;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    background: linear-gradient(180deg, #2f5fae 0%, #203f75 100%);
+    color: #ffffff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+    cursor: pointer;
+    vertical-align: middle;
+}
+
+.enquiry-results-table-root .ert-clear-column-filters-btn:hover:not(:disabled) {
+    border-color: #ffffff;
+    filter: brightness(1.06);
+}
+
+.enquiry-results-table-root .ert-clear-column-filters-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+/* Join count strip + scroll frame when count is shown (single card silhouette). */
+.enquiry-results-table-root:has(> .enquiry-results-table-project-total) .enquiry-search-table-wrap {
+    border-radius: 0 0 18px 18px;
+}
+
+.enquiry-results-table-root:has(> .enquiry-results-table-project-total) .enquiry-search-table-wrap thead tr:first-child th:first-child {
+    border-top-left-radius: 0 !important;
+}
+
+.enquiry-results-table-root:has(> .enquiry-results-table-project-total) .enquiry-search-table-wrap thead tr:first-child th:last-child {
+    border-top-right-radius: 0 !important;
+}
+
+.enquiry-results-table-root .action-icon-hover:hover {
+    background-color: rgba(13, 110, 253, 0.25) !important;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.enquiry-results-table-root .sortable-header {
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.enquiry-results-table-root .header-content {
+    display: inline-flex;
+    align-items: center;
+    width: 100%;
+}
+
+.enquiry-results-table-root .sortable-header:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.enquiry-results-table-root tbody tr.enquiry-search-row-open {
+    cursor: pointer;
+}
+
+.enquiry-results-table-root tbody tr.enquiry-search-row-open:hover {
+    background-color: #eff6ff !important;
+}
+
+/* Outer scroll frame: no solid border (avoids double-edge vs blue header); soft ring only */
+.enquiry-results-table-root .enquiry-search-table-wrap {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: auto;
+    border: none !important;
+    border-radius: 18px;
+    width: 100%;
+    background-color: #eef2f9;
+    padding: 0;
+    box-sizing: border-box;
+    -webkit-overflow-scrolling: touch;
+    box-shadow:
+        0 0 0 1px rgba(219, 227, 241, 0.85),
+        0 4px 18px rgba(15, 23, 42, 0.08);
+}
+
+.enquiry-results-table-root .enquiry-search-table-wrap table {
+    margin: 0 !important;
+    border-collapse: separate;
+    border-spacing: 0 5px;
+    width: max-content;
+    min-width: 100%;
+    max-width: none;
+}
+
+.enquiry-results-table-root .enquiry-search-table-wrap thead tr {
+    background: transparent !important;
+}
+
+.enquiry-results-table-root .enquiry-search-table-wrap thead th {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--ems-table-header-gradient) !important;
+    color: #ffffff !important;
+    font-weight: 400 !important;
+    text-shadow: 0 1px 2px rgba(15, 23, 42, 0.38);
+    border-color: rgba(210, 222, 255, 0.25) !important;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.22),
+        inset 0 -1px 0 rgba(15, 23, 42, 0.14);
+    --bs-table-bg: transparent !important;
+    --bs-table-accent-bg: transparent !important;
+    text-align: left;
+    vertical-align: middle !important;
+}
+
+/* Full inner radius — wrapper has no inset border, so 18px matches the rounded frame */
+.enquiry-results-table-root .enquiry-search-table-wrap thead tr:first-child th:first-child {
+    border-top-left-radius: 18px !important;
+}
+
+.enquiry-results-table-root .enquiry-search-table-wrap thead tr:first-child th:last-child {
+    border-top-right-radius: 18px !important;
+}
+
+.enquiry-results-table-root .enquiry-search-table-wrap thead th .header-content {
+    font-weight: 400 !important;
+}
+
+.enquiry-results-table-root .enquiry-search-table-wrap thead th.sortable-header {
+    font-weight: 400 !important;
+}
+
+.enquiry-results-table-root .enquiry-search-table-wrap thead th .text-muted,
+.enquiry-results-table-root .enquiry-search-table-wrap thead th .text-primary {
+    color: #e6efff !important;
+}
+
+.enquiry-results-table-root .enquiry-search-table-wrap tbody td {
+    background: #ffffff;
+    text-align: left;
+    padding-top: 0.38rem !important;
+    padding-bottom: 0.38rem !important;
+    line-height: 1.15;
+    vertical-align: middle;
+}
+
+.enquiry-results-table-root .enquiry-search-table-wrap th.ert-col-project,
+.enquiry-results-table-root .enquiry-search-table-wrap td.ert-col-project {
+    max-width: 220px;
+    min-width: 140px;
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    vertical-align: top;
+}
+
+.enquiry-results-table-root .enquiry-search-table-wrap tbody tr:nth-child(odd) td {
+    background: #ffffff !important;
+}
+
+.enquiry-results-table-root .enquiry-search-table-wrap tbody tr:nth-child(even) td {
+    background: #f3f7fd !important;
+}
+
+/* Column header filters (Search Enquiry — same pattern as Sales Report Jobs table) */
+.enquiry-results-table-root .ert-filterable-th {
+    position: sticky;
+    z-index: 6;
+}
+
+.enquiry-results-table-root .ert-th-header-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.2rem;
+    width: 100%;
+}
+
+.enquiry-results-table-root .ert-th-filter-btn {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.25rem;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+    padding: 0;
+    text-align: left;
+}
+
+.enquiry-results-table-root .ert-th-sort-btn {
+    flex: 0 0 auto;
+    border: none;
+    background: transparent;
+    color: #e6efff;
+    padding: 0 0.1rem;
+    line-height: 1;
+}
+
+.enquiry-results-table-root .ert-th-sort-btn:hover {
+    color: #ffffff;
+}
+
+.enquiry-results-table-root .ert-th-filter-caret {
+    font-size: 0.58rem;
+    opacity: 0.75;
+    flex-shrink: 0;
+}
+
+.enquiry-results-table-root .ert-th-filter-caret--active {
+    color: #c7d7ff;
+    opacity: 1;
+}
+
+.enquiry-results-table-root .ert-th-filter-popover {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    min-width: 220px;
+    max-width: 280px;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.22);
+    padding: 0.45rem;
+    z-index: 30;
+    color: #1e293b;
+    font-weight: 400;
+}
+
+.enquiry-results-table-root .ert-th-filter-search {
+    width: 100%;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 0.18rem 0.35rem;
+    font-size: 0.65rem;
+}
+
+.enquiry-results-table-root .ert-th-filter-actions,
+.enquiry-results-table-root .ert-th-filter-footer {
+    display: flex;
+    gap: 0.35rem;
+    margin-top: 0.35rem;
+}
+
+.enquiry-results-table-root .ert-th-filter-actions button,
+.enquiry-results-table-root .ert-th-filter-footer button {
+    border: 1px solid #94a3b8;
+    background: #f8fafc;
+    border-radius: 4px;
+    padding: 0.08rem 0.38rem;
+    font-size: 0.64rem;
+    color: #334155;
+}
+
+.enquiry-results-table-root .ert-th-filter-footer {
+    justify-content: flex-end;
+}
+
+.enquiry-results-table-root .ert-th-filter-footer .ert-th-filter-apply {
+    background: #6366f1;
+    border-color: #6366f1;
+    color: #fff;
+}
+
+.enquiry-results-table-root .ert-th-filter-options {
+    max-height: 170px;
+    overflow: auto;
+    margin-top: 0.35rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    padding: 0.22rem 0.3rem;
+}
+
+.enquiry-results-table-root .ert-th-filter-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.33rem;
+    font-size: 0.67rem;
+    line-height: 1.2;
+    padding: 0.08rem 0;
+}
+
+.enquiry-results-table-root .ert-th-filter-option--month {
+    padding-left: 1rem;
+}

@@ -1,0 +1,44 @@
+[
+  {
+    "ID": 285,
+    "ParentID": null,
+    "ItemName": "L1 - Civil Project",
+    "ParentItemName": null,
+    "CommonMailIds": "civil@almoayyedcg.com",
+    "CCMailIds": "civil_hod@almoayyedcg.com",
+    "CompanyLogo": "uploads/logos/1769097773799-Almoayyed Contracting.png",
+    "DepartmentName": "Civil Project",
+    "CompanyName": "Almoayyed Contracting",
+    "Address": "ddaFSa",
+    "Phone": "1234",
+    "FaxNo": "24234235"
+  },
+  {
+    "ID": 286,
+    "ParentID": 285,
+    "ItemName": "Elec Project",
+    "ParentItemName": "L1 - Civil Project",
+    "CommonMailIds": "electrical@almoayyedcg.com",
+    "CCMailIds": "electrical_HOD@almoayyedcg.com",
+    "CompanyLogo": "uploads/logos/1769097941308-Almoayyed-Air-Conditioning.png",
+    "DepartmentName": "Elec Project",
+    "CompanyName": "Almoayyed Air Conditioning",
+    "Address": "fasfgwdg",
+    "Phone": "13145",
+    "FaxNo": "252525"
+  },
+  {
+    "ID": 287,
+    "ParentID": 286,
+    "ItemName": "BMS Project",
+    "ParentItemName": "Elec Project",
+    "CommonMailIds": "bms@almoayyedcg.com",
+    "CCMailIds": "bms_hod@almoayyedcg.com",
+    "CompanyLogo": "uploads/logos/1769098014094-Almoayyed-Air-Conditioning.png",
+    "DepartmentName": "BMS Project",
+    "CompanyName": "Almoayyed Air Conditioning",
+    "Address": "jbjkbk",
+    "Phone": "12348",
+    "FaxNo": "98876"
+  }
+]

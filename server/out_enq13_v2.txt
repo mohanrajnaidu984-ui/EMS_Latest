@@ -1,0 +1,10 @@
+[dotenv@17.2.3] injecting env (9) from .env -- tip: ⚙️  enable debug logging with { debug: true }
+=== QUOTES ===
+ID=160 QN=AAC/BMS/13-L1/17-R0 ToName=HVAC Project Status=Saved
+=== ENQ FOR ===
+ID=366 PID=null Name=Civil Project LJC=L1
+ID=367 PID=366 Name=Electrical Project LJC=null
+ID=368 PID=null Name=BMS Project LJC=L2
+ID=369 PID=366 Name=Plumbing & Fire Fighting Project LJC=null
+ID=370 PID=366 Name=HVAC Project LJC=null
+ID=371 PID=370 Name=BMS Project LJC=null

@@ -1,0 +1,2 @@
+Master_ConcernedSE Columns: ID, FullName, Designation, EmailId, LoginPassword, Status, Department, Roles, RequestNo, ProfilePicture, ProfileImage
+Master_EnquiryFor Columns: ID, ItemName, CompanyName, DepartmentName, Status, CommonMailIds, CCMailIds, RequestNo, DivisionCode, DepartmentCode, Phone, Address, FaxNo, CompanyLogo

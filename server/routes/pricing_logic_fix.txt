@@ -1,0 +1,25 @@
+// Temporary file to show the corrected logic
+// Lines 190-212 should be replaced with:
+
+        // Check if there's AT LEAST ONE price value > 0 for the user's jobs
+        // If we find even one valid price, the enquiry is NOT pending for this division
+        for (const priceValue of enqPrices) {
+            // Check if this price value belongs to one of the user's jobs
+            const belongsToMyJob =
+                (priceValue.EnquiryForID && myJobIds.has(priceValue.EnquiryForID)) ||
+                (priceValue.EnquiryForItem && myJobNames.has(priceValue.EnquiryForItem));
+
+            if (belongsToMyJob && priceValue.Price && priceValue.Price > 0) {
+                // Found at least one valid price for the user's division - NOT pending!
+                console.log(`[Pricing] Enquiry ${enq.RequestNo} - ✓ NOT PENDING: Found price ${priceValue.Price} for job (OptionID: ${priceValue.OptionID})`);
+                logToFile(`Enquiry ${enq.RequestNo} - ✓ NOT PENDING: Found price ${priceValue.Price} for job (OptionID: ${priceValue.OptionID})`);
+                hasPendingItems = false;
+                break; // Found a valid price, no need to check further
+            }
+        }
+
+        // If we didn't find any valid prices, log it as pending
+        if (hasPendingItems) {
+            console.log(`[Pricing] Enquiry ${enq.RequestNo} - ⚠️ PENDING: No prices found for user's division`);
+            logToFile(`[Pricing] Enquiry ${enq.RequestNo} - ⚠️ PENDING: No prices found for user's division`);
+        }

@@ -1,0 +1,164 @@
+/* Dashboard route — light grey surround (slightly darker than #e2e8f0 for contrast) */
+.dashboard-page-root {
+    background-color: #cbd5e1;
+}
+
+/* Centred loading state while calendars + history refresh */
+.dashboard-content-shell {
+    position: relative;
+    flex: 1 1 0;
+    min-height: 0;
+}
+
+.dashboard-content-shell--loading .dashboard-split-container {
+    opacity: 0.42;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+}
+
+.dashboard-content-loading {
+    position: absolute;
+    inset: 0;
+    z-index: 12;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.65rem;
+    pointer-events: none;
+}
+
+.dashboard-content-loading__spinner {
+    width: 2.35rem;
+    height: 2.35rem;
+    border-width: 0.22rem;
+    color: #4169e1 !important;
+}
+
+.dashboard-content-loading__text {
+    font-size: 0.84rem;
+    font-weight: 600;
+    color: #475569;
+    letter-spacing: 0.02em;
+}
+
+/* 2px gap below app chrome / above filter strip; both columns use this so rows stay aligned */
+.dashboard-filter-bar-row {
+    margin-top: 2px;
+}
+
+/* No white band behind filters — uses page background */
+.dashboard-filter-bar-strip {
+    background-color: transparent;
+}
+
+.dashboard-split-container {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Matches dashboard filter row control height (form-select / inputs) so left/right header bands align. */
+.dashboard-filters-right-spacer {
+    min-height: 36px;
+}
+
+/* 4px inset around each calendar stack (Monthly Overview + grid) inside the column */
+.dashboard-calendar-gutter {
+    padding: 4px;
+    box-sizing: border-box;
+}
+
+/* Single rounded card: Monthly Overview + calendar */
+.dashboard-calendar-combined {
+    margin-top: 0;
+    margin-bottom: 0;
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.dashboard-calendar-combined .calendar-view-root {
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+}
+
+/* Two calendars side-by-side; fills dashboard height (no fixed bottom table row). */
+.dashboard-calendars-row {
+    flex: 1 1 auto;
+    min-height: 260px;
+}
+
+.dashboard-half-panel {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    border-right: none;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.dashboard-history-overview {
+    background: #ffffff;
+}
+
+.dashboard-history-grid-header {
+    box-shadow: 0 1px 0 rgba(15, 23, 42, 0.06);
+}
+
+.dashboard-history-month-row--future {
+    box-shadow: 0 1px 2px rgba(16, 185, 129, 0.08);
+}
+
+.dashboard-history-month-row--stripe-alt {
+    background-color: #f1f5f9;
+}
+
+.dashboard-history-year-total-row {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+}
+
+.dashboard-history-kpi-chip:hover > div,
+.dashboard-history-kpi-chip:focus-visible > div {
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.1);
+    transform: translateY(-1px);
+}
+
+.dashboard-history-kpi-chip:focus-visible {
+    outline: none;
+}
+
+.dashboard-history-kpi-chip:focus-visible > div {
+    outline: 2px solid #3b82f6;
+    outline-offset: 1px;
+}
+
+@media (min-width: 900px) {
+
+    .dashboard-split-container.dashboard-calendars-row {
+        flex-direction: row;
+        gap: 14px;
+    }
+
+    .dashboard-half-panel {
+        flex: 1 1 0;
+        min-width: 0;
+        width: auto;
+        height: 100%;
+        border-right: none;
+        border-bottom: none;
+    }
+}
+
+/* Dashboard enquiry modal — drag affordance */
+.dashboard-enquiries-modal-drag-handle:active {
+    cursor: grabbing;
+}

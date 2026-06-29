@@ -1,0 +1,39 @@
+﻿[dotenv@17.2.3] injecting env (13) from .env -- tip: ΓÜÖ∩╕Å  load multiple .env files with { path: ['.env.local', '.env'] }
+Connected to MSSQL Database
+User check result: [
+  {
+    "ID": 24,
+    "FullName": "Rani",
+    "Designation": "Sales Engineer",
+    "EmailId": "ranigovardhan@gmail.com",
+    "LoginPassword": "$2b$10$izEFBRBgWrTYL6sZdLZpL.NuVy9yLcop55hzjrafZw.V/4w2die/G",
+    "Status": "Active",
+    "Department": "MEP",
+    "Roles": "Admin",
+    "RequestNo": "94",
+    "ProfilePicture": null,
+    "ProfileImage": null
+  }
+]
+Other sample users: [
+  {
+    "FullName": "Balakumar",
+    "EmailId": "c.balakumar93@gmail.com"
+  },
+  {
+    "FullName": "vignesh",
+    "EmailId": "vigneshgovardhan5163@gmail.com"
+  },
+  {
+    "FullName": "atypicalstore",
+    "EmailId": "atypicalstore5163@gmail.com"
+  },
+  {
+    "FullName": "Mohan(personal)",
+    "EmailId": "mohanraj.naidu984@gmail.com"
+  },
+  {
+    "FullName": "mohan(work)",
+    "EmailId": "mohan.naidu@almoayyedcg.com"
+  }
+]

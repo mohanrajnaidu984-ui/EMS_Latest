@@ -1,0 +1,217 @@
+[
+  {
+    "COLUMN_NAME": "ID",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "RequestNo",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "QuoteNumber",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "QuoteNo",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "RevisionNo",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "ValidityDays",
+    "COLUMN_DEFAULT": "((30))",
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "PreparedBy",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "PreparedByEmail",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "ShowScopeOfWork",
+    "COLUMN_DEFAULT": "((1))",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "ShowBasisOfOffer",
+    "COLUMN_DEFAULT": "((1))",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "ShowExclusions",
+    "COLUMN_DEFAULT": "((1))",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "ShowPricingTerms",
+    "COLUMN_DEFAULT": "((1))",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "ShowSchedule",
+    "COLUMN_DEFAULT": "((1))",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "ShowWarranty",
+    "COLUMN_DEFAULT": "((1))",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "ShowResponsibilityMatrix",
+    "COLUMN_DEFAULT": "((1))",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "ShowTermsConditions",
+    "COLUMN_DEFAULT": "((1))",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "ShowAcceptance",
+    "COLUMN_DEFAULT": "((1))",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "ShowBillOfQuantity",
+    "COLUMN_DEFAULT": "((1))",
+    "DATA_TYPE": "bit"
+  },
+  {
+    "COLUMN_NAME": "ScopeOfWork",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "BasisOfOffer",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "Exclusions",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "PricingTerms",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "Schedule",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "Warranty",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "ResponsibilityMatrix",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "TermsConditions",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "Acceptance",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "BillOfQuantity",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "TotalAmount",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "decimal"
+  },
+  {
+    "COLUMN_NAME": "Status",
+    "COLUMN_DEFAULT": "('Draft')",
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "CustomClauses",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "ClauseOrder",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "QuoteDate",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "datetime"
+  },
+  {
+    "COLUMN_NAME": "CustomerReference",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "Subject",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "Signatory",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "SignatoryDesignation",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "ToName",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "ToAddress",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "ToPhone",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "ToEmail",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "CreatedAt",
+    "COLUMN_DEFAULT": "(getdate())",
+    "DATA_TYPE": "datetime"
+  },
+  {
+    "COLUMN_NAME": "UpdatedAt",
+    "COLUMN_DEFAULT": "(getdate())",
+    "DATA_TYPE": "datetime"
+  }
+]

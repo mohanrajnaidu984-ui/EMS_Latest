@@ -1,0 +1,44 @@
+
+=== ALL ENQUIRIES WITH QUOTES 5+ DAYS OLD ===
+Total: 5
+
+1. RequestNo: 102
+   ProjectName: Project 3
+   Status: "Enquiry"
+   ProbabilityOption: "NULL"
+   LastQuoteDate: Fri Jan 16 2026 05:30:00 GMT+0530 (India Standard Time)
+   DaysSinceQuote: 5
+   Should show in Pending: NO
+
+2. RequestNo: 103
+   ProjectName: Project 4
+   Status: "Enquiry"
+   ProbabilityOption: "NULL"
+   LastQuoteDate: Sat Jan 17 2026 05:30:00 GMT+0530 (India Standard Time)
+   DaysSinceQuote: 4
+   Should show in Pending: NO
+
+3. RequestNo: 104
+   ProjectName: Project 5
+   Status: "Enquiry"
+   ProbabilityOption: "NULL"
+   LastQuoteDate: Thu Jan 08 2026 05:30:00 GMT+0530 (India Standard Time)
+   DaysSinceQuote: 13
+   Should show in Pending: NO
+
+4. RequestNo: 107
+   ProjectName: Job 1
+   Status: "FollowUp"
+   ProbabilityOption: "High Chance (90%)"
+   LastQuoteDate: Wed Jan 21 2026 05:30:00 GMT+0530 (India Standard Time)
+   DaysSinceQuote: 0
+   Should show in Pending: NO
+
+5. RequestNo: 97
+   ProjectName: Price test
+   Status: "Won"
+   ProbabilityOption: "High Chance (90%)"
+   LastQuoteDate: Thu Jan 08 2026 05:30:00 GMT+0530 (India Standard Time)
+   DaysSinceQuote: 13
+   Should show in Pending: NO
+

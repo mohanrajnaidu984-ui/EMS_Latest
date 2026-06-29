@@ -1,0 +1,1798 @@
+/* Sales Report — mock layout: 2×2 + pipeline column; single viewport; pipeline dark */
+
+/* Amount suffixes “k” / “M” and percent “%” render at 50% of surrounding digit size */
+.sales-report-page .sr-money-thousands__k,
+.sales-report-page .sr-money-thousands__M,
+.sales-report-page .sr-pct-sym {
+    font-size: 0.4em;
+    vertical-align: 0.08em;
+}
+
+.sales-report-page {
+    color: #0f172a;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    padding: 0.4rem 0.5rem 0.35rem;
+    box-sizing: border-box;
+    --sr-header-font-scale: 1.1;
+    /* Blue section title bars only: −10% vs base calc */
+    --sr-section-header-font-factor: 0.9;
+    /* Shared blue bar height: −10% from 1.75rem, then −5% */
+    /* Single fixed row height for Won/Lost, JB, GM, Pipeline, Top Jobs toolbar */
+    --sr-section-header-min-height: calc(1.575rem * 0.95);
+    --sr-bg-smoke: #f5f5f5;
+    /* Canvas behind the grid only — gutters between cards; panels keep --sr-bg-smoke */
+    --sr-page-bg: #bcc8d9;
+    --sr-blue: #6a73ae;
+    --sr-blue-light: #abc3e4;
+    --sr-header-bar-bg: var(--sr-blue);
+    --sr-header-bar-border: #5c648f;
+    --sr-header-bar-text: #fff;
+    /* Section title bars — same as Search Enquiry / Pricing / Quote (`--ems-table-header-gradient`) */
+    --sr-section-header-gradient: var(--ems-table-header-gradient);
+    background-color: var(--sr-page-bg);
+}
+
+/* Data theme: primary blue + light blue (matches charts) */
+.sales-report-page .text-success {
+    color: var(--sr-blue) !important;
+}
+
+.sales-report-page .text-danger {
+    color: var(--sr-blue-light) !important;
+}
+
+/* Won/Lost summary only — semantic green / red (overrides blue theme above) */
+.sr-cell-won-combined .text-success {
+    color: #15803d !important;
+}
+
+.sr-cell-won-combined .text-danger {
+    color: #dc2626 !important;
+}
+
+.sales-report-page .spinner-border.text-primary {
+    color: var(--sr-blue) !important;
+}
+
+/* Centred loading state while charts + table refresh */
+.sr-content-shell {
+    position: relative;
+    flex: 1 1 0;
+    min-height: 0;
+}
+
+.sr-content-shell--loading .sr-dashboard-grid {
+    opacity: 0.42;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+}
+
+.sr-content-loading {
+    position: absolute;
+    inset: 0;
+    z-index: 12;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.65rem;
+    pointer-events: none;
+}
+
+.sr-content-loading__spinner {
+    width: 2.35rem;
+    height: 2.35rem;
+    border-width: 0.22rem;
+}
+
+.sr-content-loading__text {
+    font-size: 0.84rem;
+    font-weight: 600;
+    color: #475569;
+    letter-spacing: 0.02em;
+}
+
+.sales-report-page.sales-report-fit {
+    height: calc(100vh - var(--sr-header-offset, 72px));
+    max-height: calc(100vh - var(--sr-header-offset, 72px));
+    overflow: hidden;
+}
+
+/* Filter bar — no panel box; sits flush on page canvas */
+.sr-filter-bar {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0.1rem 0.25rem 0.15rem;
+}
+
+.sr-filter-label {
+    display: block;
+    font-size: calc(0.6rem * var(--sr-header-font-scale, 1.1));
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: #334155;
+    margin-bottom: 0.06rem;
+    line-height: 1.1;
+}
+
+.sr-filter-field .form-select {
+    background-color: #fff;
+    border: 1px solid #cbd5e1;
+    color: #1e293b;
+    padding-top: 0.12rem;
+    padding-bottom: 0.12rem;
+    min-height: 1.65rem;
+    font-size: 0.75rem;
+}
+
+.sr-filter-groups {
+    gap: 0.5rem !important;
+}
+
+/* Main grid:
+   Cols 1–3 row1–2: merged summary+chart stacks; col4: pipeline rows 1–3; row3: table.
+   [ Won+pie | Target+bar | GM+bar | Pipeline ]
+   [  span2  |   span2   | span2  |  span3  ]
+   [  table span 3       |         |  span   ]
+*/
+.sr-dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(200px, 22vw);
+    /* Row2+3 flex split: was 1 : 1.08; table row −20% → 0.864fr, remainder to row2 → 1.216fr (total 2.08fr). */
+    grid-template-rows: auto minmax(0, 1.216fr) minmax(0, 0.864fr);
+    gap: 0.45rem;
+    min-height: 0;
+    flex: 1 1 0;
+}
+
+.sr-cell {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Won/Lost: single card spanning former summary + chart rows */
+.sr-cell-won-combined {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+}
+
+.sr-cell-target-combined {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+}
+
+.sr-cell-gm-combined {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+}
+
+.sr-cell-pipeline {
+    grid-column: 4;
+    grid-row: 1 / span 3;
+}
+
+.sr-cell-table {
+    grid-column: 1 / span 3;
+    grid-row: 3;
+}
+
+/* Long title in Gross margin summary card */
+.sr-gm-section .sr-summary-title {
+    font-size: calc(0.65rem * var(--sr-header-font-scale, 1.1) * var(--sr-section-header-font-factor, 0.9));
+    line-height: 1.15;
+    padding-left: 0.25rem;
+    padding-right: 0.25rem;
+    font-weight: 400 !important;
+    min-height: var(--sr-section-header-min-height);
+    height: var(--sr-section-header-min-height);
+    box-sizing: border-box;
+}
+
+/* Summary text blocks (screenshot: rounded grey panels) */
+.sr-summary-panel {
+    background: var(--sr-bg-smoke);
+    border-radius: 8px;
+    overflow: hidden;
+    width: 100%;
+}
+
+/* Section headers: gradient bar, inset shine — shared fixed height */
+.sr-summary-compact .sr-summary-title {
+    text-align: center;
+    font-size: calc(0.72rem * var(--sr-header-font-scale, 1.1) * var(--sr-section-header-font-factor, 0.9));
+    font-weight: 400 !important;
+    min-height: var(--sr-section-header-min-height);
+    height: var(--sr-section-header-min-height);
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 0.35rem;
+    line-height: 1.15;
+    color: var(--sr-header-bar-text);
+    letter-spacing: 0.035em;
+    text-shadow: 0 1px 2px rgba(15, 23, 42, 0.38);
+    background: var(--sr-section-header-gradient);
+    border-bottom: 1px solid rgba(30, 41, 59, 0.35);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), inset 0 -1px 0 rgba(15, 23, 42, 0.14);
+}
+
+.sr-summary-compact .sr-summary-body {
+    padding: 0.22rem 0.45rem 0.28rem;
+    background: var(--sr-bg-smoke);
+    flex: 0 0 auto;
+    min-height: 0;
+}
+
+/* Below purple header: summary band 40% / chart 60% (flex grow 2 : 3) */
+.sr-cell-won-combined .sr-metric-stack,
+.sr-cell-target-combined .sr-metric-stack,
+.sr-cell-gm-combined .sr-metric-stack {
+    flex: 1 1 0;
+    min-height: 0;
+}
+
+.sr-cell-won-combined .sr-stack-top,
+.sr-cell-target-combined .sr-stack-top,
+.sr-cell-gm-combined .sr-stack-top {
+    flex: 2 1 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.sr-cell-won-combined .sr-stack-top .sr-summary-body.sr-target-body,
+.sr-cell-target-combined .sr-stack-top .sr-summary-body.sr-target-body,
+.sr-cell-gm-combined .sr-stack-top .sr-summary-body.sr-target-body {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: auto;
+    justify-content: flex-start;
+}
+
+/* Won/Lost only: keep KPI table visible without inner scrollbar. */
+.sr-cell-won-combined .sr-stack-top .sr-summary-body.sr-target-body {
+    overflow: hidden;
+}
+
+/* Job Booking + Gross Profit: same 2 : 3 split as chart — no inner vertical scrollbar (clip if extreme) */
+.sr-cell-target-combined.sr-jb-section .sr-stack-top .sr-summary-body.sr-target-body,
+.sr-cell-gm-combined.sr-gm-section .sr-stack-top .sr-summary-body.sr-target-body {
+    overflow: visible;
+}
+
+/* After header compaction, give JB/GM top summary a little more height so quarter table isn't clipped */
+.sr-cell-target-combined .sr-stack-top,
+.sr-cell-gm-combined .sr-stack-top {
+    flex: 2.35 1 0;
+}
+
+.sr-cell-target-combined .sr-ta-chart-stack,
+.sr-cell-gm-combined .sr-ta-chart-stack {
+    flex: 2.65 1 0;
+}
+
+.sr-cell-won-combined .sr-stack-top .sr-won-stack-divider,
+.sr-cell-won-combined .sr-stack-top .sr-stack-divider,
+.sr-cell-target-combined .sr-stack-top .sr-stack-divider,
+.sr-cell-gm-combined .sr-stack-top .sr-stack-divider {
+    flex-shrink: 0;
+}
+
+/* Merged panels — no rule under purple header */
+.sr-cell-won-combined .sr-summary-title,
+.sr-cell-target-combined .sr-summary-title,
+.sr-cell-gm-combined .sr-summary-title {
+    border-bottom: none;
+}
+
+.sr-stack-divider,
+.sr-won-stack-divider {
+    margin: 0;
+    border: 0;
+    border-top: 1px solid #d1d5db;
+    opacity: 1;
+}
+
+/* Won/Lost: nudge divider slightly upward to align with JB/GP divider level */
+.sr-cell-won-combined .sr-won-stack-divider {
+    transform: none;
+    margin-top: -0.28rem !important;
+    margin-bottom: 0.28rem !important;
+}
+
+.sr-cell-won-combined .sr-won-chart-stack {
+    flex: 2.7 1 0;
+    min-height: 9rem;
+    background: var(--sr-bg-smoke);
+}
+
+/* Won/Lost: give the donut a bit more room vs the summary band */
+.sr-cell-won-combined .sr-stack-top {
+    flex: 2.3 1 0;
+}
+
+.sr-cell-target-combined .sr-ta-chart-stack,
+.sr-cell-gm-combined .sr-ta-chart-stack {
+    flex: 3 1 0;
+    min-height: 0;
+    background: var(--sr-bg-smoke);
+}
+
+.sr-won-summary {
+    gap: 0.25rem;
+    align-items: stretch;
+    min-height: 0;
+}
+
+.sr-won-rates {
+    flex: 0 0 auto;
+    min-width: 40%;
+    justify-content: center;
+    min-height: 0;
+    gap: 0.45rem;
+}
+
+/* Won / Lost left column — grey stacked labels, large bold % (matches KPI reference) */
+.sr-rate-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.12rem;
+}
+
+.sr-rate-label {
+    display: block;
+    color: #64748b;
+    font-size: 0.62rem;
+    font-weight: 500;
+    line-height: 1.12;
+    max-width: 5.5rem;
+}
+
+.sr-rate-pct {
+    font-size: 1.42rem;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.03em;
+}
+
+/* Won/Lost left — rate digits +40% vs base; “%” −40% vs prior 0.98×1.42rem; inline-flex keeps chart layout stable */
+.sales-report-page .sr-cell-won-combined .sr-won-rates .sr-rate-pct {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.04em;
+}
+
+.sales-report-page .sr-cell-won-combined .sr-won-rates .sr-rate-pct__val {
+    font-size: calc(1.42rem * 1.4);
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.03em;
+}
+
+.sales-report-page .sr-cell-won-combined .sr-won-rates .sr-rate-pct .sr-pct-sym {
+    font-size: calc(1.42rem * 0.98 * 0.6);
+    font-weight: 800;
+    line-height: 1;
+}
+
+/* Won/Lost right — Won/Lost/Quoted amounts: “k” / “M” 50% larger than default (0.5em → 0.75em) */
+.sales-report-page .sr-cell-won-combined .sr-won-values .sr-money-thousands__k,
+.sales-report-page .sr-cell-won-combined .sr-won-values .sr-money-thousands__M {
+    font-size: 0.75em;
+}
+
+.sr-won-values {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    border-left: 1px solid #dce3ec;
+    padding-left: 0.35rem;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Won / Lost right column: label left-centre, value centred in remaining width */
+.sr-cell-won-combined .sr-won-values .sr-kpi-line {
+    flex: 1 1 0;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    column-gap: 0.35rem;
+    min-height: 0;
+}
+
+.sr-kpi-line {
+    border-color: #dce3ec !important;
+}
+
+.sr-kpi-label {
+    display: block;
+    font-size: 0.58rem;
+    line-height: 1.1;
+    margin-bottom: 0.05rem;
+}
+
+.sr-kpi-num {
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1.1;
+    display: block;
+}
+
+/* Match Target vs Actual summary density (tighter than default .sr-kpi-num) */
+.sr-target-card .sr-won-summary .sr-kpi-label {
+    font-size: 0.55rem;
+    line-height: 1.05;
+    margin-bottom: 0.02rem;
+}
+
+.sr-target-card .sr-won-summary .sr-kpi-num {
+    font-size: 0.68rem;
+    line-height: 1.15;
+}
+
+/* Won/Lost right column: label left + vertically centred; value +50% font, centred in second column */
+.sr-cell-won-combined .sr-won-values .sr-kpi-label {
+    font-size: 0.825rem !important;
+    line-height: 1.15;
+    margin-bottom: 0;
+    width: auto;
+    text-align: left;
+    justify-self: start;
+    align-self: center;
+}
+
+.sr-cell-won-combined .sr-won-values .sr-kpi-num {
+    font-size: 1.02rem !important;
+    line-height: 1.15;
+    width: 100%;
+    text-align: right;
+    justify-self: stretch;
+    align-self: center;
+}
+
+.sr-quoted-strong {
+    color: #000;
+}
+
+/* —— Target vs Actual (reference layout) —— */
+.sr-target-card .sr-summary-title {
+    color: var(--sr-header-bar-text);
+    font-weight: 400 !important;
+}
+
+.sr-target-card .sr-summary-body.sr-target-body {
+    background: var(--sr-bg-smoke);
+    padding: 0.35rem 0.5rem 0.4rem;
+}
+
+.sr-target-top {
+    gap: 0.35rem;
+}
+
+.sr-target-achieved {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-start;
+}
+
+.sr-target-achieved-label {
+    font-size: 0.68rem;
+    color: #64748b;
+    font-weight: 500;
+    line-height: 1.2;
+}
+
+.sr-target-achieved .sr-achieved-pct {
+    font-size: 1.15rem;
+    font-weight: 700;
+    line-height: 1.1;
+    margin-top: 0.08rem;
+}
+
+.sr-target-fraction {
+    min-width: 46%;
+    flex-shrink: 0;
+}
+
+.sr-fraction-actual,
+.sr-fraction-target {
+    line-height: 1.3;
+    font-size: 0.68rem;
+}
+
+.sr-fraction-value {
+    font-weight: 700;
+}
+
+.sr-fraction-actual .sr-fraction-value {
+    color: var(--sr-blue);
+}
+
+.sr-fraction-actual .sr-fraction-suffix {
+    color: var(--sr-blue-light);
+    font-weight: 600;
+}
+
+.sr-fraction-rule {
+    border: 0;
+    border-top: 1px solid #cbd5e1;
+    margin: 0.2rem 0;
+    width: 100%;
+}
+
+.sr-fraction-target-val {
+    color: var(--sr-blue-light);
+}
+
+.sr-fraction-target .sr-fraction-suffix {
+    color: var(--sr-blue-light);
+    font-weight: 600;
+}
+
+.sr-target-hr {
+    border: 0;
+    border-top: 1px solid #d1d5db;
+    margin: 0.35rem 0;
+    opacity: 1;
+}
+
+/* Quarter matrix: fixed Actual/Target rail + four equal bands (same total width as Recharts plot area when inset math matches). */
+.sr-quarter-matrix {
+    display: grid;
+    grid-template-columns: var(--sr-q-matrix-label-rail, 2.45rem) repeat(4, minmax(0, 1fr));
+    grid-auto-rows: auto;
+    column-gap: 0;
+    row-gap: 0;
+    width: 100%;
+    box-sizing: border-box;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    overflow: visible;
+    margin-top: 0.05rem;
+    align-items: center;
+}
+
+/* Quarter table only: “k” / “M” and “%” 50% larger than default report suffixes (0.5em → 0.75em of parent) */
+.sales-report-page .sr-quarter-matrix .sr-money-thousands__k,
+.sales-report-page .sr-quarter-matrix .sr-money-thousands__M,
+.sales-report-page .sr-quarter-matrix .sr-pct-sym {
+    font-size: 0.75em;
+}
+
+.sr-q-matrix__cell--vsep {
+    border-right: 1px solid #cbd5e1;
+}
+
+.sr-q-matrix__rule {
+    grid-column: 1 / -1;
+    border: 0;
+    margin: 0.05rem 0 0.06rem;
+    padding: 0;
+    height: 0;
+    border-top: 1px solid #d1d5db;
+    box-sizing: border-box;
+}
+
+.sr-q-matrix__lab {
+    font-size: calc(0.62rem * var(--sr-ta-text-scale) * var(--sr-quarter-font-scale) * var(--sr-header-font-scale, 1.1));
+    font-weight: 600;
+    color: #64748b;
+    line-height: 1.15;
+    text-align: left;
+    padding-left: 0;
+    padding-right: 0.06rem;
+    box-sizing: border-box;
+    min-width: 0;
+}
+
+.sr-q-matrix__lab--actual,
+.sr-q-matrix__lab--target {
+    align-self: center;
+}
+
+.sr-q-matrix__corner {
+    min-height: calc(0.62rem * var(--sr-ta-text-scale) * var(--sr-quarter-font-scale) * var(--sr-header-font-scale, 1.1) * 1.35);
+    pointer-events: none;
+}
+
+.sr-quarter-header {
+    font-size: calc(0.62rem * var(--sr-header-font-scale, 1.1));
+    line-height: 1.25;
+    margin-bottom: 0.12rem;
+}
+
+.sr-quarter-name {
+    color: #64748b;
+    font-weight: 600;
+    margin-right: 0.2rem;
+}
+
+.sr-quarter-pct {
+    font-weight: 700;
+    font-size: 0.8em;
+}
+
+.sr-quarter-actual {
+    font-size: calc(0.62rem * var(--sr-header-font-scale, 1.1));
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.sr-quarter-target {
+    font-size: calc(0.62rem * var(--sr-header-font-scale, 1.1));
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--sr-blue-light);
+}
+
+/* Target vs Actual + Gross margin summary: dark grey body copy; darker target/actual tints (matches bar fills) */
+.sr-cell-target-combined,
+.sr-cell-gm-combined {
+    --sr-ta-copy: #1f2937;
+    --sr-ta-actual: #3d4566;
+    --sr-ta-target: #7392c7;
+    --sr-ta-text-scale: 1.15;
+    --sr-achieved-pct-color: #dc2626;
+    /* Q1–Q4 block: prior scale × 0.95 (−5%) */
+    --sr-quarter-font-scale: 0.94392;
+    /* Actual / Target summary stack (Job Booking + GP): was 1.2× base, then −10% */
+    --sr-summary-kpi-scale: 1.08;
+}
+
+.sr-cell-target-combined .sr-target-achieved-label,
+.sr-cell-gm-combined .sr-target-achieved-label {
+    color: var(--sr-ta-copy);
+}
+
+.sr-cell-target-combined .sr-achieved-pct.text-success,
+.sr-cell-gm-combined .sr-achieved-pct.text-success {
+    color: var(--sr-achieved-pct-color) !important;
+}
+
+.sr-cell-target-combined .sr-quarter-name,
+.sr-cell-gm-combined .sr-quarter-name {
+    color: var(--sr-ta-copy);
+}
+
+.sr-cell-target-combined .sr-quarter-pct.text-success,
+.sr-cell-gm-combined .sr-quarter-pct.text-success {
+    color: var(--sr-achieved-pct-color) !important;
+}
+
+.sr-cell-target-combined .sr-quarter-actual.text-success,
+.sr-cell-gm-combined .sr-quarter-actual.text-success,
+.sr-cell-target-combined .sr-q-matrix__actual.text-success,
+.sr-cell-gm-combined .sr-q-matrix__actual.text-success {
+    color: var(--sr-ta-actual) !important;
+}
+
+.sr-cell-target-combined .sr-quarter-target,
+.sr-cell-gm-combined .sr-quarter-target {
+    color: var(--sr-ta-target) !important;
+}
+
+/* Gross margin quarters: GP actual + (achievement %) */
+.sr-cell-gm-combined .sr-quarter-gp-val {
+    color: var(--sr-ta-actual) !important;
+}
+
+.sr-cell-gm-combined .sr-quarter-gp-pct {
+    color: var(--sr-achieved-pct-color) !important;
+    font-weight: 600;
+    font-size: 0.8em;
+}
+
+.sr-cell-gm-combined .sr-gp-summary-actual-pct {
+    color: var(--sr-achieved-pct-color) !important;
+    font-weight: 700;
+    font-size: 0.8em;
+}
+
+.sr-cell-gm-combined .sr-gp-quarter-target {
+    font-size: calc(0.62rem * var(--sr-quarter-font-scale) * var(--sr-header-font-scale, 1.1));
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+.sr-cell-gm-combined .sr-gp-quarter-target .sr-quarter-target-k {
+    color: var(--sr-ta-target) !important;
+}
+
+.sr-cell-gm-combined .sr-gp-quarter-target .sr-quarter-target-gp-pct {
+    color: var(--sr-ta-target) !important;
+    font-weight: 600;
+    font-size: 0.8em;
+}
+
+.sr-cell-gm-combined .sr-fraction-target-val .sr-fraction-target-gp-pct {
+    color: var(--sr-ta-target) !important;
+    font-weight: 600;
+}
+
+.sr-cell-target-combined .sr-fraction-actual .sr-fraction-value.text-success,
+.sr-cell-gm-combined .sr-fraction-actual .sr-fraction-value.text-success {
+    color: var(--sr-ta-actual) !important;
+}
+
+.sr-cell-target-combined .sr-fraction-actual .sr-fraction-suffix,
+.sr-cell-gm-combined .sr-fraction-actual .sr-fraction-suffix {
+    color: var(--sr-ta-actual);
+}
+
+.sr-cell-target-combined .sr-fraction-target-val,
+.sr-cell-gm-combined .sr-fraction-target-val {
+    color: var(--sr-ta-target);
+}
+
+.sr-cell-target-combined .sr-fraction-target .sr-fraction-suffix,
+.sr-cell-gm-combined .sr-fraction-target .sr-fraction-suffix {
+    color: var(--sr-ta-target);
+}
+
+/* Target + GM: +15% typography (header + 40% summary stack); tighter spacing so layout stays contained */
+.sr-cell-target-combined.sr-jb-section.sr-summary-compact .sr-summary-title {
+    font-size: calc(0.62rem * var(--sr-ta-text-scale) * var(--sr-header-font-scale, 1.1) * var(--sr-section-header-font-factor, 0.9));
+    line-height: 1.15;
+    padding-left: 0.22rem;
+    padding-right: 0.22rem;
+    min-height: var(--sr-section-header-min-height);
+    height: var(--sr-section-header-min-height);
+}
+
+/* Job Booking: Achieved band kept compact so Q1–Q4 grid (Actual + Target rows) fits above chart without clipping */
+.sr-cell-target-combined.sr-jb-section .sr-jb-target-top {
+    min-height: 3.65rem;
+    padding-top: 0.08rem;
+    padding-bottom: 0.14rem;
+}
+
+.sr-cell-target-combined.sr-jb-section .sr-jb-fraction-stack {
+    gap: 0.09rem;
+    min-width: 0;
+}
+
+.sr-cell-target-combined.sr-jb-section .sr-jb-fraction-cell {
+    flex: 0 1 auto;
+    min-width: 0;
+    line-height: 1.35;
+}
+
+.sr-cell-target-combined.sr-jb-section .sr-jb-fraction-stack .sr-jb-fraction-stack-rule {
+    margin: 0.09rem 0;
+    width: 100%;
+    max-width: 11rem;
+    align-self: flex-end;
+}
+
+.sr-cell-target-combined.sr-jb-section .sr-target-hr {
+    margin-top: 0.06rem;
+    margin-bottom: 0.05rem;
+}
+
+.sr-cell-target-combined.sr-jb-section .sr-jb-quarter-align {
+    margin-top: 0.08rem !important;
+}
+
+/* Gross margin: match Job Booking — Actual above Target */
+.sr-cell-gm-combined.sr-gm-section .sr-gm-target-top {
+    min-height: 3.65rem;
+    padding-top: 0.08rem;
+    padding-bottom: 0.14rem;
+}
+
+.sr-cell-gm-combined.sr-gm-section .sr-gm-fraction-stack {
+    gap: 0.09rem;
+    min-width: 0;
+}
+
+.sr-cell-gm-combined.sr-gm-section .sr-gm-fraction-cell {
+    flex: 0 1 auto;
+    min-width: 0;
+    line-height: 1.35;
+}
+
+.sr-cell-gm-combined.sr-gm-section .sr-gm-fraction-stack .sr-gm-fraction-stack-rule {
+    margin: 0.09rem 0;
+    width: 100%;
+    max-width: 13rem;
+    align-self: flex-end;
+}
+
+.sr-cell-gm-combined.sr-gm-section .sr-target-hr {
+    margin-top: 0.06rem;
+    margin-bottom: 0.05rem;
+}
+
+.sr-cell-gm-combined.sr-gm-section .sr-gm-quarter-align {
+    margin-top: 0.08rem !important;
+}
+
+/* Larger type for Total Target vs Actual row (Achieved + fractions) */
+.sr-cell-target-combined.sr-jb-section .sr-jb-target-top .sr-target-achieved-label,
+.sr-cell-gm-combined.sr-gm-section .sr-gm-target-top .sr-target-achieved-label {
+    font-size: calc(0.74rem * 0.8 * var(--sr-ta-text-scale));
+}
+
+.sr-cell-target-combined.sr-jb-section .sr-jb-target-top .sr-jb-fraction-stack .sr-fraction-actual,
+.sr-cell-target-combined.sr-jb-section .sr-jb-target-top .sr-jb-fraction-stack .sr-fraction-target,
+.sr-cell-gm-combined.sr-gm-section .sr-gm-target-top .sr-gm-fraction-stack .sr-fraction-actual,
+.sr-cell-gm-combined.sr-gm-section .sr-gm-target-top .sr-gm-fraction-stack .sr-fraction-target {
+    font-size: calc(0.74rem * var(--sr-ta-text-scale) * var(--sr-summary-kpi-scale));
+}
+
+/* KPI row: Actual/Target label (~30% smaller via 0.7em) before amounts */
+.sr-cell-target-combined.sr-jb-section .sr-jb-target-top .sr-fraction-kpi-row,
+.sr-cell-gm-combined.sr-gm-section .sr-gm-target-top .sr-fraction-kpi-row {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 0.28rem;
+    flex-wrap: nowrap;
+    max-width: 100%;
+}
+
+.sr-cell-target-combined.sr-jb-section .sr-jb-target-top .sr-fraction-suffix--lead,
+.sr-cell-gm-combined.sr-gm-section .sr-gm-target-top .sr-fraction-suffix--lead {
+    font-size: 0.7em;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.sr-cell-target-combined.sr-jb-section .sr-jb-target-top .sr-fraction-actual .sr-fraction-suffix--lead,
+.sr-cell-gm-combined.sr-gm-section .sr-gm-target-top .sr-fraction-actual .sr-fraction-suffix--lead {
+    color: #64748b;
+}
+
+.sr-cell-target-combined.sr-jb-section .sr-jb-target-top .sr-fraction-target .sr-fraction-suffix--lead,
+.sr-cell-gm-combined.sr-gm-section .sr-gm-target-top .sr-fraction-target .sr-fraction-suffix--lead {
+    color: var(--sr-ta-target);
+}
+
+.sr-cell-target-combined.sr-jb-section .sr-jb-target-top .sr-fraction-kpi-row .sr-fraction-value,
+.sr-cell-gm-combined.sr-gm-section .sr-gm-target-top .sr-fraction-kpi-row .sr-fraction-value {
+    font-size: 1.3em;
+}
+
+.sr-cell-gm-combined.sr-gm-section .sr-gm-target-top .sr-fraction-kpi-row .sr-gp-summary-actual-pct {
+    font-size: 1.04em;
+}
+
+.sr-cell-gm-combined.sr-gm-section .sr-gm-target-top .sr-fraction-kpi-row .sr-fraction-target-gp-pct {
+    font-size: 0.8em !important;
+    line-height: 1;
+}
+
+/*
+ * Q1–Q4 centres vs bar chart: Recharts plot inner width = row − offset.left − offset.right (section sets --sr-ta-plot-offset-*).
+ * Padding-left = plotOffsetLeft − labelRail so (padding-left + label rail) == plotOffsetLeft; four fr columns then span the plot width.
+ */
+.sr-jb-quarter-align {
+    --sr-q-matrix-label-rail: 2.45rem;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding-left: calc(var(--sr-ta-plot-offset-left, 55px) - var(--sr-q-matrix-label-rail));
+    padding-right: var(--sr-ta-plot-offset-right, 6px);
+}
+
+.sr-jb-quarter-align .sr-quarter-matrix {
+    width: 100%;
+    min-width: 0;
+}
+
+/* Same horizontal inset as summary body — chart used p-1 (0.25rem) vs body 0.38rem and skewed bar vs grid alignment */
+.sr-jb-section .sr-jb-chart-stack {
+    padding: 0.25rem 0.38rem 0.28rem;
+    box-sizing: border-box;
+}
+
+/* Gross margin: same inset math as Job Booking */
+.sr-gm-quarter-align {
+    --sr-q-matrix-label-rail: 2.45rem;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding-left: calc(var(--sr-ta-plot-offset-left, 55px) - var(--sr-q-matrix-label-rail));
+    padding-right: var(--sr-ta-plot-offset-right, 6px);
+}
+
+.sr-gm-quarter-align .sr-quarter-matrix {
+    width: 100%;
+    min-width: 0;
+}
+
+.sr-gm-section .sr-gm-chart-stack {
+    padding: 0.25rem 0.38rem 0.28rem;
+    box-sizing: border-box;
+}
+
+.sr-cell-gm-combined.sr-gm-section.sr-summary-compact .sr-summary-title {
+    font-size: calc(0.58rem * var(--sr-ta-text-scale) * var(--sr-header-font-scale, 1.1) * var(--sr-section-header-font-factor, 0.9));
+    line-height: 1.15;
+    padding-left: 0.18rem;
+    padding-right: 0.18rem;
+    min-height: var(--sr-section-header-min-height);
+    height: var(--sr-section-header-min-height);
+}
+
+.sr-cell-target-combined.sr-target-card .sr-summary-body.sr-target-body,
+.sr-cell-gm-combined.sr-target-card .sr-summary-body.sr-target-body {
+    padding: 0.26rem 0.38rem 0.3rem;
+}
+
+.sr-cell-target-combined.sr-jb-section.sr-target-card .sr-summary-body.sr-target-body,
+.sr-cell-gm-combined.sr-gm-section.sr-target-card .sr-summary-body.sr-target-body {
+    padding: 0.12rem 0.38rem 0.14rem;
+}
+
+.sr-cell-target-combined .sr-target-top,
+.sr-cell-gm-combined .sr-target-top {
+    gap: 0.28rem;
+}
+
+.sr-cell-target-combined .sr-target-hr,
+.sr-cell-gm-combined .sr-target-hr {
+    margin: 0.26rem 0;
+}
+
+/* JB/GM: tight hr before quarter grid (overrides rule above) */
+.sr-cell-target-combined.sr-jb-section .sr-summary-body .sr-target-hr,
+.sr-cell-gm-combined.sr-gm-section .sr-summary-body .sr-target-hr {
+    margin-top: 0.06rem;
+    margin-bottom: 0.05rem;
+}
+
+.sr-cell-target-combined .sr-quarter-matrix,
+.sr-cell-gm-combined .sr-quarter-matrix {
+    margin-top: 0.02rem;
+}
+
+/* Keep quarter table slightly lower in JB/GM summary area */
+.sr-cell-target-combined.sr-jb-section .sr-jb-quarter-align .sr-quarter-matrix,
+.sr-cell-gm-combined.sr-gm-section .sr-gm-quarter-align .sr-quarter-matrix {
+    margin-top: 0.24rem !important;
+    row-gap: 0.14rem !important;
+}
+
+.sr-cell-target-combined .sr-jb-quarter-align .sr-q-matrix__qh,
+.sr-cell-target-combined .sr-jb-quarter-align .sr-q-matrix__actual,
+.sr-cell-target-combined .sr-jb-quarter-align .sr-q-matrix__target,
+.sr-cell-gm-combined .sr-gm-quarter-align .sr-q-matrix__qh,
+.sr-cell-gm-combined .sr-gm-quarter-align .sr-q-matrix__actual,
+.sr-cell-gm-combined .sr-gm-quarter-align .sr-q-matrix__target {
+    padding-left: 0.16rem;
+    padding-right: 0.16rem;
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+/* Slight row gaps inside quarter table */
+.sr-cell-target-combined .sr-jb-quarter-align .sr-q-matrix__qh,
+.sr-cell-gm-combined .sr-gm-quarter-align .sr-q-matrix__qh {
+    margin-bottom: 0.02rem;
+}
+
+.sr-cell-target-combined .sr-jb-quarter-align .sr-q-matrix__actual,
+.sr-cell-gm-combined .sr-gm-quarter-align .sr-q-matrix__actual {
+    margin-bottom: 0.03rem;
+}
+
+.sr-cell-target-combined .sr-jb-quarter-align .sr-q-matrix__target,
+.sr-cell-gm-combined .sr-gm-quarter-align .sr-q-matrix__target {
+    margin-top: 0.02rem;
+}
+
+.sr-cell-target-combined .sr-stack-top .sr-target-achieved-label,
+.sr-cell-gm-combined .sr-stack-top .sr-target-achieved-label {
+    font-size: calc(0.68rem * var(--sr-ta-text-scale));
+}
+
+/* Achieved %: digits +40% vs prior scale; “%” symbol half that size — quarter margin/min-height tuned so Q-table stays put */
+.sr-cell-target-combined .sr-stack-top .sr-target-achieved .sr-achieved-pct,
+.sr-cell-gm-combined .sr-stack-top .sr-target-achieved .sr-achieved-pct {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.04em;
+    font-size: unset;
+    line-height: 1;
+}
+
+.sr-cell-target-combined .sr-stack-top .sr-target-achieved .sr-achieved-pct .sr-achieved-pct__num,
+.sr-cell-gm-combined .sr-stack-top .sr-target-achieved .sr-achieved-pct .sr-achieved-pct__num {
+    font-size: calc(1.22rem * 1.4 * 1.4 * var(--sr-ta-text-scale));
+    font-weight: 700;
+}
+
+.sr-cell-target-combined .sr-stack-top .sr-target-achieved .sr-achieved-pct .sr-achieved-pct__sym,
+.sr-cell-gm-combined .sr-stack-top .sr-target-achieved .sr-achieved-pct .sr-achieved-pct__sym {
+    font-size: calc(1.22rem * 1.4 * 1.4 * var(--sr-ta-text-scale) * 0.5);
+    font-weight: 700;
+}
+
+.sr-cell-target-combined.sr-jb-section .sr-stack-top .sr-target-achieved .sr-achieved-pct,
+.sr-cell-gm-combined.sr-gm-section .sr-stack-top .sr-target-achieved .sr-achieved-pct {
+    line-height: 1;
+    margin-top: 0;
+}
+
+/* Smaller KPI % so quarter grid fits without clipping Target row */
+.sr-cell-target-combined.sr-jb-section .sr-stack-top .sr-achieved-pct__num,
+.sr-cell-gm-combined.sr-gm-section .sr-stack-top .sr-achieved-pct__num {
+    font-size: calc(1.22rem * 1.22 * 1.22 * var(--sr-ta-text-scale) * 0.8);
+}
+
+.sr-cell-target-combined.sr-jb-section .sr-stack-top .sr-achieved-pct__sym,
+.sr-cell-gm-combined.sr-gm-section .sr-stack-top .sr-achieved-pct__sym {
+    font-size: calc(1.22rem * 1.22 * 1.22 * var(--sr-ta-text-scale) * 0.4);
+}
+
+.sr-cell-target-combined .sr-stack-top .sr-fraction-actual,
+.sr-cell-target-combined .sr-stack-top .sr-fraction-target,
+.sr-cell-gm-combined .sr-stack-top .sr-fraction-actual,
+.sr-cell-gm-combined .sr-stack-top .sr-fraction-target {
+    font-size: calc(0.68rem * var(--sr-ta-text-scale));
+}
+
+.sr-cell-target-combined.sr-jb-section .sr-jb-fraction-stack .sr-fraction-actual,
+.sr-cell-target-combined.sr-jb-section .sr-jb-fraction-stack .sr-fraction-target,
+.sr-cell-gm-combined.sr-gm-section .sr-gm-fraction-stack .sr-fraction-actual,
+.sr-cell-gm-combined.sr-gm-section .sr-gm-fraction-stack .sr-fraction-target {
+    font-size: calc(0.68rem * var(--sr-ta-text-scale) * var(--sr-summary-kpi-scale));
+}
+
+.sr-cell-target-combined .sr-stack-top .sr-quarter-header,
+.sr-cell-gm-combined .sr-stack-top .sr-quarter-header {
+    font-size: calc(0.62rem * var(--sr-ta-text-scale) * var(--sr-quarter-font-scale) * var(--sr-header-font-scale, 1.1));
+}
+
+.sr-cell-target-combined .sr-stack-top .sr-quarter-actual,
+.sr-cell-gm-combined .sr-stack-top .sr-quarter-actual,
+.sr-cell-target-combined .sr-stack-top .sr-q-matrix__actual,
+.sr-cell-gm-combined .sr-stack-top .sr-q-matrix__actual {
+    font-size: calc(0.62rem * var(--sr-ta-text-scale) * var(--sr-quarter-font-scale) * var(--sr-header-font-scale, 1.1));
+}
+
+.sr-cell-target-combined .sr-stack-top .sr-quarter-target,
+.sr-cell-gm-combined .sr-stack-top .sr-quarter-target,
+.sr-cell-target-combined .sr-stack-top .sr-q-matrix__target,
+.sr-cell-gm-combined .sr-stack-top .sr-q-matrix__target {
+    font-size: calc(0.62rem * var(--sr-ta-text-scale) * var(--sr-quarter-font-scale) * var(--sr-header-font-scale, 1.1));
+}
+
+.sr-cell-gm-combined .sr-stack-top .sr-gp-quarter-target {
+    font-size: calc(0.62rem * var(--sr-ta-text-scale) * var(--sr-quarter-font-scale) * var(--sr-header-font-scale, 1.1));
+}
+
+.sr-cell-target-combined.sr-jb-section .sr-stack-top .sr-quarter-header,
+.sr-cell-gm-combined.sr-gm-section .sr-stack-top .sr-quarter-header,
+.sr-cell-target-combined.sr-jb-section .sr-stack-top .sr-quarter-actual,
+.sr-cell-gm-combined.sr-gm-section .sr-stack-top .sr-quarter-actual,
+.sr-cell-target-combined.sr-jb-section .sr-stack-top .sr-quarter-target,
+.sr-cell-gm-combined.sr-gm-section .sr-stack-top .sr-quarter-target,
+.sr-cell-target-combined.sr-jb-section .sr-stack-top .sr-q-matrix__actual,
+.sr-cell-gm-combined.sr-gm-section .sr-stack-top .sr-q-matrix__actual,
+.sr-cell-target-combined.sr-jb-section .sr-stack-top .sr-q-matrix__target,
+.sr-cell-gm-combined.sr-gm-section .sr-stack-top .sr-q-matrix__target,
+.sr-cell-gm-combined.sr-gm-section .sr-stack-top .sr-gp-quarter-target {
+    line-height: 1.05;
+}
+
+/* Q1–Q4 label slightly larger; nudge row up (net height ~unchanged via ± margin) */
+.sr-jb-quarter-align .sr-quarter-header .sr-quarter-name,
+.sr-gm-quarter-align .sr-quarter-header .sr-quarter-name {
+    font-size: calc(0.62rem * var(--sr-ta-text-scale) * var(--sr-quarter-font-scale) * 1.2 * var(--sr-header-font-scale, 1.1));
+}
+
+.sr-jb-quarter-align .sr-quarter-header,
+.sr-gm-quarter-align .sr-quarter-header {
+    margin-top: -0.1rem;
+    margin-bottom: 0.02rem;
+}
+
+/* Shorter corner cell frees one grid row worth of vertical space */
+.sr-cell-target-combined .sr-jb-quarter-align .sr-quarter-matrix > .sr-q-matrix__corner,
+.sr-cell-gm-combined .sr-gm-quarter-align .sr-quarter-matrix > .sr-q-matrix__corner {
+    min-height: calc(0.58rem * var(--sr-ta-text-scale) * var(--sr-quarter-font-scale) * var(--sr-header-font-scale, 1.1));
+}
+
+/* Chart-only panels */
+.sr-chart-panel {
+    background: var(--sr-bg-smoke);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.sr-chart-panel-inner {
+    flex: 1;
+    min-height: 0;
+    background: var(--sr-bg-smoke);
+}
+
+.sr-mini {
+    font-size: 0.72rem;
+    line-height: 1.2;
+}
+
+.sr-chart-pie,
+.sr-chart-bar {
+    min-height: 0;
+    flex: 1 1 0;
+}
+
+/* Target vs Actual / GM bar charts — depth on columns */
+.sales-report-page .sr-jb-chart-stack .recharts-bar-rectangle,
+.sales-report-page .sr-gm-chart-stack .recharts-bar-rectangle {
+    filter: drop-shadow(0 2px 4px rgba(15, 23, 42, 0.1));
+}
+
+.sales-report-page .sr-jb-chart-stack .recharts-surface,
+.sales-report-page .sr-gm-chart-stack .recharts-surface {
+    overflow: visible;
+}
+
+/* Won/Lost donut — concentric ring, soft depth; surface overflow so drop-shadow isn’t clipped */
+.sr-cell-won-combined .sr-chart-pie.sr-donut-chart {
+    padding: 0 2px 0;
+    box-sizing: border-box;
+}
+
+.sr-cell-won-combined .sr-chart-pie.sr-donut-chart .recharts-surface {
+    overflow: visible;
+}
+
+.sr-cell-won-combined .sr-chart-pie.sr-donut-chart .recharts-pie-sector {
+    filter: drop-shadow(0 2px 8px rgba(15, 23, 42, 0.12));
+}
+
+/* Pipeline funnel: stretch to fill column — avoids vertical letterboxing from align-items:center */
+.sr-chart-funnel {
+    min-height: 0;
+    flex: 1 1 0;
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+}
+
+/* Custom Sales Pipeline funnel — % labels in SVG (viewBox includes vertical pad for 10%) */
+.sales-pipeline-funnel-visual {
+    width: 100%;
+    max-width: 100%;
+    min-height: 0;
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-self: stretch;
+    /* Minimal horizontal inset — vbPadX in SVG still guards % labels */
+    padding-left: 1px;
+    padding-right: 1px;
+    box-sizing: border-box;
+}
+
+.sr-funnel-svg-wrap {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 184px;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transform: translateZ(0);
+    backface-visibility: hidden;
+}
+
+.sr-funnel-svg {
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
+    display: block;
+    overflow: visible;
+    shape-rendering: geometricPrecision;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    /* Integer width/height attrs set in JS — avoids blurry fractional raster scale */
+}
+
+.sr-funnel-svg.sr-funnel-svg--sized {
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: 100%;
+}
+
+.sr-funnel-label-text-svg {
+    fill: #0f172a;
+    font-weight: 500;
+    pointer-events: none;
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.sr-funnel-block-value-svg {
+    pointer-events: none;
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Sales Pipeline — same white card + blue header as other sections */
+.sr-pipeline-panel {
+    background: var(--sr-bg-smoke) !important;
+    color: #0f172a;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.sr-pipeline-header {
+    flex-shrink: 0;
+    text-align: center;
+    font-size: calc(0.72rem * var(--sr-header-font-scale, 1.1) * var(--sr-section-header-font-factor, 0.9));
+    font-weight: 400 !important;
+    min-height: var(--sr-section-header-min-height);
+    height: var(--sr-section-header-min-height);
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--sr-header-bar-text);
+    letter-spacing: 0.035em;
+    text-shadow: 0 1px 2px rgba(15, 23, 42, 0.38);
+    background: var(--sr-section-header-gradient);
+    border-bottom: 1px solid rgba(30, 41, 59, 0.35);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), inset 0 -1px 0 rgba(15, 23, 42, 0.14);
+    padding: 0 0.35rem;
+    line-height: 1.15;
+}
+
+.sr-pipeline-body {
+    flex: 1 1 0;
+    min-height: 0;
+    background: var(--sr-bg-smoke);
+    display: flex;
+    flex-direction: column;
+}
+
+.sr-pipeline-top {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.sr-pipeline-summary {
+    border-top: 1px solid #d1d9e6;
+    background: var(--sr-bg-smoke);
+    padding: 0.25rem 0.35rem 0.35rem;
+}
+
+/* Pipeline probability rows: “k” / “M” 50% larger than page default suffix */
+.sales-report-page .sr-pipeline-summary .sr-money-thousands__k,
+.sales-report-page .sr-pipeline-summary .sr-money-thousands__M {
+    font-size: 0.75em;
+}
+
+.sr-pipeline-summary-row {
+    padding: 0.43rem 0.35rem;
+    font-size: 0.775rem;
+    line-height: 1.42;
+}
+
+.sr-pipeline-summary-row:not(:last-child) {
+    border-bottom: 1px solid #e8ecf1;
+}
+
+.sr-pipeline-swatch {
+    display: inline-block;
+    width: 0.8125rem;
+    height: 0.8125rem;
+    border-radius: 2px;
+    flex-shrink: 0;
+    border: 1px solid rgba(15, 23, 42, 0.2);
+}
+
+.sr-pipeline-summary-pct {
+    font-weight: 600;
+    color: #0f172a;
+    flex-shrink: 0;
+}
+
+.sr-pipeline-summary-legend {
+    font-size: 0.725rem;
+    font-weight: 500;
+    color: #374151;
+    min-width: 0;
+}
+
+/* Recharts — legend labels dark grey (matches SR_CHART_LEGEND_GREY in SalesReport.jsx) */
+.sales-report-page .recharts-legend-item-text {
+    fill: #374151 !important;
+    color: #374151 !important;
+}
+
+.sr-pipeline-summary-value {
+    font-size: 0.775rem;
+    font-weight: 600;
+    color: #4169e1;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Table block */
+.sr-cell-table {
+    background: var(--sr-bg-smoke);
+}
+
+.sr-report-table-title {
+    background: var(--sr-section-header-gradient) !important;
+    border-bottom: 1px solid rgba(30, 41, 59, 0.35) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), inset 0 -1px 0 rgba(15, 23, 42, 0.14) !important;
+    color: var(--sr-header-bar-text) !important;
+    text-shadow: 0 1px 2px rgba(15, 23, 42, 0.38) !important;
+    letter-spacing: 0.035em !important;
+    font-weight: 400 !important;
+    font-size: calc(0.72rem * var(--sr-header-font-scale, 1.1) * var(--sr-section-header-font-factor, 0.9));
+    min-height: var(--sr-section-header-min-height);
+    height: var(--sr-section-header-min-height);
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    padding: 0 0.35rem !important;
+    line-height: 1.15;
+}
+
+.sr-report-table-title--toolbar {
+    justify-content: stretch;
+    min-height: var(--sr-section-header-min-height);
+    height: var(--sr-section-header-min-height);
+}
+
+.sr-report-table-heading {
+    color: var(--sr-header-bar-text) !important;
+    font-weight: 400 !important;
+    font-size: calc(0.72rem * var(--sr-header-font-scale, 1.1) * var(--sr-section-header-font-factor, 0.9));
+}
+
+.sr-top-jobs-status-select {
+    max-width: 11.5625rem; /* was 9.25rem; +25% for long status labels */
+    min-width: 8.125rem; /* was 6.5rem; +25% */
+    font-size: calc(0.65rem * var(--sr-header-font-scale, 1.1) * var(--sr-section-header-font-factor, 0.9));
+    padding-top: 0.16rem;
+    padding-bottom: 0.16rem;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    background-color: rgba(255, 255, 255, 0.95);
+    color: #1e293b;
+}
+
+.sr-top-jobs-status-select:focus {
+    border-color: #fff;
+    box-shadow: 0 0 0 0.12rem rgba(255, 255, 255, 0.35);
+}
+
+.sr-table-expand-btn {
+    width: 1.75rem;
+    height: 1.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-color: rgba(255, 255, 255, 0.45);
+}
+
+.sr-table-expand-btn:hover {
+    border-color: #fff;
+}
+
+.sr-table-clear-filters-btn {
+    width: 1.75rem;
+    height: 1.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-color: rgba(255, 255, 255, 0.45);
+}
+
+.sr-table-clear-filters-btn:hover:not(:disabled) {
+    border-color: #fff;
+}
+
+.sr-table-clear-filters-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.sr-table-clear-filters-btn--active {
+    color: #fff !important;
+    background: #dc3545 !important;
+    border-color: #ff8787 !important;
+    opacity: 1;
+    animation: sr-clear-filter-flash 1.1s ease-in-out infinite;
+}
+
+.sr-table-clear-filters-btn--active:hover:not(:disabled) {
+    background: #c82333 !important;
+    border-color: #fff !important;
+    color: #fff !important;
+}
+
+@keyframes sr-clear-filter-flash {
+    0%,
+    100% {
+        box-shadow: 0 0 4px rgba(220, 53, 69, 0.55);
+        filter: brightness(1);
+    }
+    50% {
+        box-shadow:
+            0 0 10px rgba(255, 70, 70, 0.95),
+            0 0 18px rgba(255, 40, 40, 0.55);
+        filter: brightness(1.15);
+    }
+}
+
+/* Bootstrap card-header can force semibold on table section title */
+.sales-report-page .sr-report-table-title.card-header {
+    font-weight: 400 !important;
+}
+
+/* Expanded table mode: left side fully table, pipeline unchanged */
+.sales-report-page.sr-table-expanded .sr-cell-won-combined,
+.sales-report-page.sr-table-expanded .sr-cell-target-combined,
+.sales-report-page.sr-table-expanded .sr-cell-gm-combined,
+.sales-report-page.sr-table-expanded .sr-cell-pipeline {
+    display: none !important;
+}
+
+.sales-report-page.sr-table-expanded .sr-cell-table {
+    grid-column: 1 / span 4;
+    grid-row: 1 / span 3;
+}
+
+.sr-table-inner {
+    flex: 1 1 0;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+    background: var(--sr-bg-smoke);
+}
+
+.sr-detail-table thead th {
+    font-size: calc(0.68rem * var(--sr-header-font-scale, 1.1) * var(--sr-section-header-font-factor, 0.9));
+    font-weight: 400 !important;
+    padding: calc(0.225rem * 0.95) calc(0.315rem * 0.95);
+    line-height: 1.15;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    border-color: #cbd5e1 !important;
+    white-space: nowrap;
+}
+
+.sr-detail-table tbody.sr-detail-table__body-loading {
+    opacity: 0.5;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+}
+
+.sr-detail-table tbody td {
+    font-size: 0.68rem;
+    padding: 0.2rem 0.35rem;
+    line-height: 1.15;
+    vertical-align: middle;
+    border-color: #e2e8f0 !important;
+    white-space: nowrap;
+}
+
+.sr-detail-table th.sr-detail-table__project-name,
+.sr-detail-table td.sr-detail-table__project-name {
+    width: 250px;
+    max-width: 250px;
+    min-width: 250px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sr-detail-table th.sr-detail-table__project-name .sr-th-filter-btn {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sr-detail-table {
+    width: max-content !important;
+    min-width: 100%;
+    table-layout: auto;
+}
+
+.sr-detail-table__total-row td {
+    background: #6f8ee8 !important;
+    color: #ffffff !important;
+    border-color: #5f7dd6 !important;
+    font-weight: 600;
+}
+
+/* Top Jobs table: alternate soft background per enquiry (RequestNo group) */
+.sr-detail-table tbody tr.sr-enquiry-strip-a td {
+    background-color: #f5f5f5;
+}
+
+.sr-detail-table tbody tr.sr-enquiry-strip-b td {
+    background-color: #dde5f6;
+}
+
+.sr-filterable-th {
+    position: sticky;
+}
+
+.sr-th-filter-btn {
+    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.25rem;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+    padding: 0;
+}
+
+.sr-th-filter-caret {
+    font-size: 0.58rem;
+    opacity: 0.75;
+}
+
+.sr-th-filter-caret--active {
+    color: #4f46e5;
+    opacity: 1;
+}
+
+.sr-th-filter-popover {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    min-width: 220px;
+    max-width: 280px;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.22);
+    padding: 0.45rem;
+    z-index: 20;
+}
+
+.sr-th-filter-popover--portal {
+    position: fixed;
+    z-index: 1100;
+    max-width: min(280px, calc(100vw - 16px));
+    overflow: auto;
+}
+
+.sr-th-filter-popover--value {
+    min-width: 190px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.35rem;
+}
+
+.sr-th-filter-popover--value .sr-th-value-op-select {
+    flex: 0 0 auto;
+}
+
+.sr-th-filter-popover--value .sr-th-filter-search {
+    flex: 0 0 auto;
+}
+
+.sr-th-filter-popover--value .sr-th-filter-footer {
+    margin-top: 0;
+}
+
+.sr-th-value-op-select {
+    width: 100%;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 0.16rem 0.3rem;
+    font-size: 0.65rem;
+    margin-bottom: 0;
+}
+
+.sr-th-filter-search {
+    width: 100%;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    padding: 0.18rem 0.35rem;
+    font-size: 0.65rem;
+}
+
+.sr-th-filter-actions,
+.sr-th-filter-footer {
+    display: flex;
+    gap: 0.35rem;
+    margin-top: 0.35rem;
+}
+
+.sr-th-filter-actions button,
+.sr-th-filter-footer button {
+    border: 1px solid #94a3b8;
+    background: #f8fafc;
+    border-radius: 4px;
+    padding: 0.08rem 0.38rem;
+    font-size: 0.64rem;
+}
+
+.sr-th-filter-options {
+    max-height: 170px;
+    overflow: auto;
+    margin-top: 0.35rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    padding: 0.22rem 0.3rem;
+}
+
+.sr-th-filter-option {
+    display: flex;
+    align-items: center;
+    gap: 0.33rem;
+    font-size: 0.67rem;
+    line-height: 1.2;
+    padding: 0.08rem 0;
+}
+
+.sr-th-filter-option--month {
+    padding-left: 1rem;
+}
+
+.sr-th-filter-footer {
+    justify-content: flex-end;
+}
+
+.sr-th-filter-footer .sr-th-filter-apply {
+    background: #6366f1;
+    border-color: #6366f1;
+    color: #fff;
+}
+
+/* Top Jobs table: “k” / “M” and “%” same size as Job Value / Gross Margin numerals (override global 0.5em suffix) */
+.sales-report-page .sr-detail-table .sr-money-thousands__k,
+.sales-report-page .sr-detail-table .sr-money-thousands__M,
+.sales-report-page .sr-detail-table .sr-pct-sym {
+    font-size: inherit;
+    vertical-align: baseline;
+}
+
+.sr-detail-table .sr-job-bar-th {
+    width: 1%;
+    min-width: 6.75rem;
+    white-space: nowrap;
+    font-size: calc(0.65rem * var(--sr-header-font-scale, 1.1) * var(--sr-section-header-font-factor, 0.9));
+}
+
+.sr-job-bar-cell {
+    vertical-align: middle;
+    padding-top: 0.15rem !important;
+    padding-bottom: 0.15rem !important;
+}
+
+.sr-job-bar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 0;
+}
+
+.sr-job-bar-pct {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 0;
+    font-variant-numeric: tabular-nums;
+    color: #475569;
+    min-width: 2.6rem;
+    text-align: right;
+    white-space: nowrap;
+}
+
+/* Whole-number %; the % sign alone is ~30% smaller than the digits */
+.sr-job-bar-pct-num {
+    font-size: 0.68rem;
+    font-weight: 600;
+}
+
+.sr-job-bar-pct-sym {
+    font-size: calc(0.68rem * 0.7);
+    font-weight: 600;
+    line-height: 1;
+}
+
+.sr-job-bar-track {
+    flex: 1 1 auto;
+    height: 0.55rem;
+    min-width: 2.5rem;
+    max-width: 6rem;
+    background: linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%);
+    border-radius: 4px;
+    overflow: hidden;
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.65);
+}
+
+.sr-job-bar-fill {
+    height: 100%;
+    min-width: 0;
+    border-radius: 3px;
+    transition: width 0.2s ease;
+    background: linear-gradient(
+        180deg,
+        #8b97d4 0%,
+        var(--sr-blue, #6a73ae) 42%,
+        #4d5580 100%
+    );
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+}
+
+.recharts-responsive-container {
+    min-height: 0 !important;
+}
+
+/* Narrow / short screens: horizontal scroll for grid instead of breaking layout */
+@media (max-width: 991.98px) {
+    .sales-report-page.sales-report-fit {
+        overflow-x: auto;
+        overflow-y: auto;
+    }
+
+    .sr-dashboard-grid {
+        min-width: 980px;
+        grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(200px, 22vw);
+    }
+}
+
+/* Print */
+.sales-report-page.printing {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+}
+
+.sales-report-page.printing .sr-dashboard-grid {
+    min-height: 520px;
+    page-break-inside: avoid;
+}
+
+@media print {
+    .no-print {
+        display: none !important;
+    }
+
+    @page {
+        size: landscape;
+        margin: 5mm;
+    }
+
+    body {
+        background: #fff !important;
+    }
+
+    .sales-report-page {
+        overflow: visible !important;
+        background: #fff !important;
+    }
+
+    .sr-table-inner {
+        overflow: visible !important;
+    }
+
+    .sr-pipeline-panel {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+}

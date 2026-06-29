@@ -1,0 +1,11 @@
+﻿[dotenv@17.2.3] injecting env (9) from server\.env -- tip: ΓÜÖ∩╕Å  override existing env vars with { override: true }
+--- QUOTES ---
+ID:120 | Q#:AAC/BMS/16-L1/4-R0 | To:Electrical | Rev:0
+ID:121 | Q#:AAC/BMS/16-L1/5-R0 | To:Cebarco Bahrain | Rev:0
+ID:122 | Q#:ACC/ELE/16-L1/6-R0 | To:Civil Project | Rev:0
+ID:123 | Q#:ACC/CVLP/16-L1/7-R0 | To:Cebarco Bahrain | Rev:0
+--- JOBS ---
+ID:201 | Name:Civil Project | Parent:null | Code:L1
+ID:202 | Name:Electrical | Parent:201 | Code:null
+ID:203 | Name:BMS | Parent:202 | Code:null
+ID:204 | Name:BMS | Parent:null | Code:L2

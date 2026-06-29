@@ -1,0 +1,16 @@
+Connected DB
+Searching for enquiries for 'Indian School Bahrain'...
+Found 1 enquiries.
+
+--- Enquiry: 13 ---
+WonOrderValue: 264130
+Items:
+  ID: 81, ParentID: null (object), Name: L1 - Civil Project
+  ID: 82, ParentID: 81 (number), Name: Electrical
+  ID: 83, ParentID: 82 (number), Name: BMS
+Prices for all items:
+  Name: L1 - Civil Project, Price: 100, ParentID: null
+  Name: Electrical, Price: 22, ParentID: 81
+  Name: BMS, Price: 11, ParentID: 82
+Sum (ParentID IS NULL): 100
+Sum (ParentID IS NULL OR 0): 100

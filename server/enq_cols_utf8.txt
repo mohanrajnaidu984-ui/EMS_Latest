@@ -1,0 +1,29 @@
+﻿[dotenv@17.2.3] injecting env (9) from .env -- tip: ΓÜÖ∩╕Å  override existing env vars with { override: true }
+Connected to MSSQL Database
+Columns in EnquiryMaster: [
+  'RequestNo',
+  'EnquiryDate',
+  'DueDate',
+  'SiteVisitDate',
+  'SourceOfEnquiry',
+  'CustomerName',
+  'ProjectName',
+  'ClientName',
+  'ConsultantName',
+  'EnquiryDetails',
+  'Doc_HardCopies',
+  'Doc_Drawing',
+  'Doc_CD_DVD',
+  'Doc_Spec',
+  'Doc_EquipmentSchedule',
+  'OthersSpecify',
+  'Remarks',
+  'SendAcknowledgementMail',
+  'ED_CEOSignatureRequired',
+  'Status',
+  'CreatedAt',
+  'CreatedBy',
+  'ReceivedFrom',
+  'AdditionalNotificationEmails',
+  'AcknowledgementSE'
+]

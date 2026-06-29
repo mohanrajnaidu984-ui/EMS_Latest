@@ -1,0 +1,50 @@
+﻿[dotenv@17.2.3] injecting env (13) from .env -- tip: ΓÜÖ∩╕Å  write to custom object with { processEnv: myObject }
+Connected to MSSQL Database
+--- EnquiryFor (103) ---
+[
+  {
+    "ItemName": "L1 - Civil Project"
+  },
+  {
+    "ItemName": "Plumbing & FF"
+  }
+]
+
+--- Master_EnquiryFor Sample ---
+[
+  {
+    "ItemName": "A/C Installation new",
+    "DivisionCode": null,
+    "DepartmentCode": null
+  },
+  {
+    "ItemName": "New Tv Installation",
+    "DivisionCode": null,
+    "DepartmentCode": null
+  },
+  {
+    "ItemName": "Speaker",
+    "DivisionCode": null,
+    "DepartmentCode": null
+  },
+  {
+    "ItemName": "BMS",
+    "DivisionCode": "BMS",
+    "DepartmentCode": "AAC"
+  },
+  {
+    "ItemName": "Electrical",
+    "DivisionCode": "Elec Project",
+    "DepartmentCode": "AAC"
+  }
+]
+
+Checking fuzzy match for 'L1 - Civil Project'...
+Searching Master for 'Civil Project'...
+Match result: [
+  {
+    "ItemName": "Civil Project",
+    "DivisionCode": "CVLP",
+    "DepartmentCode": "ACC"
+  }
+]

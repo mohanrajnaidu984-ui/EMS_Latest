@@ -1,0 +1,27 @@
+[
+  {
+    "COLUMN_NAME": "ID",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "RequestNo",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "FileName",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "FilePath",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "UploadedAt",
+    "COLUMN_DEFAULT": "(getdate())",
+    "DATA_TYPE": "datetime"
+  }
+]

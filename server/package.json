@@ -1,0 +1,39 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dbConfig.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node --watch index.js",
+    "helper": "node -e \"require('../scripts/quote-outlook-local-helper.js')\"",
+    "mail:test": "node verify_smtp_auth.js",
+    "mail:ping": "node smtp-ping.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.0.0 <23.0.0",
+    "npm": ">=10.0.0"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@qdrant/js-client-rest": "^1.16.2",
+    "axios": "^1.13.2",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "msnodesqlv8": "^5.1.1",
+    "mssql": "^12.1.0",
+    "muhammara": "^6.0.4",
+    "multer": "^2.0.2",
+    "node-fetch": "^3.3.2",
+    "nodemailer": "^7.0.10",
+    "openai": "^6.10.0",
+    "puppeteer": "^24.6.0",
+    "tesseract.js": "^7.0.0"
+  }
+}

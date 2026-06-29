@@ -1,0 +1,38 @@
+{
+  "enquiries": [
+    {
+      "RequestNo": "21",
+      "ProbabilityOption": "Very High Chance (99%)",
+      "Status": "FollowUp",
+      "CustomerPreferredPrice": "5648.00"
+    }
+  ],
+  "details": [
+    {
+      "item": {
+        "ID": 59,
+        "RequestNo": "21",
+        "ItemName": "L1 - BMS",
+        "ParentID": null
+      },
+      "mapping": [
+        {
+          "ID": 4,
+          "ItemName": "BMS",
+          "CompanyName": "Almoayyed Air Conditioning",
+          "DepartmentName": "BMS",
+          "Status": "Active",
+          "CommonMailIds": "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com",
+          "CCMailIds": "mohan.naidu@almoayyedcg.com",
+          "RequestNo": "16",
+          "DivisionCode": "BMS",
+          "DepartmentCode": "AAC",
+          "Phone": "17404949",
+          "Address": "P.O. Box 32232, Manama, Khamis, Kingdom of Bahrain",
+          "FaxNo": "17400396",
+          "CompanyLogo": "uploads/logos/1769321435260-AAC Logo.png"
+        }
+      ]
+    }
+  ]
+}

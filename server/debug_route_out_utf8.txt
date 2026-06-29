@@ -1,0 +1,24 @@
+﻿[dotenv@17.2.3] injecting env (13) from .env -- tip: ≡ƒùé∩╕Å backup and recover secrets: https://dotenvx.com/ops
+Connected to MSSQL Database
+Raw Items: [
+  'L1 - Civil Project',
+  'Plumbing & FF',
+  'BMS',
+  'L2 - BMS',
+  'Electrical'
+]
+Checking: 'L1 - Civil Project' / Clean: 'Civil Project'
+Found: 1 matches
+   -> Match: Almoayyed Contracting
+Checking: 'Plumbing & FF' / Clean: 'Plumbing & FF'
+Found: 1 matches
+   -> Match: Almoayyed Air Conditioning
+Checking: 'BMS' / Clean: 'BMS'
+Found: 1 matches
+   -> Match: Almoayyed Air Conditioning
+Checking: 'L2 - BMS' / Clean: 'BMS'
+Found: 1 matches
+   -> Match: Almoayyed Air Conditioning
+Checking: 'Electrical' / Clean: 'Electrical'
+Found: 1 matches
+   -> Match: Almoayyed Air Conditioning

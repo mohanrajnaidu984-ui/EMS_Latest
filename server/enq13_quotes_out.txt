@@ -1,0 +1,5 @@
+Total: 4
+0: QuoteNumber=AAC/BMS/13-L1/17-R0 | ToName=HVAC Project | Status=Saved
+1: QuoteNumber=AAC/BMS/13-L1/18-R0 | ToName=Ithbat Contracting Est | Status=Saved
+2: QuoteNumber=ACC/PLFF/13-L1/19-R0 | ToName=Civil Project | Status=Saved
+3: QuoteNumber=ACC/ELE/13-L1/20-R0 | ToName=Civil Project | Status=Saved

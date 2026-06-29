@@ -1,0 +1,152 @@
+SERVER STARTING - ACK V3 - Registering Sales Target Routes
+[dotenv@17.3.1] injecting env (13) from .env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+--- Email Config ---
+SMTP_HOST: smtp.gmail.com
+SMTP_USER: vigneshgovardhan5163@gmail.com
+SMTP_PORT: 587
+[2026-03-14 03:58:59] DEBUG Creating transport: nodemailer (7.0.13; +https://nodemailer.com/; SMTP/7.0.13[client:7.0.13])
+[dotenv@17.3.1] injecting env (0) from .env -- tip: 🛡️ auth for agents: https://vestauth.com
+[2026-03-14 03:58:59] DEBUG Creating transport: nodemailer (7.0.13; +https://nodemailer.com/; SMTP/7.0.13[client:7.0.13])
+Loaded 40 vectors from local file.
+[dotenv@17.3.1] injecting env (0) from .env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+Starting server initialization...
+PORT: 5001
+Server running on port 5001
+Connected to MSSQL Database
+Connected to MSSQL Database
+Database connected successfully.
+[2026-03-14T03:59:55.309Z] GET /api/notifications/36
+[2026-03-14T03:59:58.034Z] POST /api/enquiries
+RequestError: Invalid column name 'CustomerRefNo'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'CustomerRefNo'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'CustomerRefNo'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 6
+    }
+  },
+  number: 207,
+  lineNumber: 6,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: []
+}
+[2026-03-14T04:00:03.195Z] GET /api/notifications/36
+[2026-03-14T04:00:05.553Z] POST /api/enquiries
+RequestError: Invalid column name 'CustomerRefNo'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'CustomerRefNo'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'CustomerRefNo'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 6
+    }
+  },
+  number: 207,
+  lineNumber: 6,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: []
+}
+[2026-03-14T04:00:10.595Z] GET /api/notifications/36
+[2026-03-14T04:00:14.265Z] POST /api/enquiries
+RequestError: Invalid column name 'CustomerRefNo'.
+    at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:384:15)
+    at Connection.emit (node:events:508:28)
+    at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+    at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+    at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+    at Readable.emit (node:events:508:28)
+    at addChunk (node:internal/streams/readable:559:12)
+    at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+    at Readable.push (node:internal/streams/readable:391:5)
+    at nextAsync (node:internal/streams/from:194:22) {
+  code: 'EREQUEST',
+  originalError: Error: Invalid column name 'CustomerRefNo'.
+      at handleError (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\mssql\lib\tedious\request.js:382:19)
+      at Connection.emit (node:events:508:28)
+      at Connection.emit (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\connection.js:1013:18)
+      at RequestTokenHandler.onErrorMessage (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\handler.js:285:21)
+      at Readable.<anonymous> (D:\EMS _Deployed Master project file\LATEST_EMS_MASTER\New-EMS-main\server\node_modules\tedious\lib\token\token-stream-parser.js:19:33)
+      at Readable.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushObjectMode (node:internal/streams/readable:536:3)
+      at Readable.push (node:internal/streams/readable:391:5)
+      at nextAsync (node:internal/streams/from:194:22) {
+    info: ErrorMessageToken {
+      name: 'ERROR',
+      handlerName: 'onErrorMessage',
+      number: 207,
+      state: 1,
+      class: 16,
+      message: "Invalid column name 'CustomerRefNo'.",
+      serverName: 'DESKTOP-N08RTTR',
+      procName: '',
+      lineNumber: 6
+    }
+  },
+  number: 207,
+  lineNumber: 6,
+  state: 1,
+  class: 16,
+  serverName: 'DESKTOP-N08RTTR',
+  procName: '',
+  precedingErrors: []
+}

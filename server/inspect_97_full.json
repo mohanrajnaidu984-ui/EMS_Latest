@@ -1,0 +1,73 @@
+{
+  "EnquiryFor": [
+    {
+      "ID": 96,
+      "RequestNo": "97",
+      "ItemName": "BMS"
+    },
+    {
+      "ID": 97,
+      "RequestNo": "97",
+      "ItemName": "Electrical"
+    }
+  ],
+  "EnquiryQuotes": [
+    {
+      "QuoteNumber": "AAC/97/1-R0",
+      "TotalAmount": 5678,
+      "CreatedAt": "2026-01-14T09:59:48.920Z"
+    },
+    {
+      "QuoteNumber": "AAC/97/1-R1",
+      "TotalAmount": 5678,
+      "CreatedAt": "2026-01-14T10:01:24.980Z"
+    },
+    {
+      "QuoteNumber": "AAC/97/2-R0",
+      "TotalAmount": 5678,
+      "CreatedAt": "2026-01-14T10:29:37.343Z"
+    },
+    {
+      "QuoteNumber": "AAC/97/2-R1",
+      "TotalAmount": 5678,
+      "CreatedAt": "2026-01-14T10:30:17.513Z"
+    },
+    {
+      "QuoteNumber": "AAC/97/1-R2",
+      "TotalAmount": 5678,
+      "CreatedAt": "2026-01-14T10:53:03.850Z"
+    }
+  ],
+  "Master_EnquiryFor": [
+    {
+      "ItemName": "A/C Installation new",
+      "CommonMailIds": "vigneshgovardhan5163@gmail.com",
+      "CCMailIds": "atypicalstore5163@gmail.com"
+    },
+    {
+      "ItemName": "New Tv Installation",
+      "CommonMailIds": "vigneshgovardhan5163@gmail.com",
+      "CCMailIds": "atypicalstore5163@gmail.com,vigneshgovadhan5163@gmail.com"
+    },
+    {
+      "ItemName": "Speaker",
+      "CommonMailIds": "vigneshgovardhan5163@gmail.com",
+      "CCMailIds": "c.balakumar93@gmail.com"
+    },
+    {
+      "ItemName": "BMS",
+      "CommonMailIds": "c.balakumar93@gmail.com",
+      "CCMailIds": "vigneshgovardhan5163@gmail.com"
+    },
+    {
+      "ItemName": "Electrical",
+      "CommonMailIds": "electrical@almoayyedg.com",
+      "CCMailIds": "mohan.naidu@almoayyedcg.com"
+    },
+    {
+      "ItemName": "Civil Project",
+      "CommonMailIds": "saad@almoayyedcg.com",
+      "CCMailIds": "adfwf@almoy.com"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+[
+  {
+    "ProbabilityOption": "",
+    "Probability": 0
+  },
+  {
+    "ProbabilityOption": "High Chance (90%)",
+    "Probability": 90
+  },
+  {
+    "ProbabilityOption": "Medium Chance (75%)",
+    "Probability": 75
+  },
+  {
+    "ProbabilityOption": "Very High Chance (99%)",
+    "Probability": 99
+  }
+]

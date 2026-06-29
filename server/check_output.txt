@@ -1,0 +1,50 @@
+
+--- EnquiryMaster (12, 9) ---
+[
+  {
+    "RequestNo": "12",
+    "ClientName": "Eagle Hill",
+    "ConsultantName": "MSCEB"
+  },
+  {
+    "RequestNo": "9",
+    "ClientName": "Eagle Hills",
+    "ConsultantName": "MSCEB"
+  }
+]
+--- EnquiryFor (12, 9) ---
+[
+  {
+    "RequestNo": "9",
+    "ItemName": "L1 - Civil Project"
+  },
+  {
+    "RequestNo": "9",
+    "ItemName": "Elec Project"
+  },
+  {
+    "RequestNo": "9",
+    "ItemName": "BMS Project"
+  },
+  {
+    "RequestNo": "12",
+    "ItemName": "L1 - Civil Project"
+  },
+  {
+    "RequestNo": "12",
+    "ItemName": "BMS Project"
+  },
+  {
+    "RequestNo": "12",
+    "ItemName": "Elec Project"
+  },
+  {
+    "RequestNo": "12",
+    "ItemName": "L2 - Elec Project"
+  },
+  {
+    "RequestNo": "12",
+    "ItemName": "L3 - BMS Project"
+  }
+]
+        

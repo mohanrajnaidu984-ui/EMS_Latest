@@ -1,0 +1,38 @@
+[
+  {
+    "OptionID": 495,
+    "EnquiryForItem": "BMS Project",
+    "EnquiryForID": 371,
+    "Price": 2500
+  },
+  {
+    "OptionID": 494,
+    "EnquiryForItem": "BMS Project",
+    "EnquiryForID": 368,
+    "Price": 2600
+  },
+  {
+    "OptionID": 496,
+    "EnquiryForItem": "HVAC Project",
+    "EnquiryForID": 370,
+    "Price": 10000
+  },
+  {
+    "OptionID": 503,
+    "EnquiryForItem": "Plumbing & Fire Fighting Project",
+    "EnquiryForID": 369,
+    "Price": 5648
+  },
+  {
+    "OptionID": 502,
+    "EnquiryForItem": "Electrical Project",
+    "EnquiryForID": 367,
+    "Price": 3456
+  },
+  {
+    "OptionID": 488,
+    "EnquiryForItem": "Civil Project",
+    "EnquiryForID": 366,
+    "Price": 50000
+  }
+]

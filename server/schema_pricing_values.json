@@ -1,0 +1,52 @@
+[
+  {
+    "COLUMN_NAME": "ID",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "RequestNo",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "OptionID",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "EnquiryForItem",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "EnquiryForID",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "int"
+  },
+  {
+    "COLUMN_NAME": "Price",
+    "COLUMN_DEFAULT": "((0))",
+    "DATA_TYPE": "decimal"
+  },
+  {
+    "COLUMN_NAME": "UpdatedBy",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "UpdatedAt",
+    "COLUMN_DEFAULT": "(getdate())",
+    "DATA_TYPE": "datetime"
+  },
+  {
+    "COLUMN_NAME": "CustomerName",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  },
+  {
+    "COLUMN_NAME": "LeadJobName",
+    "COLUMN_DEFAULT": null,
+    "DATA_TYPE": "nvarchar"
+  }
+]

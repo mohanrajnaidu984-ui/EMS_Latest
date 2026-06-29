@@ -1,0 +1,133 @@
+{
+  "Enquiry": {
+    "RequestNo": "16",
+    "ProjectName": "Susyan Cafe",
+    "Status": "Enquiry"
+  },
+  "Jobs": [
+    {
+      "ID": 201,
+      "ParentID": null,
+      "ItemName": "Civil Project",
+      "LeadJobCode": "L1"
+    },
+    {
+      "ID": 202,
+      "ParentID": 201,
+      "ItemName": "Electrical",
+      "LeadJobCode": null
+    },
+    {
+      "ID": 203,
+      "ParentID": 202,
+      "ItemName": "BMS",
+      "LeadJobCode": null
+    },
+    {
+      "ID": 204,
+      "ParentID": null,
+      "ItemName": "BMS",
+      "LeadJobCode": "L2"
+    }
+  ],
+  "Options": [
+    {
+      "ID": 309,
+      "OptionName": "Base Price",
+      "ItemName": "Civil Project",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 310,
+      "OptionName": "Base Price",
+      "ItemName": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 311,
+      "OptionName": "Base Price",
+      "ItemName": "Electrical",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 312,
+      "OptionName": "Base Price",
+      "ItemName": "Civil Project",
+      "CustomerName": "Electrical",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 313,
+      "OptionName": "Base Price",
+      "ItemName": "BMS",
+      "CustomerName": "Electrical",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 314,
+      "OptionName": "Base Price",
+      "ItemName": "Electrical",
+      "CustomerName": "Electrical",
+      "LeadJobName": "Civil Project"
+    }
+  ],
+  "Values": [
+    {
+      "OptionID": 310,
+      "EnquiryForID": 203,
+      "EnquiryForItem": "BMS",
+      "Price": 25000,
+      "UpdatedBy": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "OptionID": 309,
+      "EnquiryForID": 203,
+      "EnquiryForItem": "BMS",
+      "Price": 25000,
+      "UpdatedBy": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "OptionID": 309,
+      "EnquiryForID": 204,
+      "EnquiryForItem": "BMS",
+      "Price": 25000,
+      "UpdatedBy": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "OptionID": 310,
+      "EnquiryForID": 204,
+      "EnquiryForItem": "BMS",
+      "Price": 25000,
+      "UpdatedBy": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "OptionID": 311,
+      "EnquiryForID": 203,
+      "EnquiryForItem": "BMS",
+      "Price": 25000,
+      "UpdatedBy": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "OptionID": 311,
+      "EnquiryForID": 204,
+      "EnquiryForItem": "BMS",
+      "Price": 25000,
+      "UpdatedBy": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    }
+  ]
+}

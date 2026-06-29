@@ -1,0 +1,25 @@
+[dotenv@17.2.3] injecting env (9) from .env -- tip: ??????  specify custom .env file path with { path: '/custom/path/.env' }
+Connected to MSSQL Database
+=== OPTIONS ===
+ID:317 | Name:Base Price | Item:Civil Project | Cust:Cebarco Bahrain | Lead:Civil Project
+ID:318 | Name:Base Price | Item:BMS | Cust:Cebarco Bahrain | Lead:BMS
+ID:319 | Name:Base Price | Item:Civil Project | Cust:Electrical | Lead:Civil Project
+ID:320 | Name:Base Price | Item:BMS | Cust:Electrical | Lead:Civil Project
+ID:321 | Name:Base Price | Item:BMS | Cust:Cebarco Bahrain | Lead:Civil Project
+ID:322 | Name:Base Price | Item:Electrical | Cust:Electrical | Lead:Civil Project
+ID:323 | Name:Base Price | Item:Electrical | Cust:Cebarco Bahrain | Lead:Civil Project
+ID:324 | Name:Base Price | Item:BMS | Cust:Electrical | Lead:BMS
+ID:325 | Name:Option-1 | Item:BMS | Cust:Cebarco Bahrain | Lead:BMS
+ID:326 | Name:Option-1 | Item:BMS | Cust:Electrical | Lead:BMS
+ID:327 | Name:Option-1 | Item:BMS | Cust:Electrical | Lead:Civil Project
+ID:328 | Name:Option-1 | Item:BMS | Cust:Cebarco Bahrain | Lead:Civil Project
+=== VALUES ===
+OptID:318 | ForID:204 | ForItem:BMS | Price:25100 | Cust:Cebarco Bahrain
+OptID:320 | ForID:203 | ForItem:BMS | Price:25000 | Cust:Electrical
+OptID:325 | ForID:204 | ForItem:BMS | Price:26100 | Cust:Cebarco Bahrain
+OptID:327 | ForID:203 | ForItem:BMS | Price:26000 | Cust:Electrical
+=== JOBS ===
+ID:201 | ParentID:null | Name:Civil Project
+ID:202 | ParentID:201 | Name:Electrical
+ID:203 | ParentID:202 | Name:BMS
+ID:204 | ParentID:null | Name:BMS

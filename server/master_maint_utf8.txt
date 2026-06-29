@@ -1,0 +1,14 @@
+﻿[dotenv@17.2.3] injecting env (9) from .env -- tip: ΓÜÖ∩╕Å  enable debug logging with { debug: true }
+Connected to MSSQL Database
+Master Results: [
+  {
+    "ItemName": "AC Maint-HVAC",
+    "CommonMailIds": "maintenance1@almoayyedcg.com",
+    "CCMailIds": "aacmhod@almoayyedcg.com"
+  },
+  {
+    "ItemName": "AC Maint-Elec",
+    "CommonMailIds": "maintenance1@almoayyedcg.com",
+    "CCMailIds": "shajimon@almoayyedcg.com,aacmhod@almoayyedcg.com"
+  }
+]

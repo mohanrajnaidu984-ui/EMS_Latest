@@ -1,0 +1,52 @@
+{
+  "enquiryFor": [
+    {
+      "ID": 111,
+      "RequestNo": "45",
+      "ItemName": "L1 - Civil Project",
+      "ParentID": null
+    },
+    {
+      "ID": 112,
+      "RequestNo": "45",
+      "ItemName": "Electrical",
+      "ParentID": 111
+    },
+    {
+      "ID": 113,
+      "RequestNo": "45",
+      "ItemName": "BMS",
+      "ParentID": 112
+    }
+  ],
+  "master": [
+    {
+      "ItemName": "BMS",
+      "Emails": "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com"
+    },
+    {
+      "ItemName": "Civil Project",
+      "Emails": "civil@almoayyedcg.com"
+    },
+    {
+      "ItemName": "Electrical",
+      "Emails": "electrical@almoayyedcg.com"
+    },
+    {
+      "ItemName": "BMS - PICV",
+      "Emails": "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com"
+    },
+    {
+      "ItemName": "BMS - BTU Meter",
+      "Emails": "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com"
+    },
+    {
+      "ItemName": "BMS - Thermostat",
+      "Emails": "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com"
+    },
+    {
+      "ItemName": "BMS - ELV",
+      "Emails": "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com"
+    }
+  ]
+}

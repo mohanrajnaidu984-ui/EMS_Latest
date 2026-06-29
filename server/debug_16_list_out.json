@@ -1,0 +1,256 @@
+{
+  "jobs": [
+    {
+      "ID": 201,
+      "ParentID": null,
+      "ItemName": "Civil Project",
+      "LeadJobCode": "L1"
+    },
+    {
+      "ID": 202,
+      "ParentID": 201,
+      "ItemName": "Electrical",
+      "LeadJobCode": null
+    },
+    {
+      "ID": 203,
+      "ParentID": 202,
+      "ItemName": "BMS",
+      "LeadJobCode": null
+    },
+    {
+      "ID": 204,
+      "ParentID": null,
+      "ItemName": "BMS",
+      "LeadJobCode": "L2"
+    }
+  ],
+  "options": [
+    {
+      "ID": 317,
+      "OptionName": "Base Price",
+      "ItemName": "Civil Project",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 318,
+      "OptionName": "Base Price",
+      "ItemName": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "BMS"
+    },
+    {
+      "ID": 319,
+      "OptionName": "Base Price",
+      "ItemName": "Civil Project",
+      "CustomerName": "Electrical",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 320,
+      "OptionName": "Base Price",
+      "ItemName": "BMS",
+      "CustomerName": "Electrical",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 321,
+      "OptionName": "Base Price",
+      "ItemName": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 322,
+      "OptionName": "Base Price",
+      "ItemName": "Electrical",
+      "CustomerName": "Electrical",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 323,
+      "OptionName": "Base Price",
+      "ItemName": "Electrical",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 324,
+      "OptionName": "Base Price",
+      "ItemName": "BMS",
+      "CustomerName": "Electrical",
+      "LeadJobName": "BMS"
+    },
+    {
+      "ID": 325,
+      "OptionName": "Option-1",
+      "ItemName": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "BMS"
+    },
+    {
+      "ID": 326,
+      "OptionName": "Option-1",
+      "ItemName": "BMS",
+      "CustomerName": "Electrical",
+      "LeadJobName": "BMS"
+    },
+    {
+      "ID": 327,
+      "OptionName": "Option-1",
+      "ItemName": "BMS",
+      "CustomerName": "Electrical",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 328,
+      "OptionName": "Option-1",
+      "ItemName": "BMS",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 334,
+      "OptionName": "Base Price",
+      "ItemName": "Electrical",
+      "CustomerName": "Civil Project",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 335,
+      "OptionName": "Base Price",
+      "ItemName": "Civil Project",
+      "CustomerName": "Civil Project",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 336,
+      "OptionName": "Option-1",
+      "ItemName": "BMS",
+      "CustomerName": "Civil Project",
+      "LeadJobName": "BMS"
+    },
+    {
+      "ID": 337,
+      "OptionName": "Base Price",
+      "ItemName": "BMS",
+      "CustomerName": "Civil Project",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 338,
+      "OptionName": "Base Price",
+      "ItemName": "BMS",
+      "CustomerName": "Civil Project",
+      "LeadJobName": "BMS"
+    },
+    {
+      "ID": 339,
+      "OptionName": "Option-1",
+      "ItemName": "BMS",
+      "CustomerName": "Civil Project",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 353,
+      "OptionName": "Option-1",
+      "ItemName": "Civil Project",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 354,
+      "OptionName": "Option-1",
+      "ItemName": "Civil Project",
+      "CustomerName": "Civil Project",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 355,
+      "OptionName": "Option-1",
+      "ItemName": "Electrical",
+      "CustomerName": "Electrical",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 356,
+      "OptionName": "Option-1",
+      "ItemName": "Civil Project",
+      "CustomerName": "Electrical",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 357,
+      "OptionName": "Option-1",
+      "ItemName": "Electrical",
+      "CustomerName": "Civil Project",
+      "LeadJobName": "Civil Project"
+    },
+    {
+      "ID": 358,
+      "OptionName": "Option-1",
+      "ItemName": "Electrical",
+      "CustomerName": "Cebarco Bahrain",
+      "LeadJobName": "Civil Project"
+    }
+  ],
+  "values": [
+    {
+      "OptionID": 318,
+      "EnquiryForID": 204,
+      "EnquiryForItem": "BMS",
+      "Price": 25100,
+      "UpdatedAt": "2026-02-23T15:50:57.720Z"
+    },
+    {
+      "OptionID": 320,
+      "EnquiryForID": 203,
+      "EnquiryForItem": "BMS",
+      "Price": 25000,
+      "UpdatedAt": "2026-02-23T09:21:24.533Z"
+    },
+    {
+      "OptionID": 327,
+      "EnquiryForID": 203,
+      "EnquiryForItem": "BMS",
+      "Price": 26000,
+      "UpdatedAt": "2026-02-23T09:21:24.533Z"
+    },
+    {
+      "OptionID": 325,
+      "EnquiryForID": 204,
+      "EnquiryForItem": "BMS",
+      "Price": 26100,
+      "UpdatedAt": "2026-02-23T15:50:57.737Z"
+    },
+    {
+      "OptionID": 357,
+      "EnquiryForID": 202,
+      "EnquiryForItem": "Electrical",
+      "Price": 260000,
+      "UpdatedAt": "2026-02-23T15:50:57.787Z"
+    },
+    {
+      "OptionID": 334,
+      "EnquiryForID": 202,
+      "EnquiryForItem": "Electrical",
+      "Price": 250000,
+      "UpdatedAt": "2026-02-23T15:50:57.787Z"
+    },
+    {
+      "OptionID": 317,
+      "EnquiryForID": 201,
+      "EnquiryForItem": "Civil Project",
+      "Price": 2500000,
+      "UpdatedAt": "2026-02-23T16:29:41.797Z"
+    },
+    {
+      "OptionID": 353,
+      "EnquiryForID": 201,
+      "EnquiryForItem": "Civil Project",
+      "Price": 2600000,
+      "UpdatedAt": "2026-02-23T16:29:41.807Z"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+﻿[dotenv@17.2.3] injecting env (9) from .env -- tip: ≡ƒæÑ sync secrets across teammates & machines: https://dotenvx.com/ops
+[dotenv@17.2.3] injecting env (0) from .env -- tip: ≡ƒùé∩╕Å backup and recover secrets: https://dotenvx.com/ops
+Connected to MSSQL Database
+--- Fetching Column Info ---
+[ 'ID', 'RequestNo', 'ItemName', 'ParentID' ]
+--- Fetching Data Sample ---
+{
+  ID: 1,
+  RequestNo: '11',
+  ItemName: 'L1 - Civil Project',
+  ParentID: null
+}

@@ -1,0 +1,291 @@
+/* Pricing Module Styles */
+
+.pricing-container {
+    padding: 24px;
+    background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ed 100%);
+    min-height: calc(100vh - 80px);
+}
+
+.pricing-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 20px 24px;
+    border-radius: 12px;
+    margin-bottom: 24px;
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+}
+
+.pricing-header h2 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 600;
+}
+
+.pricing-header .project-name {
+    opacity: 0.9;
+    font-size: 14px;
+    margin-top: 4px;
+}
+
+/* Enquiry Selector */
+.enquiry-selector {
+    background: white;
+    padding: 20px;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+    margin-bottom: 24px;
+}
+
+.enquiry-selector label {
+    font-weight: 600;
+    color: #4a5568;
+    font-size: 13px;
+    display: block;
+    margin-bottom: 8px;
+}
+
+.enquiry-selector .input-group {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.enquiry-selector input {
+    flex: 1;
+    max-width: 300px;
+    padding: 10px 14px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    font-size: 14px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.enquiry-selector input:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+/* Pricing Grid */
+.pricing-grid-container {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+    overflow: hidden;
+}
+
+.pricing-grid {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+.pricing-grid th,
+.pricing-grid td {
+    padding: 12px 16px;
+    text-align: center;
+    border-bottom: 1px solid #e2e8f0;
+    vertical-align: middle;
+}
+
+.pricing-grid th {
+    background: linear-gradient(135deg, #4a6cf7 0%, #6366f1 100%);
+    color: white;
+    font-weight: 600;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.pricing-grid th.option-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    width: 120px;
+}
+
+.pricing-grid th.lead-job {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    position: relative;
+}
+
+.pricing-grid th.lead-job::after {
+    content: '★ LEAD';
+    display: block;
+    font-size: 9px;
+    opacity: 0.9;
+    margin-top: 2px;
+}
+
+.pricing-grid th.sub-job {
+    background: linear-gradient(135deg, #4a6cf7 0%, #6366f1 100%);
+}
+
+.pricing-grid tbody tr:hover {
+    background-color: #f7fafc;
+}
+
+.pricing-grid tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.option-name {
+    font-weight: 600;
+    color: #4a5568;
+    text-align: left;
+    background-color: #f8fafc;
+}
+
+/* Price Input */
+.price-input-wrapper {
+    position: relative;
+}
+
+.price-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    font-size: 14px;
+    text-align: right;
+    transition: all 0.2s;
+    background: white;
+}
+
+.price-input:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+}
+
+.price-input:disabled {
+    background-color: #f1f5f9;
+    cursor: not-allowed;
+    color: #94a3b8;
+}
+
+.price-input.lead-job-input {
+    border-color: #10b981;
+}
+
+.price-input.lead-job-input:focus {
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+}
+
+/* Actions Row */
+.pricing-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    background: #f8fafc;
+    border-top: 1px solid #e2e8f0;
+}
+
+.btn-add-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.btn-add-option:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.btn-save-all {
+    padding: 10px 24px;
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.btn-save-all:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+
+/* Delete Option Button */
+.btn-delete-option {
+    background: none;
+    border: none;
+    color: #ef4444;
+    cursor: pointer;
+    padding: 4px 8px;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+}
+
+.btn-delete-option:hover {
+    opacity: 1;
+}
+
+/* Empty State */
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #64748b;
+}
+
+.empty-state h3 {
+    margin-bottom: 8px;
+    color: #475569;
+}
+
+/* Loading */
+.loading-spinner {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 40px;
+}
+
+/* Access Badge */
+.access-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-left: 12px;
+}
+
+.access-badge.lead {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.access-badge.child {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .pricing-container {
+        padding: 12px;
+    }
+
+    .pricing-grid th,
+    .pricing-grid td {
+        padding: 8px;
+        font-size: 12px;
+    }
+
+    .price-input {
+        padding: 8px;
+        font-size: 12px;
+    }
+}

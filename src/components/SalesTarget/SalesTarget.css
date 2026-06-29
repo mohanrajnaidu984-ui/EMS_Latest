@@ -1,0 +1,193 @@
+/* SalesTarget.css */
+.sales-target-container {
+  background-color: #e9eef6;
+}
+
+/* Match page tint; border keeps the strip readable on the same background */
+.sales-target-filter-panel {
+  background-color: #e9eef6 !important;
+  border-color: #c5d2e3 !important;
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    0 2px 10px rgba(71, 85, 105, 0.08);
+}
+
+.sales-target-container .form-control:focus {
+    background-color: #fff !important;
+    border-color: #3b82f6 !important;
+    color: #212529 !important;
+    box-shadow: none;
+}
+
+.sales-target-container input::-webkit-outer-spin-button,
+.sales-target-container input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.sales-target-container input[type=number] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
+.sales-target-container table thead th {
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.85rem;
+    padding: 1rem 0.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+    background-color: transparent !important;
+    color: #ffffff !important;
+}
+
+.sales-target-container table tbody td {
+    padding: 0.75rem 0.5rem;
+    border-color: #dee2e6;
+}
+
+/* Compact density for the quarterly targets grid */
+.sales-target-grid-table thead th {
+    padding: 0.5rem 0.55rem !important;
+    font-size: 0.62rem !important;
+    line-height: 1.2 !important;
+}
+
+.sales-target-grid-table tbody td {
+    padding: 0.28rem 0.4rem !important;
+    font-size: 0.78rem;
+}
+
+.sales-target-grid-table tfoot th {
+    padding: 0.45rem 0.55rem !important;
+    font-size: 0.78rem !important;
+}
+
+/* Rounded outer shell for the targets grid (clips header/footer corners) */
+.sales-target-grid-wrap {
+    border-radius: 12px;
+    border: 1px solid #c5d2e3;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    background: #ffffff;
+}
+
+.sales-target-grid-wrap .sales-target-grid-table {
+    margin-bottom: 0;
+    border-radius: 0;
+}
+
+/* Sales engineer / item name: shrink-wrap to content */
+.sales-target-grid-table .sales-target-col-engineer {
+    width: 1%;
+    white-space: nowrap;
+}
+
+.sales-target-grid-table .sales-target-col-engineer-name {
+    width: 1%;
+    white-space: nowrap;
+}
+
+.sales-target-grid-table .sales-target-col-metric {
+    width: 8%;
+    min-width: 108px;
+    max-width: 130px;
+}
+
+/* Row-wide backgrounds: Booking Job Value row (grey) and GP % row (green tint) */
+.sales-target-grid-table tr.sales-target-row-revenue > th,
+.sales-target-grid-table tr.sales-target-row-revenue > td {
+    background-color: #f8f9fa !important;
+}
+
+.sales-target-grid-table tr.sales-target-row-gp > th,
+.sales-target-grid-table tr.sales-target-row-gp > td {
+    background-color: rgba(25, 135, 84, 0.06) !important;
+}
+
+/* Engineer name stays neutral across both sub-rows */
+.sales-target-grid-table .sales-target-col-engineer-name {
+    background-color: #ffffff !important;
+}
+
+.sales-target-grid-table tr.sales-target-row-revenue .sales-target-metric-revenue {
+    color: #6c757d !important;
+}
+
+.sales-target-grid-table tr.sales-target-row-gp .sales-target-metric-gp {
+    color: #198754 !important;
+}
+
+/* Wider TOTAL column (header, row totals, grand total) */
+.sales-target-grid-table .sales-target-col-total {
+    width: 14%;
+    min-width: 150px;
+}
+
+/* Top corners on gradient header cells */
+.sales-target-grid-table thead tr th:first-child {
+    border-top-left-radius: 11px;
+}
+
+.sales-target-grid-table thead tr th:last-child {
+    border-top-right-radius: 11px;
+}
+
+/* No vertical borders between header columns (table-bordered adds left/right per cell) */
+.sales-target-grid-table thead th {
+    border-left: none !important;
+    border-right: none !important;
+}
+
+/* Bottom corners on footer row */
+.sales-target-grid-table tfoot tr th:first-child {
+    border-bottom-left-radius: 11px;
+}
+
+.sales-target-grid-table tfoot tr th:last-child {
+    border-bottom-right-radius: 11px;
+}
+
+/* —— “Total committed target” (year history) table —— */
+.sales-target-history-wrap {
+    border-radius: 12px;
+    border: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: #ffffff;
+    -webkit-overflow-scrolling: touch;
+}
+
+.sales-target-history-table {
+    margin-bottom: 0;
+    border: none !important;
+    --bs-table-border-color: transparent;
+}
+
+.sales-target-history-table tbody > tr > td {
+    border: none !important;
+    box-shadow: none !important;
+}
+
+.sales-target-history-table thead tr th:first-child {
+    border-top-left-radius: 11px;
+}
+
+.sales-target-history-table thead tr th:last-child {
+    border-top-right-radius: 11px;
+}
+
+/* White vertical separators between header columns (Bootstrap table-bordered adds grey; override in header only) */
+.sales-target-history-table thead th {
+    border-left: none !important;
+    border-top: none !important;
+    border-right: 1px solid rgba(255, 255, 255, 0.55) !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.22) !important;
+    background-color: transparent !important;
+    color: #ffffff !important;
+}
+
+.sales-target-history-table thead th:last-child {
+    border-right: none !important;
+}

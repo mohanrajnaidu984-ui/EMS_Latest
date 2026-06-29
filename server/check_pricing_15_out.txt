@@ -1,0 +1,3 @@
+﻿Fetching: http://localhost:5001/api/pricing/15?userEmail=civil%40almoayyedcg.com
+customers: [ 'Cebarco Bahrain' ]
+extraCustomers: [ 'Cebarco Bahrain,' ]

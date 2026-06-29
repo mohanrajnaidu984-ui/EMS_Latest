@@ -1,0 +1,342 @@
+Connected to DB
+
+--- User Details ---
+[
+  {
+    "ID": 22,
+    "FullName": "Mohan(personal)",
+    "Designation": "Enployee",
+    "EmailId": "mohanraj.naidu984@gmail.com",
+    "LoginPassword": "$2b$10$A4ZmC2DAnkmCLllQJQwQOeUEtz0WDYkiurk6iLkBrmZYWjASq6rDK",
+    "Status": "Active",
+    "Department": "MEP",
+    "Roles": "Quotation,Enquiry,Sales",
+    "RequestNo": "107",
+    "ProfilePicture": null,
+    "ProfileImage": null
+  }
+]
+
+--- EnquiryPricingOptions (107) ---
+[
+  {
+    "ID": 173,
+    "RequestNo": "107",
+    "OptionName": "Base Price",
+    "SortOrder": 1,
+    "CreatedAt": "2026-01-21T13:17:32.540Z",
+    "ItemName": "L1 - Civil Project",
+    "CustomerName": "TCS"
+  },
+  {
+    "ID": 174,
+    "RequestNo": "107",
+    "OptionName": "Base Price",
+    "SortOrder": 1,
+    "CreatedAt": "2026-01-21T13:17:32.550Z",
+    "ItemName": "Electrical",
+    "CustomerName": "TCS"
+  },
+  {
+    "ID": 176,
+    "RequestNo": "107",
+    "OptionName": "Base Price",
+    "SortOrder": 1,
+    "CreatedAt": "2026-01-21T13:17:32.553Z",
+    "ItemName": "BMS",
+    "CustomerName": "Genpact"
+  },
+  {
+    "ID": 177,
+    "RequestNo": "107",
+    "OptionName": "Base Price",
+    "SortOrder": 1,
+    "CreatedAt": "2026-01-21T13:17:32.557Z",
+    "ItemName": "Plumbing & FF",
+    "CustomerName": "Genpact"
+  },
+  {
+    "ID": 178,
+    "RequestNo": "107",
+    "OptionName": "Base Price",
+    "SortOrder": 1,
+    "CreatedAt": "2026-01-21T13:17:32.567Z",
+    "ItemName": "Electrical",
+    "CustomerName": "Genpact"
+  },
+  {
+    "ID": 179,
+    "RequestNo": "107",
+    "OptionName": "Base Price",
+    "SortOrder": 2,
+    "CreatedAt": "2026-01-21T13:17:32.630Z",
+    "ItemName": "BMS",
+    "CustomerName": "TCS"
+  },
+  {
+    "ID": 180,
+    "RequestNo": "107",
+    "OptionName": "Base Price",
+    "SortOrder": 2,
+    "CreatedAt": "2026-01-21T13:17:32.633Z",
+    "ItemName": "L1 - Civil Project",
+    "CustomerName": "Genpact"
+  },
+  {
+    "ID": 181,
+    "RequestNo": "107",
+    "OptionName": "Base Price",
+    "SortOrder": 2,
+    "CreatedAt": "2026-01-21T13:17:32.633Z",
+    "ItemName": "Plumbing & FF",
+    "CustomerName": "TCS"
+  },
+  {
+    "ID": 185,
+    "RequestNo": "107",
+    "OptionName": "Base Price",
+    "SortOrder": 3,
+    "CreatedAt": "2026-01-21T13:49:13.223Z",
+    "ItemName": "L2 - BMS",
+    "CustomerName": "TCS"
+  },
+  {
+    "ID": 186,
+    "RequestNo": "107",
+    "OptionName": "Base Price",
+    "SortOrder": 3,
+    "CreatedAt": "2026-01-21T14:02:02.487Z",
+    "ItemName": "L2 - BMS",
+    "CustomerName": "Genpact"
+  }
+]
+
+--- EnquiryPricingValues (107) ---
+[
+  {
+    "ID": 57,
+    "RequestNo": "107",
+    "OptionID": 173,
+    "EnquiryForItem": "L1 - Civil Project",
+    "Price": 20000,
+    "UpdatedBy": "mohan(work)",
+    "UpdatedAt": "2026-01-21T13:30:24.103Z",
+    "CustomerName": "TCS",
+    "EnquiryForID": 255
+  },
+  {
+    "ID": 58,
+    "RequestNo": "107",
+    "OptionID": 180,
+    "EnquiryForItem": "L1 - Civil Project",
+    "Price": 10000,
+    "UpdatedBy": "mohan(work)",
+    "UpdatedAt": "2026-01-21T13:30:24.103Z",
+    "CustomerName": "Genpact",
+    "EnquiryForID": 255
+  },
+  {
+    "ID": 59,
+    "RequestNo": "107",
+    "OptionID": 176,
+    "EnquiryForItem": "BMS",
+    "Price": 10,
+    "UpdatedBy": "Balakumar",
+    "UpdatedAt": "2026-01-21T13:30:54.413Z",
+    "CustomerName": "Genpact",
+    "EnquiryForID": 258
+  },
+  {
+    "ID": 60,
+    "RequestNo": "107",
+    "OptionID": 179,
+    "EnquiryForItem": "BMS",
+    "Price": 20,
+    "UpdatedBy": "Balakumar",
+    "UpdatedAt": "2026-01-21T13:30:54.417Z",
+    "CustomerName": "TCS",
+    "EnquiryForID": 258
+  },
+  {
+    "ID": 61,
+    "RequestNo": "107",
+    "OptionID": 186,
+    "EnquiryForItem": "L2 - BMS",
+    "Price": 11,
+    "UpdatedBy": "Balakumar",
+    "UpdatedAt": "2026-01-21T14:12:04.027Z",
+    "CustomerName": "Genpact",
+    "EnquiryForID": 263
+  },
+  {
+    "ID": 62,
+    "RequestNo": "107",
+    "OptionID": 185,
+    "EnquiryForItem": "L2 - BMS",
+    "Price": 21,
+    "UpdatedBy": "Balakumar",
+    "UpdatedAt": "2026-01-21T14:12:04.030Z",
+    "CustomerName": "TCS",
+    "EnquiryForID": 263
+  },
+  {
+    "ID": 63,
+    "RequestNo": "107",
+    "OptionID": 176,
+    "EnquiryForItem": "BMS",
+    "Price": 10,
+    "UpdatedBy": "Balakumar",
+    "UpdatedAt": "2026-01-21T14:12:04.033Z",
+    "CustomerName": "Genpact",
+    "EnquiryForID": 262
+  },
+  {
+    "ID": 64,
+    "RequestNo": "107",
+    "OptionID": 179,
+    "EnquiryForItem": "BMS",
+    "Price": 20,
+    "UpdatedBy": "Balakumar",
+    "UpdatedAt": "2026-01-21T14:12:04.037Z",
+    "CustomerName": "TCS",
+    "EnquiryForID": 262
+  },
+  {
+    "ID": 65,
+    "RequestNo": "107",
+    "OptionID": 177,
+    "EnquiryForItem": "Plumbing & FF",
+    "Price": 100,
+    "UpdatedBy": "Mohan(personal)",
+    "UpdatedAt": "2026-01-22T10:48:10.473Z",
+    "CustomerName": "Genpact",
+    "EnquiryForID": 261
+  },
+  {
+    "ID": 66,
+    "RequestNo": "107",
+    "OptionID": 181,
+    "EnquiryForItem": "Plumbing & FF",
+    "Price": 200,
+    "UpdatedBy": "Mohan(personal)",
+    "UpdatedAt": "2026-01-22T10:48:10.473Z",
+    "CustomerName": "TCS",
+    "EnquiryForID": 261
+  }
+]
+
+--- Master_EnquiryFor ---
+[
+  {
+    "ID": 8,
+    "ItemName": "A/C Installation new",
+    "CompanyName": "Almoayyed contracting",
+    "DepartmentName": "security",
+    "Status": "Active",
+    "CommonMailIds": "vigneshgovardhan5163@gmail.com",
+    "CCMailIds": "atypicalstore5163@gmail.com",
+    "RequestNo": "91",
+    "DivisionCode": null,
+    "DepartmentCode": null,
+    "Phone": null,
+    "Address": null,
+    "FaxNo": null,
+    "CompanyLogo": null
+  },
+  {
+    "ID": 9,
+    "ItemName": "New Tv Installation",
+    "CompanyName": "Genpact",
+    "DepartmentName": "Service Desk",
+    "Status": "Active",
+    "CommonMailIds": "vigneshgovardhan5163@gmail.com",
+    "CCMailIds": "atypicalstore5163@gmail.com,vigneshgovadhan5163@gmail.com",
+    "RequestNo": "97",
+    "DivisionCode": null,
+    "DepartmentCode": null,
+    "Phone": null,
+    "Address": null,
+    "FaxNo": null,
+    "CompanyLogo": null
+  },
+  {
+    "ID": 10,
+    "ItemName": "Speaker",
+    "CompanyName": "tvs",
+    "DepartmentName": "accounts",
+    "Status": "Active",
+    "CommonMailIds": "vigneshgovardhan5163@gmail.com",
+    "CCMailIds": "c.balakumar93@gmail.com",
+    "RequestNo": "93",
+    "DivisionCode": null,
+    "DepartmentCode": null,
+    "Phone": null,
+    "Address": null,
+    "FaxNo": null,
+    "CompanyLogo": null
+  },
+  {
+    "ID": 11,
+    "ItemName": "BMS",
+    "CompanyName": "Almoayyed Air Conditioning",
+    "DepartmentName": "BMS",
+    "Status": "Active",
+    "CommonMailIds": "c.balakumar93@gmail.com",
+    "CCMailIds": "c.balakumar93@gmail.com",
+    "RequestNo": "107",
+    "DivisionCode": "BMS",
+    "DepartmentCode": "AAC",
+    "Phone": "1314144",
+    "Address": "Khamis",
+    "FaxNo": "4124142",
+    "CompanyLogo": "uploads/logos/1768282621768-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "ID": 12,
+    "ItemName": "Electrical",
+    "CompanyName": "Almoayyed Air Conditioning",
+    "DepartmentName": "Electrical Project",
+    "Status": "Active",
+    "CommonMailIds": "vigneshgovardhan5163@gmail.com",
+    "CCMailIds": "vigneshgovardhan5163@gmail.com",
+    "RequestNo": "107",
+    "DivisionCode": "Elec Project",
+    "DepartmentCode": "AAC",
+    "Phone": "131234",
+    "Address": "Khamis",
+    "FaxNo": "34534636",
+    "CompanyLogo": "uploads/logos/1768282027109-Almoayyed-Air-Conditioning.png"
+  },
+  {
+    "ID": 14,
+    "ItemName": "Civil Project",
+    "CompanyName": "Almoayyed Contracting",
+    "DepartmentName": "Civil Project",
+    "Status": "Active",
+    "CommonMailIds": "mohan.naidu@almoayyedcg.com",
+    "CCMailIds": "mohan.naidu@gmail.com",
+    "RequestNo": "101",
+    "DivisionCode": "CVLP",
+    "DepartmentCode": "ACC",
+    "Phone": "1231244",
+    "Address": "Khamis, Manama, Kingdom of Bahrain.",
+    "FaxNo": "24242",
+    "CompanyLogo": "uploads/logos/1768283682318-Almoayyed Contracting.png"
+  },
+  {
+    "ID": 15,
+    "ItemName": "Plumbing & FF",
+    "CompanyName": "Almoayyed Air Conditioning",
+    "DepartmentName": "Plumbing & FF",
+    "Status": "Active",
+    "CommonMailIds": "mohanraj.naidu984@gmail.com",
+    "CCMailIds": "mohanraj.naidu984@gmail.com",
+    "RequestNo": "107",
+    "DivisionCode": "AAC",
+    "DepartmentCode": "PLFF",
+    "Phone": "123144",
+    "Address": "Khamis",
+    "FaxNo": "12312414",
+    "CompanyLogo": "uploads/logos/1768565738026-Almoayyed-Air-Conditioning.png"
+  }
+]

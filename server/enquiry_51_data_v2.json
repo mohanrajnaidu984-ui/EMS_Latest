@@ -1,0 +1,97 @@
+﻿{
+    "enquiry":  {
+                    "RequestNo":  "51",
+                    "ProjectName":  "Civil Project 12",
+                    "CustomerName":  "NOORWOOD,SEPCO III Electric Power Construction Co. Ltd.",
+                    "ReceivedFrom":  "Akshat Sharma,Liu Hualiang",
+                    "EnquiryDate":  "2026-02-14T00:00:00.000Z",
+                    "DueDate":  "2026-02-14T00:00:00.000Z",
+                    "CustomerRefNo":  "987456",
+                    "EnquiryType":  "New Tender"
+                },
+    "customerDetails":  null,
+    "divisions":  [
+
+                  ],
+    "companyDetails":  {
+                           "code":  "ACC",
+                           "logo":  "uploads/logos/1769321540859-ACC Logo.png",
+                           "name":  "Almoayyed Contracting",
+                           "divisionCode":  "CVLP",
+                           "departmentCode":  "ACC",
+                           "address":  "Khamis, Bahrain",
+                           "phone":  "12345",
+                           "fax":  "23424",
+                           "email":  "civil@almoayyedcg.com"
+                       },
+    "availableProfiles":  [
+
+                          ],
+    "preparedByOptions":  [
+                              {
+                                  "value":  "Civil",
+                                  "label":  "Civil",
+                                  "type":  "SE"
+                              },
+                              {
+                                  "value":  "Electrical",
+                                  "label":  "Electrical",
+                                  "type":  "SE"
+                              },
+                              {
+                                  "value":  "BMS",
+                                  "label":  "BMS",
+                                  "type":  "SE"
+                              }
+                          ],
+    "customerOptions":  [
+                            "NOORWOOD",
+                            "SEPCO III Electric Power Construction Co. Ltd."
+                        ],
+    "customerContacts":  {
+                             "NOORWOOD":  "Akshat Sharma",
+                             "SEPCO III Electric Power Construction Co. Ltd.":  "Liu Hualiang"
+                         },
+    "leadJobPrefix":  "L1",
+    "divisionEmails":  [
+                           {
+                               "itemName":  "Civil Project",
+                               "ccMailIds":  "civil@almoayyedcg.com,civil@almoayyedcg.com",
+                               "commonMailIds":  "civil@almoayyedcg.com"
+                           },
+                           {
+                               "itemName":  "Electrical",
+                               "ccMailIds":  "electrical@almoayyedcg.com,electrical_HOD@almoayyedcg.com",
+                               "commonMailIds":  "electrical@almoayyedcg.com"
+                           },
+                           {
+                               "itemName":  "BMS",
+                               "ccMailIds":  "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com,mohan.naidu@almoayyedcg.com",
+                               "commonMailIds":  "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com"
+                           }
+                       ],
+    "quoteNumber":  "Draft",
+    "divisionsHierarchy":  [
+                               {
+                                   "id":  129,
+                                   "parentId":  null,
+                                   "itemName":  "Civil Project",
+                                   "commonMailIds":  "civil@almoayyedcg.com",
+                                   "ccMailIds":  "civil@almoayyedcg.com"
+                               },
+                               {
+                                   "id":  130,
+                                   "parentId":  129,
+                                   "itemName":  "Electrical",
+                                   "commonMailIds":  "electrical@almoayyedcg.com",
+                                   "ccMailIds":  "electrical_HOD@almoayyedcg.com"
+                               },
+                               {
+                                   "id":  131,
+                                   "parentId":  130,
+                                   "itemName":  "BMS",
+                                   "commonMailIds":  "bms@almoayyedcg.com,bmselveng1@almoayyedcg.com",
+                                   "ccMailIds":  "mohan.naidu@almoayyedcg.com"
+                               }
+                           ]
+}
