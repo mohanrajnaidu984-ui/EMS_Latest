@@ -194,7 +194,16 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
 
                   if (hasChildren) {
                     return (
-                      <li className="nav-item ems-top-nav-item--submenu" key={item.id}>
+                      <li
+                        className={`nav-item ems-top-nav-item--submenu${isSubmenuOpen ? ' ems-top-nav-item--submenu-open' : ''}`}
+                        key={item.id}
+                        onMouseLeave={(e) => {
+                          if (!isSubmenuOpen) return;
+                          const next = e.relatedTarget;
+                          if (next instanceof Node && e.currentTarget.contains(next)) return;
+                          setOpenSubmenuId(null);
+                        }}
+                      >
                         <button
                           type="button"
                           className={`nav-link bg-transparent border-0 d-flex align-items-center shadow-none ems-top-nav-link${isParentActive ? ' active' : ''}`}

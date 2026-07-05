@@ -48,6 +48,15 @@ function parsePriceNum(v) {
     return Number.isFinite(n) ? n : 0;
 }
 
+function isDeclineToQuoteRow(pr) {
+    const v = String(pr?.Quotingornot ?? pr?.quotingornot ?? '').trim().toLowerCase();
+    return v === 'yes' || v === 'y' || v === '1' || v === 'true';
+}
+
+function rowHasResolvedBasePrice(pr) {
+    return parsePriceNum(pr?.Price ?? pr?.price) > 0 || isDeclineToQuoteRow(pr);
+}
+
 const normOptName = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
 function matchesOptionTarget(nameStr, targetLower) {
@@ -263,7 +272,7 @@ function evaluatePendingPricingSummarySpec(params) {
         const related = tuple.relatedJobIds;
         for (const pr of prices) {
             if (!reqNoEq(pr.RequestNo ?? pr.requestNo, rn)) continue;
-            if (parsePriceNum(pr.Price) <= 0) continue;
+            if (!rowHasResolvedBasePrice(pr)) continue;
             if (!isBasePriceRow(pr, optionMap)) continue;
             const mid = pr.MatchedEnquiryForId ?? pr.matchedEnquiryForId;
             const eid = pr.EnquiryForID ?? pr.enquiryForID;
@@ -287,7 +296,7 @@ function evaluatePendingPricingSummarySpec(params) {
         const wantKey = normPricingCustomerKey(extDisplayName);
         for (const pr of prices) {
             if (!reqNoEq(pr.RequestNo ?? pr.requestNo, rn)) continue;
-            if (parsePriceNum(pr.Price) <= 0) continue;
+            if (!rowHasResolvedBasePrice(pr)) continue;
             if (!isBasePriceRow(pr, optionMap)) continue;
             if (!pricingCustomerRowMatchesKey(pr.CustomerName ?? pr.customerName, wantKey)) continue;
 
@@ -327,7 +336,7 @@ function evaluatePendingPricingSummarySpec(params) {
         if (!anchor) return false;
         for (const pr of prices) {
             if (!reqNoEq(pr.RequestNo ?? pr.requestNo, rn)) continue;
-            if (parsePriceNum(pr.Price) <= 0) continue;
+            if (!rowHasResolvedBasePrice(pr)) continue;
             if (!isBasePriceRow(pr, optionMap)) continue;
             const mid = pr.MatchedEnquiryForId ?? pr.matchedEnquiryForId;
             const eid = pr.EnquiryForID ?? pr.enquiryForID;
@@ -349,7 +358,7 @@ function evaluatePendingPricingSummarySpec(params) {
         if (!wantKey) return false;
         for (const pr of prices) {
             if (!reqNoEq(pr.RequestNo ?? pr.requestNo, rn)) continue;
-            if (parsePriceNum(pr.Price) <= 0) continue;
+            if (!rowHasResolvedBasePrice(pr)) continue;
             if (!isBasePriceRow(pr, optionMap)) continue;
             if (!pricingCustomerRowMatchesKey(pr.CustomerName ?? pr.customerName, wantKey)) continue;
             const mid = pr.MatchedEnquiryForId ?? pr.matchedEnquiryForId;

@@ -560,6 +560,7 @@ function mapPendingApprovalListRow(row) {
         consultantName: row.ConsultantName,
         workflowNo: String(row.WorkflowNo || '').trim(),
         approvalStatus: String(row.ApprovalStatus || row.approvalStatus || '').trim(),
+        reasonForRevision: String(row.ReasonForRevision || row.reasonForRevision || '').trim(),
     };
 }
 
@@ -919,24 +920,34 @@ async function enrichQuoteListRowsWithApprovalStatus(rows) {
     });
 }
 
-/** SQL fragment: user's step is pending AND all earlier steps are approved (excludes rejected/dead workflows). */
-function buildActionablePendingStepSql(alias = 's', scope = 'quote') {
-    const scopeMatch =
-        scope === 'draft'
-            ? `${alias}.DraftQuoteId = prior.DraftQuoteId
-                    AND (prior.QuoteId IS NULL OR prior.QuoteId = 0)
-                    AND (${alias}.QuoteId IS NULL OR ${alias}.QuoteId = 0)`
-            : `${alias}.QuoteId = prior.QuoteId
-                    AND prior.QuoteId IS NOT NULL
-                    AND prior.QuoteId > 0`;
+/** SQL fragment: user's own step is pending (parallel approval — no sequence gate). */
+function buildActionablePendingStepSql(alias = 's') {
     return `
-              AND LOWER(LTRIM(RTRIM(ISNULL(${alias}.Status, N'')))) = N'pending'
+              AND LOWER(LTRIM(RTRIM(ISNULL(${alias}.Status, N'')))) = N'pending'`;
+}
+
+/** Exclude quotes where any approver on the same saved quote has rejected the workflow. */
+function buildQuoteWorkflowNotRejectedSql(alias = 's') {
+    return `
               AND NOT EXISTS (
                   SELECT 1
-                  FROM QuoteApprovalSteps prior
-                  WHERE ${scopeMatch}
-                    AND prior.ApproverSequence < ${alias}.ApproverSequence
-                    AND LOWER(LTRIM(RTRIM(ISNULL(prior.Status, N'')))) <> N'approved'
+                  FROM QuoteApprovalSteps wfRej
+                  WHERE wfRej.QuoteId = ${alias}.QuoteId
+                    AND wfRej.QuoteId IS NOT NULL
+                    AND wfRej.QuoteId > 0
+                    AND LOWER(LTRIM(RTRIM(ISNULL(wfRej.Status, N'')))) = N'rejected'
+              )`;
+}
+
+/** Exclude draft workflows where any step on the same draft was rejected. */
+function buildDraftWorkflowNotRejectedSql(alias = 's') {
+    return `
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM QuoteApprovalSteps wfRej
+                  WHERE wfRej.DraftQuoteId = ${alias}.DraftQuoteId
+                    AND (wfRej.QuoteId IS NULL OR wfRej.QuoteId = 0)
+                    AND LOWER(LTRIM(RTRIM(ISNULL(wfRej.Status, N'')))) = N'rejected'
               )`;
 }
 
@@ -945,6 +956,7 @@ async function countPendingApprovalsForUser(userEmail) {
     const email = normalizeApprovalEmail(userEmail);
     if (!email) return 0;
     const actionableSql = buildActionablePendingStepSql('s', 'quote');
+    const notRejectedSql = buildQuoteWorkflowNotRejectedSql('s');
     const request = new sql.Request();
     request.input('approverEmail', sql.NVarChar, email);
     const result = await request.query(`
@@ -954,6 +966,7 @@ async function countPendingApprovalsForUser(userEmail) {
           AND s.QuoteId > 0
           AND LOWER(LTRIM(RTRIM(ISNULL(s.ApproverEmail, N'')))) = LOWER(LTRIM(RTRIM(@approverEmail)))
           ${actionableSql}
+          ${notRejectedSql}
     `);
     return Number(result.recordset?.[0]?.cnt) || 0;
 }
@@ -963,6 +976,7 @@ async function fetchPendingApprovalsForUser(userEmail, { division = '' } = {}) {
     if (!email) return [];
     const divisionSql = buildApprovalDivisionFilterSql(division, 's');
     const actionableSql = buildActionablePendingStepSql('s', 'quote');
+    const notRejectedSql = buildQuoteWorkflowNotRejectedSql('s');
     const request = new sql.Request();
     request.input('approverEmail', sql.NVarChar, email);
     const result = await request.query(`
@@ -985,7 +999,8 @@ async function fetchPendingApprovalsForUser(userEmail, { division = '' } = {}) {
             ranked.ProjectName,
             ranked.DueDate,
             ranked.ConsultantName,
-            ranked.EnquiryCustomerName
+            ranked.EnquiryCustomerName,
+            ranked.ReasonForRevision
         FROM (
             SELECT
                 s.QuoteId,
@@ -1007,6 +1022,7 @@ async function fetchPendingApprovalsForUser(userEmail, { division = '' } = {}) {
                 em.DueDate,
                 em.ConsultantName,
                 em.CustomerName AS EnquiryCustomerName,
+                q.ReasonForRevision AS ReasonForRevision,
                 ROW_NUMBER() OVER (
                     PARTITION BY s.QuoteId
                     ORDER BY s.ApproverSequence ASC, s.ID ASC
@@ -1018,6 +1034,7 @@ async function fetchPendingApprovalsForUser(userEmail, { division = '' } = {}) {
               AND s.QuoteId > 0
               AND LOWER(LTRIM(RTRIM(ISNULL(s.ApproverEmail, N'')))) = LOWER(LTRIM(RTRIM(@approverEmail)))
               ${actionableSql}
+              ${notRejectedSql}
               ${divisionSql}
         ) ranked
         WHERE ranked.rn = 1
@@ -1104,7 +1121,8 @@ async function fetchApprovedApprovalsByUser(userEmail, { q = '', dateFrom = '', 
             ranked.ProjectName,
             ranked.DueDate,
             ranked.ConsultantName,
-            ranked.EnquiryCustomerName
+            ranked.EnquiryCustomerName,
+            ranked.ReasonForRevision
         FROM (
             SELECT
                 s.QuoteId,
@@ -1127,6 +1145,7 @@ async function fetchApprovedApprovalsByUser(userEmail, { q = '', dateFrom = '', 
                 em.DueDate,
                 em.ConsultantName,
                 em.CustomerName AS EnquiryCustomerName,
+                q.ReasonForRevision AS ReasonForRevision,
                 ROW_NUMBER() OVER (
                     PARTITION BY s.QuoteId
                     ORDER BY s.ApprovedAt DESC, s.ID DESC
@@ -1174,7 +1193,8 @@ async function fetchRejectedApprovalsByUser(userEmail, { q = '', dateFrom = '', 
             ranked.ProjectName,
             ranked.DueDate,
             ranked.ConsultantName,
-            ranked.EnquiryCustomerName
+            ranked.EnquiryCustomerName,
+            ranked.ReasonForRevision
         FROM (
             SELECT
                 s.QuoteId,
@@ -1197,6 +1217,7 @@ async function fetchRejectedApprovalsByUser(userEmail, { q = '', dateFrom = '', 
                 em.DueDate,
                 em.ConsultantName,
                 em.CustomerName AS EnquiryCustomerName,
+                q.ReasonForRevision AS ReasonForRevision,
                 ROW_NUMBER() OVER (
                     PARTITION BY s.QuoteId
                     ORDER BY s.ApprovedAt DESC, s.ID DESC
@@ -1216,12 +1237,15 @@ async function fetchRejectedApprovalsByUser(userEmail, { q = '', dateFrom = '', 
     return enrichPendingApprovalRows(result.recordset || []);
 }
 
-/** Quotes submitted for approval workflow (any approver/status) — Approvals page search only. */
+/** Quotes submitted for approval workflow — assigned to this user (any status, incl. rejected by others). */
 async function fetchApprovalWorkflowSearch(userEmail, { q = '', dateFrom = '', dateTo = '', division = '' } = {}) {
     const email = normalizeApprovalEmail(userEmail);
     if (!email) return [];
     const filterSql = buildApprovedByMeListFilterSql(q, dateFrom, dateTo, division);
-    const result = await sql.query(`
+    const divisionSql = buildApprovalDivisionFilterSql(division, 's');
+    const request = new sql.Request();
+    request.input('approverEmail', sql.NVarChar, email);
+    const result = await request.query(`
         SELECT
             ranked.QuoteId,
             ranked.DraftQuoteId,
@@ -1242,7 +1266,8 @@ async function fetchApprovalWorkflowSearch(userEmail, { q = '', dateFrom = '', d
             ranked.ProjectName,
             ranked.DueDate,
             ranked.ConsultantName,
-            ranked.EnquiryCustomerName
+            ranked.EnquiryCustomerName,
+            ranked.ReasonForRevision
         FROM (
             SELECT
                 s.QuoteId,
@@ -1265,6 +1290,7 @@ async function fetchApprovalWorkflowSearch(userEmail, { q = '', dateFrom = '', d
                 em.DueDate,
                 em.ConsultantName,
                 em.CustomerName AS EnquiryCustomerName,
+                q.ReasonForRevision AS ReasonForRevision,
                 ROW_NUMBER() OVER (
                     PARTITION BY s.QuoteId
                     ORDER BY q.QuoteDate DESC, s.ID DESC
@@ -1274,7 +1300,15 @@ async function fetchApprovalWorkflowSearch(userEmail, { q = '', dateFrom = '', d
             LEFT JOIN EnquiryMaster em ON LTRIM(RTRIM(em.RequestNo)) = LTRIM(RTRIM(s.RequestNo))
             WHERE s.QuoteId IS NOT NULL
               AND s.QuoteId > 0
+              AND EXISTS (
+                  SELECT 1
+                  FROM QuoteApprovalSteps mine
+                  WHERE mine.QuoteId = s.QuoteId
+                    AND LOWER(LTRIM(RTRIM(ISNULL(mine.ApproverEmail, N'')))) =
+                        LOWER(LTRIM(RTRIM(@approverEmail)))
+              )
               ${filterSql}
+              ${divisionSql}
         ) ranked
         WHERE ranked.rn = 1
         ORDER BY ranked.QuoteDate DESC, ranked.QuoteId DESC
@@ -1287,6 +1321,7 @@ async function userHasActionableDraftApprovalStep(draftQuoteId, userEmail) {
     const id = Number(draftQuoteId);
     if (!email || !Number.isFinite(id)) return false;
     const actionableSql = buildActionablePendingStepSql('s', 'draft');
+    const notRejectedSql = buildDraftWorkflowNotRejectedSql('s');
     const request = new sql.Request();
     request.input('approverEmail', sql.NVarChar, email);
     request.input('draftQuoteId', sql.Int, id);
@@ -1297,6 +1332,7 @@ async function userHasActionableDraftApprovalStep(draftQuoteId, userEmail) {
           AND (s.QuoteId IS NULL OR s.QuoteId = 0)
           AND LOWER(LTRIM(RTRIM(ISNULL(s.ApproverEmail, N'')))) = LOWER(LTRIM(RTRIM(@approverEmail)))
           ${actionableSql}
+          ${notRejectedSql}
     `);
     return (result.recordset || []).length > 0;
 }
@@ -1306,6 +1342,7 @@ async function userHasActionableQuoteApprovalStep(quoteId, userEmail) {
     const id = Number(quoteId);
     if (!email || !Number.isFinite(id)) return false;
     const actionableSql = buildActionablePendingStepSql('s', 'quote');
+    const notRejectedSql = buildQuoteWorkflowNotRejectedSql('s');
     const request = new sql.Request();
     request.input('approverEmail', sql.NVarChar, email);
     request.input('quoteId', sql.Int, id);
@@ -1315,6 +1352,7 @@ async function userHasActionableQuoteApprovalStep(quoteId, userEmail) {
         WHERE s.QuoteId = @quoteId
           AND LOWER(LTRIM(RTRIM(ISNULL(s.ApproverEmail, N'')))) = LOWER(LTRIM(RTRIM(@approverEmail)))
           ${actionableSql}
+          ${notRejectedSql}
     `);
     return (result.recordset || []).length > 0;
 }

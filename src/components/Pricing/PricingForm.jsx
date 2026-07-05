@@ -14,6 +14,7 @@ import {
     EMS_LIST_CLEAR_STYLE,
 } from '../../constants/emsSearchButtons';
 import { EMS_TABLE_HEADER_GRADIENT } from '../../constants/emsTheme';
+import { quoteBlocksDeclineToQuote } from '../../utils/pricingQuoteTupleMatch';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
 
@@ -267,7 +268,7 @@ function customerValuesBucket(allValues, flatValues, customerTab) {
     return flatValues || {};
 }
 
-function findPriceFromRawByEpvDimensions(
+function findEpvRowsFromRawByEpvDimensions(
     raw,
     {
         leadDisplayName,
@@ -280,7 +281,7 @@ function findPriceFromRawByEpvDimensions(
         optionId,
     }
 ) {
-    if (!raw || !raw.length) return null;
+    if (!raw || !raw.length) return [];
     const nLead = normLeadNameForEpv(leadDisplayName);
     const nTab = normalizePricingCustomerKey(customerTab);
     const wantPo = normPriceOption(priceOptionName);
@@ -296,7 +297,6 @@ function findPriceFromRawByEpvDimensions(
             enquiryForIdInSelectedLeadSubtree(valueScopeLeadId, eidRow, allJobs);
 
         const vLead = v.LeadJobName ?? v.leadJobName;
-        /* EPV often stores the *immediate* lead (e.g. HVAC/BMS) while the UI root is Civil — still same branch. */
         if (
             nLead &&
             vLead &&
@@ -319,8 +319,7 @@ function findPriceFromRawByEpvDimensions(
         const inferredNorm = inferredK ? normalizePricingCustomerKey(inferredK) : '';
 
         if (nTab) {
-            const tabOk =
-                vC === nTab || inferredNorm === nTab;
+            const tabOk = vC === nTab || inferredNorm === nTab;
             if (!tabOk) return false;
         }
 
@@ -330,16 +329,11 @@ function findPriceFromRawByEpvDimensions(
         return true;
     });
 
-    if (cands.length === 0) return null;
+    if (cands.length === 0) return [];
     let pool = cands;
     if (jobId != null && jobId !== '') {
         const exact = cands.filter((v) => String(v.EnquiryForID ?? v.enquiryForId) === String(jobId));
         if (!exact.length) {
-            // Some enquiries contain duplicate `EnquiryForItem` rows (same label, different EnquiryForID).
-            // When the UI row's `jobId` doesn't match the stored EPV row's EnquiryForID, fall back to the
-            // best candidate **within this selected lead subtree** (only when we are not filtering by OptionID).
-            //
-            // This is required for simulated Base Price rows where there is no reliable OptionID key.
             if (optionId == null || String(optionId).trim() === '') {
                 const inTree = cands.filter((v) =>
                     enquiryForIdInSelectedLeadSubtree(
@@ -348,10 +342,10 @@ function findPriceFromRawByEpvDimensions(
                         allJobs
                     )
                 );
-                if (!inTree.length) return null;
+                if (!inTree.length) return [];
                 pool = inTree;
             } else {
-                return null;
+                return [];
             }
         } else {
             pool = exact;
@@ -371,7 +365,6 @@ function findPriceFromRawByEpvDimensions(
     }
     const leadRootNorm = normLeadNameForEpv(leadDisplayName);
     pool.sort((a, b) => {
-        // Prefer LeadJobName that matches the selected lead root label (handles mixed LeadJobName values within same subtree).
         const al = normLeadNameForEpv(a.LeadJobName ?? a.leadJobName);
         const bl = normLeadNameForEpv(b.LeadJobName ?? b.leadJobName);
         const aLeadScore = leadRootNorm && al === leadRootNorm ? 0 : 1;
@@ -382,8 +375,28 @@ function findPriceFromRawByEpvDimensions(
         const tb = new Date(b.UpdatedAt ?? b.updatedAt ?? 0).getTime();
         return tb - ta;
     });
+    return pool;
+}
+
+function isDeclineToQuoteEpvValue(raw) {
+    const v = String(raw ?? 'No').trim().toLowerCase();
+    return v === 'yes' || v === 'y' || v === '1' || v === 'true';
+}
+
+function findPriceFromRawByEpvDimensions(
+    raw,
+    dims
+) {
+    const pool = findEpvRowsFromRawByEpvDimensions(raw, dims);
+    if (!pool.length) return null;
     const p = parseFloat(pool[0].Price);
     return Number.isFinite(p) ? p : null;
+}
+
+function findDeclineToQuoteFromRawByEpvDimensions(raw, dims) {
+    const pool = findEpvRowsFromRawByEpvDimensions(raw, dims);
+    if (!pool.length) return false;
+    return isDeclineToQuoteEpvValue(pool[0].Quotingornot ?? pool[0].quotingornot);
 }
 
 /**
@@ -573,11 +586,13 @@ function pricingListSpecStatusMeta(enq) {
             ? 'None Priced for Ownjob'
             : rawSpecStatus === 'Partial Priced'
               ? 'Partial Priced for Ownjob'
-              : rawSpecStatus === 'All Priced'
-                ? 'All Priced for Ownjob'
-                : rawSpecStatus;
+              : rawSpecStatus === 'All Quoted'
+                ? 'All Quoted for this Ownjob'
+                : rawSpecStatus === 'All Priced'
+                  ? 'All Priced for Ownjob'
+                  : rawSpecStatus;
     const specStatusColor =
-        rawSpecStatus === 'All Priced'
+        rawSpecStatus === 'All Quoted' || rawSpecStatus === 'All Priced'
             ? '#16a34a'
             : rawSpecStatus === 'None Priced'
               ? '#dc2626'
@@ -594,6 +609,7 @@ function pricingListSpecStatusTwoLines(specMeta) {
     const tail = 'for Ownjob';
     if (raw === 'None Priced') return { line1: 'None Priced', line2: tail };
     if (raw === 'Partial Priced') return { line1: 'Partial Priced', line2: tail };
+    if (raw === 'All Quoted') return { line1: 'All Quoted', line2: 'for this Ownjob' };
     if (raw === 'All Priced') return { line1: 'All Priced', line2: tail };
     const display = String(specMeta.specStatusDisplay || '').trim();
     return display ? { line1: display, line2: '' } : null;
@@ -838,8 +854,9 @@ function PricingListCustomerTotalsFromJson({ items, priceFixedDecimals }) {
             }}
         >
             {items.map((it, i) => {
+                const declined = !!it.declinedToQuote;
                 const total = Number(it.total);
-                const has = Number.isFinite(total) && total > 0;
+                const has = !declined && Number.isFinite(total) && total > 0;
                 let displayPrice = '';
                 if (has) {
                     displayPrice =
@@ -858,6 +875,12 @@ function PricingListCustomerTotalsFromJson({ items, priceFixedDecimals }) {
                         console.error('Date parse error:', e);
                     }
                 }
+                const badgeLabel = declined ? 'Decline to Quote' : has ? `BD ${displayPrice}` : 'Not Updated';
+                const badgeStyle = declined
+                    ? { color: '#9a3412', fontStyle: 'normal', background: '#ffedd5' }
+                    : has
+                      ? { color: '#166534', fontStyle: 'normal', background: '#dcfce7' }
+                      : { color: '#94a3b8', fontStyle: 'italic', background: '#f1f5f9' };
                 return (
                     <div
                         key={`ct-${i}`}
@@ -875,17 +898,15 @@ function PricingListCustomerTotalsFromJson({ items, priceFixedDecimals }) {
                         <span style={{ fontWeight: '600', color: '#475569' }}>{String(it.label || '').trim()}:</span>
                         <span
                             style={{
-                                color: has ? '#166534' : '#94a3b8',
-                                fontStyle: has ? 'normal' : 'italic',
-                                background: has ? '#dcfce7' : '#f1f5f9',
+                                ...badgeStyle,
                                 padding: '2px 8px',
                                 borderRadius: '4px',
                                 fontSize: '10px',
                             }}
                         >
-                            {has ? `BD ${displayPrice}` : 'Not Updated'}
+                            {badgeLabel}
                         </span>
-                        {has && displayDate && (
+                        {(has || declined) && displayDate && (
                             <span style={{ color: '#94a3b8', fontSize: '10px', lineHeight: 1.05 }}>({displayDate})</span>
                         )}
                     </div>
@@ -913,7 +934,8 @@ function PricingListJobForestFromJson({ nodes, priceFixedDecimals }) {
     };
 
     const renderNode = (node, depth) => {
-        const has = node.hasPrice && Number(node.price) > 0;
+        const declined = !!node.declinedToQuote;
+        const has = !declined && node.hasPrice && Number(node.price) > 0;
         let displayDate = '';
         if (node.updatedAt) {
             try {
@@ -924,6 +946,12 @@ function PricingListJobForestFromJson({ nodes, priceFixedDecimals }) {
         }
         const by = String(node.pricedBy ?? node.updatedBy ?? '').trim();
         const kids = Array.isArray(node.children) ? node.children : [];
+        const badgeLabel = declined ? 'Decline to Quote' : has ? `BD ${formatAmt(node.price)}` : 'Not Updated';
+        const badgeStyle = declined
+            ? { color: '#9a3412', fontStyle: 'normal', background: '#ffedd5' }
+            : has
+              ? { color: '#166534', fontStyle: 'normal', background: '#dcfce7' }
+              : { color: '#94a3b8', fontStyle: 'italic', background: '#f1f5f9' };
         return (
             <div key={String(node.jobId)} style={{ marginBottom: '1px' }}>
                 <div
@@ -947,19 +975,17 @@ function PricingListJobForestFromJson({ nodes, priceFixedDecimals }) {
                     </span>
                     <span
                         style={{
-                            color: has ? '#166534' : '#94a3b8',
+                            ...badgeStyle,
                             marginLeft: '2px',
-                            fontStyle: has ? 'normal' : 'italic',
-                            background: has ? '#dcfce7' : '#f1f5f9',
                             padding: '1px 4px',
                             borderRadius: '4px',
                             fontSize: '10px',
                             flexShrink: 0,
                         }}
                     >
-                        {has ? `BD ${formatAmt(node.price)}` : 'Not Updated'}
+                        {badgeLabel}
                     </span>
-                    {has && displayDate && (
+                    {(has || declined) && displayDate && (
                         <span
                             style={{
                                 marginLeft: '3px',
@@ -1134,10 +1160,16 @@ const PricingForm = ({ openContext = null }) => {
     const [pricingData, setPricingData] = useState(null);
     const [values, setValues] = useState({});
     const valuesRef = useRef(values);
+    const [declineToQuote, setDeclineToQuote] = useState({});
+    const declineToQuoteRef = useRef(declineToQuote);
     const draftValuesByCustomerRef = useRef({}); // { [normalizedCustomer]: { [cellKey]: value } }
+    const draftDeclineByCustomerRef = useRef({}); // { [normalizedCustomer]: { [cellKey]: boolean } }
     useEffect(() => {
         valuesRef.current = values;
     }, [values]);
+    useEffect(() => {
+        declineToQuoteRef.current = declineToQuote;
+    }, [declineToQuote]);
     const [newOptionNames, setNewOptionNames] = useState({});
     const [newOptionPrices, setNewOptionPrices] = useState({});
     const [showNewOptionInputs, setShowNewOptionInputs] = useState({});
@@ -1464,6 +1496,9 @@ const PricingForm = ({ openContext = null }) => {
         setPricingLoadError(null);
         setSelectedEnquiry(null);
         setValues({});
+        setDeclineToQuote({});
+        draftValuesByCustomerRef.current = {};
+        draftDeclineByCustomerRef.current = {};
         setSelectedCustomer('');
         setAddingCustomer(false);
         setNewCustomerName('');
@@ -1918,6 +1953,7 @@ const PricingForm = ({ openContext = null }) => {
 
                 // Initialize state values using ID-based keys with Legacy Fallback
                 const initialValues = {};
+                const initialDecline = {};
                 // Pre-calculate Visible Set for Hybrid Aggregation
                 // Logic MUST Match 'visibleJobs' calculation below:
                 // Lead Job + Direct Children.
@@ -2294,6 +2330,20 @@ const PricingForm = ({ openContext = null }) => {
                                 // Empty string: clear number in `prev` without showing a literal 0 for “never set”
                                 initialValues[exactKey] = '';
                             }
+                            if (
+                                findDeclineToQuoteFromRawByEpvDimensions(data.rawEnquiryPricingValues, {
+                                    leadDisplayName: leadRootNameForValueFilter,
+                                    ownJobItemName: job.itemName,
+                                    customerTab: activeCust,
+                                    priceOptionName: opt.name || 'Base Price',
+                                    valueScopeLeadId,
+                                    jobId: job.id,
+                                    allJobs: data.jobs,
+                                    optionId: opt.isSimulated ? null : opt.id,
+                                })
+                            ) {
+                                initialDecline[exactKey] = true;
+                            }
                         });
                     });
                 }
@@ -2349,6 +2399,17 @@ const PricingForm = ({ openContext = null }) => {
                         ...initialValues,
                     }));
                 }
+
+                const preserveDeclineKey = preserveSourceCustomerKey
+                    ? normalizePricingCustomerKey(preserveSourceCustomerKey)
+                    : normalizePricingCustomerKey(activeCust);
+                const preservedDecline =
+                    (preserveDeclineKey && draftDeclineByCustomerRef.current[preserveDeclineKey]) || {};
+                setDeclineToQuote((prev) => ({
+                    ...stripStaleValueKeys(prev),
+                    ...initialDecline,
+                    ...preservedDecline,
+                }));
 
                 // Auto-Select First VISIBLE Lead Job
                 if (data.jobs) {
@@ -2423,6 +2484,8 @@ const PricingForm = ({ openContext = null }) => {
         setPricingData(null);
         setSelectedEnquiry(null);
         setSelectedLeadId(null);
+        draftValuesByCustomerRef.current = {};
+        draftDeclineByCustomerRef.current = {};
         try {
             localStorage.removeItem('pricing_selectedLeadId');
         } catch {
@@ -2869,12 +2932,41 @@ const PricingForm = ({ openContext = null }) => {
         return out;
     }, [pricingData?.options, pricingData?.jobs]);
 
+    /** Persist the active customer tab's unsaved prices + decline flags into draft refs (merge, never wipe other lead jobs). */
+    const flushPricingDraftsForCurrentView = React.useCallback(() => {
+        const ck = normalizePricingCustomerKey(selectedCustomer);
+        if (!ck) return;
+        const valuesSnapshot = filterPreserveValuesForCustomer(
+            { ...(valuesRef.current || {}), ...(values || {}) },
+            selectedCustomer
+        );
+        const declineSnapshot = {
+            ...(declineToQuoteRef.current || {}),
+            ...(declineToQuote || {}),
+        };
+        draftValuesByCustomerRef.current[ck] = {
+            ...(draftValuesByCustomerRef.current[ck] || {}),
+            ...valuesSnapshot,
+        };
+        draftDeclineByCustomerRef.current[ck] = {
+            ...(draftDeclineByCustomerRef.current[ck] || {}),
+            ...declineSnapshot,
+        };
+    }, [selectedCustomer, values, declineToQuote, filterPreserveValuesForCustomer]);
+
     // When values change, snapshot the current tab's draft values so switching tabs keeps unsaved edits per-customer.
     useEffect(() => {
         const ck = normalizePricingCustomerKey(selectedCustomer);
         if (!ck) return;
-        draftValuesByCustomerRef.current[ck] = filterPreserveValuesForCustomer(values, selectedCustomer);
-    }, [values, selectedCustomer, filterPreserveValuesForCustomer]);
+        draftValuesByCustomerRef.current[ck] = {
+            ...(draftValuesByCustomerRef.current[ck] || {}),
+            ...filterPreserveValuesForCustomer(values, selectedCustomer),
+        };
+        draftDeclineByCustomerRef.current[ck] = {
+            ...(draftDeclineByCustomerRef.current[ck] || {}),
+            ...declineToQuote,
+        };
+    }, [values, declineToQuote, selectedCustomer, filterPreserveValuesForCustomer]);
 
     // Format a numeric value as ###,###,###.### (up to 3 decimal places, no trailing zeros)
     const formatPrice = (val) => {
@@ -2898,6 +2990,40 @@ const PricingForm = ({ openContext = null }) => {
         }));
     };
 
+    const handleDeclineToQuoteChange = (jobId, checked, jobOptions) => {
+        const rows = Array.isArray(jobOptions) ? jobOptions : [];
+        if (!rows.length) return;
+
+        if (checked && pricingData?.existingQuotes?.length) {
+            const leadJob = (pricingData.jobs || []).find((j) => String(j.id) === String(selectedLeadId))
+                ?.itemName;
+            if (quoteBlocksDeclineToQuote(pricingData.existingQuotes, leadJob, selectedCustomer)) {
+                alert(
+                    'Cannot decline to quote: a quote has already been created for this enquiry, lead job, and customer.'
+                );
+                return;
+            }
+        }
+
+        setDeclineToQuote((prev) => {
+            const next = { ...prev };
+            rows.forEach((opt) => {
+                next[`${opt.id}_${jobId}`] = !!checked;
+            });
+            return next;
+        });
+
+        if (checked) {
+            setValues((prev) => {
+                const next = { ...prev };
+                rows.forEach((opt) => {
+                    next[`${opt.id}_${jobId}`] = '0';
+                });
+                return next;
+            });
+        }
+    };
+
     // Save all prices
     const saveAll = async () => {
         if (!pricingData) return;
@@ -2915,6 +3041,21 @@ const PricingForm = ({ openContext = null }) => {
         // Ref is synced after paint; merge so Save All never reads stale `values` (would skip every PUT).
         // Declared up here because the draft-auto-commit block below seeds `valuesLive[newKey]`.
         const valuesLive = { ...(valuesRef.current || {}), ...(values || {}) };
+        const declineLive = { ...(declineToQuoteRef.current || {}), ...(declineToQuote || {}) };
+
+        // Merge every customer tab's unsaved drafts — Save All must persist Decline to Quote (and prices)
+        // across all tabs and lead jobs, not only the active view when the button is clicked.
+        flushPricingDraftsForCurrentView();
+        for (const custDraft of Object.values(draftValuesByCustomerRef.current || {})) {
+            if (custDraft && typeof custDraft === 'object') {
+                Object.assign(valuesLive, custDraft);
+            }
+        }
+        for (const declineDraft of Object.values(draftDeclineByCustomerRef.current || {})) {
+            if (declineDraft && typeof declineDraft === 'object') {
+                Object.assign(declineLive, declineDraft);
+            }
+        }
 
         // Auto-commit any open "+ Add" drafts where the user has typed both Name and Price.
         // Without this the user had to click "Add" a second time (to POST the option) BEFORE clicking
@@ -3119,8 +3260,15 @@ const PricingForm = ({ openContext = null }) => {
 
         const allKeys = new Set([
             ...Object.keys(valuesLive),
-            ...Object.keys(pricingData.values || {})
+            ...Object.keys(pricingData.values || {}),
+            ...Object.keys(declineLive),
         ]);
+        // Include stored rows for every customer bucket (active tab's `pricingData.values` is only one customer).
+        for (const bucket of Object.values(pricingData.allValues || {})) {
+            if (bucket && typeof bucket === 'object') {
+                Object.keys(bucket).forEach((k) => allKeys.add(k));
+            }
+        }
 
         // Step 2: Save Loop
         // Always-on per-key tracer — we cannot debug "No changes to save" without per-row reasons.
@@ -3298,6 +3446,16 @@ const PricingForm = ({ openContext = null }) => {
             }
             // -------------------------------------------------------------
 
+            const rowCustomerForDb =
+                effectiveCustomerName ||
+                opt.customerName ||
+                selectedCustomer;
+            const custDbValues = customerValuesBucket(
+                pricingData.allValues,
+                pricingData.values,
+                rowCustomerForDb
+            );
+
             // Determine Price
             let displayPrice = 0;
             if (Object.prototype.hasOwnProperty.call(valuesLive, key)) {
@@ -3305,7 +3463,7 @@ const PricingForm = ({ openContext = null }) => {
                 if (userValue !== '' && userValue !== undefined && userValue !== null) {
                     displayPrice = parseCellNum(userValue);
                 }
-            } else if (pricingData.values[key] && pricingData.values[key].Price) {
+            } else if (custDbValues[key] && custDbValues[key].Price) {
                 // If using DB value, check if it was aggregated?? No, DB stores Self.
                 // Wait, if we never touched 'values[key]', then we display DB value?
                 // But DB value is Self.
@@ -3315,7 +3473,7 @@ const PricingForm = ({ openContext = null }) => {
                 if (valuesLive[key] === undefined) {
                     // This case happens if initialValues didn't populate for some reason, or key missing.
                     // Fallback to DB self price.
-                    displayPrice = parseCellNum(pricingData.values[key].Price);
+                    displayPrice = parseCellNum(custDbValues[key].Price);
                 }
             }
 
@@ -3563,12 +3721,31 @@ const PricingForm = ({ openContext = null }) => {
             }
 
             // NEW SKIP LOGIC (Robust Dirty Check):
-            const dbValRow = pricingData.values[key];
+            const dbValRow = custDbValues[key];
             const currentDbPrice = dbValRow ? parseCellNum(dbValRow.Price) : 0;
             const hasExplicitDbRow = !!dbValRow;
+            const currentDbDecline = dbValRow
+                ? isDeclineToQuoteEpvValue(dbValRow.Quotingornot ?? dbValRow.quotingornot)
+                : false;
+            const userDecline = Object.prototype.hasOwnProperty.call(declineLive, key)
+                ? !!declineLive[key]
+                : currentDbDecline;
+            const quotingChanged = userDecline !== currentDbDecline;
+            if (userDecline && quotingChanged) {
+                const leadForDeclineCheck = opt.leadJobName || jobLeadName || '';
+                const custForDeclineCheck = effectiveCustomerName || opt.customerName || '';
+                if (
+                    quoteBlocksDeclineToQuote(pricingData.existingQuotes || [], leadForDeclineCheck, custForDeclineCheck)
+                ) {
+                    skippedCount++;
+                    debugSaveAll.skipped.declineBlockedByQuote = (debugSaveAll.skipped.declineBlockedByQuote || 0) + 1;
+                    traceRow(key, 'declineBlockedByQuote', { leadForDeclineCheck, custForDeclineCheck });
+                    continue;
+                }
+            }
             const isNoChange = Math.abs(priceToSave - currentDbPrice) < 0.01;
 
-            if (isNoChange) {
+            if (isNoChange && !quotingChanged) {
                 // Skip if already explicit in DB, or if implicit (0) and untouched by user
                 if (hasExplicitDbRow || !Object.prototype.hasOwnProperty.call(valuesLive, key)) {
                     skippedCount++;
@@ -3582,7 +3759,7 @@ const PricingForm = ({ openContext = null }) => {
             const wantsZeroSave = priceToSave <= 0;
             const allowCascadeZero =
                 userInitiatedZero && hiddenSum > 0 && wantsZeroSave;
-            if (wantsZeroSave && !allowCascadeZero && !hasExplicitDbRow) {
+            if (wantsZeroSave && !allowCascadeZero && !hasExplicitDbRow && !quotingChanged) {
                 skippedCount++;
                 debugSaveAll.skipped.zero++;
                 traceRow(key, 'zero', { displayPrice, priceToSave, currentDbPrice });
@@ -3600,6 +3777,7 @@ const PricingForm = ({ openContext = null }) => {
                 leadJobName: opt.leadJobName,    // Include Lead Job Name (Step 1078 - from Option)
                 priceOption: opt.name === 'Base Price' ? 'Base Price' : opt.name,
                 allowOptionalZero: allowCascadeZero,
+                quotingOrNot: userDecline ? 'Yes' : 'No',
             });
         }
 
@@ -3666,6 +3844,13 @@ const PricingForm = ({ openContext = null }) => {
                         )
             );
 
+            if ((debugSaveAll.skipped.declineBlockedByQuote || 0) > 0) {
+                alert(
+                    'Cannot save Decline to Quote: a quote has already been created for this enquiry, lead job, and customer.'
+                );
+                return;
+            }
+
             if (blockedByPermission.length > 0) {
                 const rows = Array.from(
                     new Set(blockedByPermission.map((r) => r.jobItemName).filter(Boolean))
@@ -3706,6 +3891,7 @@ const PricingForm = ({ openContext = null }) => {
                         leadJobName: item.leadJobName,
                         priceOption: item.priceOption,
                         allowOptionalZero: item.allowOptionalZero === true,
+                        quotingOrNot: item.quotingOrNot || 'No',
                     }),
                 });
                 if (!r.ok) {
@@ -3865,11 +4051,13 @@ const PricingForm = ({ openContext = null }) => {
         const nextCust = tabs.includes(selectedCustomer) ? selectedCustomer : tabs[0];
         const nextKey = normalizePricingCustomerKey(nextCust);
         const nextDraft = (nextKey && draftValuesByCustomerRef.current[nextKey]) || {};
+        const nextDeclineDraft = (nextKey && draftDeclineByCustomerRef.current[nextKey]) || {};
         if (nextCust !== selectedCustomer) {
             setSelectedCustomer(nextCust);
         }
-        // Instant local switch (no blocking spinner), then silent background sync.
+        // Restore full customer draft (all lead jobs) after flush captured the previous lead view.
         setValues(nextDraft);
+        setDeclineToQuote(nextDeclineDraft);
         void loadPricing(pricingData.enquiry.requestNo, nextCust, nextDraft, {
             useLeadIdForValueInit: selectedLeadId,
             preserveSourceCustomerKey: nextCust,
@@ -4820,6 +5008,7 @@ const PricingForm = ({ openContext = null }) => {
                                         disabled={false}
                                         value={selectedLeadId != null && selectedLeadId !== '' ? String(selectedLeadId) : ''}
                                         onChange={(e) => {
+                                            flushPricingDraftsForCurrentView();
                                             const val = e.target.value;
                                             const newId = val === '' ? null : (Number.isFinite(Number(val)) ? Number(val) : val);
                                             console.log('Lead Job Selected (Change):', newId);
@@ -4883,16 +5072,13 @@ const PricingForm = ({ openContext = null }) => {
                                             key={`${cust}-${idx}`}
                                             onClick={() => {
                                                 if (cust === selectedCustomer) return;
-                                                // Save current tab draft
-                                                const curKey = normalizePricingCustomerKey(selectedCustomer);
-                                                if (curKey) {
-                                                    draftValuesByCustomerRef.current[curKey] =
-                                                        filterPreserveValuesForCustomer(valuesRef.current, selectedCustomer);
-                                                }
+                                                flushPricingDraftsForCurrentView();
                                                 // Restore target tab draft
                                                 const nextKey = normalizePricingCustomerKey(cust);
                                                 const nextDraft =
                                                     (nextKey && draftValuesByCustomerRef.current[nextKey]) || {};
+                                                const nextDeclineDraft =
+                                                    (nextKey && draftDeclineByCustomerRef.current[nextKey]) || {};
                                                 // Fast local tab switch using already-loaded pricing data/drafts.
                                                 // Fall back to API reload only when no data is present for this tab.
                                                 const hasTabData =
@@ -4902,6 +5088,7 @@ const PricingForm = ({ openContext = null }) => {
                                                 if (hasTabData) {
                                                     setSelectedCustomer(cust);
                                                     setValues(nextDraft);
+                                                    setDeclineToQuote(nextDeclineDraft);
                                                 } else {
                                                     loadPricing(pricingData.enquiry.requestNo, cust, nextDraft, {
                                                         preserveSourceCustomerKey: cust,
@@ -5549,9 +5736,14 @@ const PricingForm = ({ openContext = null }) => {
                                                 });
                                                 const isAmbigItemName = (n) => (itemNameOccRender.get((n || '').trim()) || 0) > 1;
 
-                                                const selectedLeadRootName = (pricingData.jobs || []).find(
+                const selectedLeadRootName = (pricingData.jobs || []).find(
                                                     (j) => String(j.id) === String(selectedLeadId)
                                                 )?.itemName;
+                                                const declineBlockedByQuote = quoteBlocksDeclineToQuote(
+                                                    pricingData.existingQuotes,
+                                                    selectedLeadRootName,
+                                                    selectedCustomer
+                                                );
 
                                                 // LEAD JOB FILTERING LOGIC (subtree ids: module helper getPricingLeadSubtreeIds)
 
@@ -6135,17 +6327,44 @@ const PricingForm = ({ openContext = null }) => {
                                                                     displayValue = '';
                                                                 }
 
+                                                                const jobHasLocalDecline = group.options.some((opt) =>
+                                                                    Object.prototype.hasOwnProperty.call(
+                                                                        declineToQuote,
+                                                                        `${opt.id}_${job.id}`
+                                                                    )
+                                                                );
+                                                                const declineChecked = jobHasLocalDecline
+                                                                    ? group.options.some(
+                                                                          (opt) => !!declineToQuote[`${opt.id}_${job.id}`]
+                                                                      )
+                                                                    : group.options.some((opt) =>
+                                                                          findDeclineToQuoteFromRawByEpvDimensions(
+                                                                              pricingData.rawEnquiryPricingValues,
+                                                                              {
+                                                                                  leadDisplayName: selectedLeadRootName,
+                                                                                  ownJobItemName: job.itemName,
+                                                                                  customerTab: selectedCustomer,
+                                                                                  priceOptionName: opt.name || 'Base Price',
+                                                                                  valueScopeLeadId: selectedLeadId,
+                                                                                  jobId: job.id,
+                                                                                  allJobs: pricingData.jobs,
+                                                                                  optionId: opt.isSimulated ? null : opt.id,
+                                                                              }
+                                                                          )
+                                                                      );
+
                                                                 return (
                                                                     <tr key={`${option.id}_${job.id}`} style={{ borderBottom: '1px solid #e2e8f0' }}>
                                                                         <td style={{ padding: '4px 10px', fontWeight: '500', color: '#1e293b', fontSize: '12px' }}>{option.name}</td>
-                                                                        <td style={{ padding: '2px 6px', textAlign: 'right', width: '150px', verticalAlign: 'middle' }}>
+                                                                        <td style={{ padding: '2px 6px', textAlign: 'right', width: '290px', verticalAlign: 'middle' }}>
                                                                             <div
                                                                                 style={{
                                                                                     display: 'flex',
                                                                                     alignItems: 'center',
                                                                                     justifyContent: 'flex-end',
-                                                                                    gap: '4px',
+                                                                                    gap: '6px',
                                                                                     width: '100%',
+                                                                                    flexWrap: 'nowrap',
                                                                                 }}
                                                                             >
                                                                                 <input
@@ -6179,6 +6398,49 @@ const PricingForm = ({ openContext = null }) => {
                                                                                         cursor: canEditRow ? 'text' : 'not-allowed',
                                                                                     }}
                                                                                 />
+                                                                                <label
+                                                                                    title={
+                                                                                        declineBlockedByQuote
+                                                                                            ? 'A quote already exists for this enquiry, lead job, and customer — decline is not allowed.'
+                                                                                            : 'Decline to Quote'
+                                                                                    }
+                                                                                    style={{
+                                                                                        display: 'inline-flex',
+                                                                                        alignItems: 'center',
+                                                                                        gap: '4px',
+                                                                                        fontSize: '10px',
+                                                                                        color: declineBlockedByQuote ? '#94a3b8' : '#64748b',
+                                                                                        whiteSpace: 'nowrap',
+                                                                                        margin: 0,
+                                                                                        cursor:
+                                                                                            canEditRow && !declineBlockedByQuote
+                                                                                                ? 'pointer'
+                                                                                                : 'not-allowed',
+                                                                                        userSelect: 'none',
+                                                                                        flexShrink: 0,
+                                                                                    }}
+                                                                                >
+                                                                                    <input
+                                                                                        type="checkbox"
+                                                                                        checked={declineChecked}
+                                                                                        disabled={!canEditRow || declineBlockedByQuote}
+                                                                                        onChange={(e) =>
+                                                                                            handleDeclineToQuoteChange(
+                                                                                                job.id,
+                                                                                                e.target.checked,
+                                                                                                group.options
+                                                                                            )
+                                                                                        }
+                                                                                        style={{
+                                                                                            margin: 0,
+                                                                                            cursor:
+                                                                                                canEditRow && !declineBlockedByQuote
+                                                                                                    ? 'pointer'
+                                                                                                    : 'not-allowed',
+                                                                                        }}
+                                                                                    />
+                                                                                    Decline to Quote
+                                                                                </label>
                                                                                 <span
                                                                                     style={{
                                                                                         width: '22px',

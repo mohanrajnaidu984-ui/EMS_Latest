@@ -1,3 +1,4 @@
+const fs = require('fs');
 const path = require('path');
 
 /**
@@ -56,6 +57,73 @@ function resolveEnquiryAttachmentVisibilityBase(visibility) {
     return path.join(__dirname, '..', 'uploads', 'enquiries', 'Public');
 }
 
+function resolveLocalEnquiryAttachmentsRoot() {
+    const explicit =
+        process.env.EMS_ATTACHMENTS_LOCAL_ROOT || process.env.ENQUIRY_ATTACHMENTS_LOCAL_ROOT;
+    if (explicit && String(explicit).trim()) {
+        return path.normalize(String(explicit).trim());
+    }
+    return path.join(__dirname, '..', 'data', 'ems-attachments');
+}
+
+function resolveEnquiryUploadDestinationWithRoot(root, requestNo, visibility, division) {
+    const rawNo = requestNo != null ? String(requestNo) : 'unknown';
+    const safeRequestNo = sanitizeFolderName(rawNo, 'unknown');
+    const safeDivision = sanitizeFolderName(division, 'General');
+    const v = String(visibility || 'Public').toLowerCase();
+    const visFolder = v === 'private'
+        ? path.join('Enquiries', 'Private')
+        : path.join('Enquiries', 'Public');
+    return path.join(root, visFolder, safeRequestNo, safeDivision);
+}
+
+function canWriteToDirectory(dest) {
+    if (!dest) return false;
+    try {
+        if (!fs.existsSync(dest)) {
+            fs.mkdirSync(dest, { recursive: true });
+        }
+        const probe = path.join(dest, `.ems-write-probe-${process.pid}-${Date.now()}`);
+        fs.writeFileSync(probe, 'ok');
+        fs.unlinkSync(probe);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Pick the first writable folder: configured path (often UNC), else local data/ems-attachments.
+ * EPERM on UNC is common when PM2 runs as SYSTEM — local fallback avoids IT share ACL changes.
+ */
+function resolveWritableEnquiryUploadDestination(requestNo, visibility, division) {
+    const primary = resolveEnquiryUploadDestinationByVisibility(requestNo, visibility, division);
+    if (canWriteToDirectory(primary)) {
+        return { dest: primary, usedFallback: false };
+    }
+
+    const disableFallback = String(process.env.EMS_ATTACHMENTS_DISABLE_LOCAL_FALLBACK || '').trim() === '1';
+    if (!disableFallback) {
+        const localRoot = resolveLocalEnquiryAttachmentsRoot();
+        const fallback = resolveEnquiryUploadDestinationWithRoot(
+            localRoot,
+            requestNo,
+            visibility,
+            division
+        );
+        if (canWriteToDirectory(fallback)) {
+            console.warn(
+                `[attachments] Primary folder not writable (${primary}); using local fallback: ${fallback}`
+            );
+            return { dest: fallback, usedFallback: true, primaryAttempted: primary };
+        }
+    }
+
+    const err = new Error(`Attachment folder is not writable: ${primary}`);
+    err.code = 'ATTACHMENT_STORAGE_EPERM';
+    throw err;
+}
+
 function resolveEnquiryUploadDestinationByVisibility(requestNo, visibility, division) {
     const rawNo = requestNo != null ? String(requestNo) : 'unknown';
     const safeRequestNo = sanitizeFolderName(rawNo, 'unknown');
@@ -112,6 +180,8 @@ module.exports = {
     resolveEnquiryUploadDestination,
     resolveEnquiryAttachmentVisibilityBase,
     resolveEnquiryUploadDestinationByVisibility,
+    resolveLocalEnquiryAttachmentsRoot,
+    resolveWritableEnquiryUploadDestination,
     resolveQuoteAttachmentsBase,
     resolveQuoteUploadDestination,
     sanitizeFolderName,

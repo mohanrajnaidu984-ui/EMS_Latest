@@ -11,13 +11,13 @@ const EMS_AUTO_PRICE_SUMMARY_TABLE_ID = 'ems-auto-price-summary-table';
 /** Extra px reserved so packed content never overlaps continuation logo/footer (PDF uses 13px/1.45 vs editor 12px). */
 /** Reserve logo/footer band on continuation sheets (PDF font metrics vs measure). */
 /** Reserve logo/footer + Chromium/Edge print metrics vs client measure host (~5% on Server PDF). */
-const PACK_HEIGHT_SAFETY_PX = 52;
+const PACK_HEIGHT_SAFETY_PX = 48;
 /** Tighter safety when user clicks Align Page (fills sheet slack without changing A4 / header / footer). */
 const PACK_HEIGHT_SAFETY_PX_TIGHT = 12;
 /** Measure vs print slack allowed when pulling the next segment up during Align Page. */
 const PACK_ALIGN_FILL_SLACK_PX = 88;
 /** Default slack when sum-of-segment heights says a group fits but merged DOM measure is high. */
-const PACK_SUM_HEIGHT_FILL_SLACK_PX = 56;
+const PACK_SUM_HEIGHT_FILL_SLACK_PX = 54;
 /** Only split UL/OL into per-item segments when list is long (avoids one segment per bullet → 37 pages). */
 const PACK_LIST_SPLIT_MIN_ITEMS = 10;
 
@@ -68,6 +68,13 @@ function resolvePackFillLimitPx(usablePx, options) {
     return base + PACK_ALIGN_FILL_SLACK_PX;
 }
 
+/** Pull-up fill pass — merged DOM height is checked; reserve only a small anti-clip tail. */
+function resolvePackSlackFillLimitPx(usablePx, options) {
+    if (options?.tightFit) return resolvePackFillLimitPx(usablePx, options);
+    const antiClipTailPx = 44;
+    return Math.max(usablePx - antiClipTailPx, 200);
+}
+
 function sumSegmentHeightsPx(group, segmentHeightsPx) {
     if (!segmentHeightsPx?.length || !group?.length) return 0;
     return group.reduce((s, gi) => s + Math.max(segmentHeightsPx[gi] || 0, 1), 0);
@@ -77,12 +84,26 @@ function resolvePackFillSlackPx(options) {
     return options?.tightFit ? 36 : PACK_SUM_HEIGHT_FILL_SLACK_PX;
 }
 
-/** Merged DOM measure often over-counts; trust per-segment sum when it still fits. */
+/** Authoritative fit check — overflowTest mirrors continuation sheet overflow:hidden. */
 function groupFitsPackLimit(group, measureMergedGroupPx, limit, segmentHeightsPx, options = {}) {
     if (!group?.length) return false;
-    if (measureMergedGroupPx(group) <= limit) return true;
+    if (typeof options.overflowTest === 'function') {
+        return !options.overflowTest(group);
+    }
+    const merged = measureMergedGroupPx(group);
+    if (merged <= limit) return true;
     if (!segmentHeightsPx?.length) return false;
-    return sumSegmentHeightsPx(group, segmentHeightsPx) <= limit + resolvePackFillSlackPx(options);
+    const sumSlack = resolvePackFillSlackPx(options);
+    if (merged > limit + Math.min(18, Math.round(sumSlack * 0.35))) return false;
+    return sumSegmentHeightsPx(group, segmentHeightsPx) <= limit + sumSlack;
+}
+
+/** Same limit for initial pack and fill when overflowTest is used; else fill may use tighter tail. */
+function resolvePackFillLimitPxForFillPass(usablePx, options) {
+    if (typeof options?.overflowTest === 'function') {
+        return resolvePackFillLimitPx(usablePx, options);
+    }
+    return resolvePackSlackFillLimitPx(usablePx, options);
 }
 
 /** User-inserted blank line (<p><br></p> etc.) — preserve intentional vertical space on Align Page. */
@@ -1036,7 +1057,7 @@ export function fillSegmentPageGroupsSlack(
     segmentHeightsPx = null
 ) {
     if (!groups?.length || groups.length < 2) return groups || [];
-    const limit = resolvePackFillLimitPx(usablePx, options);
+    const limit = resolvePackFillLimitPxForFillPass(usablePx, options);
     /** @type {number[][]} */
     const result = groups.map((g) => [...g]);
     let changed = true;
@@ -1203,7 +1224,25 @@ export function packClauseSegmentsForContinuationPages(
 }
 
 /** Continuation body height when DOM measure is not ready yet (~A4 inner minus logo/footer). */
-export const EMS_QUOTE_CONT_USABLE_PX_FALLBACK = 780;
+export const EMS_QUOTE_CONT_USABLE_PX_FALLBACK = 772;
+
+/** @deprecated Reserved in pack safety only — do not subtract from usable height (causes blank pages). */
+export const EMS_QUOTE_PRINT_CONTENT_FOOTER_GAP_PX = 0;
+
+/** Representative footer HTML so pack measure reserves the same band as rendered sheets. */
+export function buildQuotePackMeasureFooterHtml(minHeight = '72px') {
+    return `<div class="footer-section" style="width:100%;min-height:${minHeight};box-sizing:border-box;padding-top:3px;display:flex;flex-direction:column;align-items:stretch">
+        <div class="quote-print-page-indicator" style="font-size:11px;font-weight:600;color:#64748b;padding-bottom:3px">Page 1 of 5</div>
+        <hr class="quote-section-rule" style="margin:1px 0 1.5px;border:0;border-top:0.35px solid #94a3b8;height:0;width:100%" aria-hidden="true"/>
+        <div class="quote-print-footer-wrap" style="display:block;width:50%;max-width:50%;margin-left:auto;text-align:right;box-sizing:border-box">
+            <div class="quote-print-footer-company" style="font-size:11px;line-height:1.1;color:#64748b">
+                <div>Sample Company W.L.L.</div>
+                <div>CR No.: sample PO Box sample, Building sample, Road sample, Manama, Kingdom of Bahrain</div>
+                <div>Tel: sample | Fax: sample</div>
+            </div>
+        </div>
+    </div>`;
+}
 
 /**
  * Rough per-segment height from HTML size (tables/lists weigh more than prose).
@@ -1234,7 +1273,7 @@ export function packSegmentsOntoPagesByEstimatedHeight(segments, usablePx = EMS_
     if (!segments?.length) return [];
     const heights = estimateSegmentBlockHeightsPx(segments);
     const usable = Math.max(usablePx || EMS_QUOTE_CONT_USABLE_PX_FALLBACK, 240);
-    const packFudgePx = Math.min(24, Math.round(usable * 0.02));
+    const packFudgePx = Math.min(22, Math.round(usable * 0.02));
     const pages = [];
     let cur = [];
     let sum = 0;

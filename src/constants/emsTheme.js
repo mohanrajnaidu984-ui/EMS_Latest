@@ -95,13 +95,17 @@ html[data-preview-pdf="1"] .clause-content table:not([data-ems-paste-source="off
 html[data-preview-pdf="1"] .clause-content table[data-ems-pdf-thin-borders="1"]:not([data-ems-paste-source="office"]):not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) {
     border: none !important;
 }
-html[data-preview-pdf="1"] .clause-content table:not([data-ems-paste-source="office"]):not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) th,
-html[data-preview-pdf="1"] .clause-content table:not([data-ems-paste-source="office"]):not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) td,
-html[data-preview-pdf="1"] .quote-clause-block--continuation .clause-content table:not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) th,
-html[data-preview-pdf="1"] .quote-clause-block--continuation .clause-content table:not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) td,
-html[data-preview-pdf="1"] .clause-content table[data-ems-pdf-thin-borders="1"]:not([data-ems-paste-source="office"]):not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) th,
-html[data-preview-pdf="1"] .clause-content table[data-ems-pdf-thin-borders="1"]:not([data-ems-paste-source="office"]):not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) td {
+html[data-preview-pdf="1"] .clause-content table:not([data-ems-paste-source="office"]):not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) th:not([data-ems-cell-border="none"]),
+html[data-preview-pdf="1"] .clause-content table:not([data-ems-paste-source="office"]):not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) td:not([data-ems-cell-border="none"]),
+html[data-preview-pdf="1"] .quote-clause-block--continuation .clause-content table:not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) th:not([data-ems-cell-border="none"]),
+html[data-preview-pdf="1"] .quote-clause-block--continuation .clause-content table:not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) td:not([data-ems-cell-border="none"]),
+html[data-preview-pdf="1"] .clause-content table[data-ems-pdf-thin-borders="1"]:not([data-ems-paste-source="office"]):not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) th:not([data-ems-cell-border="none"]),
+html[data-preview-pdf="1"] .clause-content table[data-ems-pdf-thin-borders="1"]:not([data-ems-paste-source="office"]):not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) td:not([data-ems-cell-border="none"]) {
     border: ${EMS_QUOTE_CLAUSE_TABLE_BORDER_PDF_HAIRLINE} !important;
+}
+html[data-preview-pdf="1"] td[data-ems-cell-border="none"],
+html[data-preview-pdf="1"] th[data-ems-cell-border="none"] {
+    border: none !important;
 }
 `;
 

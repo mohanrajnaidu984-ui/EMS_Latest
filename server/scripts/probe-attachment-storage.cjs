@@ -12,13 +12,15 @@ const os = require('os');
 const {
     resolveEnquiryAttachmentsBase,
     resolveEnquiryUploadDestinationByVisibility,
+    resolveWritableEnquiryUploadDestination,
+    resolveLocalEnquiryAttachmentsRoot,
 } = require('../lib/attachmentsRoot');
 
 const requestNo = process.argv[2] || 'probe';
 const division = process.argv[3] || 'General';
 const visibility = process.argv[4] || 'Public';
 
-const dest = resolveEnquiryUploadDestinationByVisibility(requestNo, visibility, division);
+const dest = resolveWritableEnquiryUploadDestination(requestNo, visibility, division).dest;
 const probeFile = path.join(dest, `.ems-write-probe-${Date.now()}.tmp`);
 
 let username = 'unknown';
@@ -31,6 +33,7 @@ try {
 console.log('--- EMS attachment storage probe ---');
 console.log('processUser:', username);
 console.log('enquiryAttachmentsRoot:', resolveEnquiryAttachmentsBase());
+console.log('localFallbackRoot:', resolveLocalEnquiryAttachmentsRoot());
 console.log('resolvedDestination:', dest);
 console.log('probeFile:', probeFile);
 

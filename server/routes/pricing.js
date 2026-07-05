@@ -150,10 +150,55 @@ function normalizePricingValueRow(r) {
         PriceOption: firstDefined(r, ['PriceOption', 'priceOption', 'priceoption']),
         CustomerName: firstDefined(r, ['CustomerName', 'customerName', 'customername']),
         LeadJobName: firstDefined(r, ['LeadJobName', 'leadJobName', 'leadjobname']),
+        Quotingornot: firstDefined(r, ['Quotingornot', 'quotingornot', 'QuotingOrNot', 'quotingOrNot']),
         MatchedEnquiryForId: firstDefined(r, ['MatchedEnquiryForId', 'matchedEnquiryForId', 'matchedenquiryforid']),
         MatchedItemName: firstDefined(r, ['MatchedItemName', 'matchedItemName', 'matcheditemname']),
         MatchedParentId: firstDefined(r, ['MatchedParentId', 'matchedParentId', 'matchedparentid']),
     };
+}
+
+let quotingOrNotColumnAvailable = false;
+
+async function refreshQuotingOrNotColumnState() {
+    try {
+        const check = await sql.query`
+            SELECT 1 AS ok
+            FROM sys.columns
+            WHERE object_id = OBJECT_ID(N'dbo.EnquiryPricingValues')
+              AND name = N'Quotingornot'
+        `;
+        quotingOrNotColumnAvailable = !!check.recordset?.length;
+    } catch (err) {
+        quotingOrNotColumnAvailable = false;
+        console.error('[pricing] check Quotingornot column:', err.message || err);
+    }
+    return quotingOrNotColumnAvailable;
+}
+
+async function ensureQuotingOrNotColumn() {
+    await refreshQuotingOrNotColumnState();
+    if (quotingOrNotColumnAvailable) return true;
+    try {
+        await sql.query`
+            ALTER TABLE dbo.EnquiryPricingValues
+            ADD Quotingornot NVARCHAR(8) NOT NULL
+                CONSTRAINT DF_EnquiryPricingValues_Quotingornot DEFAULT N'No'
+        `;
+        await refreshQuotingOrNotColumnState();
+    } catch (err) {
+        console.error('[pricing] ensure Quotingornot column:', err.message || err);
+    }
+    return quotingOrNotColumnAvailable;
+}
+
+function epvQuotingOrNotSelectSql(alias = 'v') {
+    return quotingOrNotColumnAvailable ? `,\n            ${alias}.Quotingornot` : '';
+}
+
+function normalizeQuotingOrNotValue(raw) {
+    const v = String(raw ?? '').trim().toLowerCase();
+    if (v === 'yes' || v === 'y' || v === '1' || v === 'true') return 'Yes';
+    return 'No';
 }
 
 const {
@@ -169,6 +214,10 @@ const {
     resolvePricingAnchorJobsWithFallbacks,
 } = require('../lib/quotePricingAccess');
 const { filterJobsByDepartment } = require('../services/hierarchyService');
+const {
+    quoteBlocksDeclineToQuote,
+    mapEnquiryQuoteRowsForDeclineGuard,
+} = require('../lib/pricingQuoteTupleMatch');
 const {
     evaluatePendingPricingSummarySpec,
     departmentMatchesItemName,
@@ -309,6 +358,7 @@ function buildDetailPricingOptionsFromValuesRows(valuesRows) {
  */
 // Helper to get Enquiry List with Pricing Tree
 async function getEnquiryPricingList(userEmail, search = null, pendingOnly = true, opts = {}) {
+    await ensureQuotingOrNotColumn();
     if (!userEmail) return [];
 
     const ctx = await resolvePricingAccessContext(userEmail);
@@ -556,7 +606,7 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
             v.UpdatedBy,
             v.PriceOption,
             v.CustomerName,
-            v.LeadJobName,
+            v.LeadJobName${epvQuotingOrNotSelectSql('v')},
             m.MatchedEnquiryForId,
             m.MatchedItemName,
             m.MatchedParentId
@@ -1049,6 +1099,11 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
             return Number.isFinite(n) ? n : 0;
         };
 
+        const isDeclineToQuotePricingRow = (pr) => {
+            const v = String(pr?.Quotingornot ?? pr?.quotingornot ?? '').trim().toLowerCase();
+            return v === 'yes' || v === 'y' || v === '1' || v === 'true';
+        };
+
         const normOptName = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
         /** Matches "Base Price" and "Base Price (…)", "Base Price - …" etc. */
@@ -1122,9 +1177,31 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                     updatedAt: bestRow.UpdatedAt,
                     customerName: cust || null,
                     updatedBy: by || null,
+                    declinedToQuote: false,
                 };
             }
-            return { price: 0, updatedAt: null, customerName: null, updatedBy: null };
+
+            let declineRow = null;
+            for (const pr of enqPrices) {
+                if (!isDeclineToQuotePricingRow(pr)) continue;
+                if (!valueRowMatchesOptionTarget(pr)) continue;
+                if (!rowMatchesJob(pr)) continue;
+                if (!declineRow || new Date(pr.UpdatedAt) > new Date(declineRow.UpdatedAt)) {
+                    declineRow = pr;
+                }
+            }
+            if (declineRow) {
+                const cust = String(declineRow.CustomerName ?? declineRow.customerName ?? '').trim();
+                const by = String(declineRow.UpdatedBy ?? declineRow.updatedBy ?? '').trim();
+                return {
+                    price: 0,
+                    updatedAt: declineRow.UpdatedAt,
+                    customerName: cust || null,
+                    updatedBy: by || null,
+                    declinedToQuote: true,
+                };
+            }
+            return { price: 0, updatedAt: null, customerName: null, updatedBy: null, declinedToQuote: false };
         };
 
         /**
@@ -1220,6 +1297,30 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                     updatedAt: bestRow.UpdatedAt,
                     customerName: cust || null,
                     updatedBy: by || null,
+                    declinedToQuote: false,
+                };
+            }
+
+            let declineRow = null;
+            for (const pr of enqPrices) {
+                if (!isDeclineToQuotePricingRow(pr)) continue;
+                if (!valueRowMatchesOptionTarget(pr)) continue;
+                if (!rowMatchesJob(pr)) continue;
+                const cn = String(pr.CustomerName ?? pr.customerName ?? '').trim();
+                if (!pricingCustomerRowMatchesKey(cn, customerNormKey)) continue;
+                if (!declineRow || new Date(pr.UpdatedAt) > new Date(declineRow.UpdatedAt)) {
+                    declineRow = pr;
+                }
+            }
+            if (declineRow) {
+                const cust = String(declineRow.CustomerName ?? declineRow.customerName ?? '').trim();
+                const by = String(declineRow.UpdatedBy ?? declineRow.updatedBy ?? '').trim();
+                return {
+                    price: 0,
+                    updatedAt: declineRow.UpdatedAt,
+                    customerName: cust || null,
+                    updatedBy: by || null,
+                    declinedToQuote: true,
                 };
             }
 
@@ -1229,12 +1330,12 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                     : '';
             const isListCustomerRoot = rootIdForList && String(jobId) === rootIdForList;
             if (listCustomerKeyIsEnquiryExternal(customerNormKey) && isListCustomerRoot) {
-                return { price: 0, updatedAt: null, customerName: null, updatedBy: null };
+                return { price: 0, updatedAt: null, customerName: null, updatedBy: null, declinedToQuote: false };
             }
 
             if (listCustomerKeyIsEnquiryExternal(customerNormKey) && !isListCustomerRoot) {
                 const fb = getDivisionPrice(jobId, optionName);
-                if (fb && parsePriceNum(fb.price) > 0) {
+                if (fb && (parsePriceNum(fb.price) > 0 || fb.declinedToQuote)) {
                     const fbn = String(fb.customerName || '').trim();
                     if (fbn && isExternalPricingCustomer(fbn) && !pricingCustomerRowMatchesKey(fbn, customerNormKey)) {
                         /* other external’s own-name row: try internal inheritance only */
@@ -1244,6 +1345,7 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                             updatedAt: fb.updatedAt,
                             customerName: fbn || null,
                             updatedBy: String(fb.updatedBy ?? '').trim() || null,
+                            declinedToQuote: !!fb.declinedToQuote,
                         };
                     }
                 }
@@ -1253,7 +1355,7 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                 ? listInheritCtx.priceRowInSubtree
                 : null;
             if (!priceRowInSubtreeFn) {
-                return { price: 0, updatedAt: null, customerName: null, updatedBy: null };
+                return { price: 0, updatedAt: null, customerName: null, updatedBy: null, declinedToQuote: false };
             }
 
             const externalCustomerSharesLeadWithInternalRow = (wantKey, internalPr) => {
@@ -1298,9 +1400,10 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                     updatedAt: internalBest.UpdatedAt,
                     customerName: cust || null,
                     updatedBy: by || null,
+                    declinedToQuote: false,
                 };
             }
-            return { price: 0, updatedAt: null, customerName: null, updatedBy: null };
+            return { price: 0, updatedAt: null, customerName: null, updatedBy: null, declinedToQuote: false };
         };
 
         /**
@@ -1341,7 +1444,7 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                 return false;
             };
             for (const pr of enqPrices) {
-                if (parsePriceNum(pr.Price) <= 0) continue;
+                if (parsePriceNum(pr.Price) <= 0 && !isDeclineToQuotePricingRow(pr)) continue;
                 if (!valueRowMatchesBase(pr)) continue;
                 if (!rowMatchesJobDirect(pr)) continue;
                 if (priceRowInSubtreeFn && !priceRowInSubtreeFn(pr)) continue;
@@ -1374,6 +1477,27 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                     valueRowIsBasePrice(pr) &&
                     strictPriceRowMatchesJobForBase(pr, jobRec)
             );
+        const strictHasDeclinedBaseForJob = (jobRec) =>
+            enqPrices.some(
+                (pr) =>
+                    isDeclineToQuotePricingRow(pr) &&
+                    valueRowIsBasePrice(pr) &&
+                    strictPriceRowMatchesJobForBase(pr, jobRec)
+            );
+        const strictJobBaseResolved = (jobRec) =>
+            strictHasPositiveBaseForJob(jobRec) || strictHasDeclinedBaseForJob(jobRec);
+        const divisionPriceDisplayColumn = (price, declinedToQuote) => {
+            if (declinedToQuote) return 'Decline to Quote';
+            return parsePriceNum(price) > 0.01 ? price : 'Not Updated';
+        };
+        const shouldEmitDivisionPriceLine = (price, optName, declinedToQuote) =>
+            parsePriceNum(price) > 0.01 || optName === 'Base Price' || !!declinedToQuote;
+        const ownJobResolutionStatusFromCounts = (priced, declined, unpriced) => {
+            if (unpriced > 0 && priced + declined === 0) return 'None Priced';
+            if (unpriced > 0) return 'Partial Priced';
+            if (priced + declined > 0) return 'All Quoted';
+            return null;
+        };
 
         /**
          * Subjob / grid line label: this job's ItemName + L# (tree indentation shows hierarchy — do not substitute
@@ -1432,16 +1556,16 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
             const targetOptionNames = ['Base Price', 'Optional'];
 
             targetOptionNames.forEach((optName) => {
-                const { price, updatedAt, customerName } = getDivisionPrice(jid, optName);
+                const { price, updatedAt, customerName, declinedToQuote } = getDivisionPrice(jid, optName);
 
-                if (price > 0 || optName === 'Base Price') {
+                if (shouldEmitDivisionPriceLine(price, optName, declinedToQuote)) {
                     const displayCode = jobLeadMap[String(jid)] || 'L1';
                     const jobRec = jid != null ? jobMap[String(jid)] : null;
                     const jobLabel = buildSubjobPriceDisplayLabel(jobRec, job, displayCode, customerName);
                     const displayName = optName === 'Base Price' ? jobLabel : `${jobLabel} (${optName})`;
 
                     displayItemsRaw.push(
-                        `${displayName}|${price > 0 ? price : 'Not Updated'}|${updatedAt ? new Date(updatedAt).toISOString() : ''}|${job.level || 0}`
+                        `${displayName}|${divisionPriceDisplayColumn(price, declinedToQuote)}|${updatedAt ? new Date(updatedAt).toISOString() : ''}|${job.level || 0}`
                     );
                 }
             });
@@ -1456,9 +1580,9 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
          * - Otherwise: legacy line-per-job labels.
          */
         const displayItems = [];
-        const pushLine = (lineLabel, price, updatedAt, level) => {
+        const pushLine = (lineLabel, price, updatedAt, level, declinedToQuote = false) => {
             displayItems.push(
-                `${lineLabel}|${price > 0 ? price : 'Not Updated'}|${updatedAt ? new Date(updatedAt).toISOString() : ''}|${level}`
+                `${lineLabel}|${divisionPriceDisplayColumn(price, declinedToQuote)}|${updatedAt ? new Date(updatedAt).toISOString() : ''}|${level}`
             );
         };
 
@@ -1506,11 +1630,11 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                         lc
                     );
                     ['Base Price', 'Optional'].forEach((optName) => {
-                        const { price, updatedAt } = getDivisionPrice(aid, optName);
-                        if (price > 0 || optName === 'Base Price') {
+                        const { price, updatedAt, declinedToQuote } = getDivisionPrice(aid, optName);
+                        if (shouldEmitDivisionPriceLine(price, optName, declinedToQuote)) {
                             const dName =
                                 optName === 'Base Price' ? parentLabel : `${parentLabel} (${optName})`;
-                            pushLine(dName, price, updatedAt, 0);
+                            pushLine(dName, price, updatedAt, 0, declinedToQuote);
                         }
                     });
                 } else {
@@ -1529,11 +1653,11 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                                 .join(', ');
                     if (!String(headerName || '').trim()) return;
                     ['Base Price', 'Optional'].forEach((optName) => {
-                        const { price, updatedAt } = getDivisionPrice(aid, optName);
-                        if (price > 0 || optName === 'Base Price') {
+                        const { price, updatedAt, declinedToQuote } = getDivisionPrice(aid, optName);
+                        if (shouldEmitDivisionPriceLine(price, optName, declinedToQuote)) {
                             const dName =
                                 optName === 'Base Price' ? headerName : `${headerName} (${optName})`;
-                            pushLine(dName, price, updatedAt, 0);
+                            pushLine(dName, price, updatedAt, 0, declinedToQuote);
                         }
                     });
                 }
@@ -1557,10 +1681,10 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                 const parentLabel = withLeadCode(stripLeadName(par.ItemName) || String(par.ItemName).trim(), lc);
 
                 ['Base Price', 'Optional'].forEach((optName) => {
-                    const { price, updatedAt } = getDivisionPrice(sid, optName);
-                    if (price > 0 || optName === 'Base Price') {
+                    const { price, updatedAt, declinedToQuote } = getDivisionPrice(sid, optName);
+                    if (shouldEmitDivisionPriceLine(price, optName, declinedToQuote)) {
                         const dName = optName === 'Base Price' ? parentLabel : `${parentLabel} (${optName})`;
-                        pushLine(dName, price, updatedAt, 0);
+                        pushLine(dName, price, updatedAt, 0, declinedToQuote);
                     }
                 });
 
@@ -1570,15 +1694,15 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                     ['Base Price', 'Optional'].forEach((optName) => {
                         const key = `${jid}|${optName}`;
                         if (emittedDescendantLine.has(key)) return;
-                        const { price, updatedAt } = getDivisionPrice(jid, optName);
-                        if (price > 0 || optName === 'Base Price') {
+                        const { price, updatedAt, declinedToQuote } = getDivisionPrice(jid, optName);
+                        if (shouldEmitDivisionPriceLine(price, optName, declinedToQuote)) {
                             emittedDescendantLine.add(key);
                             const jobRec = jobMap[jid];
                             const childNm =
                                 stripLeadName(jobRec?.ItemName) || String(jobRec?.ItemName || '').trim();
                             const dName = optName === 'Base Price' ? childNm : `${childNm} (${optName})`;
                             const lvl = Math.max(1, Number(job.level || 0));
-                            pushLine(dName, price, updatedAt, lvl);
+                            pushLine(dName, price, updatedAt, lvl, declinedToQuote);
                         }
                     });
                 });
@@ -1608,10 +1732,10 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                                 .join(', ');
                     if (!String(headerName || '').trim()) return;
                     ['Base Price', 'Optional'].forEach((optName) => {
-                        const { price, updatedAt } = getDivisionPrice(jobIdOf(root), optName);
-                        if (price > 0 || optName === 'Base Price') {
+                        const { price, updatedAt, declinedToQuote } = getDivisionPrice(jobIdOf(root), optName);
+                        if (shouldEmitDivisionPriceLine(price, optName, declinedToQuote)) {
                             const dName = optName === 'Base Price' ? headerName : `${headerName} (${optName})`;
-                            pushLine(dName, price, updatedAt, 0);
+                            pushLine(dName, price, updatedAt, 0, declinedToQuote);
                         }
                     });
                     rootsWithExternalOwnjobHeader.add(rid);
@@ -1623,9 +1747,9 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                 const targetOptionNames = ['Base Price', 'Optional'];
 
                 targetOptionNames.forEach((optName) => {
-                    const { price, updatedAt, customerName } = getDivisionPrice(jid, optName);
+                    const { price, updatedAt, customerName, declinedToQuote } = getDivisionPrice(jid, optName);
 
-                    if (price > 0 || optName === 'Base Price') {
+                    if (shouldEmitDivisionPriceLine(price, optName, declinedToQuote)) {
                         const jobRec = jid != null ? jobMap[String(jid)] : null;
                         if (
                             rootsWithExternalOwnjobHeader.has(String(jid)) &&
@@ -1639,7 +1763,7 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                         const jobLabel = buildSubjobPriceDisplayLabel(jobRec, job, displayCode, customerName);
                         const displayName = optName === 'Base Price' ? jobLabel : `${jobLabel} (${optName})`;
 
-                        pushLine(displayName, price, updatedAt, Number(job.level || 0));
+                        pushLine(displayName, price, updatedAt, Number(job.level || 0), declinedToQuote);
                     }
                 });
             });
@@ -1668,7 +1792,7 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
             visited.add(jidStr);
             const job = jobMap[jidStr];
             if (!job) return null;
-            const { price, updatedAt, customerName, updatedBy } = getDivisionPrice(jidStr, 'Base Price');
+            const { price, updatedAt, customerName, updatedBy, declinedToQuote } = getDivisionPrice(jidStr, 'Base Price');
             const displayCode = jobLeadMap[jidStr] || 'L1';
             const flatJob = { ...job, level: depth };
             const displayLineLabel = buildSubjobPriceDisplayLabel(job, flatJob, displayCode, customerName);
@@ -1683,7 +1807,8 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                 jobId: jidStr,
                 label: displayLineLabel,
                 price,
-                hasPrice: price > 0,
+                hasPrice: price > 0 && !declinedToQuote,
+                declinedToQuote: !!declinedToQuote,
                 updatedAt: updatedAt ? new Date(updatedAt).toISOString() : null,
                 pricedBy: updatedBy || null,
                 children,
@@ -1919,7 +2044,7 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                     const ch = buildJobPriceTreeNodeForCustomer(cid, customerNormKey, null);
                     if (ch) children.push(ch);
                 }
-                const { price, updatedAt, customerName, updatedBy } = getDivisionPriceForCustomer(
+                const { price, updatedAt, customerName, updatedBy, declinedToQuote } = getDivisionPriceForCustomer(
                     jidStr,
                     'Base Price',
                     customerNormKey,
@@ -1940,7 +2065,8 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                     jobId: jidStr,
                     label: displayLineLabel,
                     price,
-                    hasPrice: price > 0,
+                    hasPrice: price > 0 && !declinedToQuote,
+                    declinedToQuote: !!declinedToQuote,
                     updatedAt: updatedAt ? new Date(updatedAt).toISOString() : null,
                     pricedBy: updatedBy || null,
                     children,
@@ -2084,7 +2210,8 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                 // This avoids hiding priced subjob lines in "Individual & Subjob Base prices".
                 const keepSelf =
                     keepNodeByLabel(node.label) ||
-                    (node.hasPrice && parsePriceNum(node.price) > 0.01);
+                    (node.hasPrice && parsePriceNum(node.price) > 0.01) ||
+                    !!node.declinedToQuote;
                 if (!keepSelf && children.length === 0) return null;
                 return { ...node, children };
             };
@@ -2151,13 +2278,21 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
             const subLblOverride = customerTotalLabelOverrideForDivisionSubjob(rootNode, lbl);
             if (subLblOverride) lbl = subLblOverride;
             const t = sumTreeNodeBasesForTotals(rootNode);
+            const declinedToQuote = !!(rootNode && rootNode.declinedToQuote);
             const ownJobPriced =
                 !!(rootNode && rootNode.hasPrice && parsePriceNum(rootNode.price) > 0.01);
+            let updatedAt = null;
+            if (declinedToQuote && rootNode?.updatedAt) {
+                updatedAt = rootNode.updatedAt;
+            } else if (ownJobPriced && t.maxAt) {
+                updatedAt = new Date(t.maxAt).toISOString();
+            }
             return {
                 label: lbl,
                 // Total appears only after ownjob (root) Base Price is updated.
                 total: ownJobPriced && t.sum > 0.01 ? t.sum : 0,
-                updatedAt: ownJobPriced && t.maxAt ? new Date(t.maxAt).toISOString() : null,
+                updatedAt,
+                declinedToQuote,
             };
         });
 
@@ -2170,6 +2305,35 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
         } catch {
             pricingListDisplayJson = '';
         }
+
+        const listForestNodeUnresolved = (n) => {
+            if (!n) return false;
+            const resolved =
+                !!n.declinedToQuote || (n.hasPrice && parsePriceNum(n.price) > 0.01);
+            if (!resolved) return true;
+            for (const ch of n.children || []) {
+                if (listForestNodeUnresolved(ch)) return true;
+            }
+            return false;
+        };
+        const pendingFromScopedListForest = pricingJobForestScoped.some((root) =>
+            listForestNodeUnresolved(root)
+        );
+        const forestResolutionStatus = (() => {
+            if (!pricingJobForestScoped.length) return null;
+            let priced = 0;
+            let declined = 0;
+            let unpriced = 0;
+            const countForestNode = (n) => {
+                if (!n) return;
+                if (n.declinedToQuote) declined += 1;
+                else if (n.hasPrice && parsePriceNum(n.price) > 0.01) priced += 1;
+                else unpriced += 1;
+                for (const ch of n.children || []) countForestNode(ch);
+            };
+            for (const root of pricingJobForestScoped) countForestNode(root);
+            return ownJobResolutionStatusFromCounts(priced, declined, unpriced);
+        })();
 
         /**
          * Pending list: `hasPendingItems` uses `pendingFromVisibleJobsBase`, `pendingStrictBaseMissing`, and
@@ -2202,8 +2366,15 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
         const parseDisplayLinePriceColumn = (parts1) => {
             const p = String(parts1 ?? '').trim();
             if (!p || p === 'Not Updated') return 0;
+            if (p === 'Decline to Quote') return 0;
             const n = parseFloat(String(p).replace(/,/g, ''));
             return Number.isFinite(n) && n > 0.01 ? n : 0;
+        };
+        const parseDisplayLineResolution = (parts1) => {
+            const p = String(parts1 ?? '').trim();
+            if (!p || p === 'Not Updated') return 'unpriced';
+            if (p === 'Decline to Quote') return 'declined';
+            return parseDisplayLinePriceColumn(parts1) > 0 ? 'priced' : 'unpriced';
         };
         /**
          * Per-department / subjob view when Division filter is set: status from display lines whose label
@@ -2219,16 +2390,16 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                 );
                 if (nonOptional.length > 0) {
                     let priced = 0;
+                    let declined = 0;
                     let unpriced = 0;
                     for (const item of nonOptional) {
                         const parts = String(item).split('|');
-                        const v = parseDisplayLinePriceColumn(parts[1]);
-                        if (v > 0) priced++;
+                        const r = parseDisplayLineResolution(parts[1]);
+                        if (r === 'priced') priced++;
+                        else if (r === 'declined') declined++;
                         else unpriced++;
                     }
-                    if (unpriced > 0 && priced === 0) divisionScopedPricingStatus = 'None Priced';
-                    else if (unpriced > 0 && priced > 0) divisionScopedPricingStatus = 'Partial Priced';
-                    else if (unpriced === 0 && priced > 0) divisionScopedPricingStatus = 'All Priced';
+                    divisionScopedPricingStatus = ownJobResolutionStatusFromCounts(priced, declined, unpriced);
                 }
             }
         }
@@ -2276,8 +2447,8 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
             const jid = jobIdOf(job);
             if (jid == null || !visibleJobs.has(String(jid))) return false;
             if (scopePendingToUserAnchorsOnly && !jobIsAnchorOrDescendantOfUserAnchor(job)) return false;
-            const { price } = getDivisionPrice(jid, 'Base Price');
-            return price <= 0.01;
+            const { price, declinedToQuote } = getDivisionPrice(jid, 'Base Price');
+            return price <= 0.01 && !declinedToQuote;
         });
         /**
          * Broad strict job set (admin / CC only): anchor jobs plus department anchors so one division
@@ -2311,14 +2482,14 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                       (jobRec) =>
                           jobIdOf(jobRec) != null &&
                           !skipRootLeadBaseCheckForPending(jobRec) &&
-                          !strictHasPositiveBaseForJob(jobRec)
+                          !strictJobBaseResolved(jobRec)
                   )
                 : flatList.some((job) => {
                       if (skipRootLeadBaseCheckForPending(job)) return false;
                       const jid = jobIdOf(job);
                       if (jid == null || !visibleJobs.has(String(jid))) return false;
                       if (scopePendingToUserAnchorsOnly && !jobIsAnchorOrDescendantOfUserAnchor(job)) return false;
-                      return !strictHasPositiveBaseForJob(job);
+                      return !strictJobBaseResolved(job);
                   }));
 
         /**
@@ -2337,7 +2508,7 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                     if (!ck) return true;
                     return enqPrices.some((pr) => {
                         if (!reqNoEq(pr.RequestNo, enq.RequestNo)) return false;
-                        if (parsePriceNum(pr.Price) <= 0.01) return false;
+                        if (parsePriceNum(pr.Price) <= 0.01 && !isDeclineToQuotePricingRow(pr)) return false;
                         if (!valueRowIsBasePrice(pr)) return false;
                         return pricingCustomerRowMatchesKey(pr.CustomerName ?? pr.customerName, ck);
                     });
@@ -2427,9 +2598,11 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
             }
             if (divAnchors && divAnchors.length > 0) {
                 let priced = 0;
+                let declined = 0;
                 let unpriced = 0;
                 for (const jobRec of divAnchors) {
                     if (strictHasPositiveBaseForJob(jobRec)) priced += 1;
+                    else if (strictHasDeclinedBaseForJob(jobRec)) declined += 1;
                     else unpriced += 1;
                 }
                 /**
@@ -2468,17 +2641,22 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                     }
                 }
                 // None Priced for Ownjob / Partial Priced for Ownjob => Price Pending
-                // All Priced for Ownjob => Not Pending
-                hasPendingItems = hasCustomerBaseGap || !(unpriced === 0 && priced > 0);
+                // All Quoted for Ownjob (priced and/or declined) => Not Pending
+                hasPendingItems = hasCustomerBaseGap || !(unpriced === 0 && priced + declined > 0);
             } else if (divisionScopedPricingStatus) {
                 // Fallback for unexpected data (no anchors): use the older display-line scoped status.
-                hasPendingItems = divisionScopedPricingStatus !== 'All Priced';
+                hasPendingItems =
+                    divisionScopedPricingStatus !== 'All Priced' &&
+                    divisionScopedPricingStatus !== 'All Quoted';
             } else {
                 // With a division filter, do not use legacyPending (parent lead / other divisions).
                 hasPendingItems = false;
             }
-            if (divisionScopedPricingStatus === 'All Priced') {
+            if (divisionScopedPricingStatus === 'All Priced' || divisionScopedPricingStatus === 'All Quoted') {
                 hasPendingItems = false;
+            }
+            if (pricingJobForestScoped.length > 0) {
+                hasPendingItems = pendingFromScopedListForest;
             }
         } else if (pendingOnly && userSpecPricingSummary && userSpecPricingSummary.enabled) {
             if (userSpecPricingSummary.pricingSummaryStatus === 'All Priced') {
@@ -2564,16 +2742,18 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
             return enqJobs.filter(isRootJobRec);
         })();
         let displaySpecStatus = null;
-        if (ownJobCandidates.length > 0) {
+        if (divisionTrim && forestResolutionStatus) {
+            displaySpecStatus = forestResolutionStatus;
+        } else if (ownJobCandidates.length > 0) {
             let priced = 0;
+            let declined = 0;
             let unpriced = 0;
             for (const jobRec of ownJobCandidates) {
                 if (strictHasPositiveBaseForJob(jobRec)) priced += 1;
+                else if (strictHasDeclinedBaseForJob(jobRec)) declined += 1;
                 else unpriced += 1;
             }
-            if (unpriced > 0 && priced === 0) displaySpecStatus = 'None Priced';
-            else if (unpriced > 0 && priced > 0) displaySpecStatus = 'Partial Priced';
-            else if (unpriced === 0 && priced > 0) displaySpecStatus = 'All Priced';
+            displaySpecStatus = ownJobResolutionStatusFromCounts(priced, declined, unpriced);
         }
 
         return {
@@ -2762,6 +2942,7 @@ function sqlStripPricingName(col) {
  * @param {{ pricingScope: 'own'|'sub', leadJobClean: string, firstTab: string, activeTab?: string, customerDropdown?: string, parentJobName?: string, userEmail?: string }} scope
  */
 async function fetchQuoteScopedPricingValues(requestNo, scope) {
+    await ensureQuotingOrNotColumn();
     const { pricingScope, leadJobClean, firstTab, activeTab, customerDropdown, parentJobName, userEmail } = scope || {};
     if (!leadJobClean || !firstTab) return null;
     if (pricingScope !== 'own' && pricingScope !== 'sub') return null;
@@ -2791,7 +2972,7 @@ async function fetchQuoteScopedPricingValues(requestNo, scope) {
             v.UpdatedAt,
             v.CustomerName,
             v.LeadJobName,
-            v.PriceOption,
+            v.PriceOption${epvQuotingOrNotSelectSql('v')},
             m.MatchedEnquiryForId,
             m.MatchedItemName,
             m.MatchedParentId
@@ -3169,7 +3350,26 @@ router.get('/:requestNo', async (req, res) => {
         /** Detail GET: base option rows from `EnquiryPricingValues`; merged with `EnquiryPricingOptions` so new rows without EPV yet still appear. */
         let values = [];
         try {
-            const valuesResult = await sql.query`
+            await ensureQuotingOrNotColumn();
+            const valuesResult = quotingOrNotColumnAvailable
+                ? await sql.query`
+                SELECT
+                    ID,
+                    RequestNo,
+                    OptionID,
+                    EnquiryForItem,
+                    EnquiryForID,
+                    Price,
+                    UpdatedBy,
+                    UpdatedAt,
+                    CustomerName,
+                    LeadJobName,
+                    PriceOption,
+                    Quotingornot
+                FROM EnquiryPricingValues
+                WHERE RequestNo = ${requestNo}
+            `
+                : await sql.query`
                 SELECT
                     ID,
                     RequestNo,
@@ -3615,6 +3815,19 @@ router.get('/:requestNo', async (req, res) => {
         console.log('Final Editable:', editableJobs);
 
         console.log('Pricing API: Sending Response with jobs:', JSON.stringify(jobs.map(j => ({ name: j.ItemName, logo: j.CompanyLogo })), null, 2));
+
+        let existingQuotes = [];
+        try {
+            const eqRes = await sql.query`
+                SELECT LeadJob, OwnJob, ToName, QuoteNumber
+                FROM EnquiryQuotes
+                WHERE RequestNo = ${requestNo}
+            `;
+            existingQuotes = mapEnquiryQuoteRowsForDeclineGuard(eqRes.recordset);
+        } catch (eqErr) {
+            console.warn('Pricing API: failed to load existingQuotes:', eqErr.message);
+        }
+
         res.setHeader('Cache-Control', 'no-store, private, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.json({
@@ -3672,6 +3885,7 @@ router.get('/:requestNo', async (req, res) => {
             values: values,
             quoteScopedValues: quoteScopedValues,
             scopedFromServer: scopedFromServer,
+            existingQuotes,
             currentUserOwnJob: (sessionDivision || userDepartmentRaw || '').trim(),
             access: {
                 hasLeadAccess: userHasLeadAccess,
@@ -3842,6 +4056,7 @@ router.post('/option', async (req, res) => {
 // PUT /api/pricing/value - Update a pricing cell value
 router.put('/value', async (req, res) => {
     try {
+        await ensureQuotingOrNotColumn();
         const {
             requestNo,
             optionId,
@@ -3853,6 +4068,8 @@ router.put('/value', async (req, res) => {
             leadJobName,
             priceOption,
             allowOptionalZero,
+            quotingOrNot,
+            quotingornot,
         } = req.body;
 
         if (!requestNo || !optionId) {
@@ -3870,6 +4087,11 @@ router.put('/value', async (req, res) => {
         }
 
         const priceValue = parseFloat(price) || 0;
+        const quotingValue = normalizeQuotingOrNotValue(
+            quotingOrNot !== undefined ? quotingOrNot : quotingornot
+        );
+        const quotingProvided =
+            quotingOrNot !== undefined || quotingornot !== undefined;
 
         if (priceValue < 0) {
             return res.status(400).json({ error: 'Price cannot be negative', skipped: true });
@@ -3941,6 +4163,21 @@ router.put('/value', async (req, res) => {
             // Fallback to provided values
         }
 
+        if (quotingProvided && quotingValue === 'Yes') {
+            const eqRes = await sql.query`
+                SELECT LeadJob, OwnJob, ToName, QuoteNumber
+                FROM EnquiryQuotes
+                WHERE RequestNo = ${requestNo}
+            `;
+            const existingQuotes = mapEnquiryQuoteRowsForDeclineGuard(eqRes.recordset);
+            if (quoteBlocksDeclineToQuote(existingQuotes, resolvedLeadJobName, resolvedCustomerName)) {
+                return res.status(409).json({
+                    error: 'Cannot decline to quote: a quote already exists for this enquiry, lead job, and customer.',
+                    code: 'QUOTE_ALREADY_EXISTS',
+                });
+            }
+        }
+
         // --- UPSERT LOGIC WITH RESOLVED METADATA ---
         //
         // IMPORTANT: When `EnquiryForID` is set, match ONLY on RequestNo + OptionID + EnquiryForID.
@@ -3972,42 +4209,79 @@ router.put('/value', async (req, res) => {
         }
 
         const now = new Date();
-        // Do not insert brand-new zero-value rows.
+        // Do not insert brand-new zero-value rows unless declining to quote.
         // But if a row already exists, allow updating it to zero.
-        if (priceValue <= 0 && existingResult.recordset.length === 0) {
+        if (
+            priceValue <= 0 &&
+            existingResult.recordset.length === 0 &&
+            !(quotingProvided && quotingValue === 'Yes')
+        ) {
             return res.json({ success: true, skipped: true, reason: 'zero-new-row-skipped' });
         }
 
         if (existingResult.recordset.length > 0) {
             if (enquiryForId) {
-                await sql.query`
-                    UPDATE EnquiryPricingValues 
-                    SET Price = ${priceValue}, UpdatedBy = ${updatedBy}, UpdatedAt = ${now},
-                        EnquiryForID = ${enquiryForId || null},
-                        EnquiryForItem = ${resolvedItemName},
-                        LeadJobName = ${resolvedLeadJobName},
-                        CustomerName = ${resolvedCustomerName},
-                        PriceOption = ${priceOption || null}
-                    WHERE RequestNo = ${requestNo} 
-                    AND OptionID = ${optionId} 
-                    AND EnquiryForID = ${enquiryForId}
-                `;
+                if (quotingProvided && quotingOrNotColumnAvailable) {
+                    await sql.query`
+                        UPDATE EnquiryPricingValues 
+                        SET Price = ${priceValue}, UpdatedBy = ${updatedBy}, UpdatedAt = ${now},
+                            EnquiryForID = ${enquiryForId || null},
+                            EnquiryForItem = ${resolvedItemName},
+                            LeadJobName = ${resolvedLeadJobName},
+                            CustomerName = ${resolvedCustomerName},
+                            PriceOption = ${priceOption || null},
+                            Quotingornot = ${quotingValue}
+                        WHERE RequestNo = ${requestNo} 
+                        AND OptionID = ${optionId} 
+                        AND EnquiryForID = ${enquiryForId}
+                    `;
+                } else {
+                    await sql.query`
+                        UPDATE EnquiryPricingValues 
+                        SET Price = ${priceValue}, UpdatedBy = ${updatedBy}, UpdatedAt = ${now},
+                            EnquiryForID = ${enquiryForId || null},
+                            EnquiryForItem = ${resolvedItemName},
+                            LeadJobName = ${resolvedLeadJobName},
+                            CustomerName = ${resolvedCustomerName},
+                            PriceOption = ${priceOption || null}
+                        WHERE RequestNo = ${requestNo} 
+                        AND OptionID = ${optionId} 
+                        AND EnquiryForID = ${enquiryForId}
+                    `;
+                }
             } else {
                 const custTrim =
                     resolvedCustomerName != null ? String(resolvedCustomerName).trim() : '';
-                await sql.query`
-                    UPDATE EnquiryPricingValues 
-                    SET Price = ${priceValue}, UpdatedBy = ${updatedBy}, UpdatedAt = ${now},
-                        EnquiryForID = ${enquiryForId || null},
-                        EnquiryForItem = ${resolvedItemName},
-                        LeadJobName = ${resolvedLeadJobName},
-                        CustomerName = ${resolvedCustomerName},
-                        PriceOption = ${priceOption || null}
-                    WHERE RequestNo = ${requestNo} 
-                    AND OptionID = ${optionId} 
-                    AND EnquiryForItem = ${resolvedItemName}
-                    AND LTRIM(RTRIM(ISNULL(CustomerName, N''))) = ${custTrim}
-                `;
+                if (quotingProvided && quotingOrNotColumnAvailable) {
+                    await sql.query`
+                        UPDATE EnquiryPricingValues 
+                        SET Price = ${priceValue}, UpdatedBy = ${updatedBy}, UpdatedAt = ${now},
+                            EnquiryForID = ${enquiryForId || null},
+                            EnquiryForItem = ${resolvedItemName},
+                            LeadJobName = ${resolvedLeadJobName},
+                            CustomerName = ${resolvedCustomerName},
+                            PriceOption = ${priceOption || null},
+                            Quotingornot = ${quotingValue}
+                        WHERE RequestNo = ${requestNo} 
+                        AND OptionID = ${optionId} 
+                        AND EnquiryForItem = ${resolvedItemName}
+                        AND LTRIM(RTRIM(ISNULL(CustomerName, N''))) = ${custTrim}
+                    `;
+                } else {
+                    await sql.query`
+                        UPDATE EnquiryPricingValues 
+                        SET Price = ${priceValue}, UpdatedBy = ${updatedBy}, UpdatedAt = ${now},
+                            EnquiryForID = ${enquiryForId || null},
+                            EnquiryForItem = ${resolvedItemName},
+                            LeadJobName = ${resolvedLeadJobName},
+                            CustomerName = ${resolvedCustomerName},
+                            PriceOption = ${priceOption || null}
+                        WHERE RequestNo = ${requestNo} 
+                        AND OptionID = ${optionId} 
+                        AND EnquiryForItem = ${resolvedItemName}
+                        AND LTRIM(RTRIM(ISNULL(CustomerName, N''))) = ${custTrim}
+                    `;
+                }
             }
 
             if (debugForEnquiry) {
@@ -4018,10 +4292,17 @@ router.put('/value', async (req, res) => {
             }
         } else {
             // Insert
-            await sql.query`
-                INSERT INTO EnquiryPricingValues (RequestNo, OptionID, EnquiryForItem, EnquiryForID, Price, UpdatedBy, CustomerName, LeadJobName, UpdatedAt, PriceOption)
-                VALUES (${requestNo}, ${optionId}, ${resolvedItemName}, ${enquiryForId || null}, ${priceValue}, ${updatedBy}, ${resolvedCustomerName}, ${resolvedLeadJobName}, ${now}, ${priceOption || null})
-            `;
+            if (quotingOrNotColumnAvailable) {
+                await sql.query`
+                    INSERT INTO EnquiryPricingValues (RequestNo, OptionID, EnquiryForItem, EnquiryForID, Price, UpdatedBy, CustomerName, LeadJobName, UpdatedAt, PriceOption, Quotingornot)
+                    VALUES (${requestNo}, ${optionId}, ${resolvedItemName}, ${enquiryForId || null}, ${priceValue}, ${updatedBy}, ${resolvedCustomerName}, ${resolvedLeadJobName}, ${now}, ${priceOption || null}, ${quotingValue})
+                `;
+            } else {
+                await sql.query`
+                    INSERT INTO EnquiryPricingValues (RequestNo, OptionID, EnquiryForItem, EnquiryForID, Price, UpdatedBy, CustomerName, LeadJobName, UpdatedAt, PriceOption)
+                    VALUES (${requestNo}, ${optionId}, ${resolvedItemName}, ${enquiryForId || null}, ${priceValue}, ${updatedBy}, ${resolvedCustomerName}, ${resolvedLeadJobName}, ${now}, ${priceOption || null})
+                `;
+            }
 
             if (debugForEnquiry) {
                 logToFile(

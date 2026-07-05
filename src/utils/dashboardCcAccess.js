@@ -41,13 +41,23 @@ function masterEnquiryForMatchesDivision(masterRow, divisionLabel) {
     return false;
 }
 
+function parseCcMailList(ccMailIds) {
+    if (Array.isArray(ccMailIds)) {
+        return ccMailIds.map((s) => String(s || '').trim()).filter(Boolean);
+    }
+    return String(ccMailIds || '')
+        .split(/[,;]/)
+        .map((s) => String(s || '').trim())
+        .filter(Boolean);
+}
+
 /** Distinct CCMailIds from Master_EnquiryFor for one division, minus excluded coordinator addresses. */
 export function collectDistinctCcMailIdsForDivision(divisionLabel, enqItems) {
     const seen = new Set();
     const out = [];
     for (const item of enqItems || []) {
         if (!masterEnquiryForMatchesDivision(item, divisionLabel)) continue;
-        for (const raw of String(item.CCMailIds || '').split(/[,;]/)) {
+        for (const raw of parseCcMailList(item.CCMailIds)) {
             const norm = normalizeCcEmail(raw);
             if (!norm || EXCLUDED_ENQUIRY_STRUCTURE_CC_EMAILS.has(norm) || seen.has(norm)) continue;
             seen.add(norm);
@@ -62,7 +72,7 @@ export function collectDistinctCcMailIds(enqItems) {
     const seen = new Set();
     const out = [];
     for (const item of enqItems || []) {
-        for (const raw of String(item.CCMailIds || '').split(/[,;]/)) {
+        for (const raw of parseCcMailList(item.CCMailIds)) {
             const norm = normalizeCcEmail(raw);
             if (!norm || EXCLUDED_ENQUIRY_STRUCTURE_CC_EMAILS.has(norm) || seen.has(norm)) continue;
             seen.add(norm);
@@ -72,6 +82,18 @@ export function collectDistinctCcMailIds(enqItems) {
     return out;
 }
 
+function ccEmailToDisplayLabel(email) {
+    const norm = normalizeCcEmail(email);
+    if (!norm) return '';
+    const local = norm.split('@')[0] || norm;
+    return local
+        .split(/[._-]+/)
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ');
+}
+
+/** Map division CC emails to assignee rows; unresolved emails still appear using a readable label. */
 function mapCcEmailsToAssigneeUsers(emails, masterUsers) {
     const userByEmail = new Map(
         (masterUsers || [])
@@ -79,15 +101,23 @@ function mapCcEmailsToAssigneeUsers(emails, masterUsers) {
             .filter(([email]) => Boolean(email))
     );
     const result = [];
-    const seenNames = new Set();
-    for (const email of emails) {
-        const u = userByEmail.get(email);
-        const fullName = String(u?.FullName ?? u?.fullName ?? '').trim();
+    const seenEmails = new Set();
+    for (const email of emails || []) {
+        const norm = normalizeCcEmail(email);
+        if (!norm || seenEmails.has(norm)) continue;
+        seenEmails.add(norm);
+
+        const master = userByEmail.get(norm);
+        const fullName = master
+            ? String(master.FullName ?? master.fullName ?? '').trim()
+            : ccEmailToDisplayLabel(norm);
         if (!fullName) continue;
-        const nameKey = fullName.toLowerCase();
-        if (seenNames.has(nameKey)) continue;
-        seenNames.add(nameKey);
-        result.push(u);
+
+        result.push(
+            master
+                ? { ...master, assigneeSource: 'ccMail' }
+                : { FullName: fullName, EmailId: norm, assigneeSource: 'ccMail' }
+        );
     }
     return result;
 }
@@ -100,19 +130,29 @@ function divisionMatchKeys(divisionLabel) {
     return [...keys].filter(Boolean);
 }
 
-/** Master_ConcernedSE rows whose Department matches the structure division label. */
-function userDepartmentMatchesDivision(userDept, divisionLabel) {
-    const d = normalizeDivisionKey(userDept);
-    if (!d) return false;
-    return divisionMatchKeys(divisionLabel).some((k) => {
-        if (d === k) return true;
-        return k.includes(d) || d.includes(k);
-    });
+/** Department keys used to resolve Master_ConcernedSE for one structure division label. */
+function divisionAssigneeDepartmentKeys(divisionLabel, enqItems) {
+    const keys = new Set(divisionMatchKeys(divisionLabel));
+    for (const item of enqItems || []) {
+        if (!masterEnquiryForMatchesDivision(item, divisionLabel)) continue;
+        const deptKey = normalizeDivisionKey(item?.DepartmentName);
+        const itemKey = normalizeDivisionKey(item?.ItemName);
+        if (deptKey) keys.add(deptKey);
+        if (itemKey) keys.add(itemKey);
+    }
+    return [...keys].filter(Boolean);
 }
 
-export function getConcernedSeUsersForDivision(divisionLabel, masterUsers) {
+/** Master_ConcernedSE rows whose Department matches the structure division label (exact match only). */
+function userDepartmentMatchesDivision(userDept, divisionLabel, enqItems) {
+    const d = normalizeDivisionKey(userDept);
+    if (!d) return false;
+    return divisionAssigneeDepartmentKeys(divisionLabel, enqItems).some((k) => d === k);
+}
+
+export function getConcernedSeUsersForDivision(divisionLabel, masterUsers, enqItems = []) {
     return (masterUsers || []).filter((u) =>
-        userDepartmentMatchesDivision(u?.Department ?? u?.department, divisionLabel)
+        userDepartmentMatchesDivision(u?.Department ?? u?.department, divisionLabel, enqItems)
     );
 }
 
@@ -123,7 +163,8 @@ function mergeAssigneeUsers(...groups) {
         for (const u of group || []) {
             const fullName = String(u?.FullName ?? u?.fullName ?? '').trim();
             if (!fullName) continue;
-            const key = fullName.toLowerCase();
+            const emailKey = normalizeCcEmail(u?.EmailId ?? u?.email);
+            const key = emailKey || fullName.toLowerCase();
             if (seen.has(key)) continue;
             seen.add(key);
             result.push(u);
@@ -139,7 +180,7 @@ function mergeAssigneeUsers(...groups) {
  * Concerned SE (Master_ConcernedSE by department) plus CC-mail users for that division.
  */
 export function getEnquiryStructureAssigneeUsersForDivision(divisionLabel, enqItems, masterUsers) {
-    const concerned = getConcernedSeUsersForDivision(divisionLabel, masterUsers);
+    const concerned = getConcernedSeUsersForDivision(divisionLabel, masterUsers, enqItems);
     const ccUsers = mapCcEmailsToAssigneeUsers(
         collectDistinctCcMailIdsForDivision(divisionLabel, enqItems),
         masterUsers

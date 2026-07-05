@@ -192,6 +192,27 @@ function sqlCseLeadJobCode(alias = 'cse') {
     return `UPPER(LTRIM(RTRIM(ISNULL(${alias}.leadjobcode, ISNULL(${alias}.LeadJobCode, N'')))))`;
 }
 
+function sqlCseOwnJob(alias = 'cse') {
+    return `UPPER(LTRIM(RTRIM(ISNULL(${alias}.ownjob, ISNULL(${alias}.OwnJob, N'')))))`;
+}
+
+function sqlCseOwnJobDivisionMatch(cseAlias, divisionParam = '@division') {
+    const cseOwn = sqlCseOwnJob(cseAlias);
+    const divNorm = `UPPER(LTRIM(RTRIM(ISNULL(${divisionParam}, N''))))`;
+    return `(
+        ${cseOwn} = ${divNorm}
+        OR (
+            ${cseOwn} = N''
+            AND EXISTS (
+                SELECT 1
+                FROM Master_ConcernedSE msD
+                WHERE UPPER(LTRIM(RTRIM(ISNULL(msD.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(${cseAlias}.SEName, N''))))
+                  AND UPPER(LTRIM(RTRIM(ISNULL(msD.Department, N'')))) = ${divNorm}
+            )
+        )
+    )`;
+}
+
 function sqlEfLeadJobCode(alias = 'ef') {
     return `UPPER(LTRIM(RTRIM(ISNULL(${alias}.LeadJobCode, ISNULL(${alias}.leadjobcode, N'')))))`;
 }
@@ -232,26 +253,55 @@ COALESCE(
 }
 
 /**
- * When Probability row P is in scope: achievement counts only if selected SE is the sole
- * accountable assignee for that enquiry + lead job (L-code). Duplicate accountability rows
- * in legacy data resolve to one canonical name (stable ORDER BY).
+ * When Probability row P is in scope: achievement counts only if selected SE is the
+ * accountable assignee for that enquiry + job line (ConcernedSE.ownjob + leadjobcode).
  */
 function buildSalesReportProbAccountableSeClause(effectiveSe, seInputName = 'quotedSe') {
     if (!effectiveSe) return '';
     const leadJobCodeExpr = sqlProbLeadJobCodeExpr();
-    const canonicalAccountableSe = `
-(
-    SELECT TOP 1 LTRIM(RTRIM(ISNULL(c0.SEName, N'')))
-    FROM ConcernedSE c0
-    WHERE c0.RequestNo = E.RequestNo
-      AND ${sqlCseAccountabilityYes('c0')}
-      AND ${sqlCseLeadJobCode('c0')} = ${leadJobCodeExpr}
-      AND ${sqlCseLeadJobCode('c0')} <> N''
-    ORDER BY c0.SEName
-)`;
+    const probOwnJobNorm = `UPPER(LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))))`;
+    const cseOwnJobNorm = sqlCseOwnJob('c0');
+
     return `
-      AND LTRIM(RTRIM(ISNULL(@${seInputName}, N''))) = ${canonicalAccountableSe}
-      AND LTRIM(RTRIM(ISNULL(${canonicalAccountableSe}, N''))) <> N''`;
+      AND EXISTS (
+        SELECT 1
+        FROM ConcernedSE c0
+        WHERE c0.RequestNo = E.RequestNo
+          AND ${sqlCseAccountabilityYes('c0')}
+          AND UPPER(LTRIM(RTRIM(ISNULL(c0.SEName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(@${seInputName}, N''))))
+          AND (
+            (
+              ${probOwnJobNorm} <> N''
+              AND ${cseOwnJobNorm} = ${probOwnJobNorm}
+            )
+            OR (
+              ${probOwnJobNorm} <> N''
+              AND ${cseOwnJobNorm} = N''
+              AND EXISTS (
+                SELECT 1
+                FROM Master_ConcernedSE ms0
+                WHERE UPPER(LTRIM(RTRIM(ISNULL(ms0.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(c0.SEName, N''))))
+                  AND UPPER(LTRIM(RTRIM(ISNULL(ms0.Department, N'')))) = ${probOwnJobNorm}
+              )
+            )
+            OR (
+              ${probOwnJobNorm} = N''
+              AND ${sqlCseLeadJobCode('c0')} = ${leadJobCodeExpr}
+              AND ${sqlCseLeadJobCode('c0')} <> N''
+            )
+            OR (
+              ${probOwnJobNorm} <> N''
+              AND ${cseOwnJobNorm} = N''
+              AND ${sqlCseLeadJobCode('c0')} = ${leadJobCodeExpr}
+              AND ${sqlCseLeadJobCode('c0')} <> N''
+            )
+            OR (
+              ${probOwnJobNorm} = N''
+              AND UPPER(LTRIM(RTRIM(ISNULL(P.QuoteOwnJob, N'')))) <> N''
+              AND ${cseOwnJobNorm} = UPPER(LTRIM(RTRIM(ISNULL(P.QuoteOwnJob, N''))))
+            )
+          )
+      )`;
 }
 
 function buildSalesReportEnquiryScopeClause({ nonCcBlock, safeCompany, safeDivision, effectiveSe, seInputName = 'quotedSe', accountableSeOnly = false }) {
@@ -295,14 +345,22 @@ function buildSalesReportEnquiryScopeClause({ nonCcBlock, safeCompany, safeDivis
     return clause;
 }
 
+/** Division on Probability row: OwnJobName, or QuoteOwnJob when OwnJobName is blank (matches KPI scope). */
 function buildSalesReportProbOwnJobClause(safeDivision) {
     return safeDivision && safeDivision !== 'All'
-        ? ` AND UPPER(LTRIM(RTRIM(ISNULL(P.OwnJobName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))`
+        ? ` AND (
+                UPPER(LTRIM(RTRIM(ISNULL(P.OwnJobName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
+                OR (
+                    LTRIM(RTRIM(ISNULL(P.OwnJobName, ''))) = ''
+                    AND UPPER(LTRIM(RTRIM(ISNULL(P.QuoteOwnJob, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
+                )
+              )`
         : '';
 }
 
 /**
- * Sales Pipeline funnel + Jobs Follow-up table: latest Probability row per enquiry within division/SE scope.
+ * Sales Pipeline funnel + Jobs Follow-up table: latest Probability row per enquiry **and job line**
+ * within division/SE scope (same grain as Pending — sub-divisions under one lead job stay separate).
  */
 function buildSalesReportFunnelLatestProbCte(wonPreparedByClause, probScopeClause, enquiryScopeClause, cteName = 'LatestProbFunnelScope') {
     return `
@@ -310,7 +368,7 @@ WITH ${cteName} AS (
     SELECT * FROM (
         SELECT P.*,
             ROW_NUMBER() OVER (
-                PARTITION BY P.RequestNo
+                PARTITION BY P.RequestNo, LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))), LTRIM(RTRIM(ISNULL(P.LeadJobName, N'')))
                 ORDER BY P.UpdatedDateTime DESC, P.ID DESC
             ) AS __rn
         FROM dbo.Probability P
@@ -993,7 +1051,7 @@ router.get('/summary', async (req, res) => {
             effectiveSe: effectiveQuotedSe,
             seInputName: 'quotedSe',
         });
-        /** Won / Lost / Follow-up KPIs: only the accountable SE for each lead job (L-code) counts. */
+        /** Won / Lost / Follow-up KPIs: only the accountable SE per enquiry + ownjob (+ leadjob) counts. */
         const quotedAchievementScopeClause = buildSalesReportEnquiryScopeClause({
             nonCcBlock,
             safeCompany,
@@ -1005,17 +1063,9 @@ router.get('/summary', async (req, res) => {
 
         /** SE scope on enquiry (ConcernedSE) is in quotedFilterClause — not Probability.PreparedBy. */
         const wonPreparedByClause = '';
-        const probDivisionScopeClause = safeDivision
-            ? ` AND (
-                    UPPER(LTRIM(RTRIM(ISNULL(P.OwnJobName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
-                    OR (
-                        LTRIM(RTRIM(ISNULL(P.OwnJobName, ''))) = ''
-                        AND UPPER(LTRIM(RTRIM(ISNULL(P.QuoteOwnJob, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
-                    )
-                  )`
-            : '';
+        const probDivisionScopeClause = buildSalesReportProbOwnJobClause(safeDivision);
         const probPartitionByExpr = effectiveQuotedSe
-            ? `P.RequestNo`
+            ? `P.RequestNo, LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))), LTRIM(RTRIM(ISNULL(P.LeadJobName, N'')))`
             : `P.RequestNo, LTRIM(RTRIM(ISNULL(P.PreparedBy, '')))`;
         const quotePartitionByExpr = effectiveQuotedSe
             ? `EQ.RequestNo`
@@ -1706,6 +1756,11 @@ router.get('/top-job-booked', async (req, res) => {
         if (safeDivision && safeDivision !== 'All') {
             bindInputIfMissing(request, 'division', sql.NVarChar, safeDivision);
         }
+        if (effectiveQuotedSe) {
+            bindInputIfMissing(request, 'wonSe', sql.NVarChar, effectiveQuotedSe);
+            bindInputIfMissing(request, 'statusSe', sql.NVarChar, effectiveQuotedSe);
+            bindInputIfMissing(request, 'pendingSe', sql.NVarChar, effectiveQuotedSe);
+        }
         const isQuotedTopJob = topJobStatusKey === 'Quoted';
         const isPendingTopJob = topJobStatusKey === 'Pending';
         const isFollowUpTopJob = topJobStatusKey === 'Follow Up';
@@ -1737,16 +1792,12 @@ router.get('/top-job-booked', async (req, res) => {
                     ) `;
                 }
                 if (effectiveQuotedSe) {
-                    request.input('wonSe', sql.NVarChar, effectiveQuotedSe);
                     wonTopJobFilterClause += buildSalesReportProbAccountableSeClause(effectiveQuotedSe, 'wonSe');
                 }
             }
         }
         let statusTopJobFilterClause = '';
         if (isLostTopJob || isFollowUpTopJob) {
-            if (effectiveQuotedSe) {
-                request.input('statusSe', sql.NVarChar, effectiveQuotedSe);
-            }
             statusTopJobFilterClause = buildSalesReportEnquiryScopeClause({
                 nonCcBlock,
                 safeCompany,
@@ -1795,7 +1846,8 @@ router.get('/top-job-booked', async (req, res) => {
                         SELECT 1
                         FROM ConcernedSE cse
                         WHERE cse.RequestNo = E.RequestNo
-                          AND LTRIM(RTRIM(ISNULL(cse.SEName, ''))) = LTRIM(RTRIM(ISNULL(@pendingSe, '')))
+                          AND ${sqlCseAccountabilityYes('cse')}
+                          AND UPPER(LTRIM(RTRIM(ISNULL(cse.SEName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(@pendingSe, N''))))
                     ) `;
                 }
             }
@@ -1908,9 +1960,7 @@ router.get('/top-job-booked', async (req, res) => {
             } else if (isWonTopJob) {
                 const wonProbWhere = getProbWonMetricsSql(req);
                 const wonPreparedByClause = '';
-                const wonOwnJobClause = safeDivision && safeDivision !== 'All'
-                    ? ` AND UPPER(LTRIM(RTRIM(ISNULL(P.OwnJobName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))`
-                    : '';
+                const wonOwnJobClause = buildSalesReportProbOwnJobClause(safeDivision);
                 topJobBookedRes = await request.query(`
             WITH LatestProbWonScope AS (
                 SELECT * FROM (
@@ -1976,8 +2026,8 @@ router.get('/top-job-booked', async (req, res) => {
                     COALESCE(P.BookedDate, P.UpdatedDateTime) AS BookedDate,
                     CAST(NULL AS DATETIME) AS LostDate,
                     NULLIF(LTRIM(RTRIM(ISNULL(wonQ.QuoteType, N''))), N'') AS QuoteType
-                FROM EnquiryMaster E
-                LEFT JOIN LatestProbWonScope P ON E.RequestNo = P.RequestNo
+                FROM LatestProbWonScope P
+                INNER JOIN EnquiryMaster E ON E.RequestNo = P.RequestNo
                 OUTER APPLY (
                     SELECT TOP 1 Q.QuoteDate, Q.QuoteType
                     FROM EnquiryQuotes Q
@@ -1986,7 +2036,6 @@ router.get('/top-job-booked', async (req, res) => {
                 ) wonQ
                 WHERE ${wonProbWhere}
                   AND YEAR(COALESCE(P.BookedDate, P.UpdatedDateTime, E.EnquiryDate)) = @year
-                  ${effectiveQuotedSe ? buildSalesReportProbAccountableSeClause(effectiveQuotedSe, 'wonSe') : ''}
                   ${safeQuarter ? `AND DATEPART(QUARTER, COALESCE(P.BookedDate, P.UpdatedDateTime, E.EnquiryDate)) = @quarterNums` : ''}
             ) x
             ORDER BY x.JobValue DESC
@@ -2044,8 +2093,8 @@ router.get('/top-job-booked', async (req, res) => {
                     CAST(NULL AS DATETIME) AS BookedDate,
                     COALESCE(P.UpdatedDateTime, P.ExpectedDate) AS LostDate,
                     NULLIF(LTRIM(RTRIM(ISNULL(wonQ.QuoteType, N''))), N'') AS QuoteType
-                FROM EnquiryMaster E
-                LEFT JOIN LatestProbStatusScope P ON E.RequestNo = P.RequestNo
+                FROM LatestProbStatusScope P
+                INNER JOIN EnquiryMaster E ON E.RequestNo = P.RequestNo
                 OUTER APPLY (
                     SELECT TOP 1 Q.QuoteDate, Q.QuoteType
                     FROM EnquiryQuotes Q
@@ -2054,7 +2103,6 @@ router.get('/top-job-booked', async (req, res) => {
                 ) wonQ
                 WHERE ${isFollowUpTopJob ? followUpStatusWhere : topJobProbWhere}
                   AND YEAR(${probDateExpr}) = @year
-                  ${effectiveQuotedSe ? buildSalesReportProbAccountableSeClause(effectiveQuotedSe, 'statusSe') : ''}
                   ${safeQuarter ? `AND DATEPART(QUARTER, ${probDateExpr}) = @quarterNums` : ''}
             ) x
             ORDER BY x.JobValue DESC
@@ -2129,6 +2177,7 @@ router.get('/top-job-booked', async (req, res) => {
                         )
                       )
                   AND YEAR(${topJobDateExpr}) = @year ${topJobScopeClause}
+                  ${effectiveQuotedSe ? buildSalesReportProbAccountableSeClause(effectiveQuotedSe, 'pendingSe') : ''}
                   ${safeQuarter ? `AND DATEPART(QUARTER, ${topJobDateExpr}) = @quarterNums` : ''}
             ) x
             ORDER BY x.JobValue DESC
@@ -2250,13 +2299,12 @@ router.get('/top-job-booked', async (req, res) => {
                 SELECT
                     cse.RequestNo,
                     LTRIM(RTRIM(ISNULL(cse.SEName, ''))) AS SEName,
-                    ${sqlCseLeadJobCode('cse')} AS LeadJobCode
+                    ${sqlCseLeadJobCode('cse')} AS LeadJobCode,
+                    LTRIM(RTRIM(ISNULL(cse.ownjob, ISNULL(cse.OwnJob, N'')))) AS OwnJob
                 FROM ConcernedSE cse
-                LEFT JOIN Master_ConcernedSE ms
-                  ON UPPER(LTRIM(RTRIM(ISNULL(ms.FullName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(cse.SEName, ''))))
                 WHERE cse.RequestNo IN (${inParams.join(', ')})
                   ${safeDivision && safeDivision !== 'All'
-                    ? `AND UPPER(LTRIM(RTRIM(ISNULL(ms.Department, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))`
+                    ? `AND ${sqlCseOwnJobDivisionMatch('cse')}`
                     : ''}
             `);
             (seRowsRes.recordset || []).forEach((row) => {
@@ -2272,32 +2320,36 @@ router.get('/top-job-booked', async (req, res) => {
                 SELECT
                     cse.RequestNo,
                     LTRIM(RTRIM(ISNULL(cse.SEName, ''))) AS SEName,
-                    ${sqlCseLeadJobCode('cse')} AS LeadJobCode
+                    ${sqlCseLeadJobCode('cse')} AS LeadJobCode,
+                    LTRIM(RTRIM(ISNULL(cse.ownjob, ISNULL(cse.OwnJob, N'')))) AS OwnJob
                 FROM ConcernedSE cse
-                LEFT JOIN Master_ConcernedSE ms
-                  ON UPPER(LTRIM(RTRIM(ISNULL(ms.FullName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(cse.SEName, ''))))
                 WHERE cse.RequestNo IN (${inParams.join(', ')})
                   AND ${sqlCseAccountabilityYes('cse')}
-                  AND ${sqlCseLeadJobCode('cse')} <> N''
                   ${safeDivision && safeDivision !== 'All'
-                    ? `AND UPPER(LTRIM(RTRIM(ISNULL(ms.Department, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))`
+                    ? `AND ${sqlCseOwnJobDivisionMatch('cse')}`
                     : ''}
             `);
             concernSeAccountableMap = (accountableRowsRes.recordset || []).reduce((acc, row) => {
                 const rn = String(row.RequestNo || '').trim();
                 const ljc = String(row.LeadJobCode || '').trim().toUpperCase();
+                const ownJob = String(row.OwnJob || '').trim().toUpperCase();
                 const nm = String(row.SEName || '').trim();
-                if (!rn || !ljc || !nm) return acc;
-                acc.set(`${rn}|${ljc}`, nm);
+                if (!rn || !nm) return acc;
+                if (ownJob) acc.set(`${rn}|OWN|${ownJob}`, nm);
+                if (ljc) acc.set(`${rn}|LJC|${ljc}`, nm);
                 return acc;
             }, new Map());
         }
 
         const resolveTopJobConcernSe = (r) => {
             const rn = String(r.RequestNo || '').trim();
+            const leadJob = String(r.LeadJob || '').trim().toUpperCase();
             const ljc = String(r.LeadJobCode || '').trim().toUpperCase();
-            if (ljc && concernSeAccountableMap.has(`${rn}|${ljc}`)) {
-                return concernSeAccountableMap.get(`${rn}|${ljc}`);
+            if (leadJob && concernSeAccountableMap.has(`${rn}|OWN|${leadJob}`)) {
+                return concernSeAccountableMap.get(`${rn}|OWN|${leadJob}`);
+            }
+            if (ljc && concernSeAccountableMap.has(`${rn}|LJC|${ljc}`)) {
+                return concernSeAccountableMap.get(`${rn}|LJC|${ljc}`);
             }
             if (concernSeByRequestMap.has(rn)) {
                 return Array.from(concernSeByRequestMap.get(rn)).join(', ');

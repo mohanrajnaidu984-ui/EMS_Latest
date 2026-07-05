@@ -250,29 +250,34 @@ const NotificationDropdown = ({ onOpenEnquiry }) => {
 
 
 
+    const notificationIdOf = (n) => n?.ID ?? n?.id;
+
+    const removeFromActiveList = useCallback((id) => {
+        if (id == null) return;
+        setNotifications((prev) => prev.filter((n) => notificationIdOf(n) !== id));
+        setActiveCount((prev) => Math.max(0, prev - 1));
+    }, []);
+
+    const acknowledgeNotification = useCallback(async (id) => {
+        if (id == null) return false;
+        const res = await fetch(`/api/notifications/${id}/ack`, { method: 'PUT' });
+        return res.ok;
+    }, []);
+
+
+
     const navigateFromNotification = async (notification) => {
-
-        if (!notification.IsRead) {
-
+        const id = notificationIdOf(notification);
+        if (id != null) {
             try {
-
-                await fetch(`/api/notifications/${notification.ID}/read`, { method: 'PUT' });
-
-                setNotifications((prev) =>
-
-                    prev.map((n) => (n.ID === notification.ID ? { ...n, IsRead: true } : n))
-
-                );
-
+                const ok = await acknowledgeNotification(id);
+                if (ok) {
+                    removeFromActiveList(id);
+                }
             } catch (err) {
-
-                console.error(err);
-
+                console.error('Failed to acknowledge notification on open', err);
             }
-
         }
-
-
 
         setIsOpen(false);
 
@@ -315,27 +320,25 @@ const NotificationDropdown = ({ onOpenEnquiry }) => {
 
 
     const handleAck = async (e, notification) => {
-
         e.stopPropagation();
+        const id = notificationIdOf(notification);
+        if (id == null) return;
+
+        removeFromActiveList(id);
 
         try {
-
-            const res = await fetch(`/api/notifications/${notification.ID}/ack`, { method: 'PUT' });
-
-            if (res.ok) {
-
-                setNotifications((prev) => prev.filter((n) => n.ID !== notification.ID));
-
-                setActiveCount((prev) => Math.max(0, prev - 1));
-
+            const ok = await acknowledgeNotification(id);
+            if (!ok) {
+                await fetchNotifications('active');
+                await fetchActiveCount();
+                return;
             }
-
+            await fetchActiveCount();
         } catch (err) {
-
             console.error('Failed to acknowledge notification', err);
-
+            await fetchNotifications('active');
+            await fetchActiveCount();
         }
-
     };
 
 
@@ -365,31 +368,29 @@ const NotificationDropdown = ({ onOpenEnquiry }) => {
 
 
     const handleAckAll = async (e) => {
-
         e.stopPropagation();
-
         if (!currentUser) return;
 
+        const previous = notifications;
+        setNotifications([]);
+        setActiveCount(0);
+        setHasMore(false);
+
         try {
-
             const res = await fetch(`/api/notifications/${currentUser.id}/ack-all`, { method: 'PUT' });
-
-            if (res.ok) {
-
-                setNotifications([]);
-
-                setActiveCount(0);
-
-                setHasMore(false);
-
+            if (!res.ok) {
+                setNotifications(previous);
+                await fetchActiveCount();
+                await fetchNotifications('active');
+                return;
             }
-
+            await fetchActiveCount();
         } catch (err) {
-
             console.error('Failed to acknowledge all notifications', err);
-
+            setNotifications(previous);
+            await fetchActiveCount();
+            await fetchNotifications('active');
         }
-
     };
 
 

@@ -41,6 +41,8 @@ const {
     resolveEnquiryUploadDestination,
     resolveEnquiryAttachmentVisibilityBase,
     resolveEnquiryUploadDestinationByVisibility,
+    resolveWritableEnquiryUploadDestination,
+    resolveLocalEnquiryAttachmentsRoot,
     sanitizeFolderName,
 } = require('./lib/attachmentsRoot');
 const { previewNextRequestNo, resolveRequestNoForCreate } = require('./lib/allocateRequestNo');
@@ -365,9 +367,15 @@ const enquiryAttachmentStorage = multer.diskStorage({
         try {
             const visibility = req.query.visibility || 'Public';
             const division = req.query.division || 'General';
-            const dest = resolveEnquiryUploadDestinationByVisibility(req.query.requestNo, visibility, division);
-            if (!fs.existsSync(dest)) {
-                fs.mkdirSync(dest, { recursive: true });
+            const { dest, usedFallback, primaryAttempted } = resolveWritableEnquiryUploadDestination(
+                req.query.requestNo,
+                visibility,
+                division
+            );
+            req._attachmentUploadDest = dest;
+            req._attachmentUsedLocalFallback = usedFallback;
+            if (usedFallback) {
+                req._attachmentPrimaryAttempted = primaryAttempted;
             }
             cb(null, dest);
         } catch (err) {
@@ -395,7 +403,7 @@ function runEnquiryAttachmentUpload(req, res, next) {
                     ? 'File exceeds the 100 MB upload limit.'
                     : err.message || 'File upload failed',
             code: err.code || 'UPLOAD_ERROR',
-            hint: 'Verify ENQUIRY_ATTACHMENTS_ROOT and that the PM2 service account can write to the UNC share.',
+            hint: 'Verify ENQUIRY_ATTACHMENTS_ROOT or use local storage under EMS/data/ems-attachments.',
         });
     });
 }
@@ -479,7 +487,8 @@ app.get('/api/system/attachment-storage-probe', (req, res) => {
         const requestNo = req.query.requestNo || 'probe';
         const visibility = req.query.visibility || 'Public';
         const division = req.query.division || 'General';
-        const dest = resolveEnquiryUploadDestinationByVisibility(requestNo, visibility, division);
+        const resolved = resolveWritableEnquiryUploadDestination(requestNo, visibility, division);
+        const dest = resolved.dest;
         const probeFile = path.join(dest, `.ems-write-probe-${Date.now()}.tmp`);
         const userInfo = (() => {
             try {
@@ -493,9 +502,12 @@ app.get('/api/system/attachment-storage-probe', (req, res) => {
             ok: false,
             processUser: userInfo.username,
             enquiryAttachmentsRoot: resolveEnquiryAttachmentsBase(),
+            localFallbackRoot: resolveLocalEnquiryAttachmentsRoot(),
             publicBase: resolveEnquiryAttachmentVisibilityBase('Public'),
             privateBase: resolveEnquiryAttachmentVisibilityBase('Private'),
             resolvedDestination: dest,
+            usedLocalFallback: resolved.usedFallback,
+            primaryAttempted: resolved.primaryAttempted || null,
             probeFile,
             steps: [],
         };
@@ -2706,22 +2718,19 @@ app.post('/api/attachments/upload', (req, res, next) => {
         const visibility = req.query.visibility || 'Public';
         const division = req.query.division || 'General';
         const requestNo = req.query.requestNo;
-        const base = resolveEnquiryAttachmentVisibilityBase(visibility);
-        if (!fs.existsSync(base)) {
-            fs.mkdirSync(base, { recursive: true });
-        }
         if (requestNo) {
-            const dest = resolveEnquiryUploadDestinationByVisibility(requestNo, visibility, division);
-            if (!fs.existsSync(dest)) {
-                fs.mkdirSync(dest, { recursive: true });
+            const resolved = resolveWritableEnquiryUploadDestination(requestNo, visibility, division);
+            console.log('[attachments/upload] destination:', resolved.dest, resolved.usedFallback ? '(local fallback)' : '');
+            if (resolved.usedFallback) {
+                console.warn('[attachments/upload] primary not writable:', resolved.primaryAttempted);
             }
-            console.log('[attachments/upload] destination:', dest);
         }
     } catch (err) {
-        console.error('[attachments/upload] Cannot create attachment folder:', err.message);
+        console.error('[attachments/upload] Cannot resolve writable attachment folder:', err.message);
         return res.status(500).json({
-            message: 'Attachment storage is not available. Check ENQUIRY_ATTACHMENTS_ROOT and server permissions.',
+            message: 'Attachment storage is not available.',
             detail: err.message,
+            hint: 'Set ENQUIRY_ATTACHMENTS_ROOT to a local path, e.g. C:\\inetpub\\wwwroot\\EMS\\data\\ems-attachments',
         });
     }
     next();

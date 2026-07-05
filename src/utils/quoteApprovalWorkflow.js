@@ -74,18 +74,14 @@ function approverMatchesUser(step, userEmail, userName = '') {
     return userNormName.length > 0 && userNormName === stepNormName;
 }
 
-/** Pending step assigned to the signed-in user once all earlier steps are approved. */
+/** Pending step assigned to the signed-in user (parallel approval — no sequence gate). */
 export function getUserPendingApprovalStep(steps, userEmail, userName = '') {
     const sorted = [...(steps || [])].sort((a, b) => a.sequence - b.sequence);
     if (sorted.some((s) => s.status === 'rejected')) return null;
-    const userStep = sorted.find(
-        (s) => s.status === 'pending' && approverMatchesUser(s, userEmail, userName)
+    return (
+        sorted.find((s) => s.status === 'pending' && approverMatchesUser(s, userEmail, userName)) ||
+        null
     );
-    if (!userStep) return null;
-    const blockedByEarlier = sorted.some(
-        (s) => s.sequence < userStep.sequence && s.status !== 'approved'
-    );
-    return blockedByEarlier ? null : userStep;
 }
 
 export function canUserActOnApprovalStep(steps, step, userEmail, userName = '') {

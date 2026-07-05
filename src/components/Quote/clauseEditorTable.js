@@ -1463,13 +1463,15 @@ export function buildEmsOfficePasteTableNormalModeCss(scope) {
         background-color: transparent !important;
     }
     ${officeTable} td:not([data-ems-cell-fill]):not([data-ems-cell-border]):not(.ems-table-cell-selected),
-    ${officeTable} th:not([data-ems-cell-fill]):not([data-ems-cell-border]):not(.ems-table-cell-selected) {
+    ${officeTable} th:not([data-ems-cell-fill]):not([data-ems-cell-border]):not(.ems-table-cell-selected),
+    ${officeTable} td[data-ems-cell-border="none"],
+    ${officeTable} th[data-ems-cell-border="none"] {
         background: transparent !important;
         background-color: transparent !important;
         border: none !important;
     }
-    ${officeTable} td:not([data-ems-cell-fill])[data-ems-cell-border],
-    ${officeTable} th:not([data-ems-cell-fill])[data-ems-cell-border] {
+    ${officeTable} td:not([data-ems-cell-fill])[data-ems-cell-border]:not([data-ems-cell-border="none"]),
+    ${officeTable} th:not([data-ems-cell-fill])[data-ems-cell-border]:not([data-ems-cell-border="none"]) {
         background: transparent !important;
         background-color: transparent !important;
     }`;
@@ -3416,7 +3418,71 @@ function applyTableCellRangeSelection(jodit, table, startCell, endCell) {
     return picked;
 }
 
-/** Only the dragged row changes height; others stay fixed (data-ems-row-heights). */
+function getSelectedTableRows(jodit, getEditorBody) {
+    const live = getSelectedTableCells(jodit);
+    const stashed = (jodit.__emsFormatTableCells || []).filter((c) => c?.isConnected);
+    /** @type {HTMLTableCellElement[]} */
+    const cells = [];
+    const seenCell = new Set();
+    [...stashed, ...live].forEach((cell) => {
+        if (cell?.isConnected && !seenCell.has(cell)) {
+            seenCell.add(cell);
+            cells.push(cell);
+        }
+    });
+  /** @type {HTMLTableRowElement[]} */
+    const rows = [];
+    const seen = new Set();
+
+    if (cells.length) {
+        cells.forEach((cell) => {
+            const tr = cell.closest('tr');
+            if (tr && !seen.has(tr)) {
+                seen.add(tr);
+                rows.push(tr);
+            }
+        });
+    } else {
+        const cell = getActiveTableCell(jodit, getEditorBody);
+        const tr = cell?.closest('tr');
+        if (tr) rows.push(tr);
+    }
+
+    const table = rows[0]?.closest('table');
+    if (!table) return rows;
+
+    const order = getTableRows(table);
+    return rows.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+}
+
+/** Row indices to resize together — all selected rows in the table, or just the dragged row. */
+function resolveRowResizeTargetIndices(jodit, getEditorBody, table, primaryRowIndex) {
+    const rows = getTableRows(table);
+    const primaryRow = rows[primaryRowIndex];
+    if (!primaryRow) return [primaryRowIndex];
+
+    const selectedRows = getSelectedTableRows(jodit, getEditorBody).filter(
+        (tr) => tr.closest('table') === table
+    );
+    if (selectedRows.length <= 1 || !selectedRows.includes(primaryRow)) {
+        return [primaryRowIndex];
+    }
+
+    return selectedRows.map((tr) => rows.indexOf(tr)).filter((i) => i >= 0);
+}
+
+function markRowResizeTargetRows(table, rowIndices) {
+    if (!table) return;
+    clearRowResizeHoverMarkers(table);
+    const rows = getTableRows(table);
+    table.setAttribute('data-ems-row-resize-active', '1');
+    rowIndices.forEach((i) => {
+        const tr = rows[i];
+        if (tr) tr.setAttribute('data-ems-row-resize-target', '1');
+    });
+}
+
+/** Dragged row sets height; when multiple rows are selected, all selected rows match that height. */
 function registerTableRowResize(jodit, getEditorBody) {
     if (!jodit || jodit.__emsTableRowResize) return;
     jodit.__emsTableRowResize = true;
@@ -3427,6 +3493,7 @@ function registerTableRowResize(jodit, getEditorBody) {
     let startY = 0;
     let startHeights = null;
     let resizeRow = -1;
+    let resizeRowIndices = [];
     let workTable = null;
     let hoverCell = null;
 
@@ -3475,6 +3542,8 @@ function registerTableRowResize(jodit, getEditorBody) {
         jodit.__emsColResizeHide?.();
         const rows = getTableRows(workTable);
         startHeights = readRowHeightsPx(workTable, rows);
+        resizeRowIndices = resolveRowResizeTargetIndices(jodit, getEditorBody, workTable, resizeRow);
+        markRowResizeTargetRows(workTable, resizeRowIndices);
         startY = clientY;
         drag = true;
         setRowResizingFlag(workTable, true);
@@ -3499,6 +3568,7 @@ function registerTableRowResize(jodit, getEditorBody) {
             jodit.e?.off(jodit.ew, 'mousemove.emsRowResize touchmove.emsRowResize', onMove);
             jodit.e?.off(jodit.ow, 'mouseup.emsRowResize touchend.emsRowResize', onUp);
             startHeights = null;
+            resizeRowIndices = [];
             setBodyCursor(jodit, '');
             document.body.style.removeProperty('user-select');
             if (typeof jodit.synchronizeValues === 'function') jodit.synchronizeValues();
@@ -3544,12 +3614,20 @@ function registerTableRowResize(jodit, getEditorBody) {
         if (!workTable || resizeRow < 0 || !startHeights) return;
         const rows = getTableRows(workTable);
         const next = [...startHeights];
-        next[resizeRow] = Math.max(
+        const newHeight = Math.max(
             MIN_TABLE_ROW_HEIGHT,
             startHeights[resizeRow] + delta
         );
+        const targets =
+            resizeRowIndices.length > 0
+                ? resizeRowIndices
+                : resolveRowResizeTargetIndices(jodit, getEditorBody, workTable, resizeRow);
+        targets.forEach((i) => {
+            next[i] = newHeight;
+        });
         applyRowHeights(workTable, rows, next);
         workTable.setAttribute('data-ems-row-heights-custom', '1');
+        markRowResizeTargetRows(workTable, targets);
         positionHandleForRow(workTable, resizeRow);
     };
 
@@ -3919,33 +3997,6 @@ function convertRowCellsToHeader(tr) {
 
 function convertRowCellsToBody(tr) {
     [...tr.cells].forEach(convertCellToTd);
-}
-
-function getSelectedTableRows(jodit, getEditorBody) {
-    const cells = getSelectedTableCells(jodit);
-  /** @type {HTMLTableRowElement[]} */
-    const rows = [];
-    const seen = new Set();
-
-    if (cells.length) {
-        cells.forEach((cell) => {
-            const tr = cell.closest('tr');
-            if (tr && !seen.has(tr)) {
-                seen.add(tr);
-                rows.push(tr);
-            }
-        });
-    } else {
-        const cell = getActiveTableCell(jodit, getEditorBody);
-        const tr = cell?.closest('tr');
-        if (tr) rows.push(tr);
-    }
-
-    const table = rows[0]?.closest('table');
-    if (!table) return rows;
-
-    const order = getTableRows(table);
-    return rows.sort((a, b) => order.indexOf(a) - order.indexOf(b));
 }
 
 function canToggleRepeatHeaderRows(jodit, getEditorBody) {
@@ -4481,8 +4532,23 @@ function registerTableRowColumnClipboard(jodit, getEditorBody) {
 }
 
 const EMS_TABLE_CELL_BORDER_STYLE = '1px solid #64748b';
+export const EMS_TABLE_CELL_BORDER_NONE = 'none';
 const EMS_TABLE_BORDER_SIDE_PROPS = ['border-top', 'border-right', 'border-bottom', 'border-left'];
 const EMS_TABLE_BORDER_SIDE_NAMES = ['top', 'right', 'bottom', 'left'];
+
+/** Cells/tables explicitly cleared via toolbar "No border" — must beat default clause table grid CSS. */
+export const EMS_TABLE_NO_BORDER_CELL_OVERRIDE_CSS = `
+td[data-ems-cell-border="none"],
+th[data-ems-cell-border="none"] {
+    border: none !important;
+    border-top: none !important;
+    border-right: none !important;
+    border-bottom: none !important;
+    border-left: none !important;
+}
+table[data-ems-table-border="none"] {
+    border: none !important;
+}`;
 
 function isVisibleBorderCssValue(val) {
     if (!val) return false;
@@ -4498,9 +4564,11 @@ function isVisibleBorderCssValue(val) {
 /** True when a cell carries a real border from paste or toolbar formatting. */
 export function cellHasVisibleBorderStyle(cell, win) {
     if (!cell) return false;
+    const borderMark = cell.getAttribute?.('data-ems-cell-border');
+    if (borderMark === EMS_TABLE_CELL_BORDER_NONE) return false;
     const borderAttr = cell.getAttribute?.('border');
     if (borderAttr && borderAttr !== '0') return true;
-    if (cell.hasAttribute?.('data-ems-cell-border')) return true;
+    if (borderMark) return true;
     if (!cell.style) return false;
 
     if (isVisibleBorderCssValue(cell.style.getPropertyValue('border'))) return true;
@@ -4745,6 +4813,7 @@ export function applyDefaultOfficeTableBordersIfEmpty(table) {
     const hasBorder = [...cells].some((cell) => cellHasVisibleBorderStyle(cell));
     if (hasBorder) return;
     cells.forEach((cell) => {
+        if (cell.getAttribute('data-ems-cell-border') === EMS_TABLE_CELL_BORDER_NONE) return;
         cell.style.setProperty('border', EMS_TABLE_CELL_BORDER_STYLE, 'important');
         cell.setAttribute('data-ems-cell-border', '1');
     });
@@ -4762,6 +4831,7 @@ export function applyDefaultManualTableBordersIfEmpty(table) {
     if (!cells.length) return;
     let applied = false;
     cells.forEach((cell) => {
+        if (cell.getAttribute('data-ems-cell-border') === EMS_TABLE_CELL_BORDER_NONE) return;
         if (cellHasVisibleBorderStyle(cell)) return;
         cell.style.setProperty('border', EMS_TABLE_CELL_BORDER_STYLE, 'important');
         cell.setAttribute('data-ems-cell-border', '1');
@@ -5288,22 +5358,33 @@ const EMS_TABLE_BORDER_MAP = {
 
 function clearTableCellBorders(cell) {
     if (!cell?.style) return;
-    cell.style.removeProperty('border');
-    EMS_TABLE_BORDER_SIDE_PROPS.forEach((prop) => cell.style.removeProperty(prop));
-    cell.removeAttribute('data-ems-cell-border');
+    cell.style.setProperty('border', 'none', 'important');
+    EMS_TABLE_BORDER_SIDE_PROPS.forEach((prop) => cell.style.setProperty(prop, 'none', 'important'));
+    cell.setAttribute('data-ems-cell-border', EMS_TABLE_CELL_BORDER_NONE);
+    cell.removeAttribute('border');
+}
+
+function clearTableBorders(table) {
+    if (!table?.style) return;
+    table.style.setProperty('border', 'none', 'important');
+    table.setAttribute('data-ems-table-border', EMS_TABLE_CELL_BORDER_NONE);
+    table.removeAttribute('border');
 }
 
 function setTableCellBorderSide(cell, side, style = EMS_TABLE_CELL_BORDER_STYLE) {
     if (!cell?.style || !side) return;
+    cell.setAttribute('data-ems-cell-border', '1');
     if (side === 'all') {
         cell.style.setProperty('border', style, 'important');
     } else {
         cell.style.setProperty(`border-${side}`, style, 'important');
     }
-    cell.setAttribute('data-ems-cell-border', '1');
     const table = cell.closest('table');
-    if (table && !table.style.borderCollapse) {
-        table.style.borderCollapse = 'collapse';
+    if (table) {
+        table.removeAttribute('data-ems-table-border');
+        if (!table.style.borderCollapse) {
+            table.style.borderCollapse = 'collapse';
+        }
     }
 }
 
@@ -5358,6 +5439,10 @@ function applyTableBorderModeToCells(jodit, cells, mode) {
             }
         }
         if (!Number.isFinite(rMin)) return;
+
+        if (mode === 'none') {
+            clearTableBorders(table);
+        }
 
         const seen = new Set();
         for (let i = rMin; i <= rMax; i += 1) {

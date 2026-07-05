@@ -107,6 +107,7 @@ function mapPendingApprovalToTableRow(row) {
         ListQuoteDetailToName: cust,
         ListWorkflowNo: String(row.workflowNo || '').trim(),
         ListApprovalStatus: String(row.approvalStatus || '').trim(),
+        ListReasonForRevision: String(row.reasonForRevision || '').trim(),
         ListPendingPvId: quoteId ? String(quoteId) : '',
         QuoteListKind: ref || (quoteId ? `q-${quoteId}` : ''),
         _approvalSelection: {
@@ -510,7 +511,9 @@ export default function QuoteApprovalPage({ openContext = null }) {
                     )
                 );
             }
-            sessionDivisionRef.current = String(saved.division || '').trim();
+            // Division is intentionally NOT restored: a stale saved division silently
+            // hides cross-division pending approvals. Each visit starts at "All Divisions".
+            sessionDivisionRef.current = '';
         }
         filtersHydratedRef.current = true;
     }, [userEmail]);
@@ -555,6 +558,25 @@ export default function QuoteApprovalPage({ openContext = null }) {
             void refetchPending();
         }, 20000);
         return () => clearInterval(interval);
+    }, [listTab, userEmail, divisionsLoading, refetchPending]);
+
+    // Instant refresh: workflow send / approve / reject anywhere in the app, or returning to this tab.
+    useEffect(() => {
+        if (listTab !== LIST_TAB.PENDING || !userEmail || divisionsLoading) return;
+        const onChanged = () => {
+            void refetchPending();
+        };
+        const onVisible = () => {
+            if (document.visibilityState === 'visible') void refetchPending();
+        };
+        window.addEventListener(EMS_PENDING_APPROVALS_CHANGED, onChanged);
+        window.addEventListener('focus', onChanged);
+        document.addEventListener('visibilitychange', onVisible);
+        return () => {
+            window.removeEventListener(EMS_PENDING_APPROVALS_CHANGED, onChanged);
+            window.removeEventListener('focus', onChanged);
+            document.removeEventListener('visibilitychange', onVisible);
+        };
     }, [listTab, userEmail, divisionsLoading, refetchPending]);
 
     useEffect(() => {

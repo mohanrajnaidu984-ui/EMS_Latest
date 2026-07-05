@@ -1,6 +1,7 @@
 const sql = require('mssql');
 const { normalizeUserEmail } = require('./digitalSignaturesJson');
 const { parseMailCsv } = require('./enquiryOutlookEmailFields');
+const { isExcludedNotificationEmail } = require('./notificationEmailExclusions');
 
 const WEAK_DEPT_LABELS = new Set([
     'project', 'projects', 'general', 'gen', 'sales', 'all', 'na', 'n/a', 'tbd',
@@ -69,7 +70,12 @@ function divisionContextLabels(division) {
     return [...new Set(labels)];
 }
 
+function isExcludedQuotePickerUser(u) {
+    return isExcludedNotificationEmail(u?.EmailId);
+}
+
 function userToOption(u, type = 'Division') {
+    if (isExcludedQuotePickerUser(u)) return null;
     const fullName = String(u.FullName || '').trim();
     if (!fullName) return null;
     return {
@@ -112,6 +118,42 @@ function sortSignatoryOptions(options) {
     });
 }
 
+function sortPreparedByOptions(options) {
+    return [...options].sort((a, b) =>
+        String(a.label || '').localeCompare(String(b.label || ''))
+    );
+}
+
+function masterEnquiryForRowMatchesDivision(row, labels) {
+    const rowLabels = [row.DepartmentName, row.ItemName, stripJobPrefix(row.ItemName)].filter(Boolean);
+    return rowLabels.some((rl) => departmentMatchesDivisionStrict(rl, labels));
+}
+
+function collectDivisionCcEmails(mefRows, labels) {
+    const ccEmails = new Set();
+    for (const row of mefRows || []) {
+        if (!masterEnquiryForRowMatchesDivision(row, labels)) continue;
+        for (const em of parseMailCsv(row.CCMailIds)) {
+            const normalized = normalizeUserEmail(em);
+            if (normalized && !isExcludedNotificationEmail(normalized)) ccEmails.add(normalized);
+        }
+    }
+    return ccEmails;
+}
+
+function usersMatchingCcEmails(users, ccEmails, type) {
+    return dedupeOptions(
+        (users || [])
+            .filter((u) => {
+                if (isExcludedQuotePickerUser(u)) return false;
+                const em = normalizeUserEmail(u.EmailId);
+                return em && ccEmails.has(em);
+            })
+            .map((u) => userToOption(u, type))
+            .filter(Boolean)
+    );
+}
+
 async function fetchQuoteDivisionUserOptions(division) {
     const labels = divisionContextLabels(division);
     if (!labels.length) {
@@ -125,9 +167,9 @@ async function fetchQuoteDivisionUserOptions(division) {
            OR LTRIM(RTRIM(ISNULL(Status, N''))) = N''
         ORDER BY FullName
     `;
-    const users = usersRes.recordset || [];
+    const users = (usersRes.recordset || []).filter((u) => !isExcludedQuotePickerUser(u));
 
-    const preparedByOptions = dedupeOptions(
+    const divisionConcernedSeOptions = dedupeOptions(
         users
             .filter((u) => departmentMatchesDivisionStrict(u.Department, labels))
             .map((u) => userToOption(u, 'PreparedBy'))
@@ -145,30 +187,14 @@ async function fetchQuoteDivisionUserOptions(division) {
            OR LTRIM(RTRIM(ISNULL(DepartmentName, N''))) LIKE ${likePat}
     `;
 
-    const ccEmails = new Set();
-    for (const row of mefRes.recordset || []) {
-        const rowLabels = [row.DepartmentName, row.ItemName, stripJobPrefix(row.ItemName)].filter(Boolean);
-        const rowMatches = labels.some((divLabel) =>
-            rowLabels.some((rl) => departmentMatchesSelectedCustomer(rl, divLabel))
-        );
-        if (!rowMatches) continue;
-        for (const em of parseMailCsv(row.CCMailIds)) {
-            const normalized = normalizeUserEmail(em);
-            if (normalized) ccEmails.add(normalized);
-        }
-    }
+    const ccEmails = collectDivisionCcEmails(mefRes.recordset || [], labels);
+    const ccMailUserOptions = usersMatchingCcEmails(users, ccEmails, 'PreparedBy');
 
-    let signatoryOptions = dedupeOptions(
-        users
-            .filter((u) => {
-                const em = normalizeUserEmail(u.EmailId);
-                return em && ccEmails.has(em);
-            })
-            .map((u) => userToOption(u, 'Signatory'))
-            .filter(Boolean)
+    const preparedByOptions = sortPreparedByOptions(
+        dedupeOptions([...divisionConcernedSeOptions, ...ccMailUserOptions])
     );
 
-    signatoryOptions = sortSignatoryOptions(signatoryOptions);
+    let signatoryOptions = sortSignatoryOptions(usersMatchingCcEmails(users, ccEmails, 'Signatory'));
     if (signatoryOptions.length === 0) {
         signatoryOptions = preparedByOptions;
     }

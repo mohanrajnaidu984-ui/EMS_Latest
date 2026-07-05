@@ -97,6 +97,7 @@ function startSiteVisitReminderScheduler() {
         if (lastRunDateKey === dateKey) return;
 
         running = true;
+        lastRunDateKey = dateKey;
         try {
             if (isSiteVisitReminderEnabled()) {
                 await runSiteVisitReminders();
@@ -107,7 +108,6 @@ function startSiteVisitReminderScheduler() {
             if (isEdCeoDueReminderEnabled()) {
                 await runEdCeoDueSubmissionReminders();
             }
-            lastRunDateKey = dateKey;
         } catch (err) {
             console.error('[ems-daily-reminders] Scheduled run failed:', err);
         } finally {

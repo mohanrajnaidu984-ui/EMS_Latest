@@ -1,0 +1,22 @@
+-- Reason for Revision on saved quotes and collaborative drafts.
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns
+    WHERE object_id = OBJECT_ID(N'dbo.EnquiryQuotes') AND name = N'ReasonForRevision'
+)
+BEGIN
+    ALTER TABLE dbo.EnquiryQuotes ADD ReasonForRevision NVARCHAR(1000) NULL;
+    PRINT 'ReasonForRevision added to EnquiryQuotes';
+END
+ELSE
+    PRINT 'ReasonForRevision already exists on EnquiryQuotes';
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns
+    WHERE object_id = OBJECT_ID(N'dbo.EnquiryQuotesDraft') AND name = N'ReasonForRevision'
+)
+BEGIN
+    ALTER TABLE dbo.EnquiryQuotesDraft ADD ReasonForRevision NVARCHAR(1000) NULL;
+    PRINT 'ReasonForRevision added to EnquiryQuotesDraft';
+END
+ELSE
+    PRINT 'ReasonForRevision already exists on EnquiryQuotesDraft';

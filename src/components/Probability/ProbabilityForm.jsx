@@ -60,19 +60,52 @@ const buildProbItemSnapshot = (item) => {
     return snap;
 };
 
+/** Parse EnquiryQuotes.TotalAmount from a quote-ref list entry. */
+function parseQuoteRefTotalAmount(hit) {
+    if (!hit || typeof hit !== 'object') return null;
+    const raw = hit.TotalAmount ?? hit.totalAmount;
+    if (raw === null || raw === undefined || raw === '') return null;
+    const n = Number(String(raw).replace(/,/g, '').replace(/BD/gi, '').trim());
+    return Number.isFinite(n) ? n : null;
+}
+
+/** EnquiryQuotes.TotalAmount for the selected quote reference (from list payload). */
+function netQuotedFromQuoteRefList(quoteRefs, ref) {
+    const r = String(ref || '').trim();
+    if (!r || !Array.isArray(quoteRefs)) return null;
+    const hit = quoteRefs.find((q) => {
+        const num = typeof q === 'string' ? String(q).trim() : String(q?.QuoteNumber || q?.value || '').trim();
+        return num === r;
+    });
+    return parseQuoteRefTotalAmount(hit);
+}
+
+/** Resolved net quoted from selected quote ref (EnquiryQuotes.TotalAmount preferred). */
+function resolveRowNetQuotedNumber(item) {
+    if (!String(item?.WonQuoteRef || '').trim()) return null;
+    if (item.SelectedNetQuotedValue !== null && item.SelectedNetQuotedValue !== undefined && item.SelectedNetQuotedValue !== '') {
+        return Number(item.SelectedNetQuotedValue);
+    }
+    const fromRef = netQuotedFromQuoteRefList(item?.QuoteRefs, item.WonQuoteRef);
+    if (fromRef != null) return fromRef;
+    if (item.NetQuotedValue !== null && item.NetQuotedValue !== undefined && item.NetQuotedValue !== '') {
+        return Number(item.NetQuotedValue);
+    }
+    return null;
+}
+
 /** Numeric net quoted for filters/sort (same rules as display cell). */
 function getRowNetQuotedNumber(item, currentUser) {
     const userDept = (currentUser?.Department || currentUser?.Division || '').trim().toLowerCase();
     const isSubUser = userDept && userDept !== 'civil' && userDept !== 'admin' && currentUser?.Roles !== 'Admin' && currentUser?.role !== 'Admin';
     if (isSubUser && (!item.QuoteRefs || item.QuoteRefs.length === 0)) return null;
-    if (!String(item.WonQuoteRef || '').trim()) return null;
-    if (item.SelectedNetQuotedValue !== null && item.SelectedNetQuotedValue !== undefined && item.SelectedNetQuotedValue !== '') {
-        return Number(item.SelectedNetQuotedValue);
-    }
-    if (item.NetQuotedValue !== null && item.NetQuotedValue !== undefined && item.NetQuotedValue !== '') {
-        return Number(item.NetQuotedValue);
-    }
-    return null;
+    return resolveRowNetQuotedNumber(item);
+}
+
+function formatNetQuotedDisplay(item) {
+    const n = resolveRowNetQuotedNumber(item);
+    if (n === null || Number.isNaN(n)) return '';
+    return 'BD ' + n.toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
 }
 
 function compareEnquiryNo(a, b) {
@@ -264,10 +297,12 @@ const ProbabilityForm = () => {
                                     let quoteDate = null;
                                     let leadJob = '';
                                     let quoteType = '';
+                                    let totalAmount = null;
                                     if (parts.length >= 4 && dateIsDate) {
                                         quoteDate = dateSeg;
                                         leadJob = (parts[2] || '').trim();
                                         quoteType = (parts[4] || '').trim();
+                                        totalAmount = (parts[5] || '').trim() || null;
                                     } else if (parts.length >= 4) {
                                         leadJob = parts.slice(2, -1).join('|').trim();
                                         quoteType = (parts[parts.length - 1] || '').trim();
@@ -280,6 +315,7 @@ const ProbabilityForm = () => {
                                         LeadJob: String(leadJob || '').trim(),
                                         QuoteDate: quoteDate || null,
                                         QuoteType: quoteType || '',
+                                        TotalAmount: totalAmount,
                                     };
                                 }).sort((a, b) => {
                                     const extractLeadCode = (quoteNo) => {
@@ -322,6 +358,15 @@ const ProbabilityForm = () => {
                     // Robust Quoted Values
                     item.TotalQuotedValue = item.TotalQuotedValue || item.totalquotedvalue;
                     item.NetQuotedValue = item.NetQuotedValue || item.netquotedvalue;
+
+                    // Align net quoted with EnquiryQuotes.TotalAmount for the saved quote ref
+                    const savedRef = String(item.WonQuoteRef || '').trim();
+                    if (savedRef) {
+                        const netFromQuote = netQuotedFromQuoteRefList(item.QuoteRefs, savedRef);
+                        if (netFromQuote != null) {
+                            item.SelectedNetQuotedValue = netFromQuote;
+                        }
+                    }
 
                     if (item.QuoteRefs && item.QuoteRefs.length > 0) {
                         console.log(`Enquiry ${item.RequestNo} QuoteRefs:`, item.QuoteRefs);
@@ -600,7 +645,7 @@ const ProbabilityForm = () => {
                 division: selectedDivision || '',
                 toName: item.WonCustomerName || '',
                 totalQuotedValue: item.SelectedTotalQuotedValue ?? item.TotalQuotedValue,
-                netQuotedValue: item.SelectedNetQuotedValue ?? item.NetQuotedValue,
+                netQuotedValue: resolveRowNetQuotedNumber(item) ?? item.NetQuotedValue,
                 status: item.Status,
                 probabilityOption: item.ProbabilityOption,
                 remarks: item.ProbabilityRemarks,
@@ -702,6 +747,50 @@ const ProbabilityForm = () => {
         return null;
     };
 
+    const handleQuoteRefSelection = async (item, option) => {
+        const nextRef = option ? option.value : '';
+        const nextLead = option?.leadJob || '';
+        if (!nextRef) {
+            handleUpdate(item, {
+                WonQuoteRef: '',
+                LeadJobName: '',
+                WonCustomerName: '',
+                WonQuoteRefDate: '',
+                WonQuoteType: '',
+                SelectedTotalQuotedValue: null,
+                SelectedNetQuotedValue: null,
+                QuotePreparedBy: '',
+            });
+            return;
+        }
+        const localNet = netQuotedFromQuoteRefList(item.QuoteRefs, nextRef);
+        // Apply EnquiryQuotes.TotalAmount immediately from list payload
+        handleUpdate(item, {
+            WonQuoteRef: nextRef,
+            LeadJobName: nextLead,
+            WonCustomerName: option?.customer || item.WonCustomerName || '',
+            WonQuoteRefDate: option?.quoteDate ?? null,
+            WonQuoteType: option?.quoteType || '',
+            SelectedNetQuotedValue: localNet ?? null,
+        });
+        const details = await fetchQuoteDetails(nextRef);
+        if (!details) return;
+        handleUpdate(item, {
+            WonQuoteRef: nextRef,
+            LeadJobName: nextLead,
+            WonCustomerName: details.customerName || option?.customer || item.WonCustomerName || '',
+            WonQuoteRefDate: details.quoteDate ?? option?.quoteDate ?? null,
+            WonQuoteType: details.quoteType || option?.quoteType || '',
+            SelectedTotalQuotedValue: details.totalQuotedValue ?? null,
+            SelectedNetQuotedValue: details.netQuotedValue ?? localNet ?? null,
+            QuotePreparedBy: details.preparedBy != null && details.preparedBy !== '' ? String(details.preparedBy) : '',
+            ...(details.options ? { QuoteOptions: details.options } : {}),
+            ...(details.totalAmount != null && item.Status === 'Won'
+                ? { WonOrderValue: details.totalAmount }
+                : {}),
+        });
+    };
+
     const handleInlineUpdate = async (item, field, value) => {
         if (field === 'WonQuoteRef' && !value) {
             handleUpdate(item, { WonQuoteRef: '', WonCustomerName: '', WonQuoteRefDate: '', WonQuoteType: '' });
@@ -709,23 +798,24 @@ const ProbabilityForm = () => {
         }
         if (field === 'WonQuoteRef' && value) {
             const details = await fetchQuoteDetails(value);
-            if (details) {
+            const localNet = netQuotedFromQuoteRefList(item.QuoteRefs, value);
+            if (details || localNet != null) {
                 const updates = {
                     WonQuoteRef: value,
-                    WonCustomerName: details.customerName,
-                    WonQuoteRefDate: details.quoteDate,
-                    WonQuoteType: details.quoteType || '',
-                    WonOrderValue: details.totalAmount, // Default to total amount
-                    SelectedTotalQuotedValue: details.totalQuotedValue,
-                    SelectedNetQuotedValue: details.netQuotedValue,
-                    QuotePreparedBy: details.preparedBy != null && details.preparedBy !== '' ? String(details.preparedBy) : '',
+                    WonCustomerName: details?.customerName ?? item.WonCustomerName ?? '',
+                    WonQuoteRefDate: details?.quoteDate ?? item.WonQuoteRefDate ?? '',
+                    WonQuoteType: details?.quoteType || item.WonQuoteType || '',
+                    WonOrderValue: details?.totalAmount ?? item.WonOrderValue,
+                    SelectedTotalQuotedValue: details?.totalQuotedValue ?? item.SelectedTotalQuotedValue,
+                    SelectedNetQuotedValue: details?.netQuotedValue ?? localNet ?? null,
+                    QuotePreparedBy: details?.preparedBy != null && details?.preparedBy !== '' ? String(details.preparedBy) : '',
                 };
 
                 // If there are options, we don't auto-fill WonOrderValue yet, 
                 // or we fill it if there's only one? User said "if optional price is not available directly fill the quoted value"
                 // So if options exist, we might want to clear WonOrderValue or wait for option selection.
                 // Let's store options in the item for the UI to pick up.
-                updates.QuoteOptions = details.options || [];
+                updates.QuoteOptions = details?.options || [];
 
                 handleUpdate(item, updates);
                 return;
@@ -1675,13 +1765,7 @@ const ProbabilityForm = () => {
                                                             const userDept = (currentUser?.Department || currentUser?.Division || '').trim().toLowerCase();
                                                             const isSubUser = userDept && userDept !== 'civil' && userDept !== 'admin' && currentUser?.Roles !== 'Admin' && currentUser?.role !== 'Admin';
                                                             if (isSubUser && (!item.QuoteRefs || item.QuoteRefs.length === 0)) return <span className="text-muted italic">Restricted</span>;
-                                                            if (!String(item.WonQuoteRef || '').trim()) return '';
-                                                            if (item.SelectedNetQuotedValue !== null && item.SelectedNetQuotedValue !== undefined && item.SelectedNetQuotedValue !== '') {
-                                                                return 'BD ' + Number(item.SelectedNetQuotedValue).toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
-                                                            }
-                                                            return item.NetQuotedValue !== null && item.NetQuotedValue !== undefined
-                                                                ? 'BD ' + Number(item.NetQuotedValue).toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 })
-                                                                : '';
+                                                            return formatNetQuotedDisplay(item);
                                                         })()}
                                                     </td>
                                                     <td className="px-2 py-1 prob-td">
@@ -1721,34 +1805,7 @@ const ProbabilityForm = () => {
                                                                                 isClearable={true}
                                                                                 menuPortalTarget={document.body}
                                                                                 value={quoteRefSelectValue(item)}
-                                                                                onChange={async (option) => {
-                                                                                    const nextRef = option ? option.value : '';
-                                                                                    const nextLead = option?.leadJob || '';
-                                                                                    if (!nextRef) {
-                                                                                        handleUpdate(item, {
-                                                                                            WonQuoteRef: '',
-                                                                                            LeadJobName: '',
-                                                                                            WonCustomerName: '',
-                                                                                            WonQuoteRefDate: '',
-                                                                                            WonQuoteType: '',
-                                                                                            SelectedTotalQuotedValue: null,
-                                                                                            SelectedNetQuotedValue: null,
-                                                                                            QuotePreparedBy: '',
-                                                                                        });
-                                                                                        return;
-                                                                                    }
-                                                                                    const details = await fetchQuoteDetails(nextRef);
-                                                                                    handleUpdate(item, {
-                                                                                        WonQuoteRef: nextRef,
-                                                                                        LeadJobName: nextLead,
-                                                                                        WonCustomerName: details?.customerName || item.WonCustomerName || '',
-                                                                                        WonQuoteRefDate: details?.quoteDate ?? option?.quoteDate ?? null,
-                                                                                        WonQuoteType: details?.quoteType || option?.quoteType || '',
-                                                                                        SelectedTotalQuotedValue: details?.totalQuotedValue ?? null,
-                                                                                        SelectedNetQuotedValue: details?.netQuotedValue ?? null,
-                                                                                        QuotePreparedBy: details?.preparedBy != null && details?.preparedBy !== '' ? String(details.preparedBy) : '',
-                                                                                    });
-                                                                                }}
+                                                                                onChange={(option) => handleQuoteRefSelection(item, option)}
                                                                                 options={buildQuoteRefOptions(item)}
                                                                                 formatOptionLabel={(opt, { context }) => (
                                                                                     context === 'value'
@@ -1997,34 +2054,7 @@ const ProbabilityForm = () => {
                                                                                 isSearchable={true}
                                                                                 menuPortalTarget={document.body}
                                                                                 value={quoteRefSelectValue(item)}
-                                                                                onChange={async (option) => {
-                                                                                    const nextRef = option ? option.value : '';
-                                                                                    const nextLead = option?.leadJob || '';
-                                                                                    if (!nextRef) {
-                                                                                        handleUpdate(item, {
-                                                                                            WonQuoteRef: '',
-                                                                                            LeadJobName: '',
-                                                                                            WonCustomerName: '',
-                                                                                            WonQuoteRefDate: '',
-                                                                                            WonQuoteType: '',
-                                                                                            SelectedTotalQuotedValue: null,
-                                                                                            SelectedNetQuotedValue: null,
-                                                                                            QuotePreparedBy: '',
-                                                                                        });
-                                                                                        return;
-                                                                                    }
-                                                                                    const details = await fetchQuoteDetails(nextRef);
-                                                                                    handleUpdate(item, {
-                                                                                        WonQuoteRef: nextRef,
-                                                                                        LeadJobName: nextLead,
-                                                                                        WonCustomerName: details?.customerName || item.WonCustomerName || '',
-                                                                                        WonQuoteRefDate: details?.quoteDate ?? option?.quoteDate ?? null,
-                                                                                        WonQuoteType: details?.quoteType || option?.quoteType || '',
-                                                                                        SelectedTotalQuotedValue: details?.totalQuotedValue ?? null,
-                                                                                        SelectedNetQuotedValue: details?.netQuotedValue ?? null,
-                                                                                        QuotePreparedBy: details?.preparedBy != null && details?.preparedBy !== '' ? String(details.preparedBy) : '',
-                                                                                    });
-                                                                                }}
+                                                                                onChange={(option) => handleQuoteRefSelection(item, option)}
                                                                                 options={buildQuoteRefOptions(item)}
                                                                                 formatOptionLabel={(opt, { context }) => (
                                                                                     context === 'value'
@@ -2153,35 +2183,7 @@ const ProbabilityForm = () => {
                                                                                 isSearchable={true}
                                                                                 menuPortalTarget={document.body}
                                                                                 value={quoteRefSelectValue(item)}
-                                                                                onChange={async (option) => {
-                                                                                    console.log('[Debug] Selected Option:', option);
-                                                                                    const nextRef = option ? option.value : '';
-                                                                                    const nextLead = option?.leadJob || '';
-                                                                                    if (!nextRef) {
-                                                                                        handleUpdate(item, {
-                                                                                            WonQuoteRef: '',
-                                                                                            LeadJobName: '',
-                                                                                            WonCustomerName: '',
-                                                                                            WonQuoteRefDate: '',
-                                                                                            WonQuoteType: '',
-                                                                                            SelectedTotalQuotedValue: null,
-                                                                                            SelectedNetQuotedValue: null,
-                                                                                            QuotePreparedBy: '',
-                                                                                        });
-                                                                                        return;
-                                                                                    }
-                                                                                    const details = await fetchQuoteDetails(nextRef);
-                                                                                    handleUpdate(item, {
-                                                                                        WonQuoteRef: nextRef,
-                                                                                        LeadJobName: nextLead,
-                                                                                        WonCustomerName: details?.customerName || item.WonCustomerName || '',
-                                                                                        WonQuoteRefDate: details?.quoteDate ?? option?.quoteDate ?? null,
-                                                                                        WonQuoteType: details?.quoteType || option?.quoteType || '',
-                                                                                        SelectedTotalQuotedValue: details?.totalQuotedValue ?? null,
-                                                                                        SelectedNetQuotedValue: details?.netQuotedValue ?? null,
-                                                                                        QuotePreparedBy: details?.preparedBy != null && details?.preparedBy !== '' ? String(details.preparedBy) : '',
-                                                                                    });
-                                                                                }}
+                                                                                onChange={(option) => handleQuoteRefSelection(item, option)}
                                                                                 options={buildQuoteRefOptions(item)}
                                                                                 formatOptionLabel={(opt, { context }) => (
                                                                                     context === 'value'

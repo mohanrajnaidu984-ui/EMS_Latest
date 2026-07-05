@@ -51,6 +51,7 @@ import {
     EMS_TABLE_REPEAT_HEADER_CONTROL,
     EMS_TABLE_BORDER_CONTROL,
     EMS_TABLE_VALIGN_CONTROL,
+    EMS_TABLE_NO_BORDER_CELL_OVERRIDE_CSS,
     inlineOfficeTableCellBorders,
     markOfficePasteTableBorders,
     finalizeOfficePasteTableFormatting,
@@ -3533,12 +3534,13 @@ const ClauseEditor = ({
                     margin-top: 5px !important;
                 }
                 /* Default borders for manually inserted tables only — Excel/Word pastes keep inline styles. */
-                .clause-editor-wrapper .jodit-wysiwyg table:not([data-ems-paste-source="office"]),
-                .clause-editor-wrapper .jodit-wysiwyg table:not([data-ems-paste-source="office"]) td,
-                .clause-editor-wrapper .jodit-wysiwyg table:not([data-ems-paste-source="office"]) th {
+                .clause-editor-wrapper .jodit-wysiwyg table:not([data-ems-paste-source="office"]):not([data-ems-table-border="none"]),
+                .clause-editor-wrapper .jodit-wysiwyg table:not([data-ems-paste-source="office"]) td:not([data-ems-cell-border="none"]),
+                .clause-editor-wrapper .jodit-wysiwyg table:not([data-ems-paste-source="office"]) th:not([data-ems-cell-border="none"]) {
                     border: 1px solid #64748b !important;
                     border-collapse: collapse !important;
                 }
+                ${EMS_TABLE_NO_BORDER_CELL_OVERRIDE_CSS}
                 .clause-editor-wrapper .jodit-wysiwyg table:not([data-ems-paste-source="office"]):not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) thead th,
                 .clause-editor-wrapper .jodit-wysiwyg table:not([data-ems-paste-source="office"]):not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) thead td {
                     background-color: #f1f5f9 !important;

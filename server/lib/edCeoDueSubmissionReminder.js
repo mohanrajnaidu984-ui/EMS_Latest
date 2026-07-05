@@ -146,6 +146,11 @@ ${tableHtml}
 </html>`;
 }
 
+function isSqlUniqueViolation(err) {
+    const n = err?.number ?? err?.originalError?.number;
+    return n === 2627 || n === 2601;
+}
+
 async function ensureEdCeoDueSubmissionReminderLogTable() {
     await sql.query(`
         IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'EdCeoDueSubmissionReminderLog' AND schema_id = SCHEMA_ID('dbo'))
@@ -157,6 +162,15 @@ async function ensureEdCeoDueSubmissionReminderLogTable() {
                 SentAt DATETIME NOT NULL DEFAULT GETDATE(),
                 CONSTRAINT UQ_EdCeoDueSubmissionReminderLog UNIQUE (ReminderKind, DueDate)
             );
+        END
+        IF NOT EXISTS (
+            SELECT 1 FROM sys.key_constraints
+            WHERE name = 'UQ_EdCeoDueSubmissionReminderLog'
+              AND parent_object_id = OBJECT_ID('dbo.EdCeoDueSubmissionReminderLog')
+        )
+        BEGIN
+            ALTER TABLE dbo.EdCeoDueSubmissionReminderLog
+            ADD CONSTRAINT UQ_EdCeoDueSubmissionReminderLog UNIQUE (ReminderKind, DueDate);
         END
     `);
 }
@@ -265,14 +279,29 @@ async function wasEdCeoReminderSent(kind, dueYmd) {
     return (res.recordset || []).length > 0;
 }
 
-async function markEdCeoReminderSent(kind, dueYmd) {
+/** Reserve send slot before SMTP — only one process can claim (ReminderKind, DueDate). */
+async function tryClaimEdCeoReminderSlot(kind, dueYmd) {
+    try {
+        await sql.query`
+            INSERT INTO EdCeoDueSubmissionReminderLog (ReminderKind, DueDate)
+            VALUES (${kind}, ${dueYmd})
+        `;
+        return true;
+    } catch (err) {
+        if (isSqlUniqueViolation(err)) return false;
+        throw err;
+    }
+}
+
+async function releaseEdCeoReminderClaim(kind, dueYmd) {
     await sql.query`
-        INSERT INTO EdCeoDueSubmissionReminderLog (ReminderKind, DueDate)
-        VALUES (${kind}, ${dueYmd})
+        DELETE FROM EdCeoDueSubmissionReminderLog
+        WHERE ReminderKind = ${kind}
+          AND CONVERT(VARCHAR(10), DueDate, 23) = ${dueYmd}
     `;
 }
 
-async function sendEdCeoDueReminder(kind, dueYmd, enquiryRows) {
+async function sendEdCeoDueReminder(kind, dueYmd, enquiryRows, options = {}) {
     const toEmail = edCeoReminderToEmail();
     if (!toEmail) {
         return { sent: false, reason: 'no-recipient' };
@@ -281,18 +310,31 @@ async function sendEdCeoDueReminder(kind, dueYmd, enquiryRows) {
         return { sent: false, reason: 'empty' };
     }
 
+    if (!options.force) {
+        const claimed = await tryClaimEdCeoReminderSlot(kind, dueYmd);
+        if (!claimed) {
+            return { sent: false, reason: 'already-sent' };
+        }
+    }
+
     const subject = buildEdCeoReminderSubject(kind, dueYmd);
     const html = buildEdCeoReminderEmailHtml(kind, dueYmd, enquiryRows);
 
-    await sendEnquiryNotificationViaSmtp({
-        fromEmail: edCeoReminderFromEmail(),
-        to: toEmail,
-        cc: '',
-        subject,
-        html,
-    });
+    try {
+        await sendEnquiryNotificationViaSmtp({
+            fromEmail: edCeoReminderFromEmail(),
+            to: toEmail,
+            cc: '',
+            subject,
+            html,
+        });
+    } catch (err) {
+        if (!options.force) {
+            await releaseEdCeoReminderClaim(kind, dueYmd).catch(() => {});
+        }
+        throw err;
+    }
 
-    await markEdCeoReminderSent(kind, dueYmd);
     console.log(
         `[ed-ceo-due-reminder] Sent ${kind} to ${toEmail} (${enquiryRows.length} row(s), due ${dueYmd})`,
     );
@@ -351,7 +393,7 @@ async function runEdCeoDueSubmissionReminders(options = {}) {
                 summary.jobs.push(entry);
                 continue;
             }
-            const result = await sendEdCeoDueReminder(job.kind, job.dueYmd, rows);
+            const result = await sendEdCeoDueReminder(job.kind, job.dueYmd, rows, options);
             if (result.sent) {
                 summary.sent += 1;
                 entry.status = 'sent';

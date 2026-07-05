@@ -1,62 +1,91 @@
 import { inferAssignedSEsForEnquiryForItem } from './inferAssignedSEsForEnquiryForItem';
 
-/** Resolve L-code (L1, L2, …) for an Enquiry For row — matches HierarchyBuilder root prefix logic. */
+function divisionNameForEnquiryForItem(item) {
+    return String(item?.itemName || item?.name || item?.ItemName || '').trim();
+}
+
+function itemKeyForEnquiryForItem(item, idx) {
+    return String(item?.id ?? item?.ID ?? `idx-${idx}`);
+}
+
+/** Resolve hierarchical L-code (L1, L1-L2, …) for an Enquiry For row. */
 export function resolveLeadJobCodeForEnquiryForItem(item, allItems) {
     if (!item || typeof item !== 'object') return null;
 
-    let code = item.leadJobCode ?? item.LeadJobCode;
-    if (code && /^L\d+$/i.test(String(code).trim())) {
-        return String(code).trim().toUpperCase();
+    const explicit = item.leadJobCode ?? item.LeadJobCode;
+    if (explicit && /^L\d+(-L\d+)*$/i.test(String(explicit).trim())) {
+        return String(explicit).trim().toUpperCase();
     }
 
     const items = Array.isArray(allItems) ? allItems : [];
-    const byId = new Map(items.map((i) => [String(i.id), i]));
+    const byId = new Map(items.map((i) => [String(i.id ?? i.ID), i]));
+    const chain = [];
     let current = item;
     let safety = 0;
-    while (current?.parentId && safety < 40) {
-        const parent = byId.get(String(current.parentId));
-        if (!parent) break;
-        current = parent;
+    while (current && safety < 40) {
+        chain.unshift(current);
+        const parentId = current.parentId ?? current.ParentID;
+        current = parentId ? byId.get(String(parentId)) : null;
         safety += 1;
     }
 
-    const roots = items.filter((i) => !i.parentId);
-    const rootIndex = roots.findIndex((r) => String(r.id) === String(current?.id));
-    if (rootIndex === -1) return null;
-    return `L${rootIndex + 1}`;
+    const segments = [];
+    for (const node of chain) {
+        const parentId = node.parentId ?? node.ParentID;
+        const siblings = parentId
+            ? items.filter((i) => String(i.parentId ?? i.ParentID) === String(parentId))
+            : items.filter((i) => !(i.parentId ?? i.ParentID));
+        const idx = siblings.findIndex((s) => String(s.id ?? s.ID) === String(node.id ?? node.ID));
+        if (idx === -1) return null;
+        segments.push(`L${idx + 1}`);
+    }
+
+    if (segments.length === 0) return null;
+    if (segments.length === 1) return segments[0];
+    return segments.join('-');
 }
 
-/** Only one SE may be accountable per lead job (L-code); last marked Yes wins in payload order. */
-export function finalizeSingleAccountablePerLeadJob(rows) {
+/** One accountable SE per structure division row; ownJob stores that division label. */
+function finalizeAccountability(rows) {
     const list = Array.isArray(rows) ? rows : [];
-    const winnerByCode = new Map();
+    const winnerByScope = new Map();
 
     for (const row of list) {
         const code = String(row.leadJobCode || '').trim().toUpperCase();
-        if (!code) continue;
+        const own = String(row.ownJob || '').trim().toLowerCase();
+        const scopeKey = own ? `${code}|${own}` : code;
+        if (!scopeKey) continue;
         if (String(row.accountability || '').trim().toLowerCase() === 'yes') {
-            winnerByCode.set(code, row.seName);
+            winnerByScope.set(scopeKey, row.seName);
         }
     }
 
     return list.map((row) => {
         const code = String(row.leadJobCode || '').trim().toUpperCase();
-        if (!code || !winnerByCode.has(code)) return row;
-        const winner = winnerByCode.get(code);
+        const own = String(row.ownJob || '').trim().toLowerCase();
+        const scopeKey = own ? `${code}|${own}` : code;
+        if (!scopeKey || !winnerByScope.has(scopeKey)) return row;
+        const winner = winnerByScope.get(scopeKey);
         return {
             ...row,
             accountability: row.seName === winner ? 'Yes' : null,
+            ownJob: row.seName === winner ? row.ownJob || null : null,
         };
     });
+}
+
+/** @deprecated use finalizeAccountability */
+export function finalizeSingleAccountablePerLeadJob(rows) {
+    return finalizeAccountability(rows);
 }
 
 /** Build ConcernedSE rows from per-item SE chips + accountable selection. */
 export function buildConcernedSEAssignmentsFromEnquiryFor(enqForList) {
     const items = Array.isArray(enqForList) ? enqForList : [];
-    const accountableByCode = new Map();
     const seen = new Map();
 
-    for (const rawItem of items) {
+    for (let idx = 0; idx < items.length; idx++) {
+        const rawItem = items[idx];
         if (!rawItem || typeof rawItem !== 'object') continue;
 
         const assignees = (Array.isArray(rawItem.assignedSEs) ? rawItem.assignedSEs : [])
@@ -64,37 +93,47 @@ export function buildConcernedSEAssignmentsFromEnquiryFor(enqForList) {
             .filter(Boolean);
         if (assignees.length === 0) continue;
 
+        const divisionName = divisionNameForEnquiryForItem(rawItem);
         const leadJobCode = resolveLeadJobCodeForEnquiryForItem(rawItem, items);
-        const codeKey = leadJobCode ? String(leadJobCode).trim().toUpperCase() : '';
         const explicitAccountable = String(rawItem.accountableSE || '').trim();
-
-        if (codeKey) {
-            if (explicitAccountable && assignees.includes(explicitAccountable)) {
-                accountableByCode.set(codeKey, explicitAccountable);
-            } else if (assignees.length === 1) {
-                accountableByCode.set(codeKey, assignees[0]);
-            }
-        }
+        const accountable =
+            explicitAccountable && assignees.includes(explicitAccountable)
+                ? explicitAccountable
+                : assignees.length === 1
+                  ? assignees[0]
+                  : null;
 
         for (const seName of assignees) {
-            const key = `${codeKey}|${seName}`;
-            if (!seen.has(key)) {
-                seen.set(key, {
-                    seName,
-                    leadJobCode: leadJobCode || null,
-                    accountability: null,
-                });
-            }
+            const dedupeKey = `${itemKeyForEnquiryForItem(rawItem, idx)}|${seName}`;
+            if (seen.has(dedupeKey)) continue;
+
+            const isAccountable = Boolean(accountable && seName === accountable);
+            seen.set(dedupeKey, {
+                seName,
+                leadJobCode: leadJobCode || null,
+                accountability: isAccountable ? 'Yes' : null,
+                ownJob: isAccountable && divisionName ? divisionName : null,
+            });
         }
     }
 
-    return [...seen.values()].map((row) => {
-        const codeKey = String(row.leadJobCode || '').trim().toUpperCase();
-        const winner = codeKey ? accountableByCode.get(codeKey) : null;
-        return {
-            ...row,
-            accountability: winner && row.seName === winner ? 'Yes' : null,
-        };
+    return finalizeAccountability([...seen.values()]);
+}
+
+function concernedRowsForEnquiryForItem(item, rows, allItems) {
+    const division = divisionNameForEnquiryForItem(item);
+    const code = resolveLeadJobCodeForEnquiryForItem(item, allItems);
+    const codeNorm = code ? code.toUpperCase() : '';
+
+    return (rows || []).filter((r) => {
+        const ownJob = String(r.OwnJob || r.ownJob || '').trim();
+        if (ownJob && division && ownJob.toLowerCase() === division.toLowerCase()) return true;
+
+        const rc = String(r.LeadJobCode || r.leadJobCode || '')
+            .trim()
+            .toUpperCase();
+        if (!codeNorm || !rc) return !ownJob;
+        return rc === codeNorm && !ownJob;
     });
 }
 
@@ -117,18 +156,9 @@ export function hydrateEnquiryForWithConcernedSEAssignments(items, concernedRows
                   }
                 : { ...rawItem };
 
-        const code = resolveLeadJobCodeForEnquiryForItem(item, list);
-        const codeNorm = code ? code.toUpperCase() : '';
+        const rowsForItem = concernedRowsForEnquiryForItem(item, rows, list);
 
-        const rowsForCode = rows.filter((r) => {
-            const rc = String(r.LeadJobCode || r.leadJobCode || '')
-                .trim()
-                .toUpperCase();
-            if (!codeNorm || !rc) return true;
-            return rc === codeNorm;
-        });
-
-        const seNamesForCode = rowsForCode
+        const seNamesForItem = rowsForItem
             .map((r) => String(r.SEName || r.seName || '').trim())
             .filter(Boolean);
 
@@ -138,17 +168,21 @@ export function hydrateEnquiryForWithConcernedSEAssignments(items, concernedRows
                 ? explicit
                 : inferAssignedSEsForEnquiryForItem(
                       { ...item, assignedSEs: [] },
-                      seNamesForCode.length > 0 ? seNamesForCode : allSeNames,
+                      seNamesForItem.length > 0 ? seNamesForItem : allSeNames,
                       users
                   );
 
-        const accountableRow = rowsForCode
+        const division = divisionNameForEnquiryForItem(item);
+        const accountableRow = rowsForItem
             .filter((r) => {
                 const acc = String(r.Accountability || r.accountability || '')
                     .trim()
                     .toLowerCase();
                 const name = String(r.SEName || r.seName || '').trim();
-                return acc === 'yes' && assignedSEs.includes(name);
+                if (acc !== 'yes' || !assignedSEs.includes(name)) return false;
+                const ownJob = String(r.OwnJob || r.ownJob || '').trim();
+                if (ownJob && division) return ownJob.toLowerCase() === division.toLowerCase();
+                return true;
             })
             .pop();
 

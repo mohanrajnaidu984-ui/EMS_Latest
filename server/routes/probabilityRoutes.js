@@ -677,7 +677,7 @@ router.get('/list', async (req, res) => {
                 ) as NetQuotedValue,
                 (
                     SELECT STUFF((
-                        SELECT ',' + CAST(Q.QuoteNumber AS NVARCHAR(MAX)) + '|' + CAST(ISNULL(Q.ToName, 'N/A') AS NVARCHAR(MAX)) + '|' + CAST(ISNULL(Q.LeadJob, '') AS NVARCHAR(MAX)) + '|' + ISNULL(CONVERT(NVARCHAR(23), Q.QuoteDate, 121), N'') + '|' + CAST(ISNULL(Q.QuoteType, '') AS NVARCHAR(MAX))
+                        SELECT ',' + CAST(Q.QuoteNumber AS NVARCHAR(MAX)) + '|' + CAST(ISNULL(Q.ToName, 'N/A') AS NVARCHAR(MAX)) + '|' + CAST(ISNULL(Q.LeadJob, '') AS NVARCHAR(MAX)) + '|' + ISNULL(CONVERT(NVARCHAR(23), Q.QuoteDate, 121), N'') + '|' + CAST(ISNULL(Q.QuoteType, '') AS NVARCHAR(MAX)) + '|' + CAST(ISNULL(Q.TotalAmount, 0) AS NVARCHAR(MAX))
                         FROM EnquiryQuotes Q
                         WHERE LTRIM(RTRIM(Q.RequestNo)) = LTRIM(RTRIM(E.RequestNo))
                         AND (
@@ -1236,7 +1236,7 @@ router.get('/quote-details/:quoteNumber', async (req, res) => {
             customerName: quote.ToName,
             totalAmount: quote.TotalAmount,
             totalQuotedValue: totals.TotalQuotedValue ?? 0,
-            netQuotedValue: quoteTotalAmount || (totals.NetQuotedValue ?? 0),
+            netQuotedValue: quoteTotalAmount !== '' ? Number(quoteTotalAmount) : (totals.NetQuotedValue ?? 0),
             quoteNo: quote.QuoteNo,
             revisionNo: quote.RevisionNo,
             leadJob: quote.LeadJob,

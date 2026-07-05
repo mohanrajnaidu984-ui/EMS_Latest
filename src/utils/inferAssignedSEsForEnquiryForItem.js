@@ -35,17 +35,6 @@ export function inferAssignedSEsForEnquiryForItem(item, seList, users) {
         .filter(Boolean);
     if (exact.length > 0) return [...new Set(exact)];
 
-    const fuzzy = userList
-        .filter((u) => {
-            const d = normalize(u?.Department);
-            const fn = normalize(u?.FullName);
-            if (!d || !selectedSet.has(fn)) return false;
-            return !!(dept && (dept.includes(d) || d.includes(dept)));
-        })
-        .map((u) => String(u?.FullName || '').trim())
-        .filter(Boolean);
-    if (fuzzy.length > 0) return [...new Set(fuzzy)];
-
     const verified = seList.filter((n) => userList.some((u) => normalize(u?.FullName) === normalize(n)));
     if (verified.length > 0) return verified;
 

@@ -1,39 +1,58 @@
 /**
- * ConcernedSE persistence helpers — supports optional LeadJobCode + Accountability columns.
+ * ConcernedSE persistence helpers — supports LeadJobCode, Accountability, and OwnJob columns.
  */
+
+function divisionNameForEnquiryForItem(item) {
+    return String(item?.itemName || item?.ItemName || '').trim();
+}
+
+function itemKeyForEnquiryForItem(item, idx) {
+    return String(item?.id ?? item?.ID ?? `idx-${idx}`);
+}
 
 function resolveLeadJobCodeForEnquiryForItem(item, allItems) {
     if (!item || typeof item !== 'object') return null;
 
-    let code = item.leadJobCode ?? item.LeadJobCode;
-    if (code && /^L\d+$/i.test(String(code).trim())) {
-        return String(code).trim().toUpperCase();
+    const explicit = item.leadJobCode ?? item.LeadJobCode;
+    if (explicit && /^L\d+(-L\d+)*$/i.test(String(explicit).trim())) {
+        return String(explicit).trim().toUpperCase();
     }
 
     const items = Array.isArray(allItems) ? allItems : [];
-    const byId = new Map(items.map((i) => [String(i.id), i]));
+    const byId = new Map(items.map((i) => [String(i.id ?? i.ID), i]));
+    const chain = [];
     let current = item;
     let safety = 0;
-    while (current?.parentId && safety < 40) {
-        const parent = byId.get(String(current.parentId));
-        if (!parent) break;
-        current = parent;
+    while (current && safety < 40) {
+        chain.unshift(current);
+        const parentId = current.parentId ?? current.ParentID;
+        current = parentId ? byId.get(String(parentId)) : null;
         safety += 1;
     }
 
-    const roots = items.filter((i) => !i.parentId);
-    const rootIndex = roots.findIndex((r) => String(r.id) === String(current?.id));
-    if (rootIndex === -1) return null;
-    return `L${rootIndex + 1}`;
+    const segments = [];
+    for (const node of chain) {
+        const parentId = node.parentId ?? node.ParentID;
+        const siblings = parentId
+            ? items.filter((i) => String(i.parentId ?? i.ParentID) === String(parentId))
+            : items.filter((i) => !(i.parentId ?? i.ParentID));
+        const idx = siblings.findIndex((s) => String(s.id ?? s.ID) === String(node.id ?? node.ID));
+        if (idx === -1) return null;
+        segments.push(`L${idx + 1}`);
+    }
+
+    if (segments.length === 0) return null;
+    if (segments.length === 1) return segments[0];
+    return segments.join('-');
 }
 
+/** Build ConcernedSE rows — one accountable member per structure division row; ownJob = that division. */
 function buildConcernedSEAssignmentsFromEnquiryFor(enqForList) {
     const items = Array.isArray(enqForList) ? enqForList : [];
-    /** Last explicit accountableSE per L-code wins (user changed selection on save). */
-    const accountableByCode = new Map();
     const seen = new Map();
 
-    for (const rawItem of items) {
+    for (let idx = 0; idx < items.length; idx++) {
+        const rawItem = items[idx];
         if (!rawItem || typeof rawItem !== 'object') continue;
 
         const assignees = (Array.isArray(rawItem.assignedSEs) ? rawItem.assignedSEs : [])
@@ -41,62 +60,65 @@ function buildConcernedSEAssignmentsFromEnquiryFor(enqForList) {
             .filter(Boolean);
         if (assignees.length === 0) continue;
 
+        const divisionName = divisionNameForEnquiryForItem(rawItem);
         const leadJobCode = resolveLeadJobCodeForEnquiryForItem(rawItem, items);
-        const codeKey = leadJobCode ? String(leadJobCode).trim().toUpperCase() : '';
         const explicitAccountable = String(rawItem.accountableSE || '').trim();
-
-        if (codeKey) {
-            if (explicitAccountable && assignees.includes(explicitAccountable)) {
-                accountableByCode.set(codeKey, explicitAccountable);
-            } else if (assignees.length === 1) {
-                accountableByCode.set(codeKey, assignees[0]);
-            }
-        }
+        const accountable =
+            explicitAccountable && assignees.includes(explicitAccountable)
+                ? explicitAccountable
+                : assignees.length === 1
+                  ? assignees[0]
+                  : null;
 
         for (const seName of assignees) {
-            const key = `${codeKey}|${seName}`;
-            if (!seen.has(key)) {
-                seen.set(key, {
-                    seName,
-                    leadJobCode: leadJobCode || null,
-                    accountability: null,
-                });
-            }
+            const dedupeKey = `${itemKeyForEnquiryForItem(rawItem, idx)}|${seName}`;
+            if (seen.has(dedupeKey)) continue;
+
+            const isAccountable = Boolean(accountable && seName === accountable);
+            seen.set(dedupeKey, {
+                seName,
+                leadJobCode: leadJobCode || null,
+                accountability: isAccountable ? 'Yes' : null,
+                ownJob: isAccountable && divisionName ? divisionName : null,
+            });
         }
     }
 
-    return [...seen.values()].map((row) => {
-        const codeKey = String(row.leadJobCode || '').trim().toUpperCase();
-        const winner = codeKey ? accountableByCode.get(codeKey) : null;
-        return {
-            ...row,
-            accountability: winner && row.seName === winner ? 'Yes' : null,
-        };
-    });
+    return finalizeAccountability([...seen.values()]);
 }
 
-/** Only one SE may be accountable per lead job (L-code); last marked Yes wins in payload order. */
-function finalizeSingleAccountablePerLeadJob(rows) {
+/** One accountable SE per lead-job code + division (ownJob) scope. */
+function finalizeAccountability(rows) {
     const list = Array.isArray(rows) ? rows : [];
-    const winnerByCode = new Map();
+    const winnerByScope = new Map();
 
     for (const row of list) {
         const code = String(row.leadJobCode || '').trim().toUpperCase();
-        if (!code) continue;
+        const own = String(row.ownJob || row.OwnJob || '').trim().toLowerCase();
+        const scopeKey = own ? `${code}|${own}` : code;
+        if (!scopeKey) continue;
         if (String(row.accountability || '').trim().toLowerCase() === 'yes') {
-            winnerByCode.set(code, row.seName);
+            winnerByScope.set(scopeKey, row.seName);
         }
     }
 
     return list.map((row) => {
         const code = String(row.leadJobCode || '').trim().toUpperCase();
-        if (!code || !winnerByCode.has(code)) return row;
-        const winner = winnerByCode.get(code);
+        const own = String(row.ownJob || row.OwnJob || '').trim().toLowerCase();
+        const scopeKey = own ? `${code}|${own}` : code;
+        if (!scopeKey || !winnerByScope.has(scopeKey)) return row;
+        const winner = winnerByScope.get(scopeKey);
         return {
             ...row,
             accountability: row.seName === winner ? 'Yes' : null,
+            ownJob: row.seName === winner ? row.ownJob || row.OwnJob || null : null,
         };
     });
+}
+
+/** @deprecated use finalizeAccountability */
+function finalizeSingleAccountablePerLeadJob(rows) {
+    return finalizeAccountability(rows);
 }
 
 function normalizeConcernedSEPayload(items, selectedEnquiryFor) {
@@ -118,6 +140,7 @@ function normalizeConcernedSEPayload(items, selectedEnquiryFor) {
                         seName,
                         leadJobCode: row.leadJobCode ?? row.LeadJobCode ?? null,
                         accountability: row.accountability ?? row.Accountability ?? null,
+                        ownJob: row.ownJob ?? row.OwnJob ?? null,
                     };
                 })
                 .filter(Boolean);
@@ -125,7 +148,7 @@ function normalizeConcernedSEPayload(items, selectedEnquiryFor) {
             rows = items
                 .map((row) => {
                     const seName = String(row || '').trim();
-                    return seName ? { seName, leadJobCode: null, accountability: null } : null;
+                    return seName ? { seName, leadJobCode: null, accountability: null, ownJob: null } : null;
                 })
                 .filter(Boolean);
         }
@@ -133,11 +156,11 @@ function normalizeConcernedSEPayload(items, selectedEnquiryFor) {
         rows = buildConcernedSEAssignmentsFromEnquiryFor(selectedEnquiryFor);
     }
 
-    return finalizeSingleAccountablePerLeadJob(rows);
+    return finalizeAccountability(rows);
 }
 
 async function getConcernedSEColumnFlags(sql, transaction) {
-    const flags = { email: false, leadJobCode: false, accountability: false };
+    const flags = { email: false, leadJobCode: false, accountability: false, ownJob: false };
     try {
         const r = transaction ? new sql.Request(transaction) : new sql.Request();
         const chk = await r.query(`
@@ -150,6 +173,7 @@ async function getConcernedSEColumnFlags(sql, transaction) {
             if (col === 'emailid') flags.email = true;
             if (col === 'leadjobcode') flags.leadJobCode = true;
             if (col === 'accountability') flags.accountability = true;
+            if (col === 'ownjob') flags.ownJob = true;
         }
     } catch (_) {
         /* ignore */
@@ -172,29 +196,44 @@ async function lookupSeEmail(sqlRequest, seName) {
 
 /** Clear accountability on prior assignees for each lead job when a new SE is marked accountable. */
 async function clearPriorAccountabilityForLeadJobs(sql, transaction, requestNo, assignments, flags) {
-    if (!flags.accountability || !flags.leadJobCode) return;
+    if (!flags.accountability) return;
 
-    const winnersByCode = new Map();
+    const winnersByScope = new Map();
     for (const row of assignments) {
         const code = String(row.leadJobCode || '').trim().toUpperCase();
-        if (!code) continue;
+        const own = String(row.ownJob || '').trim().toLowerCase();
+        const scopeKey = own ? `${code}|${own}` : code;
+        if (!scopeKey) continue;
         if (String(row.accountability || '').trim().toLowerCase() === 'yes') {
-            winnersByCode.set(code, row.seName);
+            winnersByScope.set(scopeKey, { seName: row.seName, ownJob: row.ownJob || null, leadJobCode: row.leadJobCode || null });
         }
     }
 
-    for (const [code, winner] of winnersByCode) {
+    for (const [, winner] of winnersByScope) {
         const r = transaction ? new sql.Request(transaction) : new sql.Request();
         r.input('reqNo', sql.NVarChar, requestNo);
-        r.input('code', sql.NVarChar, code);
-        r.input('winner', sql.NVarChar, winner);
-        await r.query(`
-            UPDATE ConcernedSE
-            SET accountability = NULL
-            WHERE RequestNo = @reqNo
-              AND UPPER(LTRIM(RTRIM(ISNULL(leadjobcode, ISNULL(LeadJobCode, N''))))) = UPPER(LTRIM(RTRIM(@code)))
-              AND LTRIM(RTRIM(ISNULL(SEName, N''))) <> LTRIM(RTRIM(ISNULL(@winner, N'')))
-        `);
+        r.input('winner', sql.NVarChar, winner.seName);
+        r.input('code', sql.NVarChar, winner.leadJobCode || '');
+        r.input('ownJob', sql.NVarChar, winner.ownJob || '');
+
+        if (flags.ownJob && winner.ownJob) {
+            await r.query(`
+                UPDATE ConcernedSE
+                SET accountability = NULL, ownjob = NULL
+                WHERE RequestNo = @reqNo
+                  AND UPPER(LTRIM(RTRIM(ISNULL(leadjobcode, ISNULL(LeadJobCode, N''))))) = UPPER(LTRIM(RTRIM(@code)))
+                  AND LOWER(LTRIM(RTRIM(ISNULL(ownjob, N'')))) = LOWER(LTRIM(RTRIM(@ownJob)))
+                  AND LTRIM(RTRIM(ISNULL(SEName, N''))) <> LTRIM(RTRIM(ISNULL(@winner, N'')))
+            `);
+        } else if (flags.leadJobCode && winner.leadJobCode) {
+            await r.query(`
+                UPDATE ConcernedSE
+                SET accountability = NULL
+                WHERE RequestNo = @reqNo
+                  AND UPPER(LTRIM(RTRIM(ISNULL(leadjobcode, ISNULL(LeadJobCode, N''))))) = UPPER(LTRIM(RTRIM(@code)))
+                  AND LTRIM(RTRIM(ISNULL(SEName, N''))) <> LTRIM(RTRIM(ISNULL(@winner, N'')))
+            `);
+        }
     }
 }
 
@@ -219,6 +258,11 @@ async function insertAssignmentsRows(sql, transaction, requestNo, assignments, f
             r.input('accountability', sql.NVarChar, row.accountability || null);
             fields.push('Accountability');
             values.push('@accountability');
+        }
+        if (colFlags.ownJob) {
+            r.input('ownJob', sql.NVarChar, row.ownJob || null);
+            fields.push('ownjob');
+            values.push('@ownJob');
         }
         if (colFlags.email) {
             const seEmail = await lookupSeEmail(r, row.seName);
@@ -257,8 +301,9 @@ async function replaceConcernedSERows(sql, transaction, requestNo, items, select
 function mapConcernedSEAssignmentsFromRows(recordset) {
     return (recordset || []).map((s) => ({
         seName: s.SEName,
-        leadJobCode: s.LeadJobCode ?? s.leadJobCode ?? null,
+        leadJobCode: s.LeadJobCode ?? s.leadjobcode ?? s.leadJobCode ?? null,
         accountability: s.Accountability ?? s.accountability ?? null,
+        ownJob: s.OwnJob ?? s.ownjob ?? s.ownJob ?? null,
     }));
 }
 
@@ -268,4 +313,5 @@ module.exports = {
     insertConcernedSERows,
     replaceConcernedSERows,
     mapConcernedSEAssignmentsFromRows,
+    finalizeSingleAccountablePerLeadJob,
 };

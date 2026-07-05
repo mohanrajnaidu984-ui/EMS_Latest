@@ -250,8 +250,9 @@ const Help = () => {
               <strong>List modes:</strong>
             </p>
             <ul className="mb-2" style={{ paddingLeft: '1.1rem' }}>
-              <li><strong>Pending for Approval</strong> — quotes where you are the current sequential approver (includes cross-division assignments when you are on the approval path).</li>
-              <li><strong>Quote Search</strong> — find other quotes by text and/or quote date range for preview (useful when you have no pending items).</li>
+              <li><strong>Pending for Approval</strong> — quotes assigned to you that are still awaiting your approval (excludes workflows already rejected by anyone).</li>
+              <li><strong>Rejected by Me</strong> — quotes you personally rejected.</li>
+              <li><strong>Quote Search</strong> — find assigned quotes by text and/or quote date (includes rejected by you or others if you are on the approval path).</li>
             </ul>
             <p className="mb-1">
               <strong>Approver process (step-by-step):</strong>

@@ -14,7 +14,7 @@ const skipNpmInstall = process.argv.includes('--skip-npm-install');
 const skipUploads = process.argv.includes('--skip-uploads');
 /** Pre-install node_modules on build machine (smoke test only — production must run npm ci on server). */
 const withNodeModules = process.argv.includes('--with-node-modules');
-const BASELINE_VERSION = '2026-06-29-current-local';
+const BASELINE_VERSION = '2026-07-05-build3';
 const PDF_CSS_VERSION = '2026-06-05-footer-auto';
 const FRONTEND_BUNDLE_MARKERS = [
     'data-ems-html2pdf',
@@ -47,6 +47,7 @@ const REQUIRED_BACKEND_PATHS = [
     'lib/quotePrintSheetValidation.cjs',
     'lib/quotePdfPaginationDebug.cjs',
     'lib/attachmentsRoot.js',
+    'scripts/probe-attachment-storage.cjs',
     'lib/enquiryNotifySmtp.js',
     'lib/enquiryNotifyEmailHtml.js',
     'lib/enquiryOutlookEmailFields.js',
@@ -183,6 +184,19 @@ function verifyRequiredFiles() {
     const indexJs = fs.readFileSync(path.join(BACKEND_DIR, 'index.js'), 'utf8');
     if (!indexJs.includes('/api/quote-pdf')) {
         console.error('❌ index.js is missing /api/quote-pdf mount');
+        process.exit(1);
+    }
+    if (!indexJs.includes('resolveWritableEnquiryUploadDestination')) {
+        console.error('❌ index.js missing enquiry attachment local-fallback (resolveWritableEnquiryUploadDestination)');
+        process.exit(1);
+    }
+    if (!indexJs.includes('/api/system/attachment-storage-probe')) {
+        console.error('❌ index.js missing /api/system/attachment-storage-probe');
+        process.exit(1);
+    }
+    const attachmentsRoot = fs.readFileSync(path.join(BACKEND_DIR, 'lib/attachmentsRoot.js'), 'utf8');
+    if (!attachmentsRoot.includes('resolveWritableEnquiryUploadDestination')) {
+        console.error('❌ lib/attachmentsRoot.js missing UNC local-fallback writer');
         process.exit(1);
     }
     const quotePdfJs = fs.readFileSync(path.join(BACKEND_DIR, 'routes/quotePdf.js'), 'utf8');
@@ -487,7 +501,7 @@ User URL: **http://151.50.1.114:81**
 - **API 502 from IIS**: PM2 not running or wrong port in \`web.config\`.  
 - **emsQuotePdfServerEnabled false**: Set \`EMS_QUOTE_PDF_SERVER_ENABLED=1\` in \`.env\`, \`pm2 restart EMS-API --update-env\`.  
 - **muhammara NODE_MODULE_VERSION**: Server must use **Node 22**, then \`npm ci --omit=dev\`. Or \`QUOTE_PDF_RESTRICT=0\`.  
-- **PDF pagination differs from local**: Use Chrome not Edge; confirm \`quotePdfCssVersion\` on health endpoint.
+- **Enquiry upload EPERM on UNC**: PM2 as SYSTEM uses **HOSTNAME$** on the share — grant Modify on \`\\\\151.50.20.129\\ems app\\Enquiries\` to the web server computer account, or run PM2 as a domain user with share access. This build auto-falls back to \`EMS\\data\\ems-attachments\` when UNC is not writable. Probe: \`/api/system/attachment-storage-probe?requestNo=187&division=BMS%20Project\`.  
 `;
     fs.writeFileSync(path.join(DEPLOY_DIR, 'DEPLOYMENT_GUIDE.md'), guide, 'utf8');
 }
@@ -941,7 +955,12 @@ function writeManifest(uploadsMeta) {
             quoteOutlookDraft: ['routes/quotes.js POST /outlook-draft', 'lib/outlookDraftVbs.js'],
             quoteEmailDraft: ['routes/quotes.js POST /email-draft', 'lib/quoteSmtpDraft.js'],
             enquiryOutlook: ['routes/enquiryOutlook.js', 'lib/runOutlookHtmlDraftVbs.js'],
-            localHelper: ['helpers/quote-outlook-local-helper.cjs'],
+            enquiryAttachments: [
+                'lib/attachmentsRoot.js (UNC + local fallback)',
+                'scripts/probe-attachment-storage.cjs',
+                'GET /api/system/attachment-storage-probe',
+                'POST /api/attachments/upload (multer JSON errors)',
+            ],
         },
         requiredBackendFiles: REQUIRED_BACKEND_PATHS,
     };

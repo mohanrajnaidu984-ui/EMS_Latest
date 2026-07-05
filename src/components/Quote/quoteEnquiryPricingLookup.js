@@ -616,3 +616,87 @@ export function resolveQuoteSummaryPriceFromRows(rows, p) {
         userDepartment,
     });
 }
+
+function normOwnjobLabelForTotal(s) {
+    return stripPricingName(s).toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function basePriceFromSummaryGroup(g) {
+    return (Array.isArray(g?.items) ? g.items : []).reduce(
+        (sum, item) =>
+            String(item?.name || '').trim() === 'Base Price' ? sum + (Number(item?.total) || 0) : sum,
+        0
+    );
+}
+
+/**
+ * EnquiryQuotes / EnquiryQuotesDraft TotalAmount: own-job Base Price for the first quote tab.
+ * Prefer live EnquiryPricingValues over cached pricingSummary (summary can lag after pricing edits).
+ */
+export function resolveOwnjobBasePriceForEnquiryQuoteTotal(params) {
+    const {
+        tabs,
+        pricingSummaryGroups,
+        pricingValueRows,
+        divisionOwnjobFallbackGroup,
+        requestNo,
+        customerName,
+        branchPrefix,
+        jobsPool,
+        calculatedTabs,
+        activeQuoteTab,
+        hasLeadAccess,
+        editableJobNames,
+        userDepartment,
+        selectedLeadId,
+    } = params || {};
+
+    const tabList = Array.isArray(tabs) && tabs.length > 0 ? tabs : [];
+    const firstTabRaw = String(tabList[0]?.label || tabList[0]?.name || '').trim();
+    const firstNorm = normOwnjobLabelForTotal(firstTabRaw);
+    const rows = Array.isArray(pricingValueRows) ? pricingValueRows : [];
+
+    const epvCtx = {
+        requestNo,
+        customerDropdown: String(customerName || '').trim(),
+        branchPrefix: String(branchPrefix || '').trim(),
+        jobsPool: Array.isArray(jobsPool) ? jobsPool : [],
+        calculatedTabs: Array.isArray(calculatedTabs) ? calculatedTabs : tabList,
+        activeQuoteTab,
+        hasLeadAccess: !!hasLeadAccess,
+        editableJobNames: Array.isArray(editableJobNames) ? editableJobNames : [],
+        userDepartment: String(userDepartment || '').trim(),
+        selectedLeadId,
+    };
+
+    if (firstNorm && rows.length > 0 && requestNo != null) {
+        const epvTotal = sumBasePriceFromEpvRowsForJob(rows, {
+            ...epvCtx,
+            jobLabel: firstTabRaw,
+            activeQuoteTab: tabList[0]?.id ?? activeQuoteTab,
+        });
+        if (Number.isFinite(epvTotal) && Math.abs(epvTotal) > 0.0005) return epvTotal;
+    }
+
+    const summary = Array.isArray(pricingSummaryGroups) ? pricingSummaryGroups : [];
+    if (firstNorm) {
+        for (const group of summary) {
+            const groupNorm = normOwnjobLabelForTotal(group?.name || '');
+            if (!groupNorm) continue;
+            if (groupNorm === firstNorm || groupNorm.includes(firstNorm) || firstNorm.includes(groupNorm)) {
+                const value = basePriceFromSummaryGroup(group);
+                if (Number.isFinite(value) && Math.abs(value) > 0.0005) return value;
+            }
+        }
+    }
+
+    const fallback = divisionOwnjobFallbackGroup;
+    if (fallback) {
+        const fromItems = basePriceFromSummaryGroup(fallback);
+        if (Number.isFinite(fromItems) && Math.abs(fromItems) > 0.0005) return fromItems;
+        const fromTotal = Number(fallback.total);
+        if (Number.isFinite(fromTotal) && Math.abs(fromTotal) > 0.0005) return fromTotal;
+    }
+
+    return 0;
+}

@@ -10,3 +10,9 @@ BEGIN
     ALTER TABLE dbo.ConcernedSE ADD Accountability NVARCHAR(10) NULL;
     PRINT 'Accountability added to ConcernedSE';
 END
+
+IF COL_LENGTH('dbo.ConcernedSE', 'ownjob') IS NULL
+BEGIN
+    ALTER TABLE dbo.ConcernedSE ADD ownjob NVARCHAR(255) NULL;
+    PRINT 'ownjob added to ConcernedSE';
+END

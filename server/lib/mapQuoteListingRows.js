@@ -75,6 +75,67 @@ function isBasePricePricingRow(p) {
     return po === 'base price';
 }
 
+function isDeclineToQuotePricingRow(pr) {
+    const v = String(pr?.Quotingornot ?? pr?.quotingornot ?? '').trim().toLowerCase();
+    return v === 'yes' || v === 'y' || v === '1' || v === 'true';
+}
+
+function pricingRowMatchesLeadLine(pr, lineLeadCode, pvLead) {
+    const code = extractLCodeFromLeadJobName(pr.LeadJobName || '');
+    const want = String(lineLeadCode || '').trim().toUpperCase();
+    if (want && code === want) return true;
+    if (pvLead && jsTupleLeadJobMatch(pvLead, pr.LeadJobName)) return true;
+    return false;
+}
+
+function findDeclinedPricingForLeadLine(
+    pricesForReq,
+    pvOwn,
+    pvLead,
+    customerCandidates,
+    lineLeadCode,
+    subtreeJobIdSet
+) {
+    const cands = (customerCandidates || [])
+        .map((c) => jsStripCustomerLeadSuffix(String(c || '').trim()))
+        .filter(Boolean);
+    const wantKeys = [
+        ...new Set(cands.map((c) => normCustomerKeyForRollup(c)).filter(Boolean)),
+    ];
+    let subtreeBest = null;
+    let generalBest = null;
+    for (const pr of pricesForReq || []) {
+        if (!isDeclineToQuotePricingRow(pr)) continue;
+        if (!isBasePricePricingRow(pr)) continue;
+        const cn = String(pr.CustomerName ?? pr.customerName ?? '').trim();
+        if (wantKeys.length > 0 && !wantKeys.some((k) => pricingCustomerRowMatchesKeyQuote(cn, k))) {
+            continue;
+        }
+        const jid = pvRowMatchedJobId(pr);
+        if (subtreeJobIdSet && subtreeJobIdSet.size > 0 && jid && subtreeJobIdSet.has(String(jid))) {
+            if (!subtreeBest || new Date(pr.UpdatedAt) > new Date(subtreeBest.UpdatedAt)) {
+                subtreeBest = pr;
+            }
+            continue;
+        }
+        if (pvOwn && !jsTupleOwnJobMatch(pvOwn, pr.EnquiryForItem)) continue;
+        if (!pricingRowMatchesLeadLine(pr, lineLeadCode, pvLead)) continue;
+        if (!generalBest || new Date(pr.UpdatedAt) > new Date(generalBest.UpdatedAt)) {
+            generalBest = pr;
+        }
+    }
+    return subtreeBest || generalBest;
+}
+
+function quoteDetailLineResolved(ln) {
+    if (!ln) return false;
+    if (ln.declinedToQuote) return true;
+    const t = String(ln.textLine || '');
+    if (/\(Decline to Quote\)/i.test(t)) return true;
+    if (/\(Not Quoted\)/i.test(t)) return false;
+    return true;
+}
+
 function quoteRowMatchesTuple(q, pvOwn, pvLeadName, pvCust) {
     return (
         jsTupleOwnJobMatch(q.OwnJob, pvOwn) &&
@@ -292,15 +353,13 @@ function mergeRollupStatuses(statuses) {
 /** None / Partial / All from the same per-lead lines as Quote details (fixes merged PV rows where SQL tuple status is always None). */
 function rollupStatusFromLeadDetailLines(lines) {
     if (!Array.isArray(lines) || lines.length === 0) return null;
-    let nQuoted = 0;
+    let nResolved = 0;
     for (const ln of lines) {
-        const t = String(ln?.textLine || '');
-        if (/\(Not Quoted\)/.test(t)) continue;
-        nQuoted++;
+        if (quoteDetailLineResolved(ln)) nResolved++;
     }
     const n = lines.length;
-    if (nQuoted === 0) return 'None Quoted';
-    if (nQuoted === n) return 'All Quoted';
+    if (nResolved === 0) return 'None Quoted';
+    if (nResolved === n) return 'All Quoted';
     return 'Partial Quoted';
 }
 
@@ -402,7 +461,13 @@ function normCustomerKeyForRollup(s) {
 
 function pricingCustomerRowMatchesKeyQuote(cnRaw, wantKey) {
     if (!wantKey) return false;
-    return normCustomerKeyForRollup(cnRaw) === wantKey;
+    const n = normCustomerKeyForRollup(cnRaw);
+    if (!n) return false;
+    if (n === wantKey) return true;
+    const shorter = n.length <= wantKey.length ? n : wantKey;
+    const longer = n.length <= wantKey.length ? wantKey : n;
+    if (shorter.length < 4) return false;
+    return longer.startsWith(shorter);
 }
 
 function isInternalLeadSubmittedPricingRow(pr) {
@@ -812,7 +877,10 @@ function buildEnquiryLeadQuoteDetailLines(requestNo, groupRows, allQuotes, price
     }
 
     for (const p of pricesForReq || []) {
-        if (!isBasePricePricingRow(p) || parseFloat(p.Price || 0) <= 0) continue;
+        if (!isBasePricePricingRow(p)) continue;
+        const priced = parseFloat(p.Price || 0) > 0;
+        const declined = isDeclineToQuotePricingRow(p);
+        if (!priced && !declined) continue;
         const code = extractLCodeFromLeadJobName(p.LeadJobName || '');
         if (!code || leadToRow.has(code)) continue;
         if (!leadAllowed(code)) continue;
@@ -963,7 +1031,21 @@ function buildEnquiryLeadQuoteDetailLines(requestNo, groupRows, allQuotes, price
             let textLine;
             let bdTotal = null;
             let preparedBy = '';
-            if (qt && String(qt.QuoteNumber || '').trim()) {
+            let declinedToQuote = false;
+            let declineUpdatedAt = null;
+            const declinedPr = findDeclinedPricingForLeadLine(
+                pricesForReq,
+                pvOwn,
+                pvLead,
+                customerCandidates,
+                code,
+                subSet
+            );
+            if (declinedPr) {
+                declinedToQuote = true;
+                declineUpdatedAt = declinedPr.UpdatedAt ?? declinedPr.updatedAt ?? null;
+                textLine = `${label} (Decline to Quote)`;
+            } else if (qt && String(qt.QuoteNumber || '').trim()) {
                 textLine = `${label} (${String(qt.QuoteNumber).trim()} - ${fmtRowDetailDate(qt.QuoteDate)})`;
                 const ta = parseFloat(qt.TotalAmount);
                 if (!Number.isNaN(ta) && ta > 0) {
@@ -984,9 +1066,15 @@ function buildEnquiryLeadQuoteDetailLines(requestNo, groupRows, allQuotes, price
             }
             lines.push({
                 textLine,
+                declinedToQuote,
                 bdTotal: bdTotal != null && bdTotal > 0 ? bdTotal : null,
                 preparedBy,
-                quoteDate: qt && qt.QuoteDate != null && qt.QuoteDate !== '' ? qt.QuoteDate : null,
+                quoteDate:
+                    qt && qt.QuoteDate != null && qt.QuoteDate !== ''
+                        ? qt.QuoteDate
+                        : declineUpdatedAt != null && declineUpdatedAt !== ''
+                          ? declineUpdatedAt
+                          : null,
             });
         }
     }
@@ -1113,7 +1201,7 @@ function buildMultiLeadQuoteRollup(enqRequestNo, pvOwn, pvCust, allPrices, allQu
             String(p.RequestNo ?? '')
                 .trim() === reqStr &&
             isBasePricePricingRow(p) &&
-            parseFloat(p.Price || 0) > 0 &&
+            (parseFloat(p.Price || 0) > 0 || isDeclineToQuotePricingRow(p)) &&
             jsTupleOwnJobMatch(own, p.EnquiryForItem) &&
             jsTupleCustomerMatch(cust, p.CustomerName)
     );
@@ -1131,11 +1219,18 @@ function buildMultiLeadQuoteRollup(enqRequestNo, pvOwn, pvCust, allPrices, allQu
         .concat(String(cust || '').split(',').map((x) => x.trim()).filter(Boolean))
         .map((c) => jsStripCustomerLeadSuffix(String(c || '').trim()))
         .filter(Boolean);
+    let nResolved = 0;
     for (const leadName of leadNames) {
         const lc = extractLCodeFromLeadJobName(leadName);
         const best =
             findQuoteRowForLeadLine(quotesForReq, own, leadName, custCands, lc) ||
             pickLatestQuoteRow(quotesForReq.filter((q) => quoteRowMatchesTuple(q, own, leadName, cust)));
+        const declined = priceRows.some(
+            (p) =>
+                isDeclineToQuotePricingRow(p) &&
+                pricingRowMatchesLeadLine(p, lc, leadName) &&
+                jsTupleCustomerMatch(cust, p.CustomerName)
+        );
         if (best && String(best.QuoteNumber || '').trim()) {
             entries.push({
                 leadName,
@@ -1143,13 +1238,15 @@ function buildMultiLeadQuoteRollup(enqRequestNo, pvOwn, pvCust, allPrices, allQu
                 quoteDate: best.QuoteDate,
                 preparedBy: String(best.PreparedBy ?? best.preparedBy ?? '').trim(),
             });
+            nResolved += 1;
+        } else if (declined) {
+            nResolved += 1;
         }
     }
-    const nQuoted = entries.length;
     const nTotal = leadNames.length;
     let status;
-    if (nQuoted === 0) status = 'None Quoted';
-    else if (nQuoted < nTotal) status = 'Partial Quoted';
+    if (nResolved === 0) status = 'None Quoted';
+    else if (nResolved < nTotal) status = 'Partial Quoted';
     else status = 'All Quoted';
 
     const dates = entries
@@ -1274,6 +1371,7 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
                 v.CustomerName,
                 v.LeadJobName,
                 v.PriceOption,
+                v.Quotingornot,
                 m.MatchedEnquiryForId,
                 m.MatchedItemName,
                 m.MatchedParentId
@@ -1933,3 +2031,4 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
 }
 
 module.exports = mapQuoteListingRows;
+module.exports.quoteDetailLineResolved = quoteDetailLineResolved;

@@ -633,6 +633,16 @@ input[type="date"]:focus::-webkit-datetime-edit {
   z-index: 10050;
 }
 
+/* Invisible bridge so pointer can move from trigger to submenu without closing */
+.ems-top-nav-submenu::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  right: -12px;
+  top: -6px;
+  height: 6px;
+}
+
 .ems-top-nav-submenu__item {
   display: block;
   width: 100%;

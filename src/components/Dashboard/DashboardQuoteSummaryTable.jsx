@@ -19,7 +19,7 @@ function normalizeListQuoteRollupKey(raw) {
 
 export function formatListQuoteRollupStatusTwoLines(raw) {
     const key = normalizeListQuoteRollupKey(raw);
-    const tail = 'for Ownjob';
+    const tail = 'for this Ownjob';
     if (key === 'None Quoted') return { line1: 'None Quoted', line2: tail };
     if (key === 'Partial Quoted') return { line1: 'Partial Quoted', line2: tail };
     if (key === 'All Quoted') return { line1: 'All Quoted', line2: tail };
@@ -76,6 +76,8 @@ function getQuoteListFilterValue(row, key) {
             return String(row.ListWorkflowNo ?? '').trim() || '—';
         case 'approvalStatus':
             return String(row.ListApprovalStatus ?? '').trim() || '—';
+        case 'reasonForRevision':
+            return String(row.ListReasonForRevision ?? '').trim() || '—';
         case 'projectName':
             return String(row.ProjectName || '—').trim() || '—';
         case 'listQuoteDetails': {
@@ -130,6 +132,7 @@ function localYmdFromRawDate(raw) {
 function parseQuoteYmdFromDetailTextLine(textLine) {
     const tl = String(textLine || '');
     if (/\(Not Quoted\)/i.test(tl)) return null;
+    if (/\(Decline to Quote\)/i.test(tl)) return null;
     const m = tl.match(/- (\d{2})-([A-Za-z]{3})-(\d{4})\)\s*$/);
     if (!m) return null;
     const monMap = {
@@ -302,7 +305,7 @@ export default function DashboardQuoteSummaryTable({
     const filterKeys = useMemo(
         () =>
             showWorkflowNoColumn
-                ? ['requestNo', 'projectName', 'approvalStatus', 'listQuoteDetails', 'workflowNo', 'dueDate', 'consultantName']
+                ? ['requestNo', 'projectName', 'approvalStatus', 'reasonForRevision', 'listQuoteDetails', 'workflowNo', 'dueDate', 'consultantName']
                 : QUOTE_LIST_FILTER_KEYS,
         [showWorkflowNoColumn]
     );
@@ -422,6 +425,7 @@ export default function DashboardQuoteSummaryTable({
             <col style={{ width: '96px' }} />
             <col style={{ width: '220px' }} />
             {showWorkflowNoColumn ? <col style={{ width: '128px' }} /> : null}
+            {showWorkflowNoColumn ? <col style={{ width: '148px' }} /> : null}
             <col />
             {showWorkflowNoColumn ? <col style={{ width: '108px' }} /> : null}
             <col style={{ width: '110px' }} />
@@ -431,7 +435,7 @@ export default function DashboardQuoteSummaryTable({
 
     const quoteListTableFixed = {
         width: 'max-content',
-        minWidth: '960px',
+        minWidth: '1100px',
         borderCollapse: 'collapse',
         tableLayout: 'fixed',
     };
@@ -556,6 +560,22 @@ export default function DashboardQuoteSummaryTable({
                                     thStyle={{ ...pricingListThBase, width: '128px', whiteSpace: 'nowrap' }}
                                 />
                             ) : null}
+                            {showWorkflowNoColumn ? (
+                                <TableColumnFilterHeader
+                                    colKey="reasonForRevision"
+                                    label="Reason for Revision"
+                                    sortField="ListReasonForRevision"
+                                    sortConfig={sortConfig}
+                                    onSort={handleSort}
+                                    filterCtx={colFilters}
+                                    thStyle={{
+                                        ...pricingListThBase,
+                                        width: '148px',
+                                        whiteSpace: 'normal',
+                                        lineHeight: 1.2,
+                                    }}
+                                />
+                            ) : null}
                             <TableColumnFilterHeader
                                 colKey="listQuoteDetails"
                                 label="To Customer and Quote details"
@@ -609,7 +629,7 @@ export default function DashboardQuoteSummaryTable({
                     <tbody>
                         {displayRows.length === 0 ? (
                             <tr>
-                                <td colSpan={showWorkflowNoColumn ? 7 : 5} className="text-muted text-center py-3 small">
+                                <td colSpan={showWorkflowNoColumn ? 8 : 5} className="text-muted text-center py-3 small">
                                     {emptyLabel}
                                 </td>
                             </tr>
@@ -710,6 +730,26 @@ export default function DashboardQuoteSummaryTable({
                                                 {String(enq.ListApprovalStatus ?? '').trim() || '—'}
                                             </td>
                                         ) : null}
+                                        {showWorkflowNoColumn ? (
+                                            <td
+                                                style={{
+                                                    ...quoteListTdTransparent,
+                                                    padding: tdPad,
+                                                    fontSize: '10.5px',
+                                                    color: '#78350f',
+                                                    fontWeight: '500',
+                                                    verticalAlign: 'top',
+                                                    whiteSpace: 'normal',
+                                                    wordBreak: 'break-word',
+                                                    lineHeight: 1.35,
+                                                    textAlign: 'left',
+                                                    maxWidth: '148px',
+                                                }}
+                                                title={String(enq.ListReasonForRevision ?? '').trim() || undefined}
+                                            >
+                                                {String(enq.ListReasonForRevision ?? '').trim() || '—'}
+                                            </td>
+                                        ) : null}
                                         <td
                                             style={{
                                                 ...quoteListTdTransparent,
@@ -757,6 +797,17 @@ export default function DashboardQuoteSummaryTable({
                                                     wordBreak: 'break-word',
                                                 };
 
+                                                const declineLineStyle = {
+                                                    fontSize: '10px',
+                                                    color: '#9a3412',
+                                                    background: '#ffedd5',
+                                                    padding: '1px 6px',
+                                                    borderRadius: '4px',
+                                                    fontWeight: 600,
+                                                    whiteSpace: 'normal',
+                                                    wordBreak: 'break-word',
+                                                };
+
                                                 if (Array.isArray(enq.ListQuoteDetailLines) && enq.ListQuoteDetailLines.length > 0) {
                                                     const visibleLines = quoteDateScope
                                                         ? enq.ListQuoteDetailLines.filter((ln) => detailLineInScope(ln, quoteDateScope))
@@ -764,9 +815,14 @@ export default function DashboardQuoteSummaryTable({
                                                     if (!visibleLines.length) return null;
                                                     return visibleLines.map((ln, li) => {
                                                         const linePrep = String(ln.preparedBy ?? ln.PreparedBy ?? '').trim();
+                                                        const isDeclined =
+                                                            !!ln.declinedToQuote ||
+                                                            /\(Decline to Quote\)/i.test(String(ln.textLine || ''));
                                                         return (
                                                             <div key={`dl-${li}`} style={{ ...compactLineStyle, marginTop: li ? 4 : 0 }}>
-                                                                <span style={refDateStyle}>{ln.textLine}</span>
+                                                                <span style={isDeclined ? declineLineStyle : refDateStyle}>
+                                                                    {ln.textLine}
+                                                                </span>
                                                                 {ln.bdTotal != null && ln.bdTotal > 0 ? (
                                                                     <span style={{ ...bdStyle, fontSize: '10px' }}>
                                                                         BD{' '}

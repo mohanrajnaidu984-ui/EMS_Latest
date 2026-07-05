@@ -3,6 +3,7 @@ import Select from 'react-select';
 import { UserCheck, Trash2, CheckCircle2, Send, Check, X, Settings2 } from 'lucide-react';
 import { formatSignaturePlacedDateTime } from '../../utils/enquiryResultsHelpers';
 import QuoteApprovalHierarchyModal from './QuoteApprovalHierarchyModal';
+import { EMS_PENDING_APPROVALS_CHANGED } from '../../constants/approvalEvents';
 import {
     getCurrentPendingApprovalStep,
     getUserPendingApprovalStep,
@@ -263,6 +264,7 @@ export default function QuoteApprovalWorkflow({
             if (Array.isArray(data.steps)) {
                 onChange(data.steps);
             }
+            window.dispatchEvent(new CustomEvent(EMS_PENDING_APPROVALS_CHANGED));
             onApprovalSent?.(data);
             const names = Array.isArray(data.approverNames)
                 ? data.approverNames.filter(Boolean)
@@ -317,6 +319,7 @@ export default function QuoteApprovalWorkflow({
                 onChange(data.steps);
                 onStepsUpdated?.(data.steps);
             }
+            window.dispatchEvent(new CustomEvent(EMS_PENDING_APPROVALS_CHANGED));
             setComments('');
         } catch (e) {
             console.warn('[QuoteApprovalWorkflow] action failed', e);
@@ -332,7 +335,7 @@ export default function QuoteApprovalWorkflow({
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '8px',
-                flex: '1 1 50%',
+                flex: approvalReviewMode ? '1 1 60%' : '1 1 50%',
                 minHeight: 0,
                 overflowY: approvalReviewMode ? 'hidden' : 'auto',
                 paddingBottom: '4px',
@@ -595,13 +598,10 @@ export default function QuoteApprovalWorkflow({
                         flexShrink: 0,
                     }}
                 >
-                    <label style={{ fontSize: '11px', fontWeight: 600, color: '#475569' }}>
-                        Comments
-                    </label>
                     <textarea
                         value={comments}
                         onChange={(e) => setComments(e.target.value)}
-                        rows={3}
+                        rows={1}
                         placeholder="Enter approval comments…"
                         style={{
                             width: '100%',
