@@ -152,6 +152,17 @@ function isJobRowVisibleForSaveHiddenChildCheck(jobRec, accessVisibleJobNames) {
     return names.some((n) => String(n || '').trim().toLowerCase() === rl);
 }
 
+function isPricingSubjobRow(job) {
+    if (!job) return false;
+    const pid = job.parentId;
+    return pid != null && pid !== 0 && String(pid) !== '0';
+}
+
+/** Subjob price hidden from lead/parent viewers until that subjob creates a quote. */
+function isSubjobPriceMaskedByQuote(job) {
+    return isPricingSubjobRow(job) && job.priceUnlockedByQuote === false;
+}
+
 /**
  * `EnquiryPricingValues.LeadJobName` is the lead under which the price was saved.
  * e.g. BMS=2 with LeadJobName=HVAC must not show on the Civil lead tree; Civil's own rows use LeadJobName=Civil.
@@ -6198,10 +6209,13 @@ const PricingForm = ({ openContext = null }) => {
                                                             // Finalize Price for Display Logic
                                                             if (price === null) price = 0;
 
+                                                            const maskedByQuote = isSubjobPriceMaskedByQuote(job);
+                                                            const displayPriceForRow = maskedByQuote ? 0 : price;
+
                                                             // Hide if Empty, Not Newest, Not Base Price (dedupe only within same name + job + lead)
                                                             const nameL = (opt.name || '').trim().toLowerCase();
                                                             const isDefault = nameL === 'price' || nameL === 'optional';
-                                                            const isEmpty = (price <= 0.01 && !hasExplicitValue); // Treat 0 as empty ONLY if implicit
+                                                            const isEmpty = (displayPriceForRow <= 0.01 && !hasExplicitValue && !maskedByQuote); // Treat 0 as empty ONLY if implicit
                                                             const optN = optIdNum(opt.id);
                                                             const gk = `${nameL}|${(opt.itemName || '').trim()}|${(opt.leadJobName || '').trim()}`;
                                                             const nameGroupMax = defaultNameGroupMaxIds.get(gk) || 0;
@@ -6214,7 +6228,11 @@ const PricingForm = ({ openContext = null }) => {
                                                             if (isDefault && isEmpty && isNotNewest) return;
 
                                                             // Push cloned option with effective Price for display
-                                                            groupMap[job.id].options.push({ ...opt, effectivePrice: price });
+                                                            groupMap[job.id].options.push({
+                                                                ...opt,
+                                                                effectivePrice: displayPriceForRow,
+                                                                priceMaskedByQuote: maskedByQuote,
+                                                            });
                                                         }
                                                     });
                                                 });
@@ -6309,6 +6327,8 @@ const PricingForm = ({ openContext = null }) => {
                                                             {group.options.map(option => {
                                                                 const key = `${option.id}_${job.id}`;
                                                                 const canEditRow = canEditSection;
+                                                                const priceMaskedByQuote =
+                                                                    option.priceMaskedByQuote || isSubjobPriceMaskedByQuote(job);
 
                                                                 let displayValue = '';
                                                                 const vk = values[key];
@@ -6318,7 +6338,9 @@ const PricingForm = ({ openContext = null }) => {
                                                                 // If this key exists in `values`, always reflect it — including '' when the user
                                                                 // cleared the field. Previously '' was treated as "no edit" and fell through to
                                                                 // `effectivePrice`, so the box snapped back and could not be emptied.
-                                                                if (userHasLocalValue) {
+                                                                if (priceMaskedByQuote) {
+                                                                    displayValue = '0';
+                                                                } else if (userHasLocalValue) {
                                                                     displayValue =
                                                                         vk === '' || vk === null || vk === undefined ? '' : vk;
                                                                 } else if (ep !== undefined && ep !== null && String(ep) !== '') {
@@ -6354,9 +6376,10 @@ const PricingForm = ({ openContext = null }) => {
                                                                       );
 
                                                                 return (
-                                                                    <tr key={`${option.id}_${job.id}`} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                                                                    <React.Fragment key={`${option.id}_${job.id}`}>
+                                                                    <tr style={{ borderBottom: priceMaskedByQuote ? 'none' : '1px solid #e2e8f0' }}>
                                                                         <td style={{ padding: '4px 10px', fontWeight: '500', color: '#1e293b', fontSize: '12px' }}>{option.name}</td>
-                                                                        <td style={{ padding: '2px 6px', textAlign: 'right', width: '290px', verticalAlign: 'middle' }}>
+                                                                        <td style={{ padding: '2px 6px', textAlign: 'right', verticalAlign: 'middle' }}>
                                                                             <div
                                                                                 style={{
                                                                                     display: 'flex',
@@ -6371,15 +6394,18 @@ const PricingForm = ({ openContext = null }) => {
                                                                                     type="text"
                                                                                     inputMode="decimal"
                                                                                     value={
-                                                                                        focusedCell === `${option.id}_${job.id}`
+                                                                                        priceMaskedByQuote
+                                                                                            ? formatPrice(0)
+                                                                                            : focusedCell === `${option.id}_${job.id}`
                                                                                             ? (displayValue === '' ? '' : String(displayValue))
                                                                                             : formatPrice(displayValue)
                                                                                     }
-                                                                                    onFocus={() => setFocusedCell(`${option.id}_${job.id}`)}
+                                                                                    onFocus={() => !priceMaskedByQuote && setFocusedCell(`${option.id}_${job.id}`)}
                                                                                     onBlur={() => setFocusedCell(null)}
                                                                                     onChange={(e) => handleValueChange(option.id, job.id, e.target.value)}
-                                                                                    disabled={!canEditRow}
+                                                                                    disabled={!canEditRow || priceMaskedByQuote}
                                                                                     placeholder="0"
+                                                                                    title={priceMaskedByQuote ? 'Quote to be generated to see the price' : undefined}
                                                                                     style={{
                                                                                         width: '116px',
                                                                                         maxWidth: '116px',
@@ -6392,10 +6418,10 @@ const PricingForm = ({ openContext = null }) => {
                                                                                         minHeight: '24px',
                                                                                         height: '24px',
                                                                                         textAlign: 'right',
-                                                                                        backgroundColor: canEditRow ? '#fff' : '#f1f5f9',
+                                                                                        backgroundColor: canEditRow && !priceMaskedByQuote ? '#fff' : '#f1f5f9',
                                                                                         color: '#1e293b',
                                                                                         opacity: 1,
-                                                                                        cursor: canEditRow ? 'text' : 'not-allowed',
+                                                                                        cursor: canEditRow && !priceMaskedByQuote ? 'text' : 'not-allowed',
                                                                                     }}
                                                                                 />
                                                                                 <label
@@ -6486,6 +6512,24 @@ const PricingForm = ({ openContext = null }) => {
                                                                             </div>
                                                                         </td>
                                                                     </tr>
+                                                                    {priceMaskedByQuote && (
+                                                                        <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
+                                                                            <td colSpan={2} style={{ padding: '0 10px 6px', textAlign: 'right' }}>
+                                                                                <span
+                                                                                    style={{
+                                                                                        fontSize: '10px',
+                                                                                        color: '#b45309',
+                                                                                        fontStyle: 'italic',
+                                                                                        whiteSpace: 'nowrap',
+                                                                                        display: 'inline-block',
+                                                                                    }}
+                                                                                >
+                                                                                    Quote to be generated to see the price
+                                                                                </span>
+                                                                            </td>
+                                                                        </tr>
+                                                                    )}
+                                                                    </React.Fragment>
                                                                 );
                                                             })}
                                                             {canEditSection && (

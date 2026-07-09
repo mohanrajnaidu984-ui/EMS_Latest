@@ -13,7 +13,12 @@ function buildEnquiryMasterDepartmentExistsSql(divisionFilter) {
                     SELECT 1
                     FROM dbo.EnquiryFor efDiv
                     INNER JOIN dbo.Master_EnquiryFor mefDiv
-                        ON (efDiv.ItemName = mefDiv.ItemName)
+                        ON (
+                            efDiv.ItemName = mefDiv.ItemName
+                            OR efDiv.ItemName LIKE N'%- ' + mefDiv.ItemName
+                            OR efDiv.ItemName LIKE N'%- ' + mefDiv.DivisionCode
+                            OR mefDiv.ItemName LIKE N'%' + efDiv.ItemName + N'%'
+                        )
                     WHERE efDiv.RequestNo = E.RequestNo
                       AND LTRIM(RTRIM(ISNULL(mefDiv.DepartmentName, N''))) = LTRIM(RTRIM(N'${divEsc}'))
                 )`;

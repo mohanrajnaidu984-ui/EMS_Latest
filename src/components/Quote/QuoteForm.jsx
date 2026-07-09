@@ -134,6 +134,12 @@ import {
     resolveQuoteBranchPrefixForPricing,
     resolveOwnjobBasePriceForEnquiryQuoteTotal,
 } from './quoteEnquiryPricingLookup';
+import {
+    applyQuoteSubjobPriceMaskToSummary,
+    selectablePricingSummaryGroupNames,
+    filterSelectableJobItemNames,
+    SUBJOB_QUOTE_PENDING_MSG,
+} from '../../utils/pricingQuoteTupleMatch';
 import ListBoxControl from '../Enquiry/ListBoxControl';
 import { enquiryType as defaultEnquiryTypeOptions } from '../../data/mockData';
 import {
@@ -1889,6 +1895,26 @@ const matchOwnJobForQuoteScope = (rowOwn, pOwn, useDept, altOwn = '') => {
     return false;
 };
 
+/** Lead branch from QuoteNumber segment e.g. AAC/BMP/20-L1/7-R0 → L1 */
+function extractLeadCodeFromQuoteNumber(q) {
+    const parts = String(q?.QuoteNumber || '').split('/');
+    const leadSeg = parts[2] ? String(parts[2]).toUpperCase() : '';
+    const m = leadSeg.match(/L\d+/);
+    return m ? m[0] : '';
+}
+
+/** When both sides have an L-code, QuoteNumber branch must match the selected lead (L1 vs L2 vs L3). */
+function quoteRowMatchesSelectedLeadBranch(q, selectedLeadBranchCode) {
+    const wantLc = String(selectedLeadBranchCode || '')
+        .trim()
+        .toUpperCase()
+        .match(/L\d+/)?.[0];
+    if (!wantLc) return true;
+    const qLc = extractLeadCodeFromQuoteNumber(q);
+    if (!qLc) return true;
+    return qLc === wantLc;
+}
+
 /**
  * EnquiryQuotes row vs current panel: same tuple as persisted — RequestNo, LeadJob, ToName, OwnJob only
  * (no QuoteNumber / lead-prefix parsing).
@@ -1915,6 +1941,7 @@ function quoteRowMatchesEnquiryScopedParams(q, p, requestNo) {
         return false;
     }
     if (!matchLeadJobForQuoteScope(q.LeadJob, p.leadJobName)) return false;
+    if (p.leadBranchCode && !quoteRowMatchesSelectedLeadBranch(q, p.leadBranchCode)) return false;
     return matchOwnJobForQuoteScope(
         q.OwnJob,
         p.ownJobName || '',
@@ -3847,6 +3874,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const lastQuickCalcInputRef = useRef('');
     const pricingSelectionTouchedRef = useRef({});
     const pricingSelectionInitContextRef = useRef('');
+    /** Latest checkbox selection — read in async loadPricingData to avoid stale closures. */
+    const selectedJobsRef = useRef([]);
+    /** When this equals `pricingSelectionContextKey`, checkbox toggles are user-controlled (not auto-reset). */
+    const [pricingSelectionTouchedKey, setPricingSelectionTouchedKey] = useState('');
     const [expandedGroups, setExpandedGroups] = useState({}); // Track expanded revisions
     /** Avoid flicker-to-blank on tab switch: remember last non-empty previous-quote rows per tab. */
     const previousQuotesRowsCacheRef = useRef({});
@@ -4228,6 +4259,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const [pendingQuotes, setPendingQuotes] = useState([]); // Pending List State
     const [quoteSearchResults, setQuoteSearchResults] = useState([]);
     const [quoteSearchLoading, setQuoteSearchLoading] = useState(false);
+    const [quoteSearchError, setQuoteSearchError] = useState('');
     /** When true with an enquiry open, right panel shows pending/search list instead of quote preview (after Search click). */
     const [showQuoteListSummaryOverQuote, setShowQuoteListSummaryOverQuote] = useState(false);
     const quoteSummaryClearColFiltersRef = useRef(() => {});
@@ -4337,9 +4369,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const dt = (quoteListDateTo || '').trim();
         if (!q && !(df && dt)) {
             setQuoteSearchResults([]);
+            setQuoteSearchError('');
             return;
         }
         setQuoteSearchLoading(true);
+        setQuoteSearchError('');
         try {
             const params = new URLSearchParams();
             params.set('userEmail', userEmail);
@@ -4348,11 +4382,25 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (dt) params.set('dateTo', dt);
             if (quoteListDivision.trim()) params.set('division', quoteListDivision.trim());
             const res = await fetch(`${API_BASE}/api/quotes/list/search?${params.toString()}`);
-            const data = res.ok ? await res.json() : [];
+            if (!res.ok) {
+                let message = `Search failed (${res.status})`;
+                try {
+                    const errBody = await res.json();
+                    if (errBody?.error) message = String(errBody.error);
+                    if (errBody?.details) message = `${message}: ${String(errBody.details)}`;
+                } catch (_) {
+                    /* ignore */
+                }
+                setQuoteSearchResults([]);
+                setQuoteSearchError(message);
+                return;
+            }
+            const data = await res.json();
             setQuoteSearchResults(Array.isArray(data) ? data : []);
         } catch (e) {
             console.error('[QuoteForm] list/search', e);
             setQuoteSearchResults([]);
+            setQuoteSearchError('Search failed. Check that the API server is running and reachable.');
         } finally {
             setQuoteSearchLoading(false);
         }
@@ -4367,6 +4415,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         setQuoteListDateFrom('');
         setQuoteListDateTo('');
         setQuoteSearchResults([]);
+        setQuoteSearchError('');
+        listOpenApprovalQuoteIdRef.current = null;
         setQuoteListCategory(QUOTE_LIST_CATEGORY.PENDING);
         setShowQuoteListSummaryOverQuote(false);
         // Pass division explicitly to avoid fetching with a stale/empty division value.
@@ -4605,6 +4655,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             'showBillOfQuantity', 'showSchedule', 'showWarranty', 'showResponsibilityMatrix', 'showTermsConditions', 'showAcceptance'
         ]);
         setSelectedJobs([]);
+        setPricingSelectionTouchedKey('');
         setQuoteContextScope(null);
         setPricingSummary([]);
         setHasUserPricing(false);
@@ -7179,7 +7230,36 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         currentUser?.Division,
     ]);
 
-    const pricingSummaryRowsForUi = React.useMemo(() => {
+    /** Active tab used to allow a subjob to see its own price before quoting. */
+    const activeTabObjForMask = React.useMemo(
+        () =>
+            (calculatedTabs || []).find((t) => String(t.id) === String(activeQuoteTab || '')) || null,
+        [calculatedTabs, activeQuoteTab]
+    );
+
+    /** Mask subjob prices to 0 + pending message until that subjob has generated a quote. */
+    const applySubjobQuoteMask = React.useCallback(
+        (summary) =>
+            applyQuoteSubjobPriceMaskToSummary(summary, {
+                existingQuotes,
+                activeTabLabel: activeTabObjForMask?.label || activeTabObjForMask?.name || '',
+                isSubJobTab: !!activeTabObjForMask?.isSubJobTab,
+                quoteListDivision,
+                namesAlign: quoteItemNamesAlign,
+                resolveJobForGroup: (name) =>
+                    findJobInPoolByItemLabel(jobsPool, name, { selectedLeadId }),
+                jobsPool,
+            }),
+        [
+            existingQuotes,
+            activeTabObjForMask,
+            quoteListDivision,
+            jobsPool,
+            selectedLeadId,
+        ]
+    );
+
+    const pricingSummaryRowsForUiRaw = React.useMemo(() => {
         const pinned = lastNonEmptyPricingSummaryRef.current;
         const source =
             pricingSummaryWithEpvOverlay.length > 0
@@ -7196,11 +7276,32 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         return source;
     }, [pricingSummaryBusy, pricingSummaryWithEpvOverlay, pricingSummary]);
 
-    const pricingSummaryForClause = React.useMemo(() => {
+    const pricingSummaryRowsForUi = React.useMemo(
+        () => applySubjobQuoteMask(pricingSummaryRowsForUiRaw),
+        [pricingSummaryRowsForUiRaw, applySubjobQuoteMask]
+    );
+
+    /** Default checkbox selection — excludes subjobs with no quote yet (masked / zero). */
+    const defaultSelectablePricingJobNames = React.useMemo(
+        () => selectablePricingSummaryGroupNames(pricingSummaryRowsForUi),
+        [pricingSummaryRowsForUi]
+    );
+
+    const pricingSummaryForClauseRaw = React.useMemo(() => {
         if (pricingSummaryWithEpvOverlay.length > 0) return pricingSummaryWithEpvOverlay;
         if (Array.isArray(pricingSummary) && pricingSummary.length > 0) return pricingSummary;
         return divisionOwnjobFallbackSummary;
     }, [pricingSummaryWithEpvOverlay, pricingSummary, divisionOwnjobFallbackSummary]);
+
+    const pricingSummaryForClause = React.useMemo(
+        () => applySubjobQuoteMask(pricingSummaryForClauseRaw),
+        [pricingSummaryForClauseRaw, applySubjobQuoteMask]
+    );
+
+    const defaultSelectableClauseJobNames = React.useMemo(
+        () => selectablePricingSummaryGroupNames(pricingSummaryForClause),
+        [pricingSummaryForClause]
+    );
 
     const pricingSelectionContextKey = React.useMemo(() => {
         const base = `${enquiryData?.enquiry?.RequestNo || ''}::${activeQuoteTab || ''}::${normalize(toName || '')}`;
@@ -7216,45 +7317,61 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         quoteNumber,
     ]);
 
-    // New context must start with all pricing groups checked (ignore stale touched memory from older context).
+    const pricingSelectionTouched =
+        pricingSelectionTouchedKey !== '' &&
+        pricingSelectionTouchedKey === pricingSelectionContextKey;
+
+    React.useEffect(() => {
+        selectedJobsRef.current = Array.isArray(selectedJobs) ? selectedJobs : [];
+    }, [selectedJobs]);
+
+    // New context must start with selectable pricing groups checked (unquoted subjobs stay off).
     React.useEffect(() => {
         if (!pricingSelectionContextKey) return;
-        const allNames = (pricingSummaryRowsForUi || []).map((g) => g?.name).filter(Boolean);
-        if (!allNames.length) return;
+        const selectableNames = defaultSelectablePricingJobNames;
+        if (!selectableNames.length) return;
         if (pricingSelectionInitContextRef.current === pricingSelectionContextKey) return;
 
         pricingSelectionInitContextRef.current = pricingSelectionContextKey;
         pricingSelectionTouchedRef.current[pricingSelectionContextKey] = false;
+        setPricingSelectionTouchedKey('');
         setSelectedJobs((prev) => {
-            const sameSize = prev.length === allNames.length;
-            const sameMembers = sameSize && allNames.every((n) => prev.includes(n));
-            return sameMembers ? prev : allNames;
+            const sameSize = prev.length === selectableNames.length;
+            const sameMembers = sameSize && selectableNames.every((n) => prev.includes(n));
+            return sameMembers ? prev : selectableNames;
         });
-    }, [pricingSelectionContextKey, pricingSummaryRowsForUi]);
+    }, [pricingSelectionContextKey, defaultSelectablePricingJobNames]);
 
     const activeJobsForClause = React.useMemo(() => {
         const allNames = (pricingSummaryForClause || []).map((g) => g?.name).filter(Boolean);
-        const touched = Boolean(pricingSelectionTouchedRef.current[pricingSelectionContextKey]);
-        if (!touched) return allNames;
+        const selectableNames =
+            defaultSelectableClauseJobNames.length > 0 ? defaultSelectableClauseJobNames : allNames;
+        const touched = pricingSelectionTouched;
+        if (!touched) return selectableNames;
         const base = Array.isArray(selectedJobs) ? selectedJobs : [];
         if (base.length > 0) {
             // Stale checkbox list (e.g. other job tab / lead) → no group name matches → empty Pricing & Payment table body.
             const anyMatch = allNames.some((n) => jobNameMatchesActiveJobsList(n, base));
-            if (!anyMatch && allNames.length > 0) return allNames;
+            if (!anyMatch && selectableNames.length > 0) return selectableNames;
             return base;
         }
-        return allNames;
-    }, [selectedJobs, pricingSummaryForClause, pricingSelectionContextKey]);
+        return selectableNames;
+    }, [selectedJobs, pricingSummaryForClause, pricingSelectionContextKey, pricingSelectionTouched, defaultSelectableClauseJobNames]);
 
     const fallbackGrandBaseTotal = React.useMemo(
         () =>
-            (pricingSummaryForClause || []).reduce(
-                (sum, g) =>
-                    sum +
-                    (g?.items || []).reduce((s, i) => (i?.name === 'Base Price' ? s + (Number(i?.total) || 0) : s), 0),
-                0
-            ),
-        [pricingSummaryForClause]
+            (pricingSummaryForClause || [])
+                .filter((g) => jobNameMatchesActiveJobsList(g.name, activeJobsForClause))
+                .reduce(
+                    (sum, g) =>
+                        sum +
+                        (g?.items || []).reduce(
+                            (s, i) => (i?.name === 'Base Price' ? s + (Number(i?.total) || 0) : s),
+                            0
+                        ),
+                    0
+                ),
+        [pricingSummaryForClause, activeJobsForClause]
     );
 
     const pricingTermsAutoTablePreviewHtml = React.useMemo(() => {
@@ -7271,11 +7388,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const pricingAutoTableSignature = React.useMemo(() => {
         if (!Array.isArray(pricingSummaryForClause)) return '';
         const checked = Array.isArray(activeJobsForClause) ? activeJobsForClause : [];
+        const round6 = (n) => Number((Number(n) || 0).toFixed(6));
         return pricingSummaryForClause
             .filter((g) => g?.name && jobNameMatchesActiveJobsList(g.name, checked))
             .map((g) => {
                 const items = Array.isArray(g.items) ? g.items : [];
-                const itemSig = items.map((i) => String(i?.name || '').trim()).sort().join('|');
+                const itemSig = items
+                    .map((i) => `${String(i?.name || '').trim()}=${round6(i?.total)}`)
+                    .sort()
+                    .join('|');
                 return `${String(g.name || '').trim()}::${itemSig}`;
             })
             .sort()
@@ -7338,14 +7459,23 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             // Left editor is source of truth — keep user table/prices; only align clause 4.1 below.
             nextHtml = currentTerms;
         } else {
-            // Stable structure + user already has auto-table — keep their HTML and only sync 4.1.
-            nextHtml = currentTerms;
+            // Selection or amounts changed but structure stable — refresh table from live preview.
+            nextHtml = mergePricingTermsClauseHtml(
+                currentTerms,
+                pricingTermsAutoTablePreviewHtml,
+                proseFallback
+            );
         }
 
-        // 4.1 lump-sum prose should match whatever total is currently visible in the table.
-        // Prefer the value parsed from the table HTML (covers user edits to prices); fall back to calc.
+        // 4.1 lump-sum prose should match checked-job total (grand with VAT when present).
+        const previewGrand = parseLumpSumFromAutoTableHtml(pricingTermsAutoTablePreviewHtml);
         const livePrice = parseLumpSumFromAutoTableHtml(nextHtml);
-        const totalForProse = livePrice != null ? livePrice : fallbackGrandBaseTotal;
+        const totalForProse =
+            previewGrand != null && Number.isFinite(previewGrand)
+                ? previewGrand
+                : livePrice != null && Number.isFinite(livePrice)
+                  ? livePrice
+                  : fallbackGrandBaseTotal;
         const synced = applyTableRowHeightModelInHtmlString(
             ensurePricingTableColgroupInHtml(
                 syncPricingTerms41LumpSumProse(
@@ -7361,7 +7491,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (prevTerms === synced) return prev;
             return { ...prev, pricingTerms: synced };
         });
-    }, [pricingTermsAutoTablePreviewHtml, pricingAutoTableSignature, fallbackGrandBaseTotal]);
+    }, [pricingTermsAutoTablePreviewHtml, pricingAutoTableSignature, fallbackGrandBaseTotal, selectedJobsSig, pricingSelectionTouched]);
 
     /** Aligns with UI fallback when calculatedTabs is empty (e.g. lead job + internal customer only). */
     const effectiveQuoteTabs = React.useMemo(() => {
@@ -7686,8 +7816,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             }
         });
 
-        // Default behavior: all pricing summary groups start checked.
-        const names = (pricingSummary || []).map((g) => g?.name).filter(Boolean);
+        // Default behavior: selectable pricing summary groups start checked (unquoted subjobs off).
+        const names = defaultSelectablePricingJobNames;
 
         if (!names.length) return;
 
@@ -7699,7 +7829,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         setSelectedJobs((prev) => {
             // If user manually toggled for this tab+customer, keep their selection.
-            if (pricingSelectionTouchedRef.current[pricingSelectionContextKey]) return prev;
+            if (pricingSelectionTouched) return prev;
 
             // Same multiset → keep prev reference (avoids Maximum update depth when `names` is a fresh [] each run).
             if (sameSetAsNames(prev)) return prev;
@@ -7730,50 +7860,31 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         pricingSelectionContextKey,
         enquiryData?.divisionsHierarchy,
         quoteId,
+        pricingSelectionTouched,
+        defaultSelectablePricingJobNames,
     ]);
 
-    // Global default: for any context, start with all pricing groups checked until user manually deselects.
+    // Global default: selectable groups checked until user manually changes selection.
     React.useEffect(() => {
-        const allNames = (pricingSummaryRowsForUi || []).map((g) => g?.name).filter(Boolean);
-        if (!allNames.length) return;
+        const selectableNames = defaultSelectablePricingJobNames;
+        if (!selectableNames.length) return;
         if (!pricingSelectionContextKey) return;
-        if (pricingSelectionTouchedRef.current[pricingSelectionContextKey]) return;
+        if (pricingSelectionTouched) return;
         setSelectedJobs((prev) => {
-            const sameSize = prev.length === allNames.length;
-            const sameMembers = sameSize && allNames.every((n) => prev.includes(n));
-            return sameMembers ? prev : allNames;
+            const sameSize = prev.length === selectableNames.length;
+            const sameMembers = sameSize && selectableNames.every((n) => prev.includes(n));
+            return sameMembers ? prev : selectableNames;
         });
-    }, [pricingSummaryRowsForUi, pricingSelectionContextKey, quoteTabsFingerprint]);
+    }, [defaultSelectablePricingJobNames, pricingSelectionContextKey, quoteTabsFingerprint, pricingSelectionTouched]);
 
-    // When Previous Quotes is OFF, pricing summary must follow Division dropdown ownjob.
+    // When Previous Quotes is OFF, pricing summary scope follows Division dropdown ownjob.
     React.useEffect(() => {
         if (browsePreviousQuotesRevisions) return;
         const div = String(quoteListDivision || '').trim();
         if (!div) return;
 
         setQuoteContextScope((prev) => (String(prev || '').trim() === div ? prev : div));
-
-        const allGroups = Array.isArray(pricingSummaryRowsForUi) ? pricingSummaryRowsForUi : [];
-        if (allGroups.length === 0) return;
-
-        const divNorm = collapseSpacesLower(stripQuoteJobPrefix(div));
-        const ownjobGroups = allGroups
-            .map((g) => String(g?.name || '').trim())
-            .filter(Boolean)
-            .filter((name) => {
-                const n = collapseSpacesLower(stripQuoteJobPrefix(name));
-                return n === divNorm || n.includes(divNorm) || divNorm.includes(n);
-            });
-
-        if (ownjobGroups.length > 0) {
-            setSelectedJobs((prev) => {
-                const p = Array.isArray(prev) ? prev : [];
-                const sameSize = p.length === ownjobGroups.length;
-                const sameMembers = sameSize && ownjobGroups.every((n) => p.includes(n));
-                return sameMembers ? p : ownjobGroups;
-            });
-        }
-    }, [browsePreviousQuotesRevisions, quoteListDivision, pricingSummaryRowsForUi]);
+    }, [browsePreviousQuotesRevisions, quoteListDivision]);
 
     // Safety fallback: if summary is still empty in non-browse mode, relax customer filter and recalc by division scope.
     React.useEffect(() => {
@@ -8051,16 +8162,24 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 enquiryData?.leadJobPrefix || ''
             );
 
+        const leadBranchCode = resolveQuoteLeadCodePill({
+            selectedLeadId,
+            selectedValue: leadJobName,
+            pricingJobs: mergedJobPool,
+            divisionsHierarchy: enquiryData?.divisionsHierarchy,
+        });
+
         if (!leadJobName || !toNameParam) return null;
         if (!useDepartmentForOwnJob && !ownJobName) return null;
 
         return {
             leadJobName,
+            leadBranchCode,
             toName: toNameParam,
             ownJobName: useDepartmentForOwnJob ? null : ownJobName,
             useDepartmentForOwnJob,
         };
-    }, [calculatedTabs, effectiveQuoteTabs, activeQuoteTab, toName, selectedLeadId, pricingData, enquiryData?.leadJobPrefix, jobsPool, enquiryData?.divisionsHierarchy, quoteListDivision]);
+    }, [calculatedTabs, effectiveQuoteTabs, activeQuoteTab, toName, selectedLeadId, pricingData, enquiryData?.leadJobPrefix, jobsPool, enquiryData?.divisionsHierarchy, enquiryData?.divisions, quoteListDivision]);
 
     /**
      * Same quote filtering as "Previous Quotes / Revisions" tab content (for programmatic auto-select on tab switch).
@@ -8078,36 +8197,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
             const activeTabRealId = activeTabObj.realId;
 
-            const currentLeadCode = (() => {
-                if (selectedLeadId && pricingData?.jobs) {
-                    let root = pricingData.jobs.find((j) => String(j.id || j.ItemID) === String(selectedLeadId));
-                    if (root) {
-                        const rCode = (root.leadJobCode || root.LeadJobCode || '').toUpperCase();
-                        if (rCode && rCode.match(/^L\d+/)) return rCode.split('-')[0].trim();
-                        if (root.itemName?.toUpperCase().match(/^L\d+/)) return root.itemName.split('-')[0].trim().toUpperCase();
-                    }
-                }
-                const prefix = (enquiryData?.leadJobPrefix || '').toUpperCase();
-                if (!prefix) return '';
-                if (prefix.match(/^L\d+/)) return prefix.split('-')[0].trim().toUpperCase();
-                const hierarchy = enquiryData?.divisionsHierarchy || [];
-                let job = hierarchy.find((j) => {
-                    const name = (j.itemName || j.ItemName || j.DivisionName || '').toUpperCase();
-                    const clean = name.replace(/^(L\d+\s*-\s*)/, '').trim();
-                    return name === prefix || clean === prefix || (j.leadJobCode && j.leadJobCode.toUpperCase() === prefix);
+            const mergedJobPoolForLead =
+                (pricingData?.jobs && pricingData.jobs.length > 0 ? pricingData.jobs : null) || jobsPool || [];
+            const currentLeadCode =
+                scopedEnquiryQuotesParams?.leadBranchCode ||
+                resolveQuoteLeadCodePill({
+                    selectedLeadId,
+                    selectedValue: scopedEnquiryQuotesParams?.leadJobName || enquiryData?.leadJobPrefix || '',
+                    pricingJobs: mergedJobPoolForLead,
+                    divisionsHierarchy: enquiryData?.divisionsHierarchy,
                 });
-                if (job) {
-                    let root = job;
-                    while (root && root.parentId && root.parentId !== '0' && root.parentId !== 0) {
-                        const parent = hierarchy.find((p) => String(p.id || p.ItemID) === String(root.parentId));
-                        if (parent) root = parent;
-                        else break;
-                    }
-                    if (root.leadJobCode || root.LeadJobCode) return (root.leadJobCode || root.LeadJobCode).toUpperCase();
-                    if (root.itemName?.match(/^L\d+/)) return root.itemName.split('-')[0].trim().toUpperCase();
-                }
-                return prefix;
-            })();
 
             // When tuple-scoped GET has settled, NEVER fall back to unscoped existingQuotes.
             // If scoped tuple has no rows, Previous Quotes must be blank (do not show another tuple's Quote Ref).
@@ -8189,6 +8288,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             /** When `forceUnscopedToName`, re-apply ToName / tab-ancestor rules on enquiry-wide rows (scoped SQL can omit tuples). */
             function rowMatchesPreviousQuotesTab(q, forceUnscopedToName) {
                 const scopedPanel = forceUnscopedToName ? false : useScopedPanel;
+                const leadBranchForFilter =
+                    scopedEnquiryQuotesParams?.leadBranchCode || currentLeadCode;
+                if (leadBranchForFilter && !quoteRowMatchesSelectedLeadBranch(q, leadBranchForFilter)) {
+                    return false;
+                }
                 const normalizedQuoteTo = normalize(q.ToName || '');
                 const normalizedCurrentTo = normalize(toName || '');
                 const strictBrowseTuple =
@@ -8227,9 +8331,19 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 // Hard rule for Previous Quotes checkbox ON:
                 // show only rows that match the current tab tuple (request + lead + to + ownjob).
                 if (strictBrowseTuple) {
+                    const subjobTupleRelax =
+                        !!activeTabObj?.isSubJobTab &&
+                        String(q.RequestNo ?? '').trim() === String(requestNoScope ?? '').trim() &&
+                        matchLeadJobForQuoteScope(q.LeadJob, scopedEnquiryQuotesParams.leadJobName) &&
+                        matchOwnJobForQuoteScope(
+                            q.OwnJob,
+                            scopedEnquiryQuotesParams.ownJobName || '',
+                            false
+                        );
                     if (
                         !quoteRowMatchesEnquiryScopedParams(q, scopedEnquiryQuotesParams, requestNoScope) &&
-                        !tupleMatchesIgnoringLeadForOwnTab()
+                        !tupleMatchesIgnoringLeadForOwnTab() &&
+                        !subjobTupleRelax
                     ) {
                         return false;
                     }
@@ -8293,7 +8407,21 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     const scopedStrictHit = quoteRowMatchesEnquiryScopedParams(q, scopedEnquiryQuotesParams, requestNoScope);
                     const scopedOwnTabFallback = tupleMatchesIgnoringLeadForOwnTab();
                     if (!scopedStrictHit && !scopedOwnTabFallback) {
-                        return false;
+                        if (activeTabObj?.isSubJobTab) {
+                            if (String(q.RequestNo ?? '').trim() !== String(requestNoScope ?? '').trim()) {
+                                return false;
+                            }
+                            if (!matchLeadJobForQuoteScope(q.LeadJob, scopedEnquiryQuotesParams.leadJobName)) {
+                                return false;
+                            }
+                            const tabOwn = collapseSpacesLower(
+                                stripQuoteJobPrefix(activeTabObj.label || activeTabObj.name || '')
+                            );
+                            const qOwn = collapseSpacesLower(stripQuoteJobPrefix(q.OwnJob || ''));
+                            if (tabOwn && qOwn !== tabOwn) return false;
+                        } else {
+                            return false;
+                        }
                     }
                     if (activeTabObj?.isOwnJobTab) {
                         const qOwn = collapseSpacesLower(stripQuoteJobPrefix(q.OwnJob || ''));
@@ -8384,14 +8512,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (
                 rows.length === 0 &&
                 browsePreviousQuotesRevisions &&
-                activeTabObj?.isSubJobTab
-            ) {
-                // Keep strict tuple behavior in browse mode: no relaxed fallbacks.
-                rows = [];
-            }
-            if (
-                rows.length === 0 &&
-                browsePreviousQuotesRevisions &&
                 scopedEnquiryQuotesParams &&
                 requestNoScope &&
                 loadedEnquiryQuoteRowForPreview
@@ -8407,10 +8527,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                       );
                 if (
                     quoteRowMatchesEnquiryScopedParams(pinned, scopedEnquiryQuotesParams, requestNoScope) &&
+                    quoteRowMatchesSelectedLeadBranch(pinned, scopedEnquiryQuotesParams.leadBranchCode) &&
                     (!expectedOwn || pinnedOwn === expectedOwn)
                 ) {
                     rows = [pinned];
                 }
+            }
+            const pinnedApprovalQuoteId = listOpenApprovalQuoteIdRef.current;
+            if (pinnedApprovalQuoteId) {
+                rows = rows.filter(
+                    (q) => String(quoteRowId(q) ?? '') === String(pinnedApprovalQuoteId)
+                );
             }
             const cacheKey = String(activeTabObj?.id ?? tabId ?? '');
             if (rows.length > 0) {
@@ -8504,9 +8631,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 qs.set('leadJobName', p.leadJobName);
                 qs.set('toName', p.toName);
                 if (p.ownJobName) qs.set('ownJobName', p.ownJobName);
+                if (p.leadBranchCode) qs.set('leadBranchCode', p.leadBranchCode);
                 // Strict tuple match for Previous Quotes panel (avoid showing another tuple's Quote Ref).
                 qs.set('strictTuple', '1');
-                if ((quoteListDivision || '').trim()) qs.set('division', (quoteListDivision || '').trim());
+                const divisionForScopedFetch =
+                    activeScopedTabObj?.isSubJobTab && (p.ownJobName || '').trim()
+                        ? String(p.ownJobName).trim()
+                        : (quoteListDivision || '').trim();
+                if (divisionForScopedFetch) qs.set('division', divisionForScopedFetch);
 
                 const url = `${API_BASE}/api/quotes/by-enquiry/${encodeURIComponent(rn)}?${qs.toString()}`;
                 const res = await fetch(url);
@@ -10514,7 +10646,20 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     }
                 }
 
-                setSelectedJobs(allJobs);
+                if (!pricingSelectionTouchedRef.current[pricingSelectionContextKey]) {
+                    const tabForMask = (calculatedTabs || []).find(
+                        (t) => String(t.id) === String(activeQuoteTab || '')
+                    );
+                    const selectableAllJobs = filterSelectableJobItemNames(allJobs, jobsPool, existingQuotes, {
+                        activeTabLabel: tabForMask?.label || tabForMask?.name || '',
+                        isSubJobTab: !!tabForMask?.isSubJobTab,
+                        quoteListDivision,
+                        namesAlign: quoteItemNamesAlign,
+                        resolveJobForGroup: (name) =>
+                            findJobInPoolByItemLabel(jobsPool, name, { selectedLeadId }),
+                    });
+                    setSelectedJobs(selectableAllJobs.length > 0 ? selectableAllJobs : allJobs);
+                }
 
                 // Default Tabs: If 'self' is not a valid tab for this user, switch to the first available tab
                 if (!pData.access?.hasLeadAccess && pData.jobs && pData.jobs.length > 0) {
@@ -10532,7 +10677,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 if (gen !== pricingFetchGenerationRef.current) return;
                 if (!awaitingRowCustomerBootstrap && !embeddedApprovalReview) {
                     lastQuickCalcInputRef.current = '';
-                    calculateSummary(pData, allJobs, cxName, undefined, {
+                    const jobsForSummary = Array.isArray(options.selectedJobsOverride) && options.selectedJobsOverride.length > 0
+                        ? options.selectedJobsOverride
+                        : pricingSelectionTouchedRef.current[pricingSelectionContextKey]
+                          ? (Array.isArray(selectedJobsRef.current) && selectedJobsRef.current.length > 0
+                              ? selectedJobsRef.current
+                              : allJobs)
+                          : allJobs;
+                    calculateSummary(pData, jobsForSummary, cxName, undefined, {
                         forcePricingClauseUpdate: options.forcePricingClauseUpdate === true,
                     });
                 } else if (awaitingRowCustomerBootstrap) {
@@ -10590,11 +10742,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     const handleJobToggle = (jobName) => {
         pricingSelectionTouchedRef.current[pricingSelectionContextKey] = true;
-        const defaultAllNames = (pricingSummaryRowsForUi || []).map((g) => g?.name).filter(Boolean);
-        const baseSelected =
-            Array.isArray(selectedJobs) && selectedJobs.length > 0
-                ? selectedJobs
-                : defaultAllNames;
+        setPricingSelectionTouchedKey(pricingSelectionContextKey);
+        const defaultAllNames =
+            defaultSelectablePricingJobNames.length > 0
+                ? defaultSelectablePricingJobNames
+                : (pricingSummaryRowsForUi || []).map((g) => g?.name).filter(Boolean);
+        const baseSelected = pricingSelectionTouched
+            ? (Array.isArray(selectedJobs) && selectedJobs.length > 0 ? selectedJobs : defaultAllNames)
+            : defaultAllNames;
         const had = jobNameMatchesActiveJobsList(jobName, baseSelected);
         const nJob = collapseSpacesLower(stripQuoteJobPrefix(jobName));
         const newSelected = had
@@ -10603,7 +10758,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
               )
             : [...baseSelected, jobName];
         setSelectedJobs(newSelected);
-        calculateSummary(pricingData, newSelected);
+        selectedJobsRef.current = newSelected;
+        pricingTermsUserTouchedRef.current = false;
+        lastInjectedAutoTableSigRef.current = '';
+        lastQuickCalcInputRef.current = '';
+        lastPricingCalcSigRef.current = '';
+        calculateSummary(pricingData, newSelected, toName, quoteContextScope, {
+            forcePricingClauseUpdate: true,
+        });
     };
 
     /**
@@ -10623,9 +10785,39 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const cxName = String(toName || '').trim();
         if (!reqNo || !cxName) return;
 
-        await loadPricingData(reqNo, cxName, { forcePricingClauseUpdate: true });
+        const touchedNow =
+            pricingSelectionTouchedKey === pricingSelectionContextKey ||
+            Boolean(pricingSelectionTouchedRef.current[pricingSelectionContextKey]);
+        const visibleNames =
+            defaultSelectablePricingJobNames.length > 0
+                ? defaultSelectablePricingJobNames
+                : (pricingSummaryRowsForUi || []).map((g) => g?.name).filter(Boolean);
+        const jobsAtClick = touchedNow
+            ? (Array.isArray(selectedJobsRef.current) && selectedJobsRef.current.length > 0
+                ? [...selectedJobsRef.current]
+                : visibleNames)
+            : visibleNames;
+
+        const pData = await loadPricingData(reqNo, cxName, {
+            forcePricingClauseUpdate: true,
+            selectedJobsOverride: jobsAtClick,
+        });
+        if (pData && calculateSummaryRef.current) {
+            calculateSummaryRef.current(pData, jobsAtClick, cxName, quoteContextScope, {
+                forcePricingClauseUpdate: true,
+            });
+        }
         markQuoteDraftEdited();
-    }, [enquiryData?.enquiry?.RequestNo, toName, markQuoteDraftEdited]);
+    }, [
+        enquiryData?.enquiry?.RequestNo,
+        toName,
+        markQuoteDraftEdited,
+        pricingSelectionTouchedKey,
+        pricingSelectionContextKey,
+        pricingSummaryRowsForUi,
+        quoteContextScope,
+        defaultSelectablePricingJobNames,
+    ]);
 
 
     // Calculate Summary based on selected jobs
@@ -10659,6 +10851,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 lead: String(selectedLeadId ?? ''),
                 lp: String(quotePricingBranchPrefix || enquiryData?.leadJobPrefix || ''),
                 div: String(quoteListDivision || ''),
+                eq: (existingQuotes || [])
+                    .map((q) => `${q.OwnJob ?? q.ownJob ?? ''}|${q.QuoteNumber ?? q.quoteNumber ?? ''}`)
+                    .sort()
+                    .join(';'),
             });
         } catch (_) {
             quickDigest = '';
@@ -11802,16 +11998,33 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         }
 
         const currentSelectionKey = `${enquiryData?.enquiry?.RequestNo || ''}::${activeQuoteTab || ''}::${normalize(activeCustomer || '')}`;
-        const touchedSelection = Boolean(pricingSelectionTouchedRef.current[currentSelectionKey]);
+        const touchedSelection =
+            pricingSelectionTouchedKey === currentSelectionKey ||
+            Boolean(pricingSelectionTouchedRef.current[currentSelectionKey]);
         const summaryNamesForTable = summary.map((g) => g?.name).filter(Boolean);
+        const activeTabForMask = (calculatedTabs || []).find(
+            (t) => String(t.id) === String(activeQuoteTab || '')
+        );
+        const subjobMaskCtx = {
+            existingQuotes,
+            activeTabLabel: activeTabForMask?.label || activeTabForMask?.name || '',
+            isSubJobTab: !!activeTabForMask?.isSubJobTab,
+            quoteListDivision,
+            namesAlign: quoteItemNamesAlign,
+            resolveJobForGroup: (name) =>
+                findJobInPoolByItemLabel(jobsPool, name, { selectedLeadId }),
+            jobsPool,
+        };
+        const summaryForDisplay = applyQuoteSubjobPriceMaskToSummary(summary, subjobMaskCtx);
+        const selectableDefaultNames = selectablePricingSummaryGroupNames(summaryForDisplay);
         const effectiveActiveJobsForTable =
-            !touchedSelection
-                ? summaryNamesForTable
-                : (Array.isArray(activeJobs) && activeJobs.length > 0
-                    ? activeJobs
-                    : summaryNamesForTable);
+            Array.isArray(activeJobs) && activeJobs.length > 0
+                ? activeJobs
+                : !touchedSelection
+                  ? (selectableDefaultNames.length > 0 ? selectableDefaultNames : summaryNamesForTable)
+                  : [];
         const { tableHtml, htmlGrandTotal, htmlGrandTotalWithVat } = buildEmsAutoPricingTableHtml(
-            summary,
+            summaryForDisplay,
             effectiveActiveJobsForTable
         );
         const lumpSumForClause41 =
@@ -11862,7 +12075,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         }
 
         /** Same as sidebar "GRAND BASE PRICE TOTAL": Base Price only for jobs checked in Pricing Summary (EnquiryQuotes.TotalAmount). */
-        const grandBasePriceFromCheckedJobs = summary.reduce(
+        const grandBasePriceFromCheckedJobs = summaryForDisplay.reduce(
             (sum, g) =>
                 jobNameMatchesActiveJobsList(g.name, effectiveActiveJobsForTable)
                     ? sum +
@@ -11962,6 +12175,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         enquiryData?.enquiry?.RequestNo,
         quotePricingBranchPrefix,
         quoteListDivision,
+        existingQuotes,
     ]);
 
     const buildEnquirySuggestUrl = (q) => {
@@ -11982,6 +12196,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         if (embeddedApprovalReview) {
             const qid = String(openContext?.quoteId || quoteId || '').trim();
             if (qid) quoteIdQ = `&quoteId=${encodeURIComponent(qid)}`;
+        } else if (listOpenApprovalQuoteIdRef.current) {
+            quoteIdQ = `&quoteId=${encodeURIComponent(String(listOpenApprovalQuoteIdRef.current))}`;
         } else if (quoteListDivision.trim()) {
             divQ = `&division=${encodeURIComponent(quoteListDivision.trim())}`;
         }
@@ -13657,7 +13873,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         try {
             console.log('[fetchExistingQuotes] START fetching for:', requestNo);
             const em = (currentUser?.email || currentUser?.EmailId || '').toString();
-            const qs = em ? `?${new URLSearchParams({ userEmail: em }).toString()}` : '';
+            const params = new URLSearchParams();
+            if (em) params.set('userEmail', em);
+            const wfQid = listOpenApprovalQuoteIdRef.current;
+            if (wfQid) params.set('quoteId', String(wfQid));
+            const qs = params.toString() ? `?${params.toString()}` : '';
             const url = `${API_BASE}/api/quotes/by-enquiry/${encodeURIComponent(requestNo)}${qs}`;
             console.log('[fetchExistingQuotes] URL:', url);
 
@@ -14251,6 +14471,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const handledQuoteOpenContextKeyRef = useRef('');
     const embeddedApprovalLeadJobRef = useRef('');
     const pendingQuoteOpenTargetRef = useRef(null);
+    /** When Search Quote opens a cross-division approval-workflow row, pass quoteId to enquiry-data / by-enquiry. */
+    const listOpenApprovalQuoteIdRef = useRef(null);
     useEffect(() => {
         if (!openContext || !isQuoteModuleTab(openContext.tab)) return;
         if (embeddedApprovalReview) return;
@@ -14847,6 +15069,46 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     );
 
     const quoteListSummaryBody = React.useMemo(() => {
+        if (quoteSearchLoading) {
+            return (
+                <div
+                    style={{
+                        height: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#64748b',
+                        fontSize: '14px',
+                        background: 'white',
+                        borderRadius: '8px',
+                        border: '1px dashed #e2e8f0',
+                    }}
+                >
+                    Searching quotes…
+                </div>
+            );
+        }
+        if (quoteSearchError) {
+            return (
+                <div
+                    style={{
+                        height: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#b91c1c',
+                        fontSize: '14px',
+                        textAlign: 'center',
+                        padding: '16px',
+                        background: 'white',
+                        borderRadius: '8px',
+                        border: '1px dashed #fecaca',
+                    }}
+                >
+                    {quoteSearchError}
+                </div>
+            );
+        }
         if (!quoteListDisplayRows.length) {
             return (
                 <div
@@ -14875,7 +15137,30 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         return (
             <DashboardQuoteSummaryTable
                 rows={quoteListDisplayRows}
-                onOpenEnquiry={(enq) => handleSelectEnquiry(enq, { enquiryOnlyFromList: true })}
+                onOpenEnquiry={(enq) => {
+                    const wfQid = Number(enq?.ListApprovalWorkflowQuoteId ?? enq?.ApprovalWorkflowQuoteId);
+                    const hasApprovalWorkflowAccess =
+                        Boolean(enq?.ApprovalWorkflowListAccess) ||
+                        (Number.isFinite(wfQid) && wfQid > 0);
+                    if (
+                        quoteListCategory === QUOTE_LIST_CATEGORY.SEARCH &&
+                        hasApprovalWorkflowAccess
+                    ) {
+                        const quoteRefRaw = String(enq?.ListQuoteRef || '').trim();
+                        const quoteNumber = quoteRefRaw.split(/\s*\|\s*/)[0]?.trim() || '';
+                        listOpenApprovalQuoteIdRef.current =
+                            Number.isFinite(wfQid) && wfQid > 0 ? wfQid : null;
+                        pendingQuoteOpenTargetRef.current = {
+                            requestNo: String(enq?.RequestNo ?? '').trim(),
+                            quoteId: Number.isFinite(wfQid) && wfQid > 0 ? String(wfQid) : '',
+                            quoteNumber,
+                        };
+                        setBrowsePreviousQuotesRevisions(true);
+                    } else {
+                        listOpenApprovalQuoteIdRef.current = null;
+                    }
+                    handleSelectEnquiry(enq, { enquiryOnlyFromList: true });
+                }}
                 emptyLabel={emptyLabel}
                 defaultSortConfig={
                     quoteListCategory === QUOTE_LIST_CATEGORY.SEARCH
@@ -14891,7 +15176,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 }}
             />
         );
-    }, [quoteListDisplayRows, quoteListCategory, handleSelectEnquiry]);
+    }, [quoteListDisplayRows, quoteListCategory, handleSelectEnquiry, quoteSearchLoading, quoteSearchError]);
 
     // --- Attachment Functions ---
     const fetchQuoteAttachments = useCallback(async (qId) => {
@@ -21327,9 +21612,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                     pricingRowsForPanel.length > 0
                                                         ? pricingRowsForPanel
                                                         : pricingRowsFromDivisionValues;
-                                                const pricingSelectionTouched = Boolean(
-                                                    pricingSelectionTouchedRef.current[pricingSelectionContextKey]
-                                                );
+                                                const pricingRowsDisplay = applySubjobQuoteMask(pricingRowsEffective);
+                                                const pricingSummaryVisibleNames =
+                                                    selectablePricingSummaryGroupNames(pricingRowsDisplay);
+                                                const pricingJobsForCheckbox = pricingSelectionTouched
+                                                    ? selectedJobs
+                                                    : pricingSummaryVisibleNames;
 
                                                 return (
                                                     <>
@@ -21351,30 +21639,59 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                 <h5 style={{ margin: '0 0 8px 0', fontSize: '11px', color: '#166534', fontWeight: '800' }}>
                                                                     PRICING SUMMARY (LATEST):{pricingSummaryBusy ? ' …' : ''}
                                                                 </h5>
-                                                                {pricingRowsEffective.length === 0 && (
+                                                                {pricingRowsDisplay.length === 0 && (
                                                                     <div style={{ fontSize: '10px', color: '#64748b', fontStyle: 'italic' }}>
                                                                         No pricing summary available.
                                                                     </div>
                                                                 )}
-                                                                {pricingRowsEffective.map((grp, i) => (
+                                                                {pricingRowsDisplay.map((grp, i) => (
                                                                     <div key={i} style={{ marginBottom: '6px', paddingBottom: '4px', borderBottom: '1px dashed #e2e8f0' }}>
                                                                         <div style={{ fontSize: '11px', fontWeight: '700', color: '#166534', display: 'flex', alignItems: 'center', gap: '4px' }}>
                                                                             <input
                                                                                 type="checkbox"
-                                                                                checked={
-                                                                                    pricingSelectionTouched
-                                                                                        ? jobNameMatchesActiveJobsList(grp.name, selectedJobs)
-                                                                                        : true
-                                                                                }
+                                                                                checked={jobNameMatchesActiveJobsList(
+                                                                                    grp.name,
+                                                                                    pricingJobsForCheckbox
+                                                                                )}
                                                                                 onChange={() => handleJobToggle(grp.name)}
                                                                             />
                                                                             {grp.name}
                                                                         </div>
                                                                         <div style={{ marginLeft: '14px', fontSize: '10px', color: '#64748b' }}>
                                                                             {grp.items.map((item, idx) => (
-                                                                                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                                                <div
+                                                                                    key={idx}
+                                                                                    style={{
+                                                                                        display: 'flex',
+                                                                                        justifyContent: 'space-between',
+                                                                                        alignItems: 'flex-start',
+                                                                                        gap: '8px',
+                                                                                    }}
+                                                                                >
                                                                                     <span>- {item.name}</span>
-                                                                                    <span>BD {item.total.toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}</span>
+                                                                                    <span style={{ textAlign: 'right', flexShrink: 0 }}>
+                                                                                        <span style={{ whiteSpace: 'nowrap' }}>
+                                                                                            BD{' '}
+                                                                                            {item.total.toLocaleString('en-US', {
+                                                                                                minimumFractionDigits: 3,
+                                                                                                maximumFractionDigits: 3,
+                                                                                            })}
+                                                                                        </span>
+                                                                                        {grp.priceMaskedByQuote && item.name === 'Base Price' ? (
+                                                                                            <span
+                                                                                                style={{
+                                                                                                    display: 'block',
+                                                                                                    fontSize: '9px',
+                                                                                                    color: '#b45309',
+                                                                                                    fontStyle: 'italic',
+                                                                                                    whiteSpace: 'nowrap',
+                                                                                                    marginTop: '2px',
+                                                                                                }}
+                                                                                            >
+                                                                                                {SUBJOB_QUOTE_PENDING_MSG}
+                                                                                            </span>
+                                                                                        ) : null}
+                                                                                    </span>
                                                                                 </div>
                                                                             ))}
                                                                         </div>
@@ -21384,14 +21701,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                 <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '2px solid #bbf7d0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                                     <span style={{ fontSize: '11px', fontWeight: '800', color: '#166534' }}>GRAND BASE PRICE TOTAL:</span>
                                                                     <span style={{ fontSize: '12px', fontWeight: '800', color: '#15803d' }}>
-                                                                        BD {pricingRowsEffective
+                                                                        BD {pricingRowsDisplay
                                                                             .filter((g) =>
                                                                                 pricingRowsForPanel.length > 0
-                                                                                    ? (
-                                                                                        pricingSelectionTouched
-                                                                                            ? jobNameMatchesActiveJobsList(g.name, selectedJobs)
-                                                                                            : true
-                                                                                    )
+                                                                                    ? jobNameMatchesActiveJobsList(
+                                                                                          g.name,
+                                                                                          pricingJobsForCheckbox
+                                                                                      )
                                                                                     : true
                                                                             )
                                                                             .reduce((sum, g) => {
@@ -24750,13 +25066,24 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                             display: block !important;
                                         }
 
-                                        /* Logo: block imgs must use margin auto — parent text-align is not enough in print */
+                                        /* Logo top-right: inline-block honors parent text-align:right (block flow), margin-left:auto covers the flex path */
+                                        .quote-sheet-logo-row,
+                                        .quote-continuation-header {
+                                            text-align: right !important;
+                                        }
+                                        .quote-sheet-logo-row > div,
+                                        .quote-continuation-header > div {
+                                            width: 100% !important;
+                                            text-align: right !important;
+                                            display: block !important;
+                                        }
                                         .quote-sheet-logo-row img,
                                         .quote-continuation-header img {
                                             max-height: 68px !important;
-                                            display: block !important;
+                                            display: inline-block !important;
                                             margin-left: auto !important;
                                             margin-right: 0 !important;
+                                            float: none !important;
                                         }
                                         .no-print { display: none !important; }
                                         .quote-a4-sheet { box-shadow: none !important; }

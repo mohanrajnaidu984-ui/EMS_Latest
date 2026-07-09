@@ -2,7 +2,7 @@
 
 const { sql } = require('../dbConfig');
 const { loadEnquiryEmailRow } = require('./loadEnquiryEmailRow');
-const { sendEnquiryNotificationViaSmtp } = require('./enquiryNotifySmtp');
+const { sendEnquiryNotificationViaSmtp, splitRecipients } = require('./enquiryNotifySmtp');
 const { formatEnquiryDate, formatShortDate, FONT_FAMILY } = require('./enquiryNotifyEmailHtml');
 const { todayYmdInSchedulerTz, addWorkingDaysToYmd, isWorkingDayYmd } = require('./schedulerTime');
 const { getSmtpFromEmail } = require('./smtpTransport');
@@ -14,10 +14,18 @@ function edCeoReminderFromEmail() {
     return String(process.env.EMS_ED_CEO_DUE_REMINDER_FROM || getSmtpFromEmail() || 'ems@almoayyedcg.com').trim();
 }
 
-function edCeoReminderToEmail() {
-    return String(process.env.EMS_ED_CEO_DUE_REMINDER_TO || 'mohan.naidu@almoayyedcg.com')
-        .trim()
-        .toLowerCase();
+const DEFAULT_ED_CEO_REMINDER_TO =
+    'hala@almoayyedcg.com,mathews@almoayyedcg.com,lohidas@almoayyedcg.com,biju@almoayyedcg.com,mohanan.pillai@almoayyedcg.com,mepgm@almoayyedcg.com';
+const DEFAULT_ED_CEO_REMINDER_BCC = 'mohan.naidu@almoayyedcg.com';
+
+function edCeoReminderToEmails() {
+    const raw = String(process.env.EMS_ED_CEO_DUE_REMINDER_TO || DEFAULT_ED_CEO_REMINDER_TO).trim();
+    return splitRecipients(raw).map((e) => e.toLowerCase());
+}
+
+function edCeoReminderBccEmails() {
+    const raw = String(process.env.EMS_ED_CEO_DUE_REMINDER_BCC || DEFAULT_ED_CEO_REMINDER_BCC).trim();
+    return splitRecipients(raw).map((e) => e.toLowerCase());
 }
 
 function escapeHtml(value) {
@@ -302,8 +310,9 @@ async function releaseEdCeoReminderClaim(kind, dueYmd) {
 }
 
 async function sendEdCeoDueReminder(kind, dueYmd, enquiryRows, options = {}) {
-    const toEmail = edCeoReminderToEmail();
-    if (!toEmail) {
+    const toEmails = edCeoReminderToEmails();
+    const bccEmails = edCeoReminderBccEmails();
+    if (!toEmails.length) {
         return { sent: false, reason: 'no-recipient' };
     }
     if (!enquiryRows?.length) {
@@ -323,10 +332,12 @@ async function sendEdCeoDueReminder(kind, dueYmd, enquiryRows, options = {}) {
     try {
         await sendEnquiryNotificationViaSmtp({
             fromEmail: edCeoReminderFromEmail(),
-            to: toEmail,
+            to: toEmails.join(','),
             cc: '',
+            bcc: bccEmails.join(','),
             subject,
             html,
+            skipRecipientExclusions: true,
         });
     } catch (err) {
         if (!options.force) {
@@ -336,13 +347,15 @@ async function sendEdCeoDueReminder(kind, dueYmd, enquiryRows, options = {}) {
     }
 
     console.log(
-        `[ed-ceo-due-reminder] Sent ${kind} to ${toEmail} (${enquiryRows.length} row(s), due ${dueYmd})`,
+        `[ed-ceo-due-reminder] Sent ${kind} to ${toEmails.join('; ')}` +
+            (bccEmails.length ? ` (bcc: ${bccEmails.join('; ')})` : '') +
+            ` (${enquiryRows.length} row(s), due ${dueYmd})`,
     );
-    return { sent: true, to: toEmail, count: enquiryRows.length };
+    return { sent: true, to: toEmails.join('; '), bcc: bccEmails.join('; '), count: enquiryRows.length };
 }
 
 /**
- * ED/CEO signature required — consolidated due-date reminders to EMS_ED_CEO_DUE_REMINDER_TO.
+ * ED/CEO signature required — consolidated due-date reminders (EMS_ED_CEO_DUE_REMINDER_TO / _BCC).
  * @param {{ todayYmd?: string, force?: boolean }} [options]
  */
 async function runEdCeoDueSubmissionReminders(options = {}) {

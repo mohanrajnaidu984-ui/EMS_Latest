@@ -2117,15 +2117,26 @@ html[data-preview-pdf="1"] img {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
 }
+html[data-preview-pdf="1"] .quote-sheet-logo-row,
+html[data-preview-pdf="1"] .quote-continuation-header {
+    text-align: right !important;
+}
+html[data-preview-pdf="1"] .quote-sheet-logo-row > div,
+html[data-preview-pdf="1"] .quote-continuation-header > div {
+    width: 100% !important;
+    text-align: right !important;
+    display: block !important;
+}
 html[data-preview-pdf="1"] .quote-sheet-logo-row img,
 html[data-preview-pdf="1"] .quote-continuation-header img {
     max-height: 68px !important;
     height: auto !important;
     width: auto !important;
     max-width: 212px !important;
-    display: block !important;
+    display: inline-block !important;
     margin-left: auto !important;
     margin-right: 0 !important;
+    float: none !important;
     object-fit: contain !important;
     object-position: right top !important;
     flex: 0 0 auto !important;
@@ -2236,8 +2247,15 @@ html[data-preview-pdf="1"] .footer-section .quote-print-footer-company > div {
         justify-content: flex-end !important;
         align-items: flex-start !important;
         width: 100% !important;
+        text-align: right !important;
         margin-bottom: ${EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM} !important;
         box-sizing: border-box !important;
+    }
+    html[data-preview-pdf="1"] .quote-sheet-logo-row > div,
+    html[data-preview-pdf="1"] .quote-continuation-header > div {
+        width: 100% !important;
+        text-align: right !important;
+        display: block !important;
     }
     html[data-preview-pdf="1"] .quote-sheet-logo-row img,
     html[data-preview-pdf="1"] .quote-continuation-header img {
@@ -2245,8 +2263,10 @@ html[data-preview-pdf="1"] .footer-section .quote-print-footer-company > div {
         height: auto !important;
         width: auto !important;
         max-width: 212px !important;
+        display: inline-block !important;
         margin-left: auto !important;
         margin-right: 0 !important;
+        float: none !important;
         object-fit: contain !important;
         object-position: right top !important;
     }

@@ -217,6 +217,7 @@ const { filterJobsByDepartment } = require('../services/hierarchyService');
 const {
     quoteBlocksDeclineToQuote,
     mapEnquiryQuoteRowsForDeclineGuard,
+    subjobHasQuoteForPricing,
 } = require('../lib/pricingQuoteTupleMatch');
 const {
     evaluatePendingPricingSummarySpec,
@@ -3446,6 +3447,8 @@ router.get('/:requestNo', async (req, res) => {
         let userFullName = '';
         let userDepartment = '';
         let userDepartmentRaw = '';
+        /** Jobs matched by email/dept on this enquiry — not lead-branch expansion or admin “all jobs”. */
+        let directlyMatchedJobIds = new Set();
 
         if (userEmail) {
             const normalizedUserEmail = String(userEmail || '')
@@ -3513,6 +3516,7 @@ router.get('/:requestNo', async (req, res) => {
                     (userFullName && allMails.some(e => e.includes(userFullName.toLowerCase())));
 
                 if (isMatch) {
+                    directlyMatchedJobIds.add(String(job.ID));
                     if (!userJobItems.includes(job.ItemName)) {
                         userJobItems.push(job.ItemName);
                     }
@@ -3553,6 +3557,7 @@ router.get('/:requestNo', async (req, res) => {
                 for (const aj of anchorJobs) {
                     const nm = String(aj.ItemName || '').trim();
                     if (!nm) continue;
+                    directlyMatchedJobIds.add(String(aj.ID));
                     if (!userJobItems.includes(nm)) userJobItems.push(nm);
                     const pid = aj.ParentID;
                     if (pid == null || pid === '' || pid === 0 || pid === '0') {
@@ -3850,30 +3855,37 @@ router.get('/:requestNo', async (req, res) => {
                 ? (customers.length > 0 ? customers[0] : '')
                 : (activeCustomerName || '').replace(/,+$/g, '').trim(),
             leadJob: leadJobItem,
-            jobs: jobs.map(j => ({
-                id: j.ID,
-                parentId: j.ParentID,
-                itemName: j.ItemName,
-                leadJobCode: j.LeadJobCode,
-                companyLogo: j.CompanyLogo ? j.CompanyLogo.replace(/\\/g, '/') : null,
-                departmentName: j.DepartmentName,
-                companyName: j.CompanyName,
-                address: j.Address,
-                phone: j.Phone,
-                fax: j.FaxNo,
-                email: j.CommonMailIds,
-                divisionCode: j.DivisionCode,
-                departmentCode: j.DepartmentCode,
-                isLead: !j.ParentID || j.ParentID === 0 || j.ParentID === "0",
-                visible:
+            jobs: jobs.map((j) => {
+                const accessVisible =
                     typeof visibleJobIds !== 'undefined'
                         ? visibleJobIds.has(String(j.ID))
-                        : visibleJobs.includes(j.ItemName),
-                editable:
-                    typeof editableJobIds !== 'undefined'
-                        ? editableJobIds.has(String(j.ID))
-                        : editableJobs.includes(j.ItemName)
-            })),
+                        : visibleJobs.includes(j.ItemName);
+                const priceUnlockedByQuote =
+                    subjobHasQuoteForPricing(j, existingQuotes) ||
+                    directlyMatchedJobIds.has(String(j.ID));
+                return {
+                    id: j.ID,
+                    parentId: j.ParentID,
+                    itemName: j.ItemName,
+                    leadJobCode: j.LeadJobCode,
+                    companyLogo: j.CompanyLogo ? j.CompanyLogo.replace(/\\/g, '/') : null,
+                    departmentName: j.DepartmentName,
+                    companyName: j.CompanyName,
+                    address: j.Address,
+                    phone: j.Phone,
+                    fax: j.FaxNo,
+                    email: j.CommonMailIds,
+                    divisionCode: j.DivisionCode,
+                    departmentCode: j.DepartmentCode,
+                    isLead: !j.ParentID || j.ParentID === 0 || j.ParentID === '0',
+                    visible: accessVisible,
+                    priceUnlockedByQuote,
+                    editable:
+                        typeof editableJobIds !== 'undefined'
+                            ? editableJobIds.has(String(j.ID))
+                            : editableJobs.includes(j.ItemName),
+                };
+            }),
             options: options.map(o => ({
                 id: o.ID,
                 name: o.OptionName,

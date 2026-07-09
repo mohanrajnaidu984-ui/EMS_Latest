@@ -755,7 +755,20 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
                     sheetEl.style.setProperty('align-content', 'stretch', 'important');
                     sheetEl.style.setProperty('overflow', 'hidden', 'important');
                     const logo = sheetEl.querySelector(':scope > .quote-sheet-logo-row');
-                    if (logo) logo.style.setProperty('grid-row', '1', 'important');
+                    if (logo) {
+                        logo.style.setProperty('grid-row', '1', 'important');
+                        logo.style.setProperty('display', 'flex', 'important');
+                        logo.style.setProperty('flex-direction', 'row', 'important');
+                        logo.style.setProperty('justify-content', 'flex-end', 'important');
+                        logo.style.setProperty('align-items', 'flex-start', 'important');
+                        logo.style.setProperty('width', '100%', 'important');
+                        logo.style.setProperty('text-align', 'right', 'important');
+                        logo.querySelectorAll(':scope > div').forEach((wrap) => {
+                            wrap.style.setProperty('width', '100%', 'important');
+                            wrap.style.setProperty('text-align', 'right', 'important');
+                            wrap.style.setProperty('display', 'block', 'important');
+                        });
+                    }
                     const main = sheetEl.querySelector(':scope > .quote-sheet-main-flex');
                     const content = sheetEl.querySelector('.quote-sheet-main-flex > .content-section');
                     const spacer = sheetEl.querySelector('.quote-cover-page1-spacer');
@@ -812,6 +825,16 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
                     lastSheet.style.setProperty('break-after', 'avoid', 'important');
                 }
                 document
+                    .querySelectorAll('.quote-continuation-header')
+                    .forEach((hdr) => {
+                        hdr.style.setProperty('display', 'flex', 'important');
+                        hdr.style.setProperty('flex-direction', 'row', 'important');
+                        hdr.style.setProperty('justify-content', 'flex-end', 'important');
+                        hdr.style.setProperty('align-items', 'flex-start', 'important');
+                        hdr.style.setProperty('width', '100%', 'important');
+                        hdr.style.setProperty('text-align', 'right', 'important');
+                    });
+                document
                     .querySelectorAll('.quote-sheet-logo-row img, .quote-continuation-header img')
                     .forEach((img) => {
                         img.style.setProperty('max-height', '68px', 'important');
@@ -819,6 +842,11 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
                         img.style.setProperty('width', 'auto', 'important');
                         img.style.setProperty('max-width', '212px', 'important');
                         img.style.setProperty('object-fit', 'contain', 'important');
+                        /* inline-block honors parent text-align:right in block flow; margin-left:auto covers the flex path. Keeps logo top-right without touching header/footer geometry. */
+                        img.style.setProperty('display', 'inline-block', 'important');
+                        img.style.setProperty('margin-left', 'auto', 'important');
+                        img.style.setProperty('margin-right', '0', 'important');
+                        img.style.setProperty('float', 'none', 'important');
                     });
             });
         } catch (coverLayoutErr) {

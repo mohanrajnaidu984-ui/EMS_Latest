@@ -59,10 +59,52 @@ function mapEnquiryQuoteRowsForDeclineGuard(rows) {
     }));
 }
 
+/** EnquiryFor row is a subjob (not a lead root / own-job root). */
+function isPricingSubjobRow(job) {
+    const pid = job?.ParentID ?? job?.parentId ?? job?.parentID;
+    return pid != null && pid !== 0 && String(pid) !== '0';
+}
+
+/** True when a saved EnquiryQuotes row was created from this subjob division. */
+function enquiryQuoteBelongsToSubjobJob(quote, job) {
+    const itemName = String(job?.ItemName ?? job?.itemName ?? '').trim();
+    const deptName = String(job?.DepartmentName ?? job?.departmentName ?? '').trim();
+    const divCode = String(
+        job?.DivisionCode ?? job?.divisionCode ?? job?.DepartmentCode ?? job?.departmentCode ?? ''
+    )
+        .trim()
+        .toUpperCase();
+
+    const qOwn = String(quote?.ownJob ?? quote?.OwnJob ?? '').trim();
+    const qNum = String(quote?.quoteNumber ?? quote?.QuoteNumber ?? '')
+        .trim()
+        .toUpperCase();
+
+    if (itemName && normalizePricingJobName(qOwn) === normalizePricingJobName(itemName)) return true;
+    if (deptName && normalizePricingJobName(qOwn) === normalizePricingJobName(deptName)) return true;
+
+    if (divCode.length >= 2 && qNum) {
+        if (qNum.includes(`/${divCode}/`) || qNum.includes(`-${divCode}-`)) return true;
+        const divRe = new RegExp(`[/\\-]${divCode}[/\\-]`, 'i');
+        if (divRe.test(qNum)) return true;
+    }
+    return false;
+}
+
+/** Subjob pricing rows unlock only after at least one quote exists for that subjob. */
+function subjobHasQuoteForPricing(job, existingQuotes) {
+    if (!isPricingSubjobRow(job)) return true;
+    if (!Array.isArray(existingQuotes) || !existingQuotes.length) return false;
+    return existingQuotes.some((q) => enquiryQuoteBelongsToSubjobJob(q, job));
+}
+
 module.exports = {
     normalizePricingCustomerKey,
     pricingLeadJobMatches,
     pricingCustomerMatches,
     quoteBlocksDeclineToQuote,
     mapEnquiryQuoteRowsForDeclineGuard,
+    isPricingSubjobRow,
+    enquiryQuoteBelongsToSubjobJob,
+    subjobHasQuoteForPricing,
 };

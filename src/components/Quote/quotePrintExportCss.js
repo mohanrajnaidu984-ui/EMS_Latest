@@ -109,7 +109,7 @@ html[data-preview-pdf="1"] #quote-print-root[data-print-with-header='1'] .quote-
 html[data-preview-pdf="1"] #quote-print-root[data-print-with-header='1'] .quote-sheet-logo-row img,
 [data-ems-pdf-export="1"][data-print-with-header='1'] .quote-sheet-logo-row img {
     visibility: visible !important;
-    display: block !important;
+    display: inline-block !important;
     opacity: 1 !important;
     max-height: 68px !important;
     height: auto !important;
@@ -117,6 +117,15 @@ html[data-preview-pdf="1"] #quote-print-root[data-print-with-header='1'] .quote-
     max-width: 212px !important;
     object-fit: contain !important;
     object-position: right top !important;
+    margin-left: auto !important;
+    margin-right: 0 !important;
+    float: none !important;
+}
+html[data-preview-pdf="1"] #quote-print-root[data-print-with-header='1'] .quote-sheet-logo-row > div,
+[data-ems-pdf-export="1"][data-print-with-header='1'] .quote-sheet-logo-row > div {
+    width: 100% !important;
+    text-align: right !important;
+    display: block !important;
 }
 html[data-preview-pdf="1"] #quote-print-root[data-print-with-header='1'] .quote-print-footer-wrap {
     visibility: visible !important;

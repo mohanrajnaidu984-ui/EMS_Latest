@@ -5,7 +5,10 @@
  * - Assigned sales engineers: ConcernedSE.SEName = FullName, scoped by department ↔ EnquiryFor.ItemName (+ subjobs).
  */
 const sql = require('mssql');
-const { userIsAssignedQuoteApproverForEnquiry } = require('./quoteApprovalSteps');
+const {
+    userHasApprovalWorkflowQuoteAccess,
+    fetchApprovalWorkflowVisibleQuotesByRequest,
+} = require('./quoteApprovalSteps');
 
 function normalizePricingEmail(email) {
     return (email || '').trim().toLowerCase().replace(/@almcg\.com$/i, '@almoayyedcg.com');
@@ -352,12 +355,265 @@ function resolvePricingAnchorJobsWithFallbacks(enqJobs, ctx, userEmail, sessionD
 }
 
 /**
+ * CC coordinator has normal list access for this enquiry in the session division
+ * (CCMailIds on matching EnquiryFor rows, or registered coordinator for that department).
+ */
+function userHasNormalEnquiryCcListAccess(accessCtx, enqJobs, sessionDivTrim) {
+    if (!accessCtx?.isCcUser || !accessCtx.normalizedEmail) return false;
+    const div = (sessionDivTrim || '').trim();
+    const isCcOnJob = (j) => ccMailIdsContainsUser(j.CCMailIds, accessCtx.normalizedEmail);
+
+    if (div) {
+        const divJobs = (enqJobs || []).filter((j) => jobBelongsToSessionDivision(j, div));
+        if (divJobs.some(isCcOnJob)) return true;
+        if (accessCtx.ccCoordinatorDepartmentNames?.has(div.toLowerCase())) {
+            return (enqJobs || []).some(isCcOnJob);
+        }
+        return false;
+    }
+
+    const profileDiv = (accessCtx.userDepartment || '').trim();
+    if (profileDiv) {
+        const profileJobs = (enqJobs || []).filter((j) => jobBelongsToSessionDivision(j, profileDiv));
+        if (profileJobs.some(isCcOnJob)) return true;
+    }
+    return (enqJobs || []).some(isCcOnJob);
+}
+
+function pricingOwnJobMatchesEnquiryItem(quoteOwn, itemName) {
+    const eqO = normalizePricingJobName(quoteOwn);
+    const pvO = normalizePricingJobName(itemName);
+    if (!eqO || !pvO) return false;
+    if (eqO === pvO) return true;
+    if (pvO.length >= 3 && eqO.includes(pvO)) return true;
+    if (eqO.length >= 3 && pvO.includes(eqO)) return true;
+    return false;
+}
+
+function quoteNumberHasDivisionCode(quoteNumber, code) {
+    const c = String(code || '').trim().toUpperCase();
+    if (!c || c.length < 2) return false;
+    const qn = String(quoteNumber || '').trim().toUpperCase();
+    return new RegExp(`[/\\\\-]${c}[/\\\\-]`).test(qn);
+}
+
+function extractQuoteDivisionCodeFromNumber(quoteNumber) {
+    const qn = String(quoteNumber || '').trim().toUpperCase();
+    const m = qn.match(/[/\\-]([A-Z]{2,6})[/\\-]\d/);
+    return m ? m[1] : '';
+}
+
+/** Saved quote row belongs to the user's session / profile division on this enquiry. */
+function quoteBelongsToSessionDivision(quote, enqJobs, sessionDivTrim, userDepartment) {
+    const div = (sessionDivTrim || userDepartment || '').trim();
+    if (!div) return true;
+
+    const ownJob = String(quote?.OwnJob ?? quote?.ownJob ?? '').trim();
+    const qNum = String(quote?.QuoteNumber ?? quote?.quoteNumber ?? '').trim();
+    const divJobs = (enqJobs || []).filter((j) => jobBelongsToSessionDivision(j, div));
+    if (!divJobs.length) return false;
+
+    const codes = new Set();
+    for (const j of divJobs) {
+        const code = String(j.DivisionCode ?? j.divisionCode ?? '').trim().toUpperCase();
+        if (code.length >= 2) codes.add(code);
+    }
+
+    const quoteDivCode = extractQuoteDivisionCodeFromNumber(qNum);
+    if (quoteDivCode && codes.size > 0) {
+        return codes.has(quoteDivCode);
+    }
+
+    if (ownJob) {
+        if (divJobs.some((j) => pricingOwnJobMatchesEnquiryItem(ownJob, j.ItemName))) return true;
+        if (divJobs.some((j) => {
+            const dept = String(j.DepartmentName ?? j.departmentName ?? '').trim();
+            return dept && pricingOwnJobMatchesEnquiryItem(ownJob, dept);
+        })) {
+            return true;
+        }
+    }
+
+    if (qNum && codes.size > 0) {
+        for (const code of codes) {
+            if (quoteNumberHasDivisionCode(qNum, code)) return true;
+        }
+    }
+    return false;
+}
+
+function workflowEntryBelongsToUserDivision(entry, enqJobs, sessionDivTrim, userDepartment) {
+    return quoteBelongsToSessionDivision(
+        { OwnJob: entry?.ownJob, QuoteNumber: entry?.quoteNumber },
+        enqJobs,
+        sessionDivTrim,
+        userDepartment
+    );
+}
+
+function filterQuotesToSessionDivision(quotes, enqJobs, sessionDivTrim, userDepartment) {
+    const div = (sessionDivTrim || userDepartment || '').trim();
+    if (!div) return quotes || [];
+    return (quotes || []).filter((q) => quoteBelongsToSessionDivision(q, enqJobs, sessionDivTrim, userDepartment));
+}
+
+/**
+ * Own job: division-scoped quotes with prices. Not own job: workflow-assigned cross-division quote only.
+ * @returns {{ mode: 'all'|'division'|'workflow', quoteIds: Set|null }}
+ */
+function resolveEnquiryQuoteListScope({
+    accessCtx,
+    enqJobs,
+    sessionDivTrim,
+    userDepartment,
+    workflowVisible,
+    workflowOnlyListRow,
+}) {
+    if (!accessCtx || accessCtx.isAdmin) {
+        return { mode: 'all', quoteIds: null };
+    }
+
+    const userDiv = (sessionDivTrim || userDepartment || '').trim();
+
+    /**
+     * Own job = user's division has jobs on this enquiry (non-CC: department anchors; CC: CCMailIds).
+     * Own job → division scope only, even when a cross-division quote was routed to them for approval.
+     */
+    let ownDivisionPresent = false;
+    if (userDiv) {
+        if (accessCtx.isCcUser) {
+            ownDivisionPresent = userHasNormalEnquiryCcListAccess(accessCtx, enqJobs, sessionDivTrim);
+        } else {
+            ownDivisionPresent = getDepartmentPricingAnchors(enqJobs || [], userDiv).length > 0;
+        }
+    }
+    if (ownDivisionPresent) {
+        return { mode: 'division', quoteIds: null };
+    }
+
+    /** Not own job: only workflow-assigned quote ref(s). */
+    if ((workflowVisible || []).length > 0) {
+        const crossOnly = (workflowVisible || []).filter(
+            (w) => !workflowEntryBelongsToUserDivision(w, enqJobs, sessionDivTrim, userDepartment)
+        );
+        const wfSource = crossOnly.length ? crossOnly : workflowVisible;
+        const quoteIds = new Set(
+            wfSource
+                .map((w) => Number(w.quoteId))
+                .filter((id) => Number.isFinite(id) && id > 0)
+        );
+        if (quoteIds.size) {
+            return { mode: 'workflow', quoteIds };
+        }
+    }
+
+    if (userDiv) {
+        return { mode: 'division', quoteIds: null };
+    }
+    return { mode: 'all', quoteIds: null };
+}
+
+function filterPricesToSessionDivision(prices, enqJobs, sessionDivTrim, userDepartment) {
+    const div = (sessionDivTrim || userDepartment || '').trim();
+    if (!div) return prices || [];
+    return (prices || []).filter((p) => {
+        const item = String(p.EnquiryForItem ?? p.enquiryForItem ?? '').trim();
+        if (!item) return false;
+        return (enqJobs || []).some(
+            (j) =>
+                jobBelongsToSessionDivision(j, div) &&
+                pricingOwnJobMatchesEnquiryItem(item, j.ItemName)
+        );
+    });
+}
+
+/**
+ * When true, quote list / preview should use normal division access — not restrict to a single workflow quote.
+ * Cross-division approvers (workflow-only) return false and are scoped to assigned quote refs only.
+ */
+function userHasNormalQuoteListAccessForEnquiry(accessCtx, enqJobs, sessionDivTrim, workflowOnlyListRow = false) {
+    if (!accessCtx || accessCtx.isAdmin) return true;
+    if (accessCtx.isCcUser) {
+        return userHasNormalEnquiryCcListAccess(accessCtx, enqJobs, sessionDivTrim);
+    }
+    return !workflowOnlyListRow;
+}
+
+async function fetchEnquiryForJobsForAccess(requestNo) {
+    const rn = parseInt(String(requestNo), 10);
+    if (Number.isNaN(rn)) return [];
+    const jobsRes = await sql.query`
+        SELECT EF.ID, EF.ParentID, EF.ItemName, MEF.CCMailIds AS CCMailIds, MEF.DepartmentName AS DepartmentName,
+               MEF.DivisionCode AS DivisionCode
+        FROM EnquiryFor EF
+        LEFT JOIN Master_EnquiryFor MEF ON (
+            EF.ItemName = MEF.ItemName OR
+            EF.ItemName LIKE N'% - ' + MEF.ItemName OR
+            EF.ItemName LIKE N'%- ' + MEF.ItemName OR
+            EF.ItemName LIKE MEF.ItemName + N' %' OR
+            (MEF.DepartmentName IS NOT NULL AND MEF.DepartmentName <> N'' AND EF.ItemName LIKE N'%' + MEF.DepartmentName + N'%')
+        )
+        WHERE EF.RequestNo = ${rn}
+    `;
+    return jobsRes.recordset || [];
+}
+
+/**
+ * Cross-division approval workflow: restrict to assigned quote(s). Own-division CC / ConcernedSE: no restriction.
+ */
+async function resolveApprovalWorkflowQuoteRestriction(userEmail, requestNo, sessionDivision = '') {
+    const normalizedEmail = normalizePricingEmail(userEmail);
+    const ctx = await resolvePricingAccessContext(userEmail);
+    if (!ctx.user || ctx.isAdmin) {
+        return { restrict: false, quoteIds: [], visible: [] };
+    }
+
+    const visibleMap = await fetchApprovalWorkflowVisibleQuotesByRequest(normalizedEmail, [requestNo]);
+    const visible = visibleMap.get(String(requestNo).trim()) || [];
+    const quoteIds = visible
+        .map((v) => Number(v.quoteId))
+        .filter((id) => Number.isFinite(id) && id > 0);
+    if (!quoteIds.length) {
+        return { restrict: false, quoteIds: [], visible: [] };
+    }
+
+    const enqJobs = await fetchEnquiryForJobsForAccess(requestNo);
+    let workflowOnlyListRow = false;
+    if (!ctx.isCcUser) {
+        const concerned = await userIsConcernedSeOnEnquiry(ctx, requestNo);
+        workflowOnlyListRow = !concerned;
+    }
+
+    const scope = resolveEnquiryQuoteListScope({
+        accessCtx: ctx,
+        enqJobs,
+        sessionDivTrim: sessionDivision,
+        userDepartment: ctx.userDepartment,
+        workflowVisible: visible,
+        workflowOnlyListRow,
+    });
+
+    if (scope.mode === 'workflow' && scope.quoteIds?.size) {
+        return {
+            restrict: true,
+            quoteIds: [...scope.quoteIds],
+            visible,
+            scopeToSessionDivision: false,
+        };
+    }
+    if (scope.mode === 'division') {
+        return { restrict: false, quoteIds, visible, scopeToSessionDivision: true };
+    }
+    return { restrict: false, quoteIds, visible, scopeToSessionDivision: false };
+}
+
+/**
  * Enquiry-level gate + job anchors (matches pricing list/detail).
  */
 async function userHasQuotePricingEnquiryAccess(userEmail, requestNo, sessionDivision = '', quoteId = null) {
     const normalizedEmail = normalizePricingEmail(userEmail);
     if (!normalizedEmail) return false;
-    if (await userIsAssignedQuoteApproverForEnquiry(normalizedEmail, requestNo, quoteId)) {
+    if (await userHasApprovalWorkflowQuoteAccess(normalizedEmail, requestNo, quoteId)) {
         return true;
     }
     const ctx = await resolvePricingAccessContext(userEmail);
@@ -550,4 +806,12 @@ module.exports = {
     userIsConcernedSeOnEnquiry,
     resolvePricingAnchorJobsWithFallbacks,
     userHasQuotePricingEnquiryAccess,
+    userHasNormalEnquiryCcListAccess,
+    userHasNormalQuoteListAccessForEnquiry,
+    resolveApprovalWorkflowQuoteRestriction,
+    quoteBelongsToSessionDivision,
+    filterQuotesToSessionDivision,
+    filterPricesToSessionDivision,
+    resolveEnquiryQuoteListScope,
+    fetchEnquiryForJobsForAccess,
 };

@@ -898,8 +898,20 @@ const SalesReport = () => {
 
     const topRows = useMemo(() => {
         const rows = reportData.topJobBooked || [];
+        /** Follow Up: group by Chance % descending (99, 90, 75, 50, 25…), highest value first within each block. */
+        if (topJobStatus === 'Follow Up') {
+            const chancePct = (row) => {
+                const m = String(row.ProbabilityChance || '').match(/(\d+(?:\.\d+)?)\s*%/);
+                return m ? Number(m[1]) : -1;
+            };
+            return [...rows].sort((a, b) => {
+                const pctDiff = chancePct(b) - chancePct(a);
+                if (pctDiff !== 0) return pctDiff;
+                return (Number(b.JobValue) || 0) - (Number(a.JobValue) || 0);
+            });
+        }
         return [...rows].sort((a, b) => (Number(b.JobValue) || 0) - (Number(a.JobValue) || 0));
-    }, [reportData.topJobBooked]);
+    }, [reportData.topJobBooked, topJobStatus]);
 
     const getTopJobMetricFilterValue = (row) => {
         if (topJobStatus === 'Quoted') return String(row.QuoteRef || '—');

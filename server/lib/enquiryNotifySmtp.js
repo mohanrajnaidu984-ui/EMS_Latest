@@ -1,5 +1,5 @@
 const { buildSmtpTransport, stripQuotes, getSmtpFromEmail } = require('./smtpTransport');
-const { filterNotificationRecipients } = require('./notificationEmailExclusions');
+const { filterNotificationRecipients, filterNotificationEmails } = require('./notificationEmailExclusions');
 
 function splitRecipients(value) {
     return String(value || '')
@@ -15,6 +15,7 @@ function splitRecipients(value) {
 async function sendEnquiryNotificationViaSmtp({
     to,
     cc,
+    bcc,
     subject,
     html,
     replyTo,
@@ -22,13 +23,30 @@ async function sendEnquiryNotificationViaSmtp({
     fromDisplayName,
     transportOverrides,
     transportExtra,
+    skipRecipientExclusions = false,
 } = {}) {
-    const filtered = filterNotificationRecipients({
-        toList: splitRecipients(to),
-        ccList: splitRecipients(cc),
-    });
-    const toList = filtered.toList;
-    const ccList = filtered.ccList;
+    const normalizeList = (value) =>
+        splitRecipients(value).map((s) => s.trim().toLowerCase()).filter(Boolean);
+
+    let toList;
+    let ccList;
+    let bccList;
+    if (skipRecipientExclusions) {
+        toList = normalizeList(to);
+        const toSet = new Set(toList);
+        ccList = normalizeList(cc).filter((e) => !toSet.has(e));
+        const ccSet = new Set([...toSet, ...ccList]);
+        bccList = normalizeList(bcc).filter((e) => !ccSet.has(e));
+    } else {
+        const filtered = filterNotificationRecipients({
+            toList: normalizeList(to),
+            ccList: normalizeList(cc),
+        });
+        toList = filtered.toList;
+        ccList = filtered.ccList;
+        const seen = new Set([...toList, ...ccList]);
+        bccList = filterNotificationEmails(normalizeList(bcc)).filter((e) => !seen.has(e));
+    }
     if (!toList.length) {
         throw new Error('No To recipients for enquiry notification');
     }
@@ -43,12 +61,13 @@ async function sendEnquiryNotificationViaSmtp({
         from,
         to: toList,
         cc: ccList.length ? ccList : undefined,
+        bcc: bccList.length ? bccList : undefined,
         replyTo: replyToList.length ? replyToList : undefined,
         subject: String(subject || 'Enquiry notification'),
         html: String(html || ''),
     });
 
-    return { from, to: filtered.to, cc: filtered.cc };
+    return { from, to: toList.join('; '), cc: ccList.join('; '), bcc: bccList.join('; ') };
 }
 
 module.exports = { sendEnquiryNotificationViaSmtp, splitRecipients };

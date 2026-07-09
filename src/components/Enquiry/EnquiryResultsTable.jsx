@@ -1,4 +1,5 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { FilterX } from 'lucide-react';
 import { getLeadJobDisplayLines, formatLeadJobLinesPlain } from '../../utils/leadJobDisplayLines';
 import {
@@ -130,6 +131,8 @@ const EnquiryResultsTable = ({
     const [headerFilterSearch, setHeaderFilterSearch] = useState('');
     const [headerFilterDraft, setHeaderFilterDraft] = useState([]);
     const headerFilterRef = useRef(null);
+    const headerFilterAnchorRef = useRef(null);
+    const [headerFilterPopoverStyle, setHeaderFilterPopoverStyle] = useState(null);
 
     const SortIcon = ({ column }) => {
         if (sortConfig?.key !== column) return <i className="bi bi-arrow-down-up ms-1 text-muted" style={{ fontSize: '10px' }}></i>;
@@ -170,21 +173,59 @@ const EnquiryResultsTable = ({
     useEffect(() => {
         if (!enableHeaderFilters) return undefined;
         const onDocDown = (e) => {
-            if (!headerFilterRef.current?.contains(e.target)) {
-                setActiveHeaderFilter(null);
-            }
+            if (headerFilterRef.current?.contains(e.target)) return;
+            if (e.target.closest?.('.ert-th-filter-btn')) return;
+            setActiveHeaderFilter(null);
         };
         document.addEventListener('mousedown', onDocDown);
         return () => document.removeEventListener('mousedown', onDocDown);
     }, [enableHeaderFilters]);
 
-    const openHeaderFilter = (key) => {
+    const openHeaderFilter = (key, anchorEl) => {
         const options = filterOptions[key] || [];
         const applied = columnFilters[key];
+        headerFilterAnchorRef.current = anchorEl || null;
         setHeaderFilterDraft(Array.isArray(applied) ? [...applied] : [...options]);
         setHeaderFilterSearch('');
         setActiveHeaderFilter((prev) => (prev === key ? null : key));
     };
+
+    // Position the filter popover with fixed coords (portal) so the table's
+    // scroll container / scrollbar never clips it.
+    useLayoutEffect(() => {
+        if (!enableHeaderFilters || !activeHeaderFilter) {
+            setHeaderFilterPopoverStyle(null);
+            return undefined;
+        }
+        const update = () => {
+            const el = headerFilterAnchorRef.current;
+            if (!el) return;
+            const rect = el.getBoundingClientRect();
+            const minWidth = 220;
+            const maxWidth = 280;
+            const width = Math.min(maxWidth, Math.max(minWidth, rect.width));
+            let left = rect.left;
+            if (left + width > window.innerWidth - 8) {
+                left = Math.max(8, window.innerWidth - width - 8);
+            }
+            setHeaderFilterPopoverStyle({
+                position: 'fixed',
+                top: rect.bottom + 2,
+                left,
+                width,
+                minWidth,
+                maxWidth,
+                zIndex: 10050,
+            });
+        };
+        update();
+        window.addEventListener('resize', update);
+        window.addEventListener('scroll', update, true);
+        return () => {
+            window.removeEventListener('resize', update);
+            window.removeEventListener('scroll', update, true);
+        };
+    }, [activeHeaderFilter, enableHeaderFilters]);
 
     const distinctProjectCount = useMemo(() => {
         const keys = new Set();
@@ -235,13 +276,17 @@ const EnquiryResultsTable = ({
             'July', 'August', 'September', 'October', 'November', 'December',
         ];
         const monthShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        // Matches "01-Jul-26" and datetimes like "01-JUL-26 01:04:40 PM" (Created Datetime)
         const parseShortDate = (s) => {
-            const m = String(s || '').trim().match(/^(\d{1,2})-([A-Za-z]{3})-(\d{2})$/);
+            const m = String(s || '')
+                .trim()
+                .match(/^(\d{1,2})-([A-Za-z]{3})-(\d{2,4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)?$/i);
             if (!m) return null;
             const mIdx = monthShort.findIndex((x) => x.toLowerCase() === m[2].toLowerCase());
             if (mIdx < 0) return null;
-            const yy = Number(m[3]);
-            const year = yy >= 70 ? 1900 + yy : 2000 + yy;
+            const year = m[3].length === 4
+                ? Number(m[3])
+                : (Number(m[3]) >= 70 ? 1900 + Number(m[3]) : 2000 + Number(m[3]));
             return { year, monthName: monthOrder[mIdx], raw: String(s) };
         };
         const dateGroups = visible
@@ -339,7 +384,11 @@ const EnquiryResultsTable = ({
         return (
             <th key={key} className={thClass} style={{ ...headerThStyle, ...extraStyle }}>
                 <div className="ert-th-header-inner">
-                    <button type="button" className="ert-th-filter-btn" onClick={() => openHeaderFilter(key)}>
+                    <button
+                        type="button"
+                        className="ert-th-filter-btn"
+                        onClick={(e) => openHeaderFilter(key, e.currentTarget.closest('th'))}
+                    >
                         {labelLines ? (
                             <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15, textAlign: 'left' }}>
                                 <span>{labelLines[0]}</span>
@@ -362,8 +411,13 @@ const EnquiryResultsTable = ({
                         <SortIcon column={sortKey} />
                     </button>
                 </div>
-                {activeHeaderFilter === key && (
-                    <div className="ert-th-filter-popover" ref={headerFilterRef}>
+                {activeHeaderFilter === key && typeof document !== 'undefined' && createPortal(
+                    <div className="ems-cf-scope" style={{ position: 'fixed', inset: 0, zIndex: 10050, pointerEvents: 'none' }}>
+                    <div
+                        className="ert-th-filter-popover ert-th-filter-popover--portal"
+                        ref={headerFilterRef}
+                        style={{ ...(headerFilterPopoverStyle || {}), pointerEvents: 'auto' }}
+                    >
                         <input
                             className="ert-th-filter-search"
                             value={headerFilterSearch}
@@ -436,6 +490,8 @@ const EnquiryResultsTable = ({
                             </button>
                         </div>
                     </div>
+                    </div>,
+                    document.body
                 )}
             </th>
         );

@@ -15,6 +15,9 @@ const {
     normalizePricingJobName,
     jobBelongsToSessionDivision,
     getDepartmentPricingAnchors,
+    resolveApprovalWorkflowQuoteRestriction,
+    filterQuotesToSessionDivision,
+    fetchEnquiryForJobsForAccess,
 } = require('../lib/quotePricingAccess');
 const {
     normalizeUserEmail,
@@ -52,7 +55,6 @@ const {
     getCurrentPendingStep,
     resolveApprovalPersistContext,
     fetchApprovalStepsApiPayload,
-    userIsAssignedQuoteApproverForEnquiry,
 } = require('../lib/quoteApprovalSteps');
 const {
     sendQuoteApprovalRequestEmail,
@@ -172,6 +174,50 @@ function actorNameFromSteps(steps) {
     return String(last?.approverName || last?.approverEmail || '').trim();
 }
 
+/** Division code for strict tuple filters — subjob tab OwnJob wins over toolbar Division dropdown. */
+async function resolveQuoteStrictDivisionCode(requestNo, { division = '', ownJobName = '' } = {}) {
+    const rn = String(requestNo || '').trim();
+    const ownTrim = String(ownJobName || '').trim();
+    const divTrim = String(division || '').trim();
+    if (!rn) return '';
+    try {
+        if (ownTrim) {
+            const byOwn = await sql.query`
+                SELECT TOP 1 mef.DivisionCode
+                FROM dbo.EnquiryFor ef
+                INNER JOIN dbo.Master_EnquiryFor mef
+                    ON (ef.ItemName = mef.ItemName OR ef.ItemName LIKE N'% - ' + mef.ItemName)
+                WHERE LTRIM(RTRIM(ef.RequestNo)) = LTRIM(RTRIM(${rn}))
+                  AND (
+                    LTRIM(RTRIM(ISNULL(ef.ItemName, N''))) = LTRIM(RTRIM(${ownTrim}))
+                    OR LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))) = LTRIM(RTRIM(${ownTrim}))
+                    OR LTRIM(RTRIM(ISNULL(mef.ItemName, N''))) = LTRIM(RTRIM(${ownTrim}))
+                  )
+                ORDER BY
+                    CASE WHEN ef.ParentID IS NULL OR ef.ParentID = 0 OR ef.ParentID = '0' THEN 0 ELSE 1 END,
+                    ef.ID`;
+            const ownCode = (byOwn.recordset?.[0]?.DivisionCode || '').toString().trim().toUpperCase();
+            if (ownCode) return ownCode;
+        }
+        if (divTrim) {
+            const byDiv = await sql.query`
+                SELECT TOP 1 mef.DivisionCode
+                FROM dbo.EnquiryFor ef
+                INNER JOIN dbo.Master_EnquiryFor mef
+                    ON (ef.ItemName = mef.ItemName OR ef.ItemName LIKE N'% - ' + mef.ItemName)
+                WHERE LTRIM(RTRIM(ef.RequestNo)) = LTRIM(RTRIM(${rn}))
+                  AND LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))) = LTRIM(RTRIM(${divTrim}))
+                ORDER BY
+                    CASE WHEN ef.ParentID IS NULL OR ef.ParentID = 0 OR ef.ParentID = '0' THEN 0 ELSE 1 END,
+                    ef.ID`;
+            return (byDiv.recordset?.[0]?.DivisionCode || '').toString().trim().toUpperCase();
+        }
+    } catch (_) {
+        // fall through
+    }
+    return '';
+}
+
 /** Shared SELECT for GET /by-enquiry — inputs must be bound on `sql.Request` before each call. */
 const BY_ENQUIRY_QUOTES_SQL = `
             SELECT ID, QuoteNumber, QuoteDate,
@@ -264,12 +310,21 @@ const BY_ENQUIRY_QUOTES_SQL = `
                       ) > 0
                 )
               )
+              AND (
+                @strictLeadBranchCode IS NULL
+                OR LTRIM(RTRIM(ISNULL(@strictLeadBranchCode, N''))) = N''
+                OR CHARINDEX(
+                      N'-' + UPPER(LTRIM(RTRIM(ISNULL(@strictLeadBranchCode, N'')))) + N'/',
+                      UPPER(ISNULL(QuoteNumber, N''))
+                    ) > 0
+              )
             ORDER BY QuoteNo, RevisionNo DESC
         `;
 const mapQuoteListingRows = require('../lib/mapQuoteListingRows');
 const { quoteDetailLineResolved } = require('../lib/mapQuoteListingRows');
 const runPendingQuoteListQuery = require('../lib/pendingQuoteListQuery');
 const runQuotedQuoteListQuery = require('../lib/quotedQuoteListQuery');
+const { runApprovalWorkflowQuoteListQuery } = require('../lib/approvalWorkflowQuoteListQuery');
 const buildQuoteListSearchExtraWhere = require('../lib/buildQuoteListSearchExtraWhere');
 const { sendGeneralEmail } = require('../emailService');
 const { buildOutlookDraftVbs } = require('../lib/outlookDraftVbs');
@@ -579,6 +634,78 @@ function stripJobPrefixForQuoteMatch(s) {
         return i >= 0 ? t.slice(i + 1).trim() : t;
     }
     return t;
+}
+
+/** L-code from lead dropdown value or explicit leadBranchCode query param (e.g. L1, L2). */
+function extractStrictLeadBranchCode(leadJobName, leadBranchCodeParam) {
+    const fromParam = String(leadBranchCodeParam || '')
+        .trim()
+        .toUpperCase()
+        .match(/^(L\d+)/);
+    if (fromParam) return fromParam[1];
+    const fromLead = String(leadJobName || '')
+        .trim()
+        .match(/^(L\d+)/i);
+    return fromLead ? fromLead[1].toUpperCase() : '';
+}
+
+function stripQuoteJobPrefixForBranch(s) {
+    return String(s || '')
+        .replace(/^(L\d+|Sub Job)\s*-\s*/i, '')
+        .trim();
+}
+
+/** Keep only the EnquiryFor subtree that contains the saved quote's OwnJob (approval-workflow preview). */
+function filterEnquiryForItemsToQuoteOwnJobBranch(items, ownJobName) {
+    const list = Array.isArray(items) ? items : [];
+    const want = stripQuoteJobPrefixForBranch(ownJobName).toLowerCase();
+    if (!want || !list.length) return list;
+
+    const byId = new Map();
+    list.forEach((item) => {
+        if (item?.ID != null) byId.set(String(item.ID), item);
+    });
+    const normName = (item) => stripQuoteJobPrefixForBranch(item?.ItemName || '').toLowerCase();
+
+    let anchor =
+        list.find((item) => normName(item) === want) ||
+        list.find((item) => {
+            const nm = normName(item);
+            return nm && (nm.includes(want) || want.includes(nm));
+        });
+    if (!anchor) return list;
+
+    let root = anchor;
+    let safety = 0;
+    while (root && safety++ < 50) {
+        const pid = root.ParentID;
+        if (pid == null || pid === '' || pid === '0' || pid === 0) break;
+        const parent = byId.get(String(pid));
+        if (!parent) break;
+        root = parent;
+    }
+
+    const childrenByParent = new Map();
+    list.forEach((item) => {
+        const pid = item.ParentID;
+        if (pid == null || pid === '' || pid === '0' || pid === 0) return;
+        const k = String(pid);
+        if (!childrenByParent.has(k)) childrenByParent.set(k, []);
+        childrenByParent.get(k).push(item);
+    });
+
+    const allowed = new Set();
+    const queue = [root.ID];
+    while (queue.length) {
+        const id = queue.shift();
+        const sid = id != null ? String(id) : '';
+        if (!sid || allowed.has(sid)) continue;
+        allowed.add(sid);
+        const kids = childrenByParent.get(sid) || [];
+        kids.forEach((ch) => queue.push(ch.ID));
+    }
+
+    return list.filter((item) => item?.ID != null && allowed.has(String(item.ID)));
 }
 
 // POST /api/quotes/send-email - Send quote email with attachment
@@ -951,19 +1078,49 @@ router.get('/list/search', async (req, res) => {
     try {
         let { userEmail, q, dateFrom, dateTo, division } = req.query;
         const divisionTrim = (division || '').toString().trim();
-        const extra = buildQuoteListSearchExtraWhere(q || '', dateFrom || '', dateTo || '');
+        let extra = buildQuoteListSearchExtraWhere(q || '', dateFrom || '', dateTo || '', {
+            includeWorkflowSearch: true,
+        });
         if (!extra.ok) {
             return res.json([]);
         }
-        const { enquiries: pendingRaw, accessCtx, userEmail: ue } = await runPendingQuoteListQuery(
-            sql,
-            userEmail,
-            extra.sql,
-            divisionTrim
-        );
-        const { enquiries: quotedRaw } = await runQuotedQuoteListQuery(sql, userEmail, extra.sql, divisionTrim);
+
+        let pendingRaw;
+        let quotedRaw;
+        let approvalRaw;
+        let accessCtx;
+        let ue;
+        try {
+            ({ enquiries: pendingRaw, accessCtx, userEmail: ue } = await runPendingQuoteListQuery(
+                sql,
+                userEmail,
+                extra.sql,
+                divisionTrim
+            ));
+            ({ enquiries: quotedRaw } = await runQuotedQuoteListQuery(sql, userEmail, extra.sql, divisionTrim));
+            ({ enquiries: approvalRaw } = await runApprovalWorkflowQuoteListQuery(sql, userEmail, extra.sql));
+        } catch (err) {
+            if (!isMissingQuoteApprovalStepsTableError(err.message)) {
+                throw err;
+            }
+            extra = buildQuoteListSearchExtraWhere(q || '', dateFrom || '', dateTo || '', {
+                includeWorkflowSearch: false,
+            });
+            if (!extra.ok) {
+                return res.json([]);
+            }
+            ({ enquiries: pendingRaw, accessCtx, userEmail: ue } = await runPendingQuoteListQuery(
+                sql,
+                userEmail,
+                extra.sql,
+                divisionTrim
+            ));
+            ({ enquiries: quotedRaw } = await runQuotedQuoteListQuery(sql, userEmail, extra.sql, divisionTrim));
+            approvalRaw = [];
+        }
         const pendingMapped = await mapQuoteListingRows(sql, pendingRaw || [], ue, accessCtx, divisionTrim);
         const quotedMapped = await mapQuoteListingRows(sql, quotedRaw || [], ue, accessCtx, divisionTrim);
+        const approvalMapped = await mapQuoteListingRows(sql, approvalRaw || [], ue, accessCtx, '');
         const byNo = new Map();
         const quoteRowScore = (row) => {
             if (!row) return 0;
@@ -981,6 +1138,11 @@ router.get('/list/search', async (req, res) => {
         };
         const pickBetter = (prev, next) => {
             if (!prev) return next;
+            if (!next) return prev;
+            const prevWf = Boolean(prev.ApprovalWorkflowListAccess || prev.ListApprovalWorkflowQuoteId);
+            const nextWf = Boolean(next.ApprovalWorkflowListAccess || next.ListApprovalWorkflowQuoteId);
+            if (prevWf && !nextWf) return prev;
+            if (nextWf && !prevWf) return next;
             const a = quoteRowScore(prev);
             const b = quoteRowScore(next);
             if (b > a) return next;
@@ -998,6 +1160,16 @@ router.get('/list/search', async (req, res) => {
         for (const row of quotedMapped) {
             const key = String(row.RequestNo);
             const next = { ...row, QuoteListKind: 'quoted' };
+            byNo.set(key, pickBetter(byNo.get(key), next));
+        }
+        for (const row of approvalMapped) {
+            const key = String(row.RequestNo);
+            const wfQuoteId = Number(row.ApprovalWorkflowQuoteId ?? row.approvalworkflowquoteid);
+            const next = {
+                ...row,
+                QuoteListKind: 'quoted',
+                ListApprovalWorkflowQuoteId: Number.isFinite(wfQuoteId) && wfQuoteId > 0 ? wfQuoteId : null,
+            };
             byNo.set(key, pickBetter(byNo.get(key), next));
         }
         const merged = Array.from(byNo.values()).sort((a, b) => {
@@ -1120,6 +1292,9 @@ router.get('/by-enquiry/:requestNo', async (req, res) => {
         const toNameStripped = stripJobPrefixForQuoteMatch(toName) || null;
         const leadJobName = (req.query.leadJobName || '').toString().trim();
         const leadJobNameStripped = stripJobPrefixForQuoteMatch(leadJobName) || null;
+        const leadBranchCodeParam = (req.query.leadBranchCode || '').toString().trim();
+        const strictLeadBranchCode =
+            extractStrictLeadBranchCode(leadJobName, leadBranchCodeParam) || null;
         const userEmail = (req.query.userEmail || '').toString().trim();
         // In strict tuple mode, OwnJob can come from explicit tab ownJobName (direct subjob tab),
         // otherwise fallback to Division dropdown resolution.
@@ -1127,13 +1302,15 @@ router.get('/by-enquiry/:requestNo', async (req, res) => {
         const ownJobNameFromTabStripped = stripJobPrefixForQuoteMatch(ownJobNameFromTabRaw) || null;
         const strictTuple = String(req.query.strictTuple || '').trim() === '1';
         const division = (req.query.division || '').toString().trim(); // Master_EnquiryFor.DepartmentName
+        const quoteIdParam = req.query.quoteId ? Number(req.query.quoteId) : null;
 
         if (userEmail) {
             const normalizedEmail = userEmail.toLowerCase().replace(/@almcg\.com/g, '@almoayyedcg.com');
             const ok = await userHasQuotePricingEnquiryAccess(
                 normalizedEmail,
                 requestNo,
-                (req.query.division || '').toString().trim()
+                (req.query.division || '').toString().trim(),
+                Number.isFinite(quoteIdParam) && quoteIdParam > 0 ? quoteIdParam : null
             );
             if (!ok) {
                 return res.status(403).json({ error: 'Forbidden' });
@@ -1151,27 +1328,29 @@ router.get('/by-enquiry/:requestNo', async (req, res) => {
         // - Subjob-tab: use explicit ownJobName from selected tab label.
         let ownJobName = '';
         let strictDivisionCode = '';
-        if (strictTuple && division) {
-            // Always resolve strictDivisionCode from selected Division for QuoteNumber fallback.
-            try {
-                const r = await sql.query`
-                    SELECT TOP 1 ef.ItemName, mef.DivisionCode
-                    FROM dbo.EnquiryFor ef
-                    INNER JOIN dbo.Master_EnquiryFor mef
-                        ON (ef.ItemName = mef.ItemName OR ef.ItemName LIKE N'% - ' + mef.ItemName)
-                    WHERE LTRIM(RTRIM(ef.RequestNo)) = LTRIM(RTRIM(${requestNo}))
-                      AND LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))) = LTRIM(RTRIM(${division}))
-                    ORDER BY
-                        CASE WHEN ef.ParentID IS NULL OR ef.ParentID = 0 OR ef.ParentID = '0' THEN 0 ELSE 1 END,
-                        ef.ID
-                `;
-                strictDivisionCode = (r.recordset?.[0]?.DivisionCode || '').toString().trim().toUpperCase();
-                // OwnJob source:
-                // - Subjob tab sends explicit ownJobName -> use it
-                // - Ownjob tab (no explicit ownJobName) -> use selected Division's root ownjob
-                ownJobName = ownJobNameFromTab || (r.recordset?.[0]?.ItemName || '').toString().trim();
-            } catch (_) {
-                // fall through (ownJobName remains '')
+        if (strictTuple && (division || ownJobNameFromTab)) {
+            strictDivisionCode = await resolveQuoteStrictDivisionCode(requestNo, {
+                division,
+                ownJobName: ownJobNameFromTab,
+            });
+            if (ownJobNameFromTab) {
+                ownJobName = ownJobNameFromTab;
+            } else if (division) {
+                try {
+                    const r = await sql.query`
+                        SELECT TOP 1 ef.ItemName
+                        FROM dbo.EnquiryFor ef
+                        INNER JOIN dbo.Master_EnquiryFor mef
+                            ON (ef.ItemName = mef.ItemName OR ef.ItemName LIKE N'% - ' + mef.ItemName)
+                        WHERE LTRIM(RTRIM(ef.RequestNo)) = LTRIM(RTRIM(${requestNo}))
+                          AND LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))) = LTRIM(RTRIM(${division}))
+                        ORDER BY
+                            CASE WHEN ef.ParentID IS NULL OR ef.ParentID = 0 OR ef.ParentID = '0' THEN 0 ELSE 1 END,
+                            ef.ID`;
+                    ownJobName = (r.recordset?.[0]?.ItemName || '').toString().trim();
+                } catch (_) {
+                    // fall through
+                }
             }
         } else if (ownJobNameFromTab) {
             ownJobName = ownJobNameFromTab;
@@ -1220,6 +1399,7 @@ router.get('/by-enquiry/:requestNo', async (req, res) => {
         request.input('ownJobName', sql.NVarChar, ownJobName || null);
         request.input('ownJobNameStripped', sql.NVarChar, ownJobNameFromTabStripped || stripJobPrefixForQuoteMatch(ownJobName) || null);
         request.input('strictDivisionCode', sql.NVarChar, strictDivisionCode || null);
+        request.input('strictLeadBranchCode', sql.NVarChar, strictLeadBranchCode);
         request.input('strictTuple', sql.Bit, strictTuple ? 1 : 0);
 
         let result = await request.query(BY_ENQUIRY_QUOTES_SQL);
@@ -1236,13 +1416,41 @@ router.get('/by-enquiry/:requestNo', async (req, res) => {
                 relaxReq.input('ownJobName', sql.NVarChar, ownJobName || null);
                 relaxReq.input('ownJobNameStripped', sql.NVarChar, ownJobNameFromTabStripped || stripJobPrefixForQuoteMatch(ownJobName) || null);
                 relaxReq.input('strictDivisionCode', sql.NVarChar, strictDivisionCode || null);
+                relaxReq.input('strictLeadBranchCode', sql.NVarChar, strictLeadBranchCode);
                 relaxReq.input('strictTuple', sql.Bit, 0);
                 result = await relaxReq.query(BY_ENQUIRY_QUOTES_SQL);
             }
         }
 
         console.log(`[Quote API] Found ${result.recordset.length} quotes for RequestNo ${requestNo}`);
-        res.json(result.recordset);
+
+        let rows = result.recordset || [];
+        if (userEmail && rows.length > 0) {
+            const normalizedEmail = userEmail.toLowerCase().replace(/@almcg\.com/g, '@almoayyedcg.com');
+            const sessionDiv = (req.query.division || '').toString().trim();
+            const scopeDiv = ownJobNameFromTabRaw || sessionDiv;
+            const restriction = await resolveApprovalWorkflowQuoteRestriction(
+                normalizedEmail,
+                requestNo,
+                scopeDiv
+            );
+            if (restriction.restrict && restriction.quoteIds.length > 0) {
+                const allowedIds = new Set(restriction.quoteIds);
+                if (Number.isFinite(quoteIdParam) && quoteIdParam > 0) {
+                    rows = rows.filter(
+                        (r) => Number(r.ID) === quoteIdParam && allowedIds.has(quoteIdParam)
+                    );
+                } else {
+                    rows = rows.filter((r) => allowedIds.has(Number(r.ID)));
+                }
+            } else if (restriction.scopeToSessionDivision) {
+                const ctx = await resolvePricingAccessContext(normalizedEmail);
+                const enqJobs = await fetchEnquiryForJobsForAccess(requestNo);
+                rows = filterQuotesToSessionDivision(rows, enqJobs, scopeDiv, ctx.userDepartment);
+            }
+        }
+
+        res.json(rows);
     } catch (err) {
         console.error('[Quote API] Error fetching quotes for enquiry:', err);
         console.error('[Quote API] Error details:', err.message);
@@ -1618,9 +1826,16 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
         }
 
         let effectiveSessionDivision = sessionDivision;
-        if (userEmail && Number.isFinite(quoteIdParam) && quoteIdParam > 0) {
+        let restrictWorkflowQuotes = false;
+        if (userEmail) {
             const normalizedEmail = userEmail.toLowerCase().replace(/@almcg\.com/g, '@almoayyedcg.com');
-            if (await userIsAssignedQuoteApproverForEnquiry(normalizedEmail, requestNo, quoteIdParam)) {
+            const restriction = await resolveApprovalWorkflowQuoteRestriction(
+                normalizedEmail,
+                requestNo,
+                sessionDivision
+            );
+            restrictWorkflowQuotes = restriction.restrict;
+            if (restrictWorkflowQuotes) {
                 effectiveSessionDivision = '';
             }
         }
@@ -1801,6 +2016,22 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
             }
             rawItems = uniqueRawItems;
             log(`Deduplicated Raw Items Count: ${rawItems.length}`);
+
+            if (restrictWorkflowQuotes && Number.isFinite(quoteIdParam) && quoteIdParam > 0) {
+                const qOwnRes = await sql.query`
+                    SELECT TOP 1 OwnJob
+                    FROM EnquiryQuotes
+                    WHERE ID = ${quoteIdParam}
+                      AND LTRIM(RTRIM(RequestNo)) = LTRIM(RTRIM(${requestNo}))
+                `;
+                const wfOwnJob = qOwnRes.recordset?.[0]?.OwnJob;
+                if (wfOwnJob) {
+                    rawItems = filterEnquiryForItemsToQuoteOwnJobBranch(rawItems, wfOwnJob);
+                    log(
+                        `Approval-workflow quote ${quoteIdParam}: scoped EnquiryFor to OwnJob "${wfOwnJob}" (${rawItems.length} items)`
+                    );
+                }
+            }
 
             /**
              * Session division must NOT shrink the tree to matching rows only (that drops parent lead roots,
@@ -2485,7 +2716,17 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
             // --- HIERARCHY LOGIC: derive Parent Customer for own-job subjob users ---
             if (rawItems && rawItems.length > 0 && userIsSubjobUser) {
                 // Find own job from login Department
-                const loginDept = (currentUser?.Department || currentUser?.department || '').toString().trim();
+                let loginDept = '';
+                if (userEmail) {
+                    try {
+                        const normalizedDeptEmail = userEmail.toLowerCase().replace(/@almcg\.com/g, '@almoayyedcg.com');
+                        const deptRes = await sql.query`
+                            SELECT TOP 1 Department FROM Master_ConcernedSE
+                            WHERE LOWER(LTRIM(RTRIM(ISNULL(EmailId, N'')))) = ${normalizedDeptEmail}
+                        `;
+                        loginDept = String(deptRes.recordset?.[0]?.Department || '').trim();
+                    } catch (_deptErr) { /* keep loginDept empty */ }
+                }
                 const ownJobNode = rawItems.find(r =>
                     String(r.ItemName || '').replace(/^(L\d+|Sub Job)\s*-\s*/i, '').trim().toLowerCase() ===
                     loginDept.toLowerCase()

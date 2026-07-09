@@ -35,6 +35,8 @@ const NotificationDropdown = ({ onOpenEnquiry }) => {
     const [hasMore, setHasMore] = useState(false);
 
     const fetchAbortRef = useRef(null);
+    /** Ignore stale /api/notifications/:id/count responses after optimistic ACK. */
+    const countFetchGenRef = useRef(0);
 
 
 
@@ -59,27 +61,18 @@ const NotificationDropdown = ({ onOpenEnquiry }) => {
 
 
     const fetchActiveCount = useCallback(async () => {
-
         if (!currentUser) return;
-
+        const gen = ++countFetchGenRef.current;
         try {
-
             const res = await fetch(`/api/notifications/${currentUser.id}/count`);
-
-            if (res.ok) {
-
-                const data = await res.json();
-
-                setActiveCount(data.count ?? 0);
-
-            }
-
+            if (!res.ok || gen !== countFetchGenRef.current) return;
+            const data = await res.json();
+            if (gen !== countFetchGenRef.current) return;
+            setActiveCount(Number(data.count) || 0);
         } catch (err) {
-
+            if (gen !== countFetchGenRef.current) return;
             console.error('Failed to fetch notification count', err);
-
         }
-
     }, [currentUser]);
 
 
@@ -168,6 +161,11 @@ const NotificationDropdown = ({ onOpenEnquiry }) => {
 
             setNotifications((prev) => (append ? [...prev, ...items] : items));
 
+            if (!isHistory && !append && !moreAvailable) {
+                countFetchGenRef.current += 1;
+                setActiveCount(items.length);
+            }
+
         } catch (err) {
 
             if (err.name !== 'AbortError') {
@@ -254,7 +252,9 @@ const NotificationDropdown = ({ onOpenEnquiry }) => {
 
     const removeFromActiveList = useCallback((id) => {
         if (id == null) return;
-        setNotifications((prev) => prev.filter((n) => notificationIdOf(n) !== id));
+        const idStr = String(id);
+        countFetchGenRef.current += 1;
+        setNotifications((prev) => prev.filter((n) => String(notificationIdOf(n)) !== idStr));
         setActiveCount((prev) => Math.max(0, prev - 1));
     }, []);
 
@@ -329,13 +329,14 @@ const NotificationDropdown = ({ onOpenEnquiry }) => {
         try {
             const ok = await acknowledgeNotification(id);
             if (!ok) {
+                countFetchGenRef.current += 1;
                 await fetchNotifications('active');
                 await fetchActiveCount();
                 return;
             }
-            await fetchActiveCount();
         } catch (err) {
             console.error('Failed to acknowledge notification', err);
+            countFetchGenRef.current += 1;
             await fetchNotifications('active');
             await fetchActiveCount();
         }
@@ -372,6 +373,7 @@ const NotificationDropdown = ({ onOpenEnquiry }) => {
         if (!currentUser) return;
 
         const previous = notifications;
+        countFetchGenRef.current += 1;
         setNotifications([]);
         setActiveCount(0);
         setHasMore(false);
@@ -379,14 +381,15 @@ const NotificationDropdown = ({ onOpenEnquiry }) => {
         try {
             const res = await fetch(`/api/notifications/${currentUser.id}/ack-all`, { method: 'PUT' });
             if (!res.ok) {
+                countFetchGenRef.current += 1;
                 setNotifications(previous);
                 await fetchActiveCount();
                 await fetchNotifications('active');
                 return;
             }
-            await fetchActiveCount();
         } catch (err) {
             console.error('Failed to acknowledge all notifications', err);
+            countFetchGenRef.current += 1;
             setNotifications(previous);
             await fetchActiveCount();
             await fetchNotifications('active');

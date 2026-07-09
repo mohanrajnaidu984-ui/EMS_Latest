@@ -1,6 +1,15 @@
 'use strict';
 
-const { getPricingAnchorJobs, getPricingAnchorJobsForDivision, expandVisibleJobIdsFromAnchors } = require('./quotePricingAccess');
+const {
+    getPricingAnchorJobs,
+    getPricingAnchorJobsForDivision,
+    expandVisibleJobIdsFromAnchors,
+    resolveEnquiryQuoteListScope,
+    filterQuotesToSessionDivision,
+    filterPricesToSessionDivision,
+    jobBelongsToSessionDivision,
+} = require('./quotePricingAccess');
+const { fetchApprovalWorkflowVisibleQuotesByRequest } = require('./quoteApprovalSteps');
 
 function jsNormKey(s) {
     return String(s || '')
@@ -265,6 +274,55 @@ function pickLatestQuoteRow(rows) {
         return rB - rA;
     });
     return sorted[0];
+}
+
+function filterDetailLinesForScopedQuotes(detailLines, scopedQuotes) {
+    const refs = (scopedQuotes || [])
+        .map((q) => String(q.QuoteNumber || q.quoteNumber || '').trim())
+        .filter(Boolean);
+    if (!refs.length) return [];
+    return (detailLines || []).filter((ln) => {
+        const t = String(ln?.textLine || '');
+        return refs.some((ref) => t.includes(ref));
+    });
+}
+
+/** One summary line per workflow-visible saved quote (fallback when lead rollup omits scoped refs). */
+function buildDetailLinesFromScopedQuotes(scopedQuotes) {
+    const sorted = [...(scopedQuotes || [])].sort((a, b) => {
+        const qnA = Number(a.QuoteNo) || 0;
+        const qnB = Number(b.QuoteNo) || 0;
+        if (qnB !== qnA) return qnB - qnA;
+        const rA = Number(a.RevisionNo) || 0;
+        const rB = Number(b.RevisionNo) || 0;
+        return rB - rA;
+    });
+    const seenRef = new Set();
+    const lines = [];
+    for (const q of sorted) {
+        const ref = String(q.QuoteNumber || q.quoteNumber || '').trim();
+        if (!ref || seenRef.has(ref)) continue;
+        seenRef.add(ref);
+        const code = extractLCodeFromLeadJobName(q.LeadJob || q.leadJob || '') || '';
+        const cust =
+            jsStripCustomerLeadSuffix(String(q.ToName || q.toName || '').trim()) ||
+            String(q.ToName || q.toName || '').trim();
+        const label = code && cust ? `${cust} - ${code}` : cust || code || '—';
+        const ta = parseFloat(q.TotalAmount);
+        lines.push({
+            textLine: `${label} (${ref} - ${fmtRowDetailDate(q.QuoteDate)})`,
+            declinedToQuote: false,
+            bdTotal: !Number.isNaN(ta) && ta > 0 ? ta : null,
+            preparedBy: String(q.PreparedBy ?? q.preparedBy ?? '').trim(),
+            quoteDate: q.QuoteDate ?? null,
+        });
+    }
+    return lines;
+}
+
+function quoteRowIdNumber(q) {
+    const n = Number(q?.ID ?? q?.id);
+    return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 function preparedByFromQuoteNumber(allQuotes, requestNo, quoteNumber) {
@@ -783,7 +841,18 @@ function buildListQuoteLeadContext({
             subtreeJobIdsByLeadCode[c] = new Set();
             continue;
         }
-        subtreeJobIdsByLeadCode[c] = new Set(collectBranch(rootFound).map((j) => String(j.ID)));
+        const branch = collectBranch(rootFound);
+        const ownNodeInBranch = ownItemTrim
+            ? branch.find((j) => jsTupleOwnJobMatch(ownItemTrim, j.ItemName))
+            : null;
+        const isSubjobOwn =
+            ownNodeInBranch &&
+            ownNodeInBranch.ParentID != null &&
+            ownNodeInBranch.ParentID !== '' &&
+            ownNodeInBranch.ParentID !== 0 &&
+            ownNodeInBranch.ParentID !== '0';
+        const subtreeRoot = isSubjobOwn ? ownNodeInBranch : rootFound;
+        subtreeJobIdsByLeadCode[c] = new Set(collectBranch(subtreeRoot).map((j) => String(j.ID)));
     }
     return {
         allLeadCodesSorted,
@@ -791,6 +860,20 @@ function buildListQuoteLeadContext({
         pvLeadByCode,
         ownBranchLeadCodeSet: filterLeadsByOwnBranch ? leadCodesWhereOwnParticipates : null,
         subtreeJobIdsByLeadCode,
+        ownIsSubjobOwn: Boolean(
+            ownItemTrim &&
+                (roots || []).some((root) => {
+                    const branch = collectBranch(root);
+                    const ownNode = branch.find((j) => jsTupleOwnJobMatch(ownItemTrim, j.ItemName));
+                    return (
+                        ownNode &&
+                        ownNode.ParentID != null &&
+                        ownNode.ParentID !== '' &&
+                        ownNode.ParentID !== 0 &&
+                        ownNode.ParentID !== '0'
+                    );
+                })
+        ),
     };
 }
 
@@ -1058,7 +1141,13 @@ function buildEnquiryLeadQuoteDetailLines(requestNo, groupRows, allQuotes, price
                 textLine = `${label} (Not Quoted)`;
             }
             // Do not show a BD roll-up from pricing alone when this customer has no saved quote (avoids Nass-like amounts on Alkomed).
-            if (subSet && subSet.size && qt && String(qt.QuoteNumber || '').trim()) {
+            if (
+                subSet &&
+                subSet.size &&
+                qt &&
+                String(qt.QuoteNumber || '').trim() &&
+                !(lineCtx && lineCtx.ownIsSubjobOwn)
+            ) {
                 const rolled = sumCustomerBasePricingInLeadSubtree(pricesForReq, code, custName, subSet);
                 if (rolled > 0) {
                     bdTotal = rolled;
@@ -1302,6 +1391,61 @@ function resolveListWorkflowNo(lookup, requestNo, listQuoteRef) {
     return lookup.byReq.get(rn) || '';
 }
 
+function resolveOwnJobLabelForQuoteList(
+    accessCtx,
+    enqJobs,
+    userEmail,
+    sessionDivTrim,
+    userDepartment,
+    { approvalWorkflowListAccess, listQuoteOwnFromRow, pendingOwnFromTuple }
+) {
+    if (pendingOwnFromTuple) return pendingOwnFromTuple;
+    if (approvalWorkflowListAccess && listQuoteOwnFromRow) return listQuoteOwnFromRow;
+
+    if (accessCtx && !accessCtx.isAdmin && !accessCtx.isCcUser && userEmail) {
+        let anchors = getPricingAnchorJobs(enqJobs, accessCtx, userEmail);
+        if (sessionDivTrim) {
+            anchors = anchors.filter((j) => jobBelongsToSessionDivision(j, sessionDivTrim));
+        }
+        if (!anchors.length && sessionDivTrim) {
+            anchors = getPricingAnchorJobsForDivision(enqJobs, accessCtx, userEmail, sessionDivTrim);
+        }
+        if (anchors.length > 0) {
+            const subjob = anchors.find((j) => {
+                const pid = j.ParentID;
+                return pid != null && pid !== '' && pid !== 0 && pid !== '0';
+            });
+            if (subjob) return String(subjob.ItemName || '').trim();
+            return String(anchors[0].ItemName || '').trim();
+        }
+    }
+
+    if (sessionDivTrim) return sessionDivTrim;
+    if (accessCtx && !accessCtx.isAdmin && String(userDepartment || '').trim()) {
+        return String(userDepartment).trim();
+    }
+    return listQuoteOwnFromRow || '';
+}
+
+function filterDetailLinesToDivisionQuotes(lines, quotesForReq) {
+    if (!Array.isArray(lines) || !lines.length || !Array.isArray(quotesForReq) || !quotesForReq.length) {
+        return lines || [];
+    }
+    const allowedQn = new Set(
+        quotesForReq
+            .map((q) => String(q.QuoteNumber ?? q.quoteNumber ?? '').trim().toUpperCase())
+            .filter(Boolean)
+    );
+    if (!allowedQn.size) return lines;
+    return lines.filter((ln) => {
+        const text = String(ln?.textLine || '');
+        if (!text || /not quoted/i.test(text) || /decline to quote/i.test(text)) return true;
+        const refs = text.match(/[A-Z]{2,4}\/[A-Z]{2,6}\/\d+[^)\s]*/gi) || [];
+        if (!refs.length) return true;
+        return refs.some((r) => allowedQn.has(String(r).trim().toUpperCase()));
+    });
+}
+
 /**
  * Maps raw enquiry rows from list/pending / list/search SQL into the shape the Quote UI expects.
  */
@@ -1341,7 +1485,8 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
     // Fetch Jobs (CCMailIds required for anchor scope — same as pricing)
         const jobsRes = await sql.query(`
             SELECT EF.RequestNo, EF.ID, EF.ParentID, EF.ItemName, EF.LeadJobCode,
-                   MEF.CCMailIds AS CCMailIds, MEF.DepartmentName AS DepartmentName
+                   MEF.CCMailIds AS CCMailIds, MEF.DepartmentName AS DepartmentName,
+                   MEF.DivisionCode AS DivisionCode
             FROM EnquiryFor EF
             LEFT JOIN Master_EnquiryFor MEF ON (EF.ItemName = MEF.ItemName OR EF.ItemName LIKE '% - ' + MEF.ItemName)
             WHERE EF.RequestNo IN (${requestNos})
@@ -1415,6 +1560,18 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
 
         const workflowLookup = await fetchWorkflowNoLookup(sql, requestNos);
 
+        let workflowVisibleByReq = new Map();
+        if (userEmail && accessCtx && !accessCtx.isAdmin) {
+            workflowVisibleByReq = await fetchApprovalWorkflowVisibleQuotesByRequest(
+                userEmail,
+                enquiriesToMap.map((e) => e.RequestNo)
+            );
+        }
+
+        /** Division/workflow-scoped quotes+prices per RequestNo — merge pass must not resurrect other-division rows. */
+        const scopedQuoteSetByReq = new Map();
+        const scopedPriceSetByReq = new Map();
+
         // Map subjob prices for each enquiry
         const mappedEnquiries = enquiriesToMap.map(enq => {
             const enqRequestNo = enq.RequestNo?.toString().trim();
@@ -1422,8 +1579,53 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
 
             const enqJobs = allJobs.filter(j => j.RequestNo?.toString().trim() == enqRequestNo);
             const enqPrices = allPrices.filter(p => p.RequestNo?.toString().trim() == enqRequestNo);
+            const quotesForReqAll = allQuotes.filter((q) => String(q.RequestNo ?? '').trim() === enqRequestNo);
+            const workflowVisible = workflowVisibleByReq.get(enqRequestNo) || [];
+            const workflowOnlyListRow =
+                enq.ApprovalWorkflowListAccess === true ||
+                enq.ApprovalWorkflowListAccess === 1 ||
+                enq.approvalworkflowlistaccess === true ||
+                enq.approvalworkflowlistaccess === 1;
+            const quoteListScope = resolveEnquiryQuoteListScope({
+                accessCtx,
+                enqJobs,
+                sessionDivTrim,
+                userDepartment,
+                workflowVisible,
+                workflowOnlyListRow,
+            });
+            const workflowQuoteScope = quoteListScope.mode === 'workflow';
+            const workflowQuoteIdSet = workflowQuoteScope ? quoteListScope.quoteIds : null;
+            let quotesForReq;
+            if (workflowQuoteScope && workflowQuoteIdSet?.size) {
+                quotesForReq = quotesForReqAll.filter((q) => workflowQuoteIdSet.has(quoteRowIdNumber(q)));
+            } else if (quoteListScope.mode === 'division') {
+                quotesForReq = filterQuotesToSessionDivision(
+                    quotesForReqAll,
+                    enqJobs,
+                    sessionDivTrim,
+                    userDepartment
+                );
+            } else {
+                quotesForReq = quotesForReqAll;
+            }
+            if (quotesForReq.length !== quotesForReqAll.length) {
+                scopedQuoteSetByReq.set(enqRequestNo, new Set(quotesForReq));
+            }
+            const quotesForWorkflowDisplay =
+                workflowQuoteScope && quotesForReq.length === 0
+                    ? quotesForReqAll.filter((q) =>
+                          workflowVisible.some(
+                              (w) =>
+                                  String(w.quoteNumber || '').trim() &&
+                                  String(w.quoteNumber).trim() ===
+                                      String(q.QuoteNumber || q.quoteNumber || '').trim()
+                          )
+                      )
+                    : quotesForReq;
+            const approvalWorkflowListAccess = workflowQuoteScope;
             const pendingOwnFromTupleRaw = (enq.ListPendingOwnJobItem ?? enq.listpendingownjobitem ?? '').toString().trim();
-            if (sessionDivTrim && pendingOwnFromTupleRaw) {
+            if (sessionDivTrim && pendingOwnFromTupleRaw && !approvalWorkflowListAccess) {
                 const divNorm = normalizeDeptKey(sessionDivTrim);
                 const ownMatchesDivision = enqJobs.some((j) => {
                     if (!jsTupleOwnJobMatch(pendingOwnFromTupleRaw, j.ItemName)) return false;
@@ -1487,7 +1689,7 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
 
             // Filter flatList by ScopedJobIDs â€” prefer JS anchors (aligned with pricing) when user is non-admin
             let scopedJobIDsStr = (enq.ScopedJobIDs || '').toString().split(',').map(id => id.trim()).filter(Boolean);
-            if (userEmail && accessCtx && accessCtx.user && !accessCtx.isAdmin) {
+            if (userEmail && accessCtx && accessCtx.user && !accessCtx.isAdmin && !approvalWorkflowListAccess) {
                 const anchors = sessionDivTrim
                     ? getPricingAnchorJobsForDivision(enqJobs, accessCtx, userEmail, sessionDivTrim)
                     : getPricingAnchorJobs(enqJobs, accessCtx, userEmail);
@@ -1804,22 +2006,20 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
             // Latest-quote own job: sum base prices for that EnquiryFor node + all descendants (same selfPrices rules as Subjob Prices column).
             // Prefer the pending-list tuple (PV) so ref/date/summary align with the row, not another branch on the enquiry.
             const pendingOwnFromTuple = pendingOwnFromTupleRaw;
-            const listQuoteOwnFromRow = (enq.ListQuoteOwnJob ?? enq.listquoteownjob ?? '').toString().trim();
+            const listQuoteOwnFromRowEarly = (enq.ListQuoteOwnJob ?? enq.listquoteownjob ?? '').toString().trim();
 
-            // Use the tuple's own job label for quote-matching/status.
-            // (If we force to sessionDivTrim here, it can break matching when quotes persist a slightly different representation.)
-            let ownJobFromQuote = pendingOwnFromTuple;
-            if (!ownJobFromQuote) {
-                // Search/quoted rows often have no pending tuple; own-job must follow selected Division.
-                if (sessionDivTrim) {
-                    ownJobFromQuote = sessionDivTrim;
-                } else if (accessCtx && !accessCtx.isAdmin && String(userDepartment || '').trim()) {
-                    ownJobFromQuote = String(userDepartment).trim();
-                } else {
-                    // Admins / no department: use SQL column (latest quote on enquiry, any division).
-                    ownJobFromQuote = listQuoteOwnFromRow;
+            let ownJobFromQuote = resolveOwnJobLabelForQuoteList(
+                accessCtx,
+                enqJobs,
+                userEmail,
+                sessionDivTrim,
+                userDepartment,
+                {
+                    approvalWorkflowListAccess,
+                    listQuoteOwnFromRow: listQuoteOwnFromRowEarly,
+                    pendingOwnFromTuple,
                 }
-            }
+            );
             const savedTotalRaw = enq.ListQuoteTotalAmount ?? enq.listquotetotalamount;
             const savedQuoteTotal = savedTotalRaw != null && !Number.isNaN(parseFloat(savedTotalRaw))
                 ? parseFloat(savedTotalRaw)
@@ -1868,7 +2068,9 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
                     .map((x) => x.trim())
                     .filter(Boolean)[0] ||
                 '';
-            const multiRoll = buildMultiLeadQuoteRollup(enq.RequestNo, pvOwnT, pvCustT, allPrices, allQuotes, enqJobs);
+            const multiRoll = workflowQuoteScope
+                ? null
+                : buildMultiLeadQuoteRollup(enq.RequestNo, pvOwnT, pvCustT, allPrices, quotesForReq, enqJobs);
 
             let listQuoteRollupStatus = null;
             let listMultiLeadQuoteRefs = null;
@@ -1886,6 +2088,41 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
                     listRef = multiRoll.entries.map((e) => e.quoteNumber).join(' | ');
                 } else {
                     listRef = '';
+                }
+            } else if (workflowQuoteScope && quotesForWorkflowDisplay.length > 0) {
+                const refs = [
+                    ...new Set(
+                        quotesForWorkflowDisplay
+                            .map((q) => String(q.QuoteNumber || q.quoteNumber || '').trim())
+                            .filter(Boolean)
+                    ),
+                ];
+                listRef = refs.join(' | ');
+                const primary = pickLatestQuoteRow(quotesForWorkflowDisplay);
+                listDtRaw = primary?.QuoteDate ?? listDtRaw;
+                listQuoteRollupStatus =
+                    refs.length > 1 ? 'Partial Quoted' : refs.length === 1 ? 'All Quoted' : listQuoteRollupStatus;
+            }
+
+            /** SQL ListQuoteRef is the enquiry's latest quote (any division) — clamp to division-scoped quotes. */
+            if (quoteListScope.mode === 'division' && listRef && !multiRoll) {
+                const allowedRefs = new Set(
+                    quotesForReq
+                        .map((q) => String(q.QuoteNumber || q.quoteNumber || '').trim().toUpperCase())
+                        .filter(Boolean)
+                );
+                const keptRefs = listRef
+                    .split('|')
+                    .map((s) => s.trim())
+                    .filter((s) => s && allowedRefs.has(s.toUpperCase()));
+                if (keptRefs.length > 0) {
+                    listRef = keptRefs.join(' | ');
+                } else {
+                    const latestScoped = pickLatestQuoteRow(quotesForReq);
+                    listRef = latestScoped
+                        ? String(latestScoped.QuoteNumber || latestScoped.quoteNumber || '').trim()
+                        : '';
+                    listDtRaw = latestScoped?.QuoteDate ?? null;
                 }
             }
 
@@ -1913,13 +2150,22 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
                 (String(fullCustomerName || '').split(',')[0].trim()) ||
                 '';
 
+            const pricesForDetail =
+                quoteListScope.mode === 'division'
+                    ? filterPricesToSessionDivision(enqPrices, enqJobs, sessionDivTrim, userDepartment)
+                    : enqPrices;
+            if (pricesForDetail.length !== enqPrices.length) {
+                scopedPriceSetByReq.set(enqRequestNo, new Set(pricesForDetail));
+            }
+
             const rowDraft = {
                 ListPreparedBy: listPreparedBy,
                 ListMultiLeadQuoteRefs: listMultiLeadQuoteRefs,
                 ListQuoteRef: listRef,
             };
             listPreparedBy =
-                collectPreparedByForMappedRow(enq.RequestNo, rowDraft, allQuotes) || listPreparedBy;
+                collectPreparedByForMappedRow(enq.RequestNo, rowDraft, workflowQuoteScope ? quotesForReq : allQuotes) ||
+                listPreparedBy;
 
             const pendingLeadName = (enq.ListPendingLeadJobName ?? enq.listpendingleadjobname ?? '').toString().trim();
             const pendingCustomerName = (enq.ListPendingCustomerName ?? enq.listpendingcustomername ?? '').toString().trim();
@@ -1928,7 +2174,7 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
                 roots,
                 rootLabelMap,
                 stringChildrenMap,
-                enqPrices,
+                enqPrices: pricesForDetail,
                 pendingOwnItem: ownJobFromQuote,
                 stripLeadPrefix,
                 normalize,
@@ -1937,7 +2183,7 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
                 externalCustomers,
                 quoteListShowAllLeadsForAdmin: !!(accessCtx && accessCtx.isAdmin),
             });
-            const leadQuoteLines = buildEnquiryLeadQuoteDetailLines(
+            const leadQuoteLinesRaw = buildEnquiryLeadQuoteDetailLines(
                 enqRequestNo,
                 [
                     {
@@ -1952,11 +2198,24 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
                         ListQuoteDate: listDtRaw != null && listDtRaw !== '' ? listDtRaw : null,
                     },
                 ],
-                allQuotes,
-                enqPrices,
+                quotesForReq,
+                pricesForDetail,
                 listQuoteLeadContext
             );
+            let leadQuoteLines = workflowQuoteScope
+                ? filterDetailLinesForScopedQuotes(leadQuoteLinesRaw, quotesForWorkflowDisplay)
+                : leadQuoteLinesRaw;
+            if (!workflowQuoteScope && quoteListScope.mode === 'division') {
+                leadQuoteLines = filterDetailLinesToDivisionQuotes(leadQuoteLines, quotesForReq);
+            }
+            if (workflowQuoteScope && leadQuoteLines.length === 0 && quotesForWorkflowDisplay.length > 0) {
+                leadQuoteLines = buildDetailLinesFromScopedQuotes(quotesForWorkflowDisplay);
+            }
             const rollupFromDetailLines = rollupStatusFromLeadDetailLines(leadQuoteLines);
+            const workflowPrimaryQuote = workflowQuoteScope
+                ? pickLatestQuoteRow(quotesForWorkflowDisplay)
+                : null;
+            const workflowQuoteId = workflowPrimaryQuote ? Number(workflowPrimaryQuote.ID) : null;
 
             return {
                 RequestNo: enq.RequestNo,
@@ -1975,7 +2234,9 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
                 ListQuoteUnderRefTotal: listQuoteUnderRefTotal,
                 ListPreparedBy: listPreparedBy,
                 ListQuoteDetailLines: leadQuoteLines,
-                CustomerName: fullCustomerName,
+                CustomerName: workflowPrimaryQuote
+                    ? String(workflowPrimaryQuote.ToName || '').trim() || fullCustomerName
+                    : fullCustomerName,
                 PricingCustomerDetails: finalPricingStr,
                 ClientName: enq.ClientName || enq.clientname || '-',
                 ConsultantName: enq.ConsultantName || enq.consultantname || '-',
@@ -1984,7 +2245,20 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
                 Status: enq.Status,
                 Divisions: enq.Divisions,
                 QuotedCustomers: enq.QuotedCustomers,
-                SubJobPrices: subJobPrices
+                SubJobPrices: subJobPrices,
+                ApprovalWorkflowListAccess: approvalWorkflowListAccess,
+                ApprovalWorkflowQuoteId: (() => {
+                    if (workflowQuoteId) return workflowQuoteId;
+                    const raw = enq.ApprovalWorkflowQuoteId ?? enq.approvalworkflowquoteid;
+                    const n = Number(raw);
+                    return Number.isFinite(n) && n > 0 ? n : null;
+                })(),
+                ListApprovalWorkflowQuoteId: (() => {
+                    if (workflowQuoteId) return workflowQuoteId;
+                    const raw = enq.ApprovalWorkflowQuoteId ?? enq.approvalworkflowquoteid;
+                    const n = Number(raw);
+                    return Number.isFinite(n) && n > 0 ? n : null;
+                })(),
             };
         }).filter(Boolean);
 
@@ -2019,7 +2293,20 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
             mappedDeduped.push(row);
         }
 
-        let finalMapped = mergePendingRowsByRequestNo(mappedDeduped, allQuotes, allPrices);
+        const quotesForMerge = scopedQuoteSetByReq.size
+            ? allQuotes.filter((q) => {
+                  const scoped = scopedQuoteSetByReq.get(String(q.RequestNo ?? '').trim());
+                  return !scoped || scoped.has(q);
+              })
+            : allQuotes;
+        const pricesForMerge = scopedPriceSetByReq.size
+            ? allPrices.filter((p) => {
+                  const scoped = scopedPriceSetByReq.get(String(p.RequestNo ?? '').trim());
+                  return !scoped || scoped.has(p);
+              })
+            : allPrices;
+
+        let finalMapped = mergePendingRowsByRequestNo(mappedDeduped, quotesForMerge, pricesForMerge);
         if (userEmail && accessCtx && !accessCtx.isAdmin) {
             finalMapped = finalMapped.map(enq => {
                 const accessRule = accessCtx.isCcUser ? 'cc_coordinator' : 'concerned_se';

@@ -816,12 +816,20 @@ async function fetchQuoteApprovalRollupStatusMap(quoteIds) {
     const ids = [...new Set((quoteIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
     if (!ids.length) return new Map();
     const idList = ids.join(',');
-    const result = await sql.query(`
+    let result;
+    try {
+        result = await sql.query(`
         SELECT QuoteId, Status, ApproverSequence, ID
         FROM QuoteApprovalSteps
         WHERE QuoteId IN (${idList})
         ORDER BY QuoteId ASC, ApproverSequence ASC, ID ASC
     `);
+    } catch (err) {
+        if (isMissingQuoteApprovalStepsTableError(err.message)) {
+            return new Map();
+        }
+        throw err;
+    }
     const byQuote = new Map();
     for (const row of result.recordset || []) {
         const qid = Number(row.QuoteId);
@@ -882,6 +890,17 @@ async function enrichPendingApprovalRows(rows) {
 /** Attach ListApprovalStatus to quote list rows (Quote Search on Approvals page). */
 async function enrichQuoteListRowsWithApprovalStatus(rows) {
     if (!Array.isArray(rows) || !rows.length) return rows || [];
+    try {
+        return await enrichQuoteListRowsWithApprovalStatusInner(rows);
+    } catch (err) {
+        if (isMissingQuoteApprovalStepsTableError(err.message)) {
+            return rows;
+        }
+        throw err;
+    }
+}
+
+async function enrichQuoteListRowsWithApprovalStatusInner(rows) {
     const quoteIdByRowKey = new Map();
     const quoteIds = new Set();
 
@@ -1237,15 +1256,16 @@ async function fetchRejectedApprovalsByUser(userEmail, { q = '', dateFrom = '', 
     return enrichPendingApprovalRows(result.recordset || []);
 }
 
-/** Quotes submitted for approval workflow — assigned to this user (any status, incl. rejected by others). */
+/** Quotes submitted for approval workflow — visible to approver, CC teammates, or ConcernedSE on enquiry. */
 async function fetchApprovalWorkflowSearch(userEmail, { q = '', dateFrom = '', dateTo = '', division = '' } = {}) {
     const email = normalizeApprovalEmail(userEmail);
     if (!email) return [];
+    const uEsc = email.replace(/'/g, "''");
+    const uLocalEsc = ((email.split('@')[0] || '').trim()).replace(/'/g, "''");
+    const visibilitySql = buildApprovalQuoteVisibleToUserSql('s.QuoteId', 's.RequestNo', uEsc, uLocalEsc);
     const filterSql = buildApprovedByMeListFilterSql(q, dateFrom, dateTo, division);
     const divisionSql = buildApprovalDivisionFilterSql(division, 's');
-    const request = new sql.Request();
-    request.input('approverEmail', sql.NVarChar, email);
-    const result = await request.query(`
+    const result = await sql.query(`
         SELECT
             ranked.QuoteId,
             ranked.DraftQuoteId,
@@ -1300,13 +1320,7 @@ async function fetchApprovalWorkflowSearch(userEmail, { q = '', dateFrom = '', d
             LEFT JOIN EnquiryMaster em ON LTRIM(RTRIM(em.RequestNo)) = LTRIM(RTRIM(s.RequestNo))
             WHERE s.QuoteId IS NOT NULL
               AND s.QuoteId > 0
-              AND EXISTS (
-                  SELECT 1
-                  FROM QuoteApprovalSteps mine
-                  WHERE mine.QuoteId = s.QuoteId
-                    AND LOWER(LTRIM(RTRIM(ISNULL(mine.ApproverEmail, N'')))) =
-                        LOWER(LTRIM(RTRIM(@approverEmail)))
-              )
+              AND ${visibilitySql}
               ${filterSql}
               ${divisionSql}
         ) ranked
@@ -1704,6 +1718,297 @@ async function userIsAssignedQuoteApproverForEnquiry(userEmail, requestNo, quote
     }
 }
 
+/**
+ * ConcernedSE on the enquiry when an approver in the workflow is a CCMailIds user for the viewer's division.
+ * Lets division teammates preview cross-division quotes sent for approval to their CC coordinator.
+ */
+async function userHasApprovalWorkflowDivisionStakeholderAccess(userEmail, requestNo, quoteId = null) {
+    const email = normalizeApprovalEmail(userEmail);
+    const rn = String(requestNo || '').trim();
+    if (!email || !rn) return false;
+
+    const { resolvePricingAccessContext, userIsConcernedSeOnEnquiry } = require('./quotePricingAccess');
+    const ctx = await resolvePricingAccessContext(userEmail);
+    if (!ctx?.user) return false;
+
+    const allowedBySe = await userIsConcernedSeOnEnquiry(ctx, requestNo);
+    if (!allowedBySe) return false;
+
+    const userDept = String(ctx.userDepartment || '').trim();
+    if (!userDept) return false;
+
+    const qid = quoteId != null ? Number(quoteId) : null;
+
+    try {
+        if (Number.isFinite(qid) && qid > 0) {
+            const byQuote = await sql.query`
+                SELECT TOP 1 1 AS ok
+                FROM ConcernedSE cs
+                INNER JOIN Master_ConcernedSE m
+                  ON UPPER(LTRIM(RTRIM(ISNULL(m.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(cs.SEName, N''))))
+                INNER JOIN QuoteApprovalSteps ap ON ap.QuoteId = ${qid}
+                INNER JOIN Master_EnquiryFor mef
+                  ON LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))) = LTRIM(RTRIM(ISNULL(m.Department, N'')))
+                WHERE LTRIM(RTRIM(cs.RequestNo)) = LTRIM(RTRIM(${rn}))
+                  AND LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(m.EmailId, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com')))) = ${email}
+                  AND LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))) = ${userDept}
+                  AND (
+                    REPLACE(',' + REPLACE(ISNULL(mef.CCMailIds, ''), ' ', '') + ',', '@almcg.com', '@almoayyedcg.com')
+                      LIKE '%,' + LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(ap.ApproverEmail, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com')))) + ',%'
+                    OR (
+                        CHARINDEX('@', LOWER(LTRIM(RTRIM(ISNULL(ap.ApproverEmail, N''))))) > 0
+                        AND REPLACE(',' + REPLACE(ISNULL(mef.CCMailIds, ''), ' ', '') + ',', '@almcg.com', '@almoayyedcg.com')
+                          LIKE '%,' + LOWER(LTRIM(RTRIM(SUBSTRING(
+                            LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(ap.ApproverEmail, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com')))),
+                            1,
+                            CHARINDEX('@', LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(ap.ApproverEmail, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com'))))) - 1
+                          )))) + ',%'
+                    )
+                  )
+            `;
+            return (byQuote.recordset || []).length > 0;
+        }
+
+        const byEnquiry = await sql.query`
+            SELECT TOP 1 1 AS ok
+            FROM ConcernedSE cs
+            INNER JOIN Master_ConcernedSE m
+              ON UPPER(LTRIM(RTRIM(ISNULL(m.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(cs.SEName, N''))))
+            INNER JOIN QuoteApprovalSteps ap
+              ON LTRIM(RTRIM(ap.RequestNo)) = LTRIM(RTRIM(cs.RequestNo))
+             AND ap.QuoteId IS NOT NULL
+             AND ap.QuoteId > 0
+            INNER JOIN Master_EnquiryFor mef
+              ON LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))) = LTRIM(RTRIM(ISNULL(m.Department, N'')))
+            WHERE LTRIM(RTRIM(cs.RequestNo)) = LTRIM(RTRIM(${rn}))
+              AND LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(m.EmailId, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com')))) = ${email}
+              AND LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))) = ${userDept}
+              AND (
+                REPLACE(',' + REPLACE(ISNULL(mef.CCMailIds, ''), ' ', '') + ',', '@almcg.com', '@almoayyedcg.com')
+                  LIKE '%,' + LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(ap.ApproverEmail, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com')))) + ',%'
+                OR (
+                    CHARINDEX('@', LOWER(LTRIM(RTRIM(ISNULL(ap.ApproverEmail, N''))))) > 0
+                    AND REPLACE(',' + REPLACE(ISNULL(mef.CCMailIds, ''), ' ', '') + ',', '@almcg.com', '@almoayyedcg.com')
+                      LIKE '%,' + LOWER(LTRIM(RTRIM(SUBSTRING(
+                        LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(ap.ApproverEmail, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com')))),
+                        1,
+                        CHARINDEX('@', LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(ap.ApproverEmail, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com'))))) - 1
+                      )))) + ',%'
+                )
+              )
+        `;
+        return (byEnquiry.recordset || []).length > 0;
+    } catch (err) {
+        if (isMissingQuoteApprovalStepsTableError(err.message)) return false;
+        throw err;
+    }
+}
+
+/** Direct approver, CC-mail teammate of any workflow approver, or ConcernedSE assigned on the enquiry. */
+async function userHasApprovalWorkflowQuoteAccess(userEmail, requestNo, quoteId = null) {
+    const email = normalizeApprovalEmail(userEmail);
+    const rn = String(requestNo || '').trim();
+    if (!email || !rn) return false;
+
+    const uEsc = email.replace(/'/g, "''");
+    const uLocalEsc = ((email.split('@')[0] || '').trim()).replace(/'/g, "''");
+    const rnEsc = rn.replace(/'/g, "''");
+    const qid = quoteId != null ? Number(quoteId) : null;
+    const quoteFilter =
+        Number.isFinite(qid) && qid > 0 ? `AND q.ID = ${qid}` : '';
+
+    try {
+        const visibilitySql = buildApprovalQuoteVisibleToUserSql('q.ID', 'q.RequestNo', uEsc, uLocalEsc);
+        const result = await sql.query(`
+            SELECT TOP 1 1 AS ok
+            FROM EnquiryQuotes q
+            WHERE LTRIM(RTRIM(q.RequestNo)) = LTRIM(RTRIM(N'${rnEsc}'))
+              ${quoteFilter}
+              AND ${visibilitySql}
+        `);
+        return (result.recordset || []).length > 0;
+    } catch (err) {
+        if (isMissingQuoteApprovalStepsTableError(err.message)) return false;
+        throw err;
+    }
+}
+
+function approverEmailMatchSql(apAlias, uEsc, uLocalEsc) {
+    const email = `LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(${apAlias}.ApproverEmail, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com'))))`;
+    let sql = `${email} = LOWER(LTRIM(N'${uEsc}'))`;
+    if (uLocalEsc.length >= 2) {
+        const local = `LOWER(LTRIM(RTRIM(REPLACE(SUBSTRING(${email}, 1, NULLIF(CHARINDEX('@', ${email}), 0) - 1), N' ', N''))))`;
+        sql += ` OR ${local} = LOWER(LTRIM(N'${uLocalEsc}'))`;
+    }
+    return `(${sql})`;
+}
+
+function ccMailIdsContainsApproverSql(mefAlias, apAlias) {
+    const ccCsv = `REPLACE(',' + REPLACE(ISNULL(${mefAlias}.CCMailIds, ''), ' ', '') + ',', '@almcg.com', '@almoayyedcg.com')`;
+    const apEmail = `LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(${apAlias}.ApproverEmail, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com'))))`;
+    const apLocal = `LOWER(LTRIM(RTRIM(REPLACE(SUBSTRING(${apEmail}, 1, NULLIF(CHARINDEX('@', ${apEmail}), 0) - 1), N' ', N''))))`;
+    return `(
+        ${ccCsv} LIKE '%,' + ${apEmail} + ',%'
+        OR (${apLocal} <> N'' AND ${ccCsv} LIKE '%,' + ${apLocal} + ',%')
+    )`;
+}
+
+function ccMailIdsContainsUserSql(mefAlias, uEsc, uLocalEsc) {
+    const ccCsv = `REPLACE(',' + REPLACE(ISNULL(${mefAlias}.CCMailIds, ''), ' ', '') + ',', '@almcg.com', '@almoayyedcg.com')`;
+    let sql = `${ccCsv} LIKE '%,' + LOWER(LTRIM(N'${uEsc}')) + ',%'`;
+    if (uLocalEsc.length >= 2) {
+        sql += ` OR ${ccCsv} LIKE '%,' + LOWER(LTRIM(N'${uLocalEsc}')) + ',%'`;
+    }
+    return `(${sql})`;
+}
+
+function masterConcernedSeEmailMatchSql(mAlias, apAlias) {
+    const mEmail = `LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(${mAlias}.EmailId, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com'))))`;
+    const apEmail = `LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(${apAlias}.ApproverEmail, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com'))))`;
+    let sql = `${mEmail} = ${apEmail}`;
+    const mLocal = `LOWER(LTRIM(RTRIM(REPLACE(SUBSTRING(${mEmail}, 1, NULLIF(CHARINDEX('@', ${mEmail}), 0) - 1), N' ', N''))))`;
+    const apLocal = `LOWER(LTRIM(RTRIM(REPLACE(SUBSTRING(${apEmail}, 1, NULLIF(CHARINDEX('@', ${apEmail}), 0) - 1), N' ', N''))))`;
+    sql += ` OR (${mLocal} <> N'' AND ${mLocal} = ${apLocal})`;
+    return `(${sql})`;
+}
+
+function viewerConcernedSeEmailMatchSql(mAlias, uEsc, uLocalEsc) {
+    const emailCol = `LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(${mAlias}.EmailId, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com'))))`;
+    let match = `${emailCol} = LOWER(LTRIM(N'${uEsc}'))`;
+    if (uLocalEsc.length >= 2) {
+        const local = `LOWER(LTRIM(RTRIM(REPLACE(SUBSTRING(${emailCol}, 1, NULLIF(CHARINDEX('@', ${emailCol}), 0) - 1), N' ', N''))))`;
+        match += ` OR ${local} = LOWER(LTRIM(N'${uLocalEsc}'))`;
+    }
+    return `(${match})`;
+}
+
+/** ConcernedSE teammate: same department, both assigned on enquiry, approver on this quote. */
+function concernedSeTeammateOfQuoteApproverSql(quoteIdExpr, requestNoExpr, uEsc, uLocalEsc) {
+    return `EXISTS (
+        SELECT 1
+        FROM ConcernedSE cs_viewer
+        INNER JOIN Master_ConcernedSE m_viewer
+          ON UPPER(LTRIM(RTRIM(ISNULL(m_viewer.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(cs_viewer.SEName, N''))))
+        INNER JOIN QuoteApprovalSteps ap_tm
+          ON ap_tm.QuoteId = ${quoteIdExpr}
+         AND ap_tm.QuoteId > 0
+        INNER JOIN Master_ConcernedSE m_ap
+          ON ${masterConcernedSeEmailMatchSql('m_ap', 'ap_tm')}
+        INNER JOIN ConcernedSE cs_ap
+          ON LTRIM(RTRIM(cs_ap.RequestNo)) = LTRIM(RTRIM(cs_viewer.RequestNo))
+         AND UPPER(LTRIM(RTRIM(ISNULL(cs_ap.SEName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(m_ap.FullName, N''))))
+        WHERE LTRIM(RTRIM(cs_viewer.RequestNo)) = LTRIM(RTRIM(${requestNoExpr}))
+          AND ${viewerConcernedSeEmailMatchSql('m_viewer', uEsc, uLocalEsc)}
+          AND LTRIM(RTRIM(ISNULL(m_viewer.Department, N''))) <> N''
+          AND LTRIM(RTRIM(ISNULL(m_ap.Department, N''))) <> N''
+          AND UPPER(LTRIM(RTRIM(ISNULL(m_viewer.Department, N'')))) =
+              UPPER(LTRIM(RTRIM(ISNULL(m_ap.Department, N''))))
+    )`;
+}
+
+/** Cross-division: ConcernedSE on enquiry + same-department approver on this quote's workflow. */
+function concernedSeCrossDivisionWorkflowApproverSql(quoteIdExpr, requestNoExpr, uEsc, uLocalEsc) {
+    const ownJob = `UPPER(LTRIM(RTRIM(ISNULL(eq_xd.OwnJob, N''))))`;
+    const viewerDept = `UPPER(LTRIM(RTRIM(ISNULL(m_viewer.Department, N''))))`;
+    const crossDivision = `(
+        ${ownJob} <> ${viewerDept}
+        AND ${ownJob} NOT LIKE ${viewerDept} + N'%'
+        AND ${viewerDept} NOT LIKE ${ownJob} + N'%'
+    )`;
+    return `EXISTS (
+        SELECT 1
+        FROM ConcernedSE cs_viewer
+        INNER JOIN Master_ConcernedSE m_viewer
+          ON UPPER(LTRIM(RTRIM(ISNULL(m_viewer.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(cs_viewer.SEName, N''))))
+        INNER JOIN EnquiryQuotes eq_xd
+          ON eq_xd.ID = ${quoteIdExpr}
+        INNER JOIN QuoteApprovalSteps ap_div
+          ON ap_div.QuoteId = eq_xd.ID
+         AND ap_div.QuoteId > 0
+        INNER JOIN Master_ConcernedSE m_ap
+          ON ${masterConcernedSeEmailMatchSql('m_ap', 'ap_div')}
+        WHERE LTRIM(RTRIM(cs_viewer.RequestNo)) = LTRIM(RTRIM(${requestNoExpr}))
+          AND ${viewerConcernedSeEmailMatchSql('m_viewer', uEsc, uLocalEsc)}
+          AND LTRIM(RTRIM(ISNULL(m_viewer.Department, N''))) <> N''
+          AND LTRIM(RTRIM(ISNULL(m_ap.Department, N''))) <> N''
+          AND UPPER(LTRIM(RTRIM(ISNULL(m_viewer.Department, N'')))) =
+              UPPER(LTRIM(RTRIM(ISNULL(m_ap.Department, N''))))
+          AND ${crossDivision}
+    )`;
+}
+
+/** Direct approver, CC-mail teammate, ConcernedSE teammate, or cross-division division-mate approver. */
+function buildApprovalQuoteVisibleToUserSql(quoteIdExpr, requestNoExpr, uEsc, uLocalEsc) {
+    return `(
+        EXISTS (
+            SELECT 1
+            FROM QuoteApprovalSteps apVis
+            WHERE apVis.QuoteId = ${quoteIdExpr}
+              AND apVis.QuoteId > 0
+              AND ${approverEmailMatchSql('apVis', uEsc, uLocalEsc)}
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM Master_EnquiryFor mefCc
+            INNER JOIN QuoteApprovalSteps apCc
+              ON apCc.QuoteId = ${quoteIdExpr}
+             AND apCc.QuoteId > 0
+            WHERE ${ccMailIdsContainsUserSql('mefCc', uEsc, uLocalEsc)}
+              AND ${ccMailIdsContainsApproverSql('mefCc', 'apCc')}
+        )
+        OR ${concernedSeTeammateOfQuoteApproverSql(quoteIdExpr, requestNoExpr, uEsc, uLocalEsc)}
+        OR ${concernedSeCrossDivisionWorkflowApproverSql(quoteIdExpr, requestNoExpr, uEsc, uLocalEsc)}
+    )`;
+}
+
+/**
+ * Quotes on these enquiries visible only via approval workflow (direct approver or division teammate).
+ * Map key = RequestNo, value = [{ quoteId, quoteNumber, ownJob, leadJob, toName }].
+ */
+async function fetchApprovalWorkflowVisibleQuotesByRequest(userEmail, requestNos) {
+    const email = normalizeApprovalEmail(userEmail);
+    const nums = [...new Set((requestNos || []).map((r) => String(r ?? '').trim()).filter(Boolean))];
+    const out = new Map();
+    if (!email || !nums.length) return out;
+
+    const csv = nums.map((n) => `'${n.replace(/'/g, "''")}'`).join(',');
+    const uEsc = email.replace(/'/g, "''");
+    const uLocalEsc = ((email.split('@')[0] || '').trim()).replace(/'/g, "''");
+
+    try {
+        const result = await sql.query(`
+            SELECT DISTINCT
+                ap.QuoteId AS QuoteId,
+                LTRIM(RTRIM(ap.RequestNo)) AS RequestNo,
+                LTRIM(RTRIM(ISNULL(q.QuoteNumber, N''))) AS QuoteNumber,
+                LTRIM(RTRIM(ISNULL(q.OwnJob, N''))) AS OwnJob,
+                LTRIM(RTRIM(ISNULL(q.LeadJob, N''))) AS LeadJob,
+                LTRIM(RTRIM(ISNULL(q.ToName, N''))) AS ToName
+            FROM QuoteApprovalSteps ap
+            INNER JOIN EnquiryQuotes q ON q.ID = ap.QuoteId AND ap.QuoteId > 0
+            WHERE LTRIM(RTRIM(ap.RequestNo)) IN (${csv})
+              AND ${buildApprovalQuoteVisibleToUserSql('ap.QuoteId', 'ap.RequestNo', uEsc, uLocalEsc)}
+        `);
+        for (const row of result.recordset || []) {
+            const rn = String(row.RequestNo || '').trim();
+            const quoteId = Number(row.QuoteId);
+            if (!rn || !Number.isFinite(quoteId) || quoteId <= 0) continue;
+            if (!out.has(rn)) out.set(rn, []);
+            out.get(rn).push({
+                quoteId,
+                quoteNumber: String(row.QuoteNumber || '').trim(),
+                ownJob: String(row.OwnJob || '').trim(),
+                leadJob: String(row.LeadJob || '').trim(),
+                toName: String(row.ToName || '').trim(),
+            });
+        }
+        return out;
+    } catch (err) {
+        if (isMissingQuoteApprovalStepsTableError(err.message)) return out;
+        throw err;
+    }
+}
+
 module.exports = {
     isMissingQuoteApprovalStepsTableError,
     mapDbRowToStep,
@@ -1732,4 +2037,7 @@ module.exports = {
     resolveApprovalPersistContext,
     fetchApprovalStepsApiPayload,
     userIsAssignedQuoteApproverForEnquiry,
+    userHasApprovalWorkflowDivisionStakeholderAccess,
+    userHasApprovalWorkflowQuoteAccess,
+    fetchApprovalWorkflowVisibleQuotesByRequest,
 };
