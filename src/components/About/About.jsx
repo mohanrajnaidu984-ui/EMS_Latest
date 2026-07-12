@@ -23,7 +23,7 @@ const appSections = [
     label: 'Quote',
     icon: 'bi-file-earmark-text',
     description:
-      'Formal customer quotes with clause editor, A4 preview, lead job mapping, revisions, and pricing summary tables. Download protected PDF or open Outlook draft with quote PDF attached. Preview matches PDF layout for cover letter, headers, and clause content.',
+      'Formal customer quotes with clause editor, A4 preview, lead job mapping, revisions, and pricing summary tables. Includes workflow-based approval routing, cross-division approver visibility rules, and subjob-aligned quote access in enquiry tabs. Download protected PDF or open Outlook draft with quote PDF attached.',
   },
   {
     label: 'Probability',
@@ -35,7 +35,7 @@ const appSections = [
     label: 'Sales Report',
     icon: 'bi-file-earmark-bar-graph',
     description:
-      'Performance insights with division/SE filters, charts, top-jobs tables, and status-based analysis across quoted, won, lost, and follow-up opportunities.',
+      'Performance insights with division/SE filters, charts, top-jobs tables, and status-based analysis across quoted, won, lost, and follow-up opportunities. Follow Up rows are grouped by probability bands with value-priority sorting, and print preview is optimized for A4 output with report-focused layout.',
   },
   {
     label: 'Sales Target',

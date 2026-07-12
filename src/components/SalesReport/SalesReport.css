@@ -131,6 +131,15 @@
     gap: 0.5rem !important;
 }
 
+.sr-print-footer {
+    flex-shrink: 0;
+    text-align: center;
+    font-size: 0.65rem;
+    color: #64748b;
+    padding: 0.2rem 0 0;
+    visibility: hidden;
+}
+
 /* Main grid:
    Cols 1–3 row1–2: merged summary+chart stacks; col4: pipeline rows 1–3; row3: table.
    [ Won+pie | Target+bar | GM+bar | Pipeline ]
@@ -1527,6 +1536,10 @@
     background-color: #dde5f6;
 }
 
+.sr-detail-table__enquiry-group-cell {
+    vertical-align: middle;
+}
+
 .sr-filterable-th {
     position: sticky;
 }
@@ -1756,43 +1769,350 @@
     }
 }
 
-/* Print */
-.sales-report-page.printing {
-    height: auto !important;
-    max-height: none !important;
-    overflow: visible !important;
-}
-
-.sales-report-page.printing .sr-dashboard-grid {
-    min-height: 520px;
-    page-break-inside: avoid;
-}
-
+/* Print — layout vars (--sr-print-*) are captured from on-screen sizes in handlePrint */
 @media print {
-    .no-print {
+    body.sr-print-active .navbar,
+    body.sr-print-active .sr-th-filter-popover,
+    body.sr-print-active .sr-th-filter-popover--portal,
+    body.sr-print-active .sr-content-loading,
+    body.sr-print-active .no-print,
+    body.sr-print-active .recharts-tooltip-wrapper,
+    body.sr-print-active .recharts-active-dot {
+        display: none !important;
+    }
+
+    body.sr-print-active .sales-report-page > :not(.sr-print-area) {
         display: none !important;
     }
 
     @page {
-        size: landscape;
-        margin: 5mm;
+        size: A4 landscape;
+        margin: 6mm;
     }
 
-    body {
-        background: #fff !important;
-    }
-
-    .sales-report-page {
+    body.sr-print-active {
+        margin: 0 !important;
+        padding: 0 !important;
         overflow: visible !important;
         background: #fff !important;
-    }
-
-    .sr-table-inner {
-        overflow: visible !important;
-    }
-
-    .sr-pipeline-panel {
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
+    }
+
+    body.sr-print-active > div > .container-fluid {
+        margin-top: 0 !important;
+        padding: 0 !important;
+        height: auto !important;
+        overflow: visible !important;
+    }
+
+    body.sr-print-active .sales-report-page {
+        width: 100% !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
+        background: #fff !important;
+    }
+
+    body.sr-print-active .sales-report-page.sales-report-fit {
+        height: auto !important;
+        max-height: none !important;
+    }
+
+    body.sr-print-active .sr-print-area.sr-print-fit {
+        transform: scale(var(--sr-print-scale, 1));
+        transform-origin: top left;
+        width: calc(100% / var(--sr-print-scale, 1)) !important;
+        height: var(--sr-print-area-h, auto) !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: visible !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    body.sr-print-active .sr-filter-bar {
+        padding: 0 0 0.15rem !important;
+        margin-bottom: 0.15rem !important;
+    }
+
+    body.sr-print-active .sr-filter-bar .form-select {
+        border: none !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+        min-height: 0 !important;
+        height: auto !important;
+        font-size: 8pt !important;
+        pointer-events: none !important;
+        appearance: none !important;
+        -webkit-appearance: none !important;
+        background-image: none !important;
+    }
+
+    body.sr-print-active .sr-filter-label {
+        font-size: 6.5pt !important;
+        margin-bottom: 0 !important;
+    }
+
+    body.sr-print-active .sr-print-footer {
+        visibility: visible !important;
+        display: block !important;
+        font-size: 7pt !important;
+        padding-top: 0.15rem !important;
+    }
+
+    body.sr-print-active .sr-content-shell,
+    body.sr-print-active .sr-content-shell--loading {
+        height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
+        opacity: 1 !important;
+        flex: 1 1 auto !important;
+    }
+
+    body.sr-print-active .sr-dashboard-grid {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) var(--sr-print-pipeline-cell-w, 220px) !important;
+        grid-template-rows: auto minmax(0, 1.216fr) minmax(0, 0.864fr) !important;
+        width: var(--sr-print-grid-w, 100%) !important;
+        height: var(--sr-print-grid-h, auto) !important;
+        min-height: var(--sr-print-grid-h, auto) !important;
+        max-height: var(--sr-print-grid-h, auto) !important;
+        gap: 0.45rem !important;
+        min-width: 0 !important;
+    }
+
+    body.sr-print-active .sr-cell-won-combined {
+        grid-column: 1 !important;
+        grid-row: 1 / span 2 !important;
+    }
+
+    body.sr-print-active .sr-cell-target-combined {
+        grid-column: 2 !important;
+        grid-row: 1 / span 2 !important;
+    }
+
+    body.sr-print-active .sr-cell-gm-combined {
+        grid-column: 3 !important;
+        grid-row: 1 / span 2 !important;
+    }
+
+    body.sr-print-active .sr-cell-pipeline {
+        grid-column: 4 !important;
+        grid-row: 1 / span 3 !important;
+        width: var(--sr-print-pipeline-cell-w, auto) !important;
+        min-width: var(--sr-print-pipeline-cell-w, auto) !important;
+        max-width: var(--sr-print-pipeline-cell-w, auto) !important;
+        height: var(--sr-print-pipeline-cell-h, auto) !important;
+        max-height: var(--sr-print-pipeline-cell-h, auto) !important;
+        overflow: visible !important;
+    }
+
+    body.sr-print-active .sr-pipeline-panel,
+    body.sr-print-active .sr-pipeline-body,
+    body.sr-print-active .sr-pipeline-summary {
+        overflow: visible !important;
+    }
+
+    body.sr-print-active .sr-pipeline-top {
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+    }
+
+    body.sr-print-active .sr-pipeline-summary {
+        flex-shrink: 0 !important;
+        min-height: var(--sr-print-pipeline-summary-h, auto) !important;
+        padding: 0.15rem 0.2rem 0.2rem !important;
+    }
+
+    body.sr-print-active .sr-pipeline-summary-row {
+        padding: 0.18rem 0.1rem !important;
+        font-size: 0.62rem !important;
+        line-height: 1.25 !important;
+        gap: 0.12rem !important;
+    }
+
+    body.sr-print-active .sr-pipeline-summary-row > .d-flex {
+        min-width: 0 !important;
+        flex: 1 1 auto !important;
+    }
+
+    body.sr-print-active .sr-pipeline-summary-legend {
+        overflow: visible !important;
+        text-overflow: unset !important;
+        white-space: nowrap !important;
+        font-size: 0.58rem !important;
+    }
+
+    body.sr-print-active .sr-pipeline-summary-pct {
+        min-width: 1.45rem !important;
+        font-size: 0.58rem !important;
+    }
+
+    body.sr-print-active .sr-pipeline-summary-value {
+        flex-shrink: 0 !important;
+        white-space: nowrap !important;
+        overflow: visible !important;
+        font-size: 0.62rem !important;
+        padding-left: 0.1rem !important;
+    }
+
+    body.sr-print-active .sr-pipeline-swatch {
+        width: 0.55rem !important;
+        height: 0.55rem !important;
+    }
+
+    body.sr-print-active .sr-cell-table {
+        grid-column: 1 / span 3 !important;
+        grid-row: 3 !important;
+        height: var(--sr-print-table-cell-h, auto) !important;
+        max-height: var(--sr-print-table-cell-h, auto) !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+    }
+
+    body.sr-print-active .sales-report-page.sr-table-expanded .sr-cell-won-combined,
+    body.sr-print-active .sales-report-page.sr-table-expanded .sr-cell-target-combined,
+    body.sr-print-active .sales-report-page.sr-table-expanded .sr-cell-gm-combined,
+    body.sr-print-active .sales-report-page.sr-table-expanded .sr-cell-pipeline {
+        display: none !important;
+    }
+
+    body.sr-print-active .sales-report-page.sr-table-expanded .sr-cell-table {
+        grid-column: 1 / -1 !important;
+        grid-row: 1 / -1 !important;
+        height: auto !important;
+        max-height: none !important;
+    }
+
+    body.sr-print-active .sr-cell {
+        overflow: hidden !important;
+        box-shadow: none !important;
+        min-height: 0 !important;
+    }
+
+    body.sr-print-active .sr-cell-pipeline.sr-cell {
+        overflow: visible !important;
+    }
+
+    body.sr-print-active .sr-summary-panel {
+        overflow: hidden !important;
+    }
+
+    body.sr-print-active .sr-stack-top {
+        overflow: hidden !important;
+    }
+
+    body.sr-print-active .sr-cell.card {
+        border: 1px solid #cbd5e1 !important;
+    }
+
+    body.sr-print-active .sr-report-table-title--toolbar {
+        justify-content: center !important;
+    }
+
+    body.sr-print-active .sr-report-table-title--toolbar > .flex-grow-1[aria-hidden] {
+        display: none !important;
+    }
+
+    body.sr-print-active .sr-th-filter-btn {
+        border: none !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        min-height: 0 !important;
+        font: inherit !important;
+        color: inherit !important;
+        pointer-events: none !important;
+    }
+
+    body.sr-print-active .sr-th-filter-caret {
+        display: none !important;
+    }
+
+    body.sr-print-active .sr-table-inner {
+        overflow: hidden !important;
+        max-height: var(--sr-print-table-inner-h, 100%) !important;
+        height: var(--sr-print-table-inner-h, auto) !important;
+        flex: 1 1 auto !important;
+    }
+
+    body.sr-print-active .sr-won-chart-stack {
+        flex: 2.7 1 0 !important;
+        min-height: var(--sr-print-pie-stack-h, 9rem) !important;
+        height: var(--sr-print-pie-stack-h, 9rem) !important;
+    }
+
+    body.sr-print-active .sr-jb-chart-stack {
+        flex: 3 1 0 !important;
+        min-height: var(--sr-print-jb-stack-h, 6rem) !important;
+        height: var(--sr-print-jb-stack-h, 6rem) !important;
+    }
+
+    body.sr-print-active .sr-gm-chart-stack {
+        flex: 3 1 0 !important;
+        min-height: var(--sr-print-gm-stack-h, 6rem) !important;
+        height: var(--sr-print-gm-stack-h, 6rem) !important;
+    }
+
+    body.sr-print-active .sr-chart-pie {
+        flex: 1 1 auto !important;
+        min-height: var(--sr-print-pie-h, 9rem) !important;
+        height: var(--sr-print-pie-h, 9rem) !important;
+    }
+
+    body.sr-print-active .sr-jb-chart-stack .sr-chart-bar {
+        min-height: var(--sr-print-jb-bar-h, 6rem) !important;
+        height: var(--sr-print-jb-bar-h, 6rem) !important;
+    }
+
+    body.sr-print-active .sr-gm-chart-stack .sr-chart-bar {
+        min-height: var(--sr-print-gm-bar-h, 6rem) !important;
+        height: var(--sr-print-gm-bar-h, 6rem) !important;
+    }
+
+    body.sr-print-active .sr-chart-pie .recharts-responsive-container {
+        width: 100% !important;
+        height: var(--sr-print-pie-h, 9rem) !important;
+        min-height: var(--sr-print-pie-h, 9rem) !important;
+    }
+
+    body.sr-print-active .sr-jb-chart-stack .recharts-responsive-container {
+        width: 100% !important;
+        height: var(--sr-print-jb-bar-h, 6rem) !important;
+        min-height: var(--sr-print-jb-bar-h, 6rem) !important;
+    }
+
+    body.sr-print-active .sr-gm-chart-stack .recharts-responsive-container {
+        width: 100% !important;
+        height: var(--sr-print-gm-bar-h, 6rem) !important;
+        min-height: var(--sr-print-gm-bar-h, 6rem) !important;
+    }
+
+    body.sr-print-active .sr-funnel-svg-wrap {
+        min-height: var(--sr-print-funnel-h, 184px) !important;
+        height: var(--sr-print-funnel-h, 184px) !important;
+        width: var(--sr-print-funnel-w, 100%) !important;
+    }
+
+    body.sr-print-active .sr-pipeline-panel,
+    body.sr-print-active .sr-funnel-svg,
+    body.sr-print-active .recharts-surface,
+    body.sr-print-active .recharts-bar-rectangle,
+    body.sr-print-active .recharts-pie-sector {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    body.sr-print-active .recharts-responsive-container,
+    body.sr-print-active .recharts-wrapper,
+    body.sr-print-active .recharts-surface {
+        overflow: visible !important;
     }
 }

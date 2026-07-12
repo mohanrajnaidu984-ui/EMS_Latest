@@ -111,6 +111,8 @@ import {
     restoreClauseEditorCaretOffset,
     clauseEditorHtmlContainsTable,
     isClauseEditorSelectionInTable,
+    preserveClauseEditorSelectionDuring,
+    isClauseEditorTypingActive,
 } from './clauseEditorListPresets';
 import { stabilizeClauseEditorTablesForExport, hideTableResizeHandles, hideAllEmsTableResizeHandles, finalizeAllOfficePasteTablesFormatting, applyTableRowHeightModelInHtmlString } from './clauseEditorTable';
 import {
@@ -1441,12 +1443,45 @@ function formatBhdAmount(n) {
 const EMS_PRICING_FOOTER_LABEL_RE = /^(Total \(Base Price\)|VAT\s*10%|Grand Total)/i;
 
 /** Parse BD cell text — supports negatives, commas, accounting parentheses, and "-BD". */
+function isIncompleteBhdAmountText(raw) {
+    const txt = String(raw || '')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .trim();
+    if (!txt) return false;
+    return (
+        txt === '-'
+        || /^-\s*$/.test(txt)
+        || /^-\s*BD\s*$/i.test(txt)
+        || /^BD\s*-\s*$/i.test(txt)
+        || /^-\s*BD\s*[.,]?\s*$/i.test(txt)
+    );
+}
+
+function isDiscountPricingLabel(label) {
+    return /^discount$/i.test(String(label || '').trim());
+}
+
+function isPricingTableHeaderRow(label) {
+    return /^(Description|Amount(\s*\([^)]*\))?)$/i.test(String(label || '').trim());
+}
+
+/** Discount rows subtract from base total; positive typed values are treated as discounts. */
+function parsePricingLineAmount(label, amount) {
+    const n = Number(amount);
+    if (!Number.isFinite(n)) return 0;
+    const labelTrim = String(label || '').trim();
+    if (isDiscountPricingLabel(labelTrim) && n > 0) return -Math.abs(n);
+    return n;
+}
+
 function parseBhdAmountText(raw) {
     const txt = String(raw || '')
         .replace(/<[^>]*>/g, ' ')
         .replace(/&nbsp;/gi, ' ')
         .trim();
-    const negBdPrefix = /-\s*BD\b/i.test(txt) || /\bBD\s+-/i.test(txt);
+    if (isIncompleteBhdAmountText(txt)) return null;
+    const negBdPrefix = /^\s*-\s*BD\b/i.test(txt) || /\bBD\s+-/i.test(txt);
     const parenNeg = /\(/.test(txt) && /\)/.test(txt);
     const cleaned = txt
         .replace(/[()]/g, '')
@@ -1469,8 +1504,75 @@ function extractEmsAutoPricingTableHtml(html) {
 }
 
 function isEmsPricingFooterRowEl(rowKind, label) {
-    if (rowKind === 'total' || rowKind === 'vat' || rowKind === 'grand-vat' || rowKind === 'grand') return true;
+    const labelTrim = String(label || '').trim();
+    if (EMS_PRICING_FOOTER_LABEL_RE.test(labelTrim)) return true;
+    if (rowKind === 'total' && /^Total\s*\(Base Price\)/i.test(labelTrim)) return true;
+    if (rowKind === 'vat' && /^VAT\b/i.test(labelTrim)) return true;
+    if (rowKind === 'grand-vat' && /^Grand Total with VAT/i.test(labelTrim)) return true;
+    if (rowKind === 'grand' && /^Grand Total/i.test(labelTrim)) return true;
+    return false;
+}
+
+const EMS_PRICING_FOOTER_ROW_KIND_RE = /^(total|vat|grand-vat|grand)$/i;
+const EMS_PRICING_FOOTER_AMOUNT_ATTR_RE = /^(total|vat|grand-vat|grand)$/i;
+
+/** All data rows — includes line items Jodit may have parked in thead above a separate tbody. */
+function getPricingTableDataRows(table) {
+    if (!table?.querySelectorAll) return [];
+    return [...table.querySelectorAll('tr')].filter((row) => {
+        const cells = row.cells || [];
+        if (cells.length < 2) return false;
+        const label = String(cells[0].textContent || '').trim();
+        return !(row.closest('thead') && isPricingTableHeaderRow(label));
+    });
+}
+
+function isPricingTableFooterLabel(label) {
     return EMS_PRICING_FOOTER_LABEL_RE.test(String(label || '').trim());
+}
+
+function isPricingTableFooterRow(row) {
+    const cells = row?.cells || [];
+    if (cells.length < 2) return false;
+    return isPricingTableFooterLabel(cells[0].textContent);
+}
+
+/** Strip footer row/amount attrs copied onto user-inserted rows above the footer. */
+function sanitizeMisplacedPricingFooterAttrsInTable(table) {
+    if (!table) return;
+    for (const row of getPricingTableDataRows(table)) {
+        if (isPricingTableFooterRow(row)) continue;
+        const rowKind = String(row.getAttribute('data-ems-row') || '').trim();
+        if (EMS_PRICING_FOOTER_ROW_KIND_RE.test(rowKind)) {
+            row.removeAttribute('data-ems-row');
+        }
+        const amtCell = row.cells[row.cells.length - 1];
+        const amtAttr = String(amtCell?.getAttribute('data-ems-amount') || '').trim();
+        if (EMS_PRICING_FOOTER_AMOUNT_ATTR_RE.test(amtAttr)) {
+            amtCell.removeAttribute('data-ems-amount');
+        }
+    }
+}
+
+function sanitizeMisplacedPricingFooterAttrsInTableHtml(html) {
+    const tableHtml = extractEmsAutoPricingTableHtml(html);
+    if (!tableHtml) return String(html || '');
+    if (typeof DOMParser === 'undefined') return String(html || '');
+    try {
+        const doc = new DOMParser().parseFromString(tableHtml, 'text/html');
+        const table = doc.querySelector('table');
+        if (!table) return String(html || '');
+        sanitizeMisplacedPricingFooterAttrsInTable(table);
+        const sanitizedTable = table.outerHTML;
+        const idAttr = EMS_AUTO_PRICE_SUMMARY_TABLE_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const tableRe = new RegExp(
+            `<table[^>]*(?:id=["']${idAttr}["']|data-ems-pricing-cols=["']fixed["'])[^>]*>[\\s\\S]*?<\\/table>`,
+            'i'
+        );
+        return String(html || '').replace(tableRe, sanitizedTable);
+    } catch (_e) {
+        return String(html || '');
+    }
 }
 
 /**
@@ -1479,25 +1581,24 @@ function isEmsPricingFooterRowEl(rowKind, label) {
  */
 function parseBaseTotalFromPricingTableElement(table) {
     if (!table?.querySelectorAll) return null;
+    sanitizeMisplacedPricingFooterAttrsInTable(table);
     let sum = 0;
     let found = false;
-    const rows = [...table.querySelectorAll('tbody tr')];
-    const rowList = rows.length ? rows : [...table.querySelectorAll('tr')].filter((r) => !r.closest('thead'));
 
-    for (const row of rowList) {
+    for (const row of getPricingTableDataRows(table)) {
         const cells = row.cells || [];
         if (cells.length < 2) continue;
         const label = String(cells[0].textContent || '').trim();
         const rowKind = String(row.getAttribute('data-ems-row') || '').trim();
-        if (EMS_PRICING_FOOTER_LABEL_RE.test(label)) break;
+        if (isPricingTableFooterLabel(label)) break;
         if (isEmsPricingFooterRowEl(rowKind, label)) continue;
 
-        const amtCell =
-            row.querySelector(
-                'td[data-ems-amount="division"], td[data-ems-amount="item"], td[data-ems-amount]:not([data-ems-amount="total"]):not([data-ems-amount="vat"]):not([data-ems-amount="grand-vat"]):not([data-ems-amount="grand"])'
-            )
-            || cells[cells.length - 1];
-        sum += parseBhdAmountText(amtCell?.textContent);
+        const amtCell = cells[cells.length - 1];
+        const amtText = amtCell?.textContent;
+        if (isIncompleteBhdAmountText(amtText)) continue;
+        const parsed = parseBhdAmountText(amtText);
+        if (parsed == null) continue;
+        sum += parsePricingLineAmount(label, parsed);
         found = true;
     }
     return found ? sum : null;
@@ -1505,8 +1606,7 @@ function parseBaseTotalFromPricingTableElement(table) {
 
 function sumPricingLineRowsFromTableHtmlRegex(tableHtml) {
     const cellNum = (cellHtml) => parseBhdAmountText(cellHtml);
-    const tbodyMatch = String(tableHtml || '').match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i);
-    const chunk = tbodyMatch ? tbodyMatch[1] : String(tableHtml || '');
+    const chunk = String(tableHtml || '');
     const rowRe = /<tr([^>]*)>([\s\S]*?)<\/tr>/gi;
     let sum = 0;
     let found = false;
@@ -1520,19 +1620,21 @@ function sumPricingLineRowsFromTableHtmlRegex(tableHtml) {
             : '';
         const rowKindMatch = rowAttrs.match(/data-ems-row=["']([^"']+)["']/i);
         const rowKind = rowKindMatch ? rowKindMatch[1] : '';
-        if (EMS_PRICING_FOOTER_LABEL_RE.test(label)) break;
+        if (isPricingTableHeaderRow(label)) continue;
+        if (isPricingTableFooterLabel(label)) break;
         if (isEmsPricingFooterRowEl(rowKind, label)) continue;
 
-        const attrAmt = rowHtml.match(
-            /<td[^>]*data-ems-amount=["'](?!total|vat|grand-vat|grand)[^"']*["'][^>]*>([\s\S]*?)<\/td>/i
-        );
-        let amtHtml = attrAmt ? attrAmt[1] : null;
-        if (amtHtml == null) {
-            const allCells = [...rowHtml.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)];
-            if (allCells.length >= 2) amtHtml = allCells[allCells.length - 1][1];
-        }
-        if (amtHtml == null) continue;
-        sum += cellNum(amtHtml);
+        const allCells = [...rowHtml.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)];
+        if (allCells.length < 2) continue;
+        const amtCellHtml = allCells[allCells.length - 1][0] || '';
+        const amtHtml = allCells[allCells.length - 1][1];
+        const amtAttrMatch = amtCellHtml.match(/data-ems-amount=["']([^"']+)["']/i);
+        const amtAttr = amtAttrMatch ? amtAttrMatch[1] : '';
+        if (EMS_PRICING_FOOTER_AMOUNT_ATTR_RE.test(amtAttr) && !isPricingTableFooterLabel(label)) continue;
+        if (isIncompleteBhdAmountText(amtHtml)) continue;
+        const parsed = cellNum(amtHtml);
+        if (parsed == null) continue;
+        sum += parsePricingLineAmount(label, parsed);
         found = true;
     }
     return found ? sum : null;
@@ -1540,7 +1642,8 @@ function sumPricingLineRowsFromTableHtmlRegex(tableHtml) {
 
 /** Parse base (pre-VAT) total — sum of all line rows above the footer. */
 function parseBaseTotalFromAutoTableHtml(html) {
-    const tableHtml = extractEmsAutoPricingTableHtml(html);
+    const sanitized = sanitizeMisplacedPricingFooterAttrsInTableHtml(html);
+    const tableHtml = extractEmsAutoPricingTableHtml(sanitized);
     if (!tableHtml) return null;
 
     if (typeof DOMParser !== 'undefined') {
@@ -1556,15 +1659,7 @@ function parseBaseTotalFromAutoTableHtml(html) {
         }
     }
 
-    const fromRegex = sumPricingLineRowsFromTableHtmlRegex(tableHtml);
-    if (fromRegex != null) return fromRegex;
-
-    const cellNum = (cellHtml) => parseBhdAmountText(cellHtml);
-    const totalMatch =
-        tableHtml.match(/<td[^>]*data-ems-amount=["']total["'][^>]*>([\s\S]*?)<\/td>/i)
-        || tableHtml.match(/<td[^>]*data-ems-amount=["']grand["'][^>]*>([\s\S]*?)<\/td>/i);
-    if (totalMatch) return cellNum(totalMatch[1]);
-    return null;
+    return sumPricingLineRowsFromTableHtmlRegex(tableHtml);
 }
 
 /**
@@ -1588,68 +1683,165 @@ function parseLumpSumFromAutoTableHtml(html) {
 /** Editor-only — never document.getElementById (preview/measure hosts duplicate the same table id). */
 function findLiveEmsPricingTableElement() {
     if (typeof document === 'undefined') return null;
-    return document.querySelector(
-        '.clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table, .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"]'
+    const editingTable = document.querySelector(
+        '#quote-preview .quote-clause-block--editing .jodit-wysiwyg table#ems-auto-price-summary-table, #quote-preview .quote-clause-block--editing .jodit-wysiwyg table[data-ems-pricing-cols="fixed"]'
     );
+    if (editingTable) return editingTable;
+
+    const inlineTable = document.querySelector(
+        '#quote-preview .quote-clause-inline-editor .jodit-wysiwyg table#ems-auto-price-summary-table, #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table[data-ems-pricing-cols="fixed"]'
+    );
+    if (inlineTable) return inlineTable;
+
+    const tables = [
+        ...document.querySelectorAll(
+            '.clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table, .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"]'
+        ),
+    ];
+    return tables.length ? tables[tables.length - 1] : null;
+}
+
+function resolveActiveClauseEditorJodit() {
+    if (typeof document === 'undefined') return null;
+    const host = document.getElementById(EMS_QUOTE_PREVIEW_TOOLBAR_ID);
+    return host?.__emsActiveClauseEditorJodit || null;
+}
+
+/** Amount <td> that currently holds the typing caret (do not rewrite its text while editing). */
+function getActivePricingTableAmountCell(table) {
+    if (!table || typeof document === 'undefined') return null;
+    const active = document.activeElement;
+    const fromActive = active?.closest?.('td');
+    if (fromActive && table.contains(fromActive)) {
+        const row = fromActive.closest('tr');
+        const cells = row?.cells || [];
+        if (cells.length >= 2 && fromActive === cells[cells.length - 1]) return fromActive;
+    }
+    const sel = window.getSelection?.();
+    if (!sel?.rangeCount) return null;
+    const node = sel.getRangeAt(0).startContainer;
+    const el = node?.nodeType === 1 ? node : node?.parentElement;
+    const td = el?.closest?.('td');
+    if (!td || !table.contains(td)) return null;
+    const row = td.closest('tr');
+    const cells = row?.cells || [];
+    if (cells.length < 2 || td !== cells[cells.length - 1]) return null;
+    return td;
+}
+
+function normalizeDiscountRowsInPricingTable(table, { skipCell = null } = {}) {
+    if (!table?.querySelectorAll) return;
+    sanitizeMisplacedPricingFooterAttrsInTable(table);
+    for (const row of getPricingTableDataRows(table)) {
+        const cells = row.cells || [];
+        if (cells.length < 2) continue;
+        const label = String(cells[0].textContent || '').trim();
+        if (isPricingTableFooterLabel(label)) break;
+        const isDiscountRow = isDiscountPricingLabel(label) || !label;
+        if (!isDiscountRow) continue;
+        const amtCell = cells[cells.length - 1];
+        const isActiveCell = Boolean(skipCell && amtCell === skipCell);
+        if (isIncompleteBhdAmountText(amtCell?.textContent)) continue;
+        const parsed = parseBhdAmountText(amtCell?.textContent);
+        if (parsed == null || !Number.isFinite(parsed) || parsed === 0) continue;
+        if (!isActiveCell) {
+            const normalized = parsed > 0 ? -Math.abs(parsed) : parsed;
+            const formatted = formatBhdAmount(normalized);
+            if ((amtCell.textContent || '').trim() !== formatted) amtCell.textContent = formatted;
+        }
+        row.setAttribute('data-ems-row', 'discount');
+        amtCell.setAttribute('data-ems-amount', 'discount');
+    }
 }
 
 function patchPricingTableFooterDom(table, baseTotal) {
     if (!table) return;
+    sanitizeMisplacedPricingFooterAttrsInTable(table);
     const { vat, grandWithVat } = calcPricingTotalsFromBase(baseTotal);
     const footerValues = [
-        { attr: 'total', label: 'Total (Base Price)', text: formatBhdAmount(baseTotal) },
-        { attr: 'vat', label: 'VAT 10%', text: formatBhdAmount(vat) },
-        { attr: 'grand-vat', label: 'Grand Total with VAT 10%', text: formatBhdAmount(grandWithVat) },
+        { attr: 'total', rowKind: 'total', label: 'Total (Base Price)', text: formatBhdAmount(baseTotal) },
+        { attr: 'vat', rowKind: 'vat', label: 'VAT 10%', text: formatBhdAmount(vat) },
+        { attr: 'grand-vat', rowKind: 'grand-vat', label: 'Grand Total with VAT 10%', text: formatBhdAmount(grandWithVat) },
     ];
-    footerValues.forEach(({ attr, label, text }) => {
+    footerValues.forEach(({ attr, rowKind, label, text }) => {
         let patched = false;
-        table.querySelectorAll(`td[data-ems-amount="${attr}"]`).forEach((c) => {
-            if ((c.textContent || '').trim() !== text) c.textContent = text;
-            patched = true;
-        });
-        if (patched) return;
-        table.querySelectorAll('tbody tr, tr').forEach((row) => {
+        for (const row of getPricingTableDataRows(table)) {
             const cells = row.cells || [];
-            if (cells.length < 2) return;
+            if (cells.length < 2) continue;
             const rowLabel = String(cells[0].textContent || '').trim();
-            if (rowLabel === label || rowLabel.startsWith(label)) {
-                const amtCell = cells[cells.length - 1];
-                if ((amtCell.textContent || '').trim() !== text) amtCell.textContent = text;
-            }
+            if (rowLabel !== label && !rowLabel.startsWith(label)) continue;
+            const amtCell = cells[cells.length - 1];
+            row.setAttribute('data-ems-row', rowKind);
+            amtCell.setAttribute('data-ems-amount', attr);
+            if ((amtCell.textContent || '').trim() !== text) amtCell.textContent = text;
+            patched = true;
+        }
+        if (patched) return;
+        table.querySelectorAll(`td[data-ems-amount="${attr}"]`).forEach((c) => {
+            const row = c.closest('tr');
+            if (!row || !isPricingTableFooterRow(row)) return;
+            if ((c.textContent || '').trim() !== text) c.textContent = text;
         });
     });
+}
+
+function applyPricingTableRecalcDomPatches(liveTable, baseTotal) {
+    if (!liveTable) return;
+    const jodit = resolveActiveClauseEditorJodit();
+    const activeCell = getActivePricingTableAmountCell(liveTable);
+    const whileTyping = isClauseEditorTypingActive(jodit);
+    const run = () => {
+        if (!whileTyping) {
+            normalizeDiscountRowsInPricingTable(liveTable, { skipCell: activeCell });
+        }
+        patchPricingTableFooterDom(liveTable, baseTotal);
+    };
+    if (jodit) {
+        preserveClauseEditorSelectionDuring(jodit, run);
+    } else {
+        run();
+    }
 }
 
 /** Recompute footer rows + clause 4.1 from edited pricing table HTML (prefer live editor DOM). */
 function recalcPricingTermsEditorHtml(val, numberToWordsFn) {
     const liveTable = findLiveEmsPricingTableElement();
     let html = String(val || '');
-    let baseTotal = null;
 
     if (liveTable) {
-        baseTotal = parseBaseTotalFromPricingTableElement(liveTable);
+        sanitizeMisplacedPricingFooterAttrsInTable(liveTable);
         const wys = liveTable.closest('.jodit-wysiwyg');
         if (wys) html = wys.innerHTML;
+    } else {
+        html = sanitizeMisplacedPricingFooterAttrsInTableHtml(html);
     }
+
+    let baseTotal = liveTable
+        ? parseBaseTotalFromPricingTableElement(liveTable)
+        : null;
     if (baseTotal == null) {
         baseTotal = parseBaseTotalFromAutoTableHtml(html);
     }
     if (baseTotal == null || !Number.isFinite(baseTotal)) return null;
 
     try {
-        patchPricingTableFooterDom(liveTable, baseTotal);
+        applyPricingTableRecalcDomPatches(liveTable, baseTotal);
     } catch (_domErr) {
         /* footer patch is best-effort */
     }
 
-    const grandWithVat =
-        parseGrandTotalWithVatFromPricingTableElement(liveTable)
-        ?? calcPricingTotalsFromBase(baseTotal).grandWithVat;
+    const grandWithVat = calcPricingTotalsFromBase(baseTotal).grandWithVat;
 
     const wys = liveTable?.closest('.jodit-wysiwyg');
+    const jodit = resolveActiveClauseEditorJodit();
     if (wys) {
         try {
-            patchClause41LumpSumInWysiwyg(wys, grandWithVat, numberToWordsFn);
+            const patchClause41 = () => patchClause41LumpSumInWysiwyg(wys, grandWithVat, numberToWordsFn);
+            if (jodit) {
+                preserveClauseEditorSelectionDuring(jodit, patchClause41);
+            } else {
+                patchClause41();
+            }
             html = wys.innerHTML;
         } catch (_domErr) {
             /* keep html from earlier read */
@@ -1658,6 +1850,9 @@ function recalcPricingTermsEditorHtml(val, numberToWordsFn) {
 
     let synced = ensurePricingTableColgroupInHtml(updatePricingTableFooterCellsInHtml(html, baseTotal));
     synced = patchClause41LumpSumInHtml(synced, grandWithVat, numberToWordsFn);
+    if (normalizeClauseHtmlPreservingTables(synced) === normalizeClauseHtmlPreservingTables(val)) {
+        return null;
+    }
     return synced;
 }
 
@@ -1665,31 +1860,24 @@ function recalcPricingTermsEditorHtml(val, numberToWordsFn) {
  * Rewrite Total (Base Price), VAT 10%, and Grand Total with VAT cells in the auto pricing table HTML.
  */
 function updatePricingTableFooterCellsInHtml(html, baseTotal) {
-    let out = String(html || '');
-    if (!out) return out;
-    const { vat, grandWithVat } = calcPricingTotalsFromBase(baseTotal);
-    const fmtTotal = formatBhdAmount(baseTotal);
-    const fmtVat = formatBhdAmount(vat);
-    const fmtGrand = formatBhdAmount(grandWithVat);
-    const replaceAmt = (src, amountAttr, fmt) =>
-        src.replace(
-            new RegExp(
-                `(<td[^>]*data-ems-amount=["']${amountAttr}["'][^>]*>)([\\s\\S]*?)(<\\/td>)`,
-                'i'
-            ),
-            (_full, openTd, _inner, closeTd) => `${openTd}${fmt}${closeTd}`
+    let out = sanitizeMisplacedPricingFooterAttrsInTableHtml(html);
+    const tableHtml = extractEmsAutoPricingTableHtml(out);
+    if (!tableHtml || typeof DOMParser === 'undefined') return out;
+    try {
+        const doc = new DOMParser().parseFromString(tableHtml, 'text/html');
+        const table = doc.querySelector('table');
+        if (!table) return out;
+        patchPricingTableFooterDom(table, baseTotal);
+        const sanitizedTable = table.outerHTML;
+        const idAttr = EMS_AUTO_PRICE_SUMMARY_TABLE_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const tableRe = new RegExp(
+            `<table[^>]*(?:id=["']${idAttr}["']|data-ems-pricing-cols=["']fixed["'])[^>]*>[\\s\\S]*?<\\/table>`,
+            'i'
         );
-    out = replaceAmt(out, 'total', fmtTotal);
-    out = replaceAmt(out, 'vat', fmtVat);
-    out = replaceAmt(out, 'grand-vat', fmtGrand);
-    /** Legacy single-row tables used data-ems-amount="grand" for base total only. */
-    if (!/data-ems-amount=["']total["']/i.test(out) && /data-ems-amount=["']grand["']/i.test(out)) {
-        out = out.replace(
-            /(<td[^>]*data-ems-amount=["']grand["'][^>]*>)([\s\S]*?)(<\/td>)/i,
-            (_full, openTd, _inner, closeTd) => `${openTd}${fmtTotal}${closeTd}`
-        );
+        return out.replace(tableRe, sanitizedTable);
+    } catch (_e) {
+        return out;
     }
-    return out;
 }
 
 // Global styles for pasted tables in clauses
@@ -15380,14 +15568,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     : html;
             if (contentKey === 'pricingTerms') {
                 const synced = recalcPricingTermsEditorHtml(val, numberToWordsBHD);
-                const liveWys =
-                    typeof document !== 'undefined'
-                        ? document.querySelector(
-                              '#quote-preview .quote-clause-inline-editor .jodit-wysiwyg'
-                          )
-                        : null;
-                const liveHtml = liveWys?.innerHTML || val;
-                const displayHtml = synced != null ? synced : liveHtml;
+                const displayHtml = synced != null ? synced : val;
                 updateClauseContent(contentKey, persistHtml(displayHtml));
                 return displayHtml;
             }

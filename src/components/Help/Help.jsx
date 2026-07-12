@@ -252,7 +252,7 @@ const Help = () => {
             <ul className="mb-2" style={{ paddingLeft: '1.1rem' }}>
               <li><strong>Pending for Approval</strong> — quotes assigned to you that are still awaiting your approval (excludes workflows already rejected by anyone).</li>
               <li><strong>Rejected by Me</strong> — quotes you personally rejected.</li>
-              <li><strong>Quote Search</strong> — find assigned quotes by text and/or quote date (includes rejected by you or others if you are on the approval path).</li>
+              <li><strong>Quote Search</strong> — find only workflow-linked quotes you are entitled to see by text and/or quote date (includes assigned rejected items and permitted cross-division workflow cases).</li>
             </ul>
             <p className="mb-1">
               <strong>Approver process (step-by-step):</strong>
@@ -266,7 +266,10 @@ const Help = () => {
               <li>After approval, the item leaves your pending list and the next approver in sequence becomes active (they receive workflow visibility in their pending list).</li>
             </ol>
             <p className="mb-1">
-              <strong>Cross-division access:</strong> If you are assigned on a quote from another division, you can still open the preview and approve — EMS resolves access from your approver assignment, not only your division filter.
+              <strong>Cross-division access:</strong> If you are assigned in the workflow on a quote from another division, you can still open and approve it. Visibility is workflow-tied and enquiry-context-aware; broad division-only access is intentionally restricted.
+            </p>
+            <p className="mb-1">
+              <strong>Search visibility guardrails:</strong> Quote Search shows items through direct approver assignment, valid workflow teammate paths, and approved cross-division concern mapping for the same quote. Unrelated quotes from the same enquiry or customer are filtered out.
             </p>
             <p className="mb-1">
               <strong>Loading:</strong> While a quote preview is loading or refreshing, a centred loading indicator appears so you can wait for the update to complete.
@@ -313,6 +316,9 @@ const Help = () => {
               <strong>How to use:</strong> Apply filters for Division and SE, then review charts and top-job tables by status.
             </p>
             <p className="mb-1">
+              <strong>Follow Up sorting:</strong> In <strong>Jobs (Follow up)</strong>, rows are ordered by probability block (99%, 90%, 75%, 50%, 25%) and then by highest value within each block, making action prioritization clearer.
+            </p>
+            <p className="mb-1">
               <strong>What to monitor:</strong> quoted value, won value, loss trends, follow-up pipeline, gross profit movement.
             </p>
             <p className="mb-0">
@@ -320,6 +326,9 @@ const Help = () => {
             </p>
             <p className="mb-0 mt-1">
               <strong>Step process:</strong> Apply filters &rarr; review charts/table &rarr; compare status buckets &rarr; prepare action list for pending opportunities.
+            </p>
+            <p className="mb-0 mt-1">
+              <strong>Print / PDF output:</strong> Use the print button to generate A4 landscape output. Print preview keeps report content (including filter context and footer), hides interactive controls, and formats the page for export-ready sharing.
             </p>
             <p className="mb-0 mt-1">
               <strong>Expected output:</strong> Insight-driven follow-up priorities and conversion analysis.
@@ -332,6 +341,7 @@ const Help = () => {
               <li><strong>Summary/KPI Section:</strong> Shows consolidated high-level values for quick health check before deep analysis.</li>
               <li><strong>Top Jobs Section:</strong> Status-driven detailed table (Quoted/Won/Lost/Follow Up/Pending) with job-wise value context.</li>
               <li><strong>Pipeline/Status Section:</strong> Visual distribution of opportunities by stage/status to identify movement and backlog.</li>
+              <li><strong>Print Footer:</strong> Exported page includes the system footer: <em>This report is generated from Enquiry Management System</em>.</li>
             </ul>
             <p className="mb-0 mt-2">
               <strong>Chart-wise explanation:</strong>
