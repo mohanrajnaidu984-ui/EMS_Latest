@@ -1810,7 +1810,8 @@ app.get('/api/enquiries/:id/milestone-status', async (req, res) => {
 
 /**
  * EnquiryFor pricing guard: which EnquiryFor IDs have any pricing rows?
- * Used by UI to warn/block deletion, and by save-structure flows.
+ * Also returns customer names that have an updated (non-zero) price — used to block
+ * removing those customers from the enquiry even by the creator.
  */
 app.get('/api/enquiries/:id/enquiryfor/priced-ids', async (req, res) => {
     const reqNo = String(req.params.id || '').trim();
@@ -1832,10 +1833,29 @@ app.get('/api/enquiries/:id/enquiryfor/priced-ids', async (req, res) => {
             if (id == null) return;
             pricedById[String(id)] = Number(cnt) || 0;
         });
+
+        const custRes = await sql.query`
+            SELECT DISTINCT LTRIM(RTRIM(ISNULL(CustomerName, N''))) AS CustomerName
+            FROM EnquiryPricingValues
+            WHERE LTRIM(RTRIM(RequestNo)) = LTRIM(RTRIM(${reqNo}))
+              AND LTRIM(RTRIM(ISNULL(CustomerName, N''))) <> N''
+              AND ISNULL(
+                    TRY_CONVERT(
+                        DECIMAL(18,2),
+                        REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ISNULL(CAST(Price AS NVARCHAR(50)), N'0'))), N',', N''), N'BD', N''), N' ', N'')
+                    ),
+                    0
+                ) > 0
+        `;
+        const pricedCustomers = (custRes.recordset || [])
+            .map((x) => String(x.CustomerName || '').trim())
+            .filter(Boolean);
+
         res.json({
             requestNo: reqNo,
             pricedIds: Object.keys(pricedById).map((k) => Number(k)).filter((n) => Number.isFinite(n)),
             pricedById,
+            pricedCustomers,
         });
     } catch (err) {
         console.error('Error priced-ids:', err);
@@ -1871,13 +1891,61 @@ app.put('/api/enquiries/:id', async (req, res) => {
             }
         }
 
+        // Customers with an updated price in Pricing cannot be removed from the enquiry
+        // (even by the creator). Restore any priced names missing from the payload.
+        let customersToSave = Array.isArray(SelectedCustomers) ? [...SelectedCustomers] : [];
+        try {
+            const pricedCustRes = await sql.query`
+                SELECT DISTINCT LTRIM(RTRIM(ISNULL(CustomerName, N''))) AS CustomerName
+                FROM EnquiryPricingValues
+                WHERE LTRIM(RTRIM(RequestNo)) = LTRIM(RTRIM(${id}))
+                  AND LTRIM(RTRIM(ISNULL(CustomerName, N''))) <> N''
+                  AND ISNULL(
+                        TRY_CONVERT(
+                            DECIMAL(18,2),
+                            REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ISNULL(CAST(Price AS NVARCHAR(50)), N'0'))), N',', N''), N'BD', N''), N' ', N'')
+                        ),
+                        0
+                    ) > 0
+            `;
+            const existingCustRes = await sql.query`
+                SELECT CustomerName FROM EnquiryCustomer
+                WHERE LTRIM(RTRIM(RequestNo)) = LTRIM(RTRIM(${id}))
+            `;
+            const pricedNames = (pricedCustRes.recordset || [])
+                .map((r) => String(r.CustomerName || '').trim())
+                .filter(Boolean);
+            const existingNames = (existingCustRes.recordset || [])
+                .map((r) => String(r.CustomerName || '').trim())
+                .filter(Boolean);
+            const norm = (s) => String(s || '').trim().toLowerCase();
+            const saveKeys = new Set(customersToSave.map(norm).filter(Boolean));
+            const restored = [];
+            for (const existing of existingNames) {
+                const isPriced = pricedNames.some((p) => norm(p) === norm(existing));
+                if (!isPriced) continue;
+                if (saveKeys.has(norm(existing))) continue;
+                customersToSave.push(existing);
+                saveKeys.add(norm(existing));
+                restored.push(existing);
+            }
+            if (restored.length) {
+                console.warn(
+                    `[PUT /api/enquiries/${id}] Restored priced customer(s) that cannot be removed:`,
+                    restored.join(', ')
+                );
+            }
+        } catch (custGuardErr) {
+            console.warn('[PUT /api/enquiries] priced-customer guard:', custGuardErr.message);
+        }
+
         const request = new sql.Request();
         request.input('RequestNo', sql.NVarChar, id);
         request.input('SourceOfEnquiry', sql.NVarChar, SourceOfInfo);
         request.input('EnquiryDate', sql.VarChar(10), EnquiryDate ? EnquiryDate.split('T')[0] : null);
         request.input('DueDate', sql.VarChar(10), DueOn ? DueOn.split('T')[0] : null);
         request.input('SiteVisitDate', sql.VarChar(10), SiteVisitDate ? SiteVisitDate.split('T')[0] : null);
-        request.input('CustomerName', sql.NVarChar, SelectedCustomers ? SelectedCustomers.join(',') : null);
+        request.input('CustomerName', sql.NVarChar, customersToSave.length ? customersToSave.join(',') : null);
         request.input('ReceivedFrom', sql.NVarChar, SelectedReceivedFroms ? SelectedReceivedFroms.map(i => i.split('|')[0]).join(',') : null);
 
         request.input('ProjectName', sql.NVarChar, ProjectName);
@@ -2287,6 +2355,7 @@ app.put('/api/enquiries/:id', async (req, res) => {
 
         await updateRelated('EnquiryFor', 'ItemName', SelectedEnquiryFor);
         await normalizeEnquiryForLeadMeta(id);
+
         const updateReceivedFrom = async () => {
             const delRF = new sql.Request();
             delRF.input('reqNo', sql.NVarChar, id);
@@ -2303,7 +2372,7 @@ app.put('/api/enquiries/:id', async (req, res) => {
             }
         };
         await Promise.all([
-            updateRelated('EnquiryCustomer', 'CustomerName', SelectedCustomers),
+            updateRelated('EnquiryCustomer', 'CustomerName', customersToSave),
             updateRelated('EnquiryType', 'TypeName', SelectedEnquiryTypes),
             updateRelated(
                 'ConcernedSE',

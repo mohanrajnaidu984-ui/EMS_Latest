@@ -13729,9 +13729,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         }
     }, [quoteEnquiryTypeSelect, quoteTypeList]);
 
-    const handleRemoveQuoteTypeAt = useCallback((idx) => {
-        if (idx == null || idx < 0) return;
-        setQuoteTypeList((prev) => prev.filter((_, i) => i !== idx));
+    const handleRemoveQuoteTypeAt = useCallback((selectedIndices) => {
+        const indices = (Array.isArray(selectedIndices) ? selectedIndices : [selectedIndices])
+            .map(Number)
+            .filter((i) => Number.isInteger(i) && i >= 0);
+        if (!indices.length) return;
+        const removeSet = new Set(indices);
+        setQuoteTypeList((prev) => prev.filter((_, i) => !removeSet.has(i)));
     }, []);
 
     // Generic Mandatory Field Validation

@@ -671,7 +671,7 @@ const EnquiryResultsTable = ({
                                         >
                                             {r.ProjectName}
                                         </td>
-                                        <td style={{ verticalAlign: 'top', minWidth: '200px', cursor: canActivate ? 'pointer' : 'default' }} onClick={openThisRow}>
+                                        <td style={{ minWidth: '200px', cursor: canActivate ? 'pointer' : 'default' }} onClick={openThisRow}>
                                             {jobLines.map((ln, li) => {
                                                 const isSub = ln.depth > 0;
                                                 return (
@@ -697,13 +697,13 @@ const EnquiryResultsTable = ({
                                             })}
                                         </td>
                                         <td
-                                            style={{ verticalAlign: 'top', ...ENQUIRY_DETAILS_COL_STYLE, fontSize: '11px', whiteSpace: 'normal', wordBreak: 'break-word', cursor: canActivate ? 'pointer' : 'default' }}
+                                            style={{ ...ENQUIRY_DETAILS_COL_STYLE, fontSize: '11px', whiteSpace: 'normal', wordBreak: 'break-word', cursor: canActivate ? 'pointer' : 'default' }}
                                             title={getEnquiryDetailsDisplay(r)}
                                             onClick={openThisRow}
                                         >
                                             {getEnquiryDetailsDisplay(r)}
                                         </td>
-                                        <td style={{ verticalAlign: 'top', cursor: canActivate ? 'pointer' : 'default' }} onClick={openThisRow}>
+                                        <td style={{ cursor: canActivate ? 'pointer' : 'default' }} onClick={openThisRow}>
                                             {getCustomerDisplayLines(r).map((name, i, arr) => (
                                                 <div
                                                     key={`${r.RequestNo}-cust-${i}`}
@@ -719,7 +719,7 @@ const EnquiryResultsTable = ({
                                         <td onClick={openThisRow} style={{ cursor: canActivate ? 'pointer' : 'default' }}>{formatEnquiryResultDate(r.DueOn ?? r.DueDate)}</td>
                                         <td onClick={openThisRow} style={{ cursor: canActivate ? 'pointer' : 'default' }}>{formatEnquiryResultDate(r.SiteVisitDate)}</td>
                                         <td onClick={openThisRow} style={{ cursor: canActivate ? 'pointer' : 'default' }}>{r.ClientName}</td>
-                                        <td style={{ verticalAlign: 'top', cursor: canActivate ? 'pointer' : 'default' }} onClick={openThisRow}>
+                                        <td style={{ cursor: canActivate ? 'pointer' : 'default' }} onClick={openThisRow}>
                                             {getConsultantDisplayLines(r).map((name, i, arr) => (
                                                 <div
                                                     key={`${r.RequestNo}-consult-${i}`}

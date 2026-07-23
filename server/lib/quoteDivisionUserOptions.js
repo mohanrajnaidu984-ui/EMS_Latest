@@ -74,8 +74,9 @@ function isExcludedQuotePickerUser(u) {
     return isExcludedNotificationEmail(u?.EmailId);
 }
 
-function userToOption(u, type = 'Division') {
-    if (isExcludedQuotePickerUser(u)) return null;
+function userToOption(u, type = 'Division', { allowExcluded = false } = {}) {
+    // Notification exclusions block mail only — Signatory may still list those CCMailIds.
+    if (!allowExcluded && isExcludedQuotePickerUser(u)) return null;
     const fullName = String(u.FullName || '').trim();
     if (!fullName) return null;
     return {
@@ -129,27 +130,29 @@ function masterEnquiryForRowMatchesDivision(row, labels) {
     return rowLabels.some((rl) => departmentMatchesDivisionStrict(rl, labels));
 }
 
-function collectDivisionCcEmails(mefRows, labels) {
+function collectDivisionCcEmails(mefRows, labels, { applyNotificationExclusions = true } = {}) {
     const ccEmails = new Set();
     for (const row of mefRows || []) {
         if (!masterEnquiryForRowMatchesDivision(row, labels)) continue;
         for (const em of parseMailCsv(row.CCMailIds)) {
             const normalized = normalizeUserEmail(em);
-            if (normalized && !isExcludedNotificationEmail(normalized)) ccEmails.add(normalized);
+            if (!normalized) continue;
+            if (applyNotificationExclusions && isExcludedNotificationEmail(normalized)) continue;
+            ccEmails.add(normalized);
         }
     }
     return ccEmails;
 }
 
-function usersMatchingCcEmails(users, ccEmails, type) {
+function usersMatchingCcEmails(users, ccEmails, type, { allowExcluded = false } = {}) {
     return dedupeOptions(
         (users || [])
             .filter((u) => {
-                if (isExcludedQuotePickerUser(u)) return false;
+                if (!allowExcluded && isExcludedQuotePickerUser(u)) return false;
                 const em = normalizeUserEmail(u.EmailId);
                 return em && ccEmails.has(em);
             })
-            .map((u) => userToOption(u, type))
+            .map((u) => userToOption(u, type, { allowExcluded }))
             .filter(Boolean)
     );
 }
@@ -167,7 +170,9 @@ async function fetchQuoteDivisionUserOptions(division) {
            OR LTRIM(RTRIM(ISNULL(Status, N''))) = N''
         ORDER BY FullName
     `;
-    const users = (usersRes.recordset || []).filter((u) => !isExcludedQuotePickerUser(u));
+    const usersAll = usersRes.recordset || [];
+    // Prepared By still omits notification-only addresses (ED/CEO/etc.).
+    const users = usersAll.filter((u) => !isExcludedQuotePickerUser(u));
 
     const divisionConcernedSeOptions = dedupeOptions(
         users
@@ -187,14 +192,23 @@ async function fetchQuoteDivisionUserOptions(division) {
            OR LTRIM(RTRIM(ISNULL(DepartmentName, N''))) LIKE ${likePat}
     `;
 
-    const ccEmails = collectDivisionCcEmails(mefRes.recordset || [], labels);
-    const ccMailUserOptions = usersMatchingCcEmails(users, ccEmails, 'PreparedBy');
+    const mefRows = mefRes.recordset || [];
+    const ccEmailsPrepared = collectDivisionCcEmails(mefRows, labels, {
+        applyNotificationExclusions: true,
+    });
+    const ccMailUserOptions = usersMatchingCcEmails(users, ccEmailsPrepared, 'PreparedBy');
 
     const preparedByOptions = sortPreparedByOptions(
         dedupeOptions([...divisionConcernedSeOptions, ...ccMailUserOptions])
     );
 
-    let signatoryOptions = sortSignatoryOptions(usersMatchingCcEmails(users, ccEmails, 'Signatory'));
+    // Signatory / Co-Signatory: every CCMailId on the selected division (mapped to SE names).
+    const ccEmailsSignatory = collectDivisionCcEmails(mefRows, labels, {
+        applyNotificationExclusions: false,
+    });
+    let signatoryOptions = sortSignatoryOptions(
+        usersMatchingCcEmails(usersAll, ccEmailsSignatory, 'Signatory', { allowExcluded: true })
+    );
     if (signatoryOptions.length === 0) {
         signatoryOptions = preparedByOptions;
     }

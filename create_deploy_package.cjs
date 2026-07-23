@@ -14,7 +14,7 @@ const skipNpmInstall = process.argv.includes('--skip-npm-install');
 const skipUploads = process.argv.includes('--skip-uploads');
 /** Pre-install node_modules on build machine (smoke test only — production must run npm ci on server). */
 const withNodeModules = process.argv.includes('--with-node-modules');
-const BASELINE_VERSION = '2026-07-12-latest';
+const BASELINE_VERSION = '2026-07-23-latest';
 const PDF_CSS_VERSION = '2026-06-05-footer-auto';
 const FRONTEND_BUNDLE_MARKERS = [
     'data-ems-html2pdf',

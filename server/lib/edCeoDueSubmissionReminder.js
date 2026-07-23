@@ -119,7 +119,7 @@ function buildEdCeoEnquiryListTableHtml(rows) {
                 row.enquiryDetails,
             ];
             return `<tr>${cells
-                .map((c) => `<td style="${tdStyle}">${escapeHtml(c)}</td>`)
+                .map((c) => `<td style="${tdStyle}">${escapeHtml(c).replace(/\n/g, '<br>')}</td>`)
                 .join('')}</tr>`;
         })
         .join('\n');
@@ -199,6 +199,8 @@ async function fetchEdCeoRequestNosDueOn(dueYmd) {
 async function loadLeadDivisionNames(requestNo) {
     const res = await sql.query`
         SELECT
+            EF.ID,
+            EF.ParentID,
             EF.ItemName,
             MEF.DepartmentName
         FROM EnquiryFor EF
@@ -209,17 +211,39 @@ async function loadLeadDivisionNames(requestNo) {
         WHERE EF.RequestNo = ${requestNo}
         ORDER BY EF.ID
     `;
+
+    const isLeadJob = (row) => {
+        const p = row.ParentID;
+        return p == null || p === '' || p === 0 || p === '0';
+    };
+
+    const divisionOf = (row) => String(row.DepartmentName || row.ItemName || '').trim();
+    const leadNames = [];
+    const otherNames = [];
     const seen = new Set();
-    const out = [];
+
+    // Lead jobs (root EnquiryFor rows) first, in ID order.
     for (const row of res.recordset || []) {
-        const division = String(row.DepartmentName || row.ItemName || '').trim();
+        if (!isLeadJob(row)) continue;
+        const division = divisionOf(row);
         if (!division) continue;
         const key = division.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
-        out.push(division);
+        leadNames.push(division);
     }
-    return out;
+
+    // Then remaining divisions (sub-jobs), first appearance by ID.
+    for (const row of res.recordset || []) {
+        const division = divisionOf(row);
+        if (!division) continue;
+        const key = division.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        otherNames.push(division);
+    }
+
+    return [...leadNames, ...otherNames];
 }
 
 function mapRowToListEntry(row, divisionName) {
@@ -237,7 +261,8 @@ function mapRowToListEntry(row, divisionName) {
 }
 
 /**
- * One table row per lead division (EnquiryFor) for enquiries with ED/CEO signature required.
+ * One table row per enquiry (ED/CEO signature required).
+ * Division column lists lead jobs first, then other divisions (numbered, one per line).
  */
 async function buildEdCeoDueEnquiryRows(dueYmd) {
     const requestNos = await fetchEdCeoRequestNosDueOn(dueYmd);
@@ -259,20 +284,16 @@ async function buildEdCeoDueEnquiryRows(dueYmd) {
                 .map((s) => s.trim())
                 .filter(Boolean);
         }
-        if (!divisions.length) {
-            divisions = [''];
-        }
 
-        for (const division of divisions) {
-            rows.push(mapRowToListEntry(row, division));
-        }
+        const divisionLabel = divisions.length
+            ? divisions.map((name, i) => `${i + 1}. ${name}`).join('\n')
+            : '';
+        rows.push(mapRowToListEntry(row, divisionLabel));
     }
 
-    rows.sort((a, b) => {
-        const div = a.division.localeCompare(b.division, undefined, { sensitivity: 'base' });
-        if (div !== 0) return div;
-        return a.requestNo.localeCompare(b.requestNo, undefined, { numeric: true });
-    });
+    rows.sort((a, b) =>
+        a.requestNo.localeCompare(b.requestNo, undefined, { numeric: true })
+    );
 
     return rows;
 }
@@ -431,6 +452,7 @@ async function runEdCeoDueSubmissionReminders(options = {}) {
 
 module.exports = {
     runEdCeoDueSubmissionReminders,
+    buildEdCeoDueEnquiryRows,
     buildEdCeoReminderSubject,
     buildEdCeoReminderEmailHtml,
     buildEdCeoEnquiryListTableHtml,

@@ -1309,6 +1309,9 @@
     font-weight: 600;
     color: #0f172a;
     flex-shrink: 0;
+    width: 3.35rem;
+    min-width: 3.35rem;
+    text-align: right;
 }
 
 .sr-pipeline-summary-legend {
@@ -1489,35 +1492,73 @@
     pointer-events: none;
 }
 
+.sr-detail-table thead th,
+.sr-detail-table tbody td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 0; /* forces fixed-layout cells to honor width and clip instead of spilling */
+}
+
 .sr-detail-table tbody td {
     font-size: 0.68rem;
     padding: 0.2rem 0.35rem;
     line-height: 1.15;
     vertical-align: middle;
     border-color: #e2e8f0 !important;
-    white-space: nowrap;
 }
 
-.sr-detail-table th.sr-detail-table__project-name,
-.sr-detail-table td.sr-detail-table__project-name {
-    width: 250px;
-    max-width: 250px;
-    min-width: 250px;
+.sr-detail-table th.sr-detail-table__clip,
+.sr-detail-table td.sr-detail-table__clip {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-.sr-detail-table th.sr-detail-table__project-name .sr-th-filter-btn {
+.sr-detail-table th.sr-detail-table__clip .sr-th-filter-btn,
+.sr-detail-table td.sr-detail-table__clip > span {
+    display: block;
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Chart / bar cells: keep content inside the column */
+.sr-detail-table td.sr-job-bar-cell {
+    overflow: hidden;
+    max-width: 0;
+}
+
+.sr-detail-table td.sr-job-bar-cell .sr-job-bar-wrap {
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.sr-detail-table th.sr-resizable-th {
+    position: relative;
+}
+
+.sr-detail-table .sr-col-resize-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 6px;
+    cursor: col-resize;
+    z-index: 8;
+    user-select: none;
+}
+
+.sr-detail-table .sr-col-resize-handle:hover,
+.sr-detail-table .sr-col-resize-handle:active {
+    background: rgba(255, 255, 255, 0.35);
 }
 
 .sr-detail-table {
     width: max-content !important;
     min-width: 100%;
-    table-layout: auto;
+    table-layout: fixed;
 }
 
 .sr-detail-table__total-row td {
@@ -1950,7 +1991,9 @@
     }
 
     body.sr-print-active .sr-pipeline-summary-pct {
-        min-width: 1.45rem !important;
+        width: 2.35rem !important;
+        min-width: 2.35rem !important;
+        text-align: right !important;
         font-size: 0.58rem !important;
     }
 

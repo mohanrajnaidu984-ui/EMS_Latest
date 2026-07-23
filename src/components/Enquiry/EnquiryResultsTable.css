@@ -159,7 +159,7 @@
     padding-top: 0.38rem !important;
     padding-bottom: 0.38rem !important;
     line-height: 1.15;
-    vertical-align: middle;
+    vertical-align: middle !important;
 }
 
 .enquiry-results-table-root .enquiry-search-table-wrap th.ert-col-project,
@@ -169,7 +169,7 @@
     white-space: normal;
     word-break: break-word;
     overflow-wrap: anywhere;
-    vertical-align: top;
+    vertical-align: middle !important;
 }
 
 .enquiry-results-table-root .enquiry-search-table-wrap tbody tr:nth-child(odd) td {

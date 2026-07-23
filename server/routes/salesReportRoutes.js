@@ -353,6 +353,116 @@ function buildSalesReportQuoteOwnJobDivisionClause(safeDivision, eqAlias = 'EQ')
 }
 
 /**
+ * Quoted KPI total — same LatestQuoted grain + max-per-enquiry as Jobs (Quoted) table.
+ */
+function buildQuotedMaxPerEnquiryKpiSql(filterClause, safeDivision, safeQuarter) {
+    const quotedEqOwnJobExpr = `LTRIM(RTRIM(ISNULL(EQ.OwnJob, N'')))`;
+    const quotedOwnJobDivisionClause = buildSalesReportQuoteOwnJobDivisionClause(safeDivision);
+    const yearDateExpr = `COALESCE(LQ.QuoteDate, E.EnquiryDate)`;
+    const quarterClause = safeQuarter
+        ? `AND DATEPART(QUARTER, ${yearDateExpr}) = @quarterNums`
+        : '';
+    return `
+            WITH LatestQuoted AS (
+                SELECT * FROM (
+                    SELECT
+                        EQ.RequestNo,
+                        ISNULL(
+                            TRY_CONVERT(
+                                DECIMAL(18,2),
+                                REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ISNULL(EQ.TotalAmount, '0'))), ',', ''), 'BD', ''), ' ', '')
+                            ),
+                            0
+                        ) AS NetQuotedValue,
+                        COALESCE(EQ.UpdatedAt, EQ.QuoteDate) AS QuoteDate,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY
+                                EQ.RequestNo,
+                                ${quotedEqOwnJobExpr},
+                                LTRIM(RTRIM(ISNULL(EQ.ToName, N'')))
+                            ORDER BY
+                                ISNULL(EQ.QuoteNo, 0) DESC,
+                                ISNULL(EQ.RevisionNo, 0) DESC,
+                                ISNULL(EQ.UpdatedAt, EQ.QuoteDate) DESC,
+                                EQ.QuoteDate DESC
+                        ) AS __rn
+                    FROM EnquiryQuotes EQ
+                    INNER JOIN EnquiryMaster E ON E.RequestNo = EQ.RequestNo
+                    WHERE 1 = 1
+                      ${quotedOwnJobDivisionClause}
+                      ${filterClause}
+                ) __lq
+                WHERE __lq.__rn = 1
+            ),
+            MaxPerEnquiry AS (
+                SELECT
+                    E.RequestNo,
+                    MAX(LQ.NetQuotedValue) AS MaxValue
+                FROM EnquiryMaster E
+                INNER JOIN LatestQuoted LQ ON E.RequestNo = LQ.RequestNo
+                WHERE YEAR(${yearDateExpr}) = @year
+                  ${filterClause}
+                  ${quarterClause}
+                GROUP BY E.RequestNo
+            )
+            SELECT
+                COUNT(*) AS Cnt,
+                SUM(ISNULL(MaxValue, 0)) AS TotalValue
+            FROM MaxPerEnquiry
+        `;
+}
+
+/**
+ * Accountable SE for quote rows (no Probability alias) — matches ConcernedSE to EnquiryQuotes.OwnJob.
+ */
+function buildSalesReportQuoteAccountableSeClause(effectiveSe, seInputName = 'pendingSe', eqAlias = 'EQ') {
+    if (!effectiveSe) return '';
+    const eqOwnJobNorm = `UPPER(LTRIM(RTRIM(ISNULL(${eqAlias}.OwnJob, N''))))`;
+    const cseOwnJobNorm = sqlCseOwnJob('c0');
+    return `
+      AND EXISTS (
+        SELECT 1
+        FROM ConcernedSE c0
+        WHERE c0.RequestNo = E.RequestNo
+          AND ${sqlCseAccountabilityYes('c0')}
+          AND UPPER(LTRIM(RTRIM(ISNULL(c0.SEName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(@${seInputName}, N''))))
+          AND (
+            (
+              ${eqOwnJobNorm} <> N''
+              AND ${cseOwnJobNorm} = ${eqOwnJobNorm}
+            )
+            OR (
+              ${eqOwnJobNorm} <> N''
+              AND ${cseOwnJobNorm} = N''
+              AND EXISTS (
+                SELECT 1
+                FROM Master_ConcernedSE ms0
+                WHERE UPPER(LTRIM(RTRIM(ISNULL(ms0.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(c0.SEName, N''))))
+                  AND UPPER(LTRIM(RTRIM(ISNULL(ms0.Department, N'')))) = ${eqOwnJobNorm}
+              )
+            )
+          )
+      )`;
+}
+
+/** Company + division only (no SE) — for pending outer query when P may be NULL. */
+function buildSalesReportPendingEnquiryScopeClause({
+    nonCcBlock,
+    safeCompany,
+    safeDivision,
+    seInputName = 'pendingSe',
+}) {
+    return buildSalesReportEnquiryScopeClause({
+        nonCcBlock,
+        safeCompany,
+        safeDivision,
+        effectiveSe: null,
+        seInputName,
+        accountableSeOnly: false,
+    });
+}
+
+/**
  * Pending-to-update-probability scope: company + division (EnquiryFor) and accountable SE per job line.
  * Used for Jobs (Pending) table and Sales Pipeline “Pending” (10% quoted) bucket.
  */
@@ -373,22 +483,59 @@ function buildSalesReportPendingScopeClause({
     });
 }
 
+/** Pending scope for quoted rows without a Probability record (uses EnquiryQuotes.OwnJob). */
+function buildSalesReportPendingQuoteScopeClause({
+    nonCcBlock,
+    safeCompany,
+    safeDivision,
+    effectiveSe,
+    seInputName = 'pendingSe',
+}) {
+    let clause = buildSalesReportPendingEnquiryScopeClause({
+        nonCcBlock,
+        safeCompany,
+        safeDivision,
+        seInputName,
+    });
+    if (nonCcBlock) return clause;
+    if (effectiveSe) {
+        clause += buildSalesReportQuoteAccountableSeClause(effectiveSe, seInputName, 'EQ');
+    }
+    return clause;
+}
+
 const SQL_PROB_STATUS_PENDING_QUOTED_NORM = `REPLACE(REPLACE(LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))), '-', ''), ' ', '')`;
 
+/** Matches Probability “Pending Update” — quoted / not-yet-updated statuses (not Won/Lost/terminal). */
 const SQL_PROB_ROW_PENDING_FOR_QUOTE_UPDATE = `(
-    ${SQL_PROB_STATUS_PENDING_QUOTED_NORM} IN ('pending', 'quote', 'quoted')
-    AND LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) NOT LIKE '%follow%'
-    AND LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) NOT LIKE '%won%'
-    AND LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) NOT LIKE '%lost%'
-    AND LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) NOT LIKE '%hold%'
-    AND LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) NOT LIKE '%cancel%'
-    AND LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) NOT LIKE '%retender%'
+    (
+        P.RequestNo IS NOT NULL
+        AND (
+            ${SQL_PROB_STATUS_PENDING_QUOTED_NORM} IN ('pending', 'quote', 'quoted', 'enquiry', 'priced', 'estimated')
+            OR LTRIM(RTRIM(ISNULL(P.Status, ''))) = ''
+        )
+        AND LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) NOT LIKE '%won%'
+        AND LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) NOT LIKE '%lost%'
+        AND LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) NOT LIKE '%hold%'
+        AND LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) NOT LIKE '%cancel%'
+        AND LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) NOT LIKE '%retender%'
+        AND NOT (
+            LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) LIKE '%follow%'
+            AND LTRIM(RTRIM(ISNULL(P.ProbabilityChance, ''))) <> ''
+        )
+    )
+    OR (
+        P.RequestNo IS NOT NULL
+        AND LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) LIKE '%follow%'
+        AND LTRIM(RTRIM(ISNULL(P.ProbabilityChance, ''))) = ''
+    )
 )`;
 
 function buildSalesReportPendingQuotedAggregateSql({
     probDateExpr,
     safeQuarter,
     pendingScopeClause,
+    pendingQuoteScopeClause,
     probOwnJobClause,
     quoteOwnJobClause,
 }) {
@@ -414,9 +561,13 @@ function buildSalesReportPendingQuotedAggregateSql({
                         ) AS QuoteAmount,
                         COALESCE(EQ.UpdatedAt, EQ.QuoteDate) AS LatestQuoteDate,
                         ROW_NUMBER() OVER (
-                            PARTITION BY EQ.RequestNo, LTRIM(RTRIM(ISNULL(EQ.OwnJob, N'')))
+                            PARTITION BY
+                                EQ.RequestNo,
+                                LTRIM(RTRIM(ISNULL(EQ.OwnJob, N''))),
+                                LTRIM(RTRIM(ISNULL(EQ.ToName, N'')))
                             ORDER BY
                                 ISNULL(EQ.QuoteNo, 0) DESC,
+                                ISNULL(EQ.RevisionNo, 0) DESC,
                                 ISNULL(EQ.UpdatedAt, EQ.QuoteDate) DESC,
                                 EQ.QuoteDate DESC
                         ) AS __rn
@@ -424,43 +575,52 @@ function buildSalesReportPendingQuotedAggregateSql({
                     INNER JOIN EnquiryMaster E ON E.RequestNo = EQ.RequestNo
                     WHERE 1 = 1
                       ${quoteOwnJobClause}
-                      ${pendingScopeClause}
+                      ${pendingQuoteScopeClause}
                 ) z
                 WHERE z.__rn = 1
             )
             SELECT
                 COUNT(*) AS Cnt,
-                SUM(ScopedValue) AS TotalValue
+                SUM(EnquiryMax) AS TotalValue
             FROM (
                 SELECT
-                    COALESCE(
-                        ${SQL_PROB_NETQUOTED_PARSED},
-                        CAST(0 AS DECIMAL(18,2))
-                    ) AS ScopedValue
-                FROM LatestProbPendingFunnelScope P
-                INNER JOIN EnquiryMaster E ON E.RequestNo = P.RequestNo
-                WHERE YEAR(${probDateExpr}) = @year
-                  ${safeQuarter ? `AND DATEPART(QUARTER, ${probDateExpr}) = @quarterNums` : ''}
-                  AND ${SQL_PROB_ROW_PENDING_FOR_QUOTE_UPDATE}
-                UNION ALL
-                SELECT ISNULL(LQ.QuoteAmount, CAST(0 AS DECIMAL(18,2))) AS ScopedValue
-                FROM LatestQuotePerOwnJob LQ
-                INNER JOIN EnquiryMaster E ON E.RequestNo = LQ.RequestNo
-                WHERE NOT EXISTS (
-                    SELECT 1
+                    RequestNo,
+                    MAX(ScopedValue) AS EnquiryMax
+                FROM (
+                    SELECT
+                        P.RequestNo,
+                        COALESCE(
+                            ${SQL_PROB_NETQUOTED_PARSED},
+                            CAST(0 AS DECIMAL(18,2))
+                        ) AS ScopedValue
                     FROM LatestProbPendingFunnelScope P
-                    WHERE P.RequestNo = LQ.RequestNo
-                      AND (
-                        UPPER(LTRIM(RTRIM(ISNULL(P.OwnJobName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(LQ.QuoteOwnJob, N''))))
-                        OR (
-                            LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))) = N''
-                            AND UPPER(LTRIM(RTRIM(ISNULL(P.QuoteOwnJob, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(LQ.QuoteOwnJob, N''))))
-                        )
-                      )
-                )
-                  AND YEAR(COALESCE(LQ.LatestQuoteDate, E.EnquiryDate)) = @year
-                  ${safeQuarter ? `AND DATEPART(QUARTER, COALESCE(LQ.LatestQuoteDate, E.EnquiryDate)) = @quarterNums` : ''}
-            ) pendingScoped
+                    INNER JOIN EnquiryMaster E ON E.RequestNo = P.RequestNo
+                    WHERE YEAR(${probDateExpr}) = @year
+                      ${safeQuarter ? `AND DATEPART(QUARTER, ${probDateExpr}) = @quarterNums` : ''}
+                      AND ${SQL_PROB_ROW_PENDING_FOR_QUOTE_UPDATE}
+                    UNION ALL
+                    SELECT
+                        LQ.RequestNo,
+                        ISNULL(LQ.QuoteAmount, CAST(0 AS DECIMAL(18,2))) AS ScopedValue
+                    FROM LatestQuotePerOwnJob LQ
+                    INNER JOIN EnquiryMaster E ON E.RequestNo = LQ.RequestNo
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM LatestProbPendingFunnelScope P
+                        WHERE P.RequestNo = LQ.RequestNo
+                          AND (
+                            UPPER(LTRIM(RTRIM(ISNULL(P.OwnJobName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(LQ.QuoteOwnJob, N''))))
+                            OR (
+                                LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))) = N''
+                                AND UPPER(LTRIM(RTRIM(ISNULL(P.QuoteOwnJob, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(LQ.QuoteOwnJob, N''))))
+                            )
+                          )
+                    )
+                      AND YEAR(COALESCE(LQ.LatestQuoteDate, E.EnquiryDate)) = @year
+                      ${safeQuarter ? `AND DATEPART(QUARTER, COALESCE(LQ.LatestQuoteDate, E.EnquiryDate)) = @quarterNums` : ''}
+                ) pendingLines
+                GROUP BY RequestNo
+            ) pendingPerEnquiry
             `;
 }
 
@@ -505,6 +665,37 @@ const SQL_FUNNEL_FOLLOWUP_STATUS = `(
     LTRIM(RTRIM(ISNULL(P.ProbabilityChance, ''))) <> ''
     AND LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) LIKE '%follow%'
 )`;
+
+/** Sales Pipeline funnel: max net quoted per enquiry per stage, then sum by probability %. */
+function buildSalesReportProbabilityFunnelAggregateSql(funnelLatestProbCte, probDateExpr, safeQuarter) {
+    const quarterClause = safeQuarter
+        ? `AND DATEPART(QUARTER, ${probDateExpr}) = @quarterNums`
+        : '';
+    return `
+            ${funnelLatestProbCte}
+            SELECT
+                MAX(Scoped.ProbabilityName) AS ProbabilityName,
+                Scoped.ProbabilityPercentage,
+                SUM(Scoped.EnquiryMaxValue) AS TotalValue,
+                COUNT(*) AS Count
+            FROM (
+                SELECT
+                    P.RequestNo,
+                    MAX(LTRIM(RTRIM(ISNULL(P.ProbabilityChance, '')))) AS ProbabilityName,
+                    ${SQL_PROB_CHANCE_PCT_EXPR} AS ProbabilityPercentage,
+                    MAX(${SQL_FUNNEL_NET_QUOTED_VALUE}) AS EnquiryMaxValue
+                FROM LatestProbFunnelScope P
+                INNER JOIN EnquiryMaster E ON E.RequestNo = P.RequestNo
+                WHERE YEAR(${probDateExpr}) = @year
+                  ${quarterClause}
+                  AND ${SQL_FUNNEL_FOLLOWUP_STATUS}
+                GROUP BY P.RequestNo, ${SQL_PROB_CHANCE_PCT_EXPR}
+            ) Scoped
+            WHERE Scoped.ProbabilityPercentage IS NOT NULL
+            GROUP BY Scoped.ProbabilityPercentage
+            ORDER BY Scoped.ProbabilityPercentage ASC
+        `;
+}
 
 /** Latest Probability row per enquiry **and job line** (OwnJob + LeadJob) — Jobs table lists every line for Probability updates. */
 const SQL_TOPJOB_LATEST_PROB_CTE = `
@@ -583,6 +774,9 @@ const SQL_LATEST_QUOTE_DATE_PER_ENQUIRY = `
         ISNULL(EQ.UpdatedAt, EQ.QuoteDate) DESC,
         EQ.QuoteDate DESC
 )`;
+
+/** Year/quarter filter for pending probability-update rows (quote date before enquiry date). */
+const SQL_PENDING_EVENT_DATE_EXPR = `COALESCE(P.UpdatedDateTime, P.ExpectedDate, ${SQL_LATEST_QUOTE_DATE_PER_ENQUIRY}, E.EnquiryDate)`;
 
 /**
  * Lost / Follow-up (Won/Lost section): least EnquiryQuotes.TotalAmount per project,
@@ -693,7 +887,7 @@ function appendSalesReportEnquiryFilters(req, request, safeCompany, safeDivision
 
     if (isNonCcSalesScope) {
         if (srUserEmail) {
-            request.input('srUserEmail', sql.NVarChar, srUserEmail);
+            bindInputIfMissing(request, 'srUserEmail', sql.NVarChar, srUserEmail);
         }
         if (req.salesReportNonCcBlock === true) {
             filterClause += ' AND 1=0 ';
@@ -701,11 +895,11 @@ function appendSalesReportEnquiryFilters(req, request, safeCompany, safeDivision
             filterClause += ' AND 1=0 ';
         } else {
             if (safeCompany && safeCompany !== 'All') {
-                request.input('company', sql.NVarChar, safeCompany);
+                bindInputIfMissing(request, 'company', sql.NVarChar, safeCompany);
                 filterClause += ` AND EXISTS (SELECT 1 FROM EnquiryFor ef JOIN Master_EnquiryFor mef ON (ef.ItemName = mef.ItemName OR ef.ItemName LIKE '%- ' + mef.ItemName OR ef.ItemName LIKE '%-' + mef.ItemName) WHERE ef.RequestNo = E.RequestNo AND LTRIM(RTRIM(mef.CompanyName)) = @company) `;
             }
             if (safeDivision && safeDivision !== 'All' && !omitMasterDivision) {
-                request.input('division', sql.NVarChar, safeDivision);
+                bindInputIfMissing(request, 'division', sql.NVarChar, safeDivision);
                 filterClause += `
                   AND EXISTS (
                     SELECT 1
@@ -729,7 +923,7 @@ function appendSalesReportEnquiryFilters(req, request, safeCompany, safeDivision
                        = LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(@srUserEmail, N''), N'@almcg.com', N'@almoayyedcg.com'), N'@ALMCG.COM', N'@almoayyedcg.com'))))
                   ) `;
             if (safeRole && safeRole !== 'All') {
-                request.input('seRole', sql.NVarChar, safeRole);
+                bindInputIfMissing(request, 'seRole', sql.NVarChar, safeRole);
                 filterClause += `
                   AND EXISTS (
                     SELECT 1
@@ -740,10 +934,10 @@ function appendSalesReportEnquiryFilters(req, request, safeCompany, safeDivision
             }
         }
     } else if (safeDivision && safeDivision !== 'All' && !omitMasterDivision) {
-        request.input('division', sql.NVarChar, safeDivision);
+        bindInputIfMissing(request, 'division', sql.NVarChar, safeDivision);
         filterClause += ` AND EXISTS (SELECT 1 FROM EnquiryFor ef JOIN Master_EnquiryFor mef ON (ef.ItemName = mef.ItemName OR ef.ItemName LIKE '%- ' + mef.ItemName OR ef.ItemName LIKE '%-' + mef.ItemName) WHERE ef.RequestNo = E.RequestNo AND LTRIM(RTRIM(mef.DepartmentName)) = @division) `;
     } else if (safeCompany && safeCompany !== 'All') {
-        request.input('company', sql.NVarChar, safeCompany);
+        bindInputIfMissing(request, 'company', sql.NVarChar, safeCompany);
         filterClause += ` AND EXISTS (SELECT 1 FROM EnquiryFor ef JOIN Master_EnquiryFor mef ON (ef.ItemName = mef.ItemName OR ef.ItemName LIKE '%- ' + mef.ItemName OR ef.ItemName LIKE '%-' + mef.ItemName) WHERE ef.RequestNo = E.RequestNo AND LTRIM(RTRIM(mef.CompanyName)) = @company) `;
     }
 
@@ -752,10 +946,10 @@ function appendSalesReportEnquiryFilters(req, request, safeCompany, safeDivision
             filterClause += ' AND 1=0 ';
         } else if (req.salesReportForceSeName) {
             const seF = String(req.salesReportForceSeName).trim();
-            request.input('se', sql.NVarChar, seF);
+            bindInputIfMissing(request, 'se', sql.NVarChar, seF);
             filterClause += ` AND EXISTS (SELECT 1 FROM ConcernedSE cse WHERE cse.RequestNo = E.RequestNo AND LTRIM(RTRIM(cse.SEName)) = LTRIM(RTRIM(@se))) `;
         } else if (safeRole && safeRole !== 'All') {
-            request.input('se', sql.NVarChar, safeRole);
+            bindInputIfMissing(request, 'se', sql.NVarChar, safeRole);
             filterClause += ` AND EXISTS (SELECT 1 FROM ConcernedSE cse WHERE cse.RequestNo = E.RequestNo AND LTRIM(RTRIM(cse.SEName)) = LTRIM(RTRIM(@se))) `;
         }
     }
@@ -1336,73 +1530,40 @@ WITH LatestProbByUpdate AS (
             console.warn('[Sales Report] Lost KPI from Probability:', lostKpiErr.message);
         }
 
-        /** Follow-up KPI: latest row per enquiry; if status Follow-up, sum NetQuotedValue. */
+        /** Follow-up KPI: highest net quoted per enquiry (multiple customers count once), then sum. */
         let followUpKpiRes = { recordset: [{ Cnt: 0, TotalValue: 0 }] };
         try {
             followUpKpiRes = await request.query(`
             ${latestProbByUpdateCte}
-            SELECT COUNT(*) AS Cnt, SUM(${SQL_PROB_NETQUOTED_SUM}) AS TotalValue
-            FROM LatestProbByUpdate P
-            INNER JOIN EnquiryMaster E ON E.RequestNo = P.RequestNo
-            WHERE LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) LIKE '%follow%'
-              AND YEAR(COALESCE(P.BookedDate, P.UpdatedDateTime, E.EnquiryDate)) = @year
-              ${safeQuarter ? `AND DATEPART(QUARTER, COALESCE(P.BookedDate, P.UpdatedDateTime, E.EnquiryDate)) = @quarterNums` : ''}
+            SELECT COUNT(*) AS Cnt, SUM(ScopedValue) AS TotalValue
+            FROM (
+                SELECT
+                    P.RequestNo,
+                    MAX(${SQL_FUNNEL_NET_QUOTED_VALUE}) AS ScopedValue
+                FROM LatestProbByUpdate P
+                INNER JOIN EnquiryMaster E ON E.RequestNo = P.RequestNo
+                WHERE LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) LIKE '%follow%'
+                  AND YEAR(${probDateExpr}) = @year
+                  ${safeQuarter ? `AND DATEPART(QUARTER, ${probDateExpr}) = @quarterNums` : ''}
+                GROUP BY P.RequestNo
+            ) fuScoped
             `);
         } catch (fuKpiErr) {
             console.warn('[Sales Report] Follow-up KPI from Probability:', fuKpiErr.message);
         }
 
-        // Quoted slice: highest quote amount per enquiry in selected scope, then sum.
-        const quotedRes = await request.query(`
-            WITH FilteredEnquiries AS (
-                SELECT DISTINCT E.RequestNo
-                FROM EnquiryMaster E
-                WHERE 1=1 ${quotedFilterClause}
-            ),
-            CandidateQuotes AS (
-                SELECT
-                    EQ.RequestNo,
-                    ISNULL(
-                        TRY_CONVERT(
-                            DECIMAL(18,2),
-                            REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ISNULL(EQ.TotalAmount, '0'))), ',', ''), 'BD', ''), ' ', '')
-                        ),
-                        0
-                    ) AS ParsedAmount,
-                    COALESCE(EQ.UpdatedAt, EQ.QuoteDate) AS QuoteDate
-                FROM EnquiryQuotes EQ
-                WHERE 1=1
-                  ${safeDivision ? `AND EXISTS (
-                        SELECT 1
-                        FROM Master_EnquiryFor mefQ
-                        WHERE (
-                            UPPER(LTRIM(RTRIM(ISNULL(mefQ.DepartmentName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
-                            OR UPPER(LTRIM(RTRIM(ISNULL(mefQ.ItemName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
-                        )
-                          AND LTRIM(RTRIM(ISNULL(mefQ.DivisionCode, ''))) <> ''
-                          AND (
-                              CHARINDEX('/' + UPPER(LTRIM(RTRIM(ISNULL(mefQ.DivisionCode, '')))) + '/', UPPER(ISNULL(EQ.QuoteNumber, ''))) > 0
-                              OR CHARINDEX('-' + UPPER(LTRIM(RTRIM(ISNULL(mefQ.DivisionCode, '')))) + '/', UPPER(ISNULL(EQ.QuoteNumber, ''))) > 0
-                              OR CHARINDEX('/' + UPPER(LTRIM(RTRIM(ISNULL(mefQ.DivisionCode, '')))) + '-', UPPER(ISNULL(EQ.QuoteNumber, ''))) > 0
-                          )
-                    )` : ''}
-            ),
-            HighestQuotePerReq AS (
-                SELECT
-                    CQ.RequestNo,
-                    MAX(CQ.ParsedAmount) AS HighestQuoteAmount,
-                    MAX(CQ.QuoteDate) AS LatestQuoteDate
-                FROM CandidateQuotes CQ
-                GROUP BY CQ.RequestNo
-            )
-            SELECT 
-                COUNT(DISTINCT FE.RequestNo) as Cnt,
-                SUM(ISNULL(H.HighestQuoteAmount, 0)) as TotalValue
-            FROM FilteredEnquiries FE
-            INNER JOIN HighestQuotePerReq H ON H.RequestNo = FE.RequestNo
-            WHERE YEAR(COALESCE(H.LatestQuoteDate, GETDATE())) = @year
-              ${safeQuarter ? 'AND DATEPART(QUARTER, COALESCE(H.LatestQuoteDate, GETDATE())) = @quarterNums' : ''}
-        `);
+        // Quoted KPI — same LatestQuoted + max-per-enquiry logic and filters as Jobs (Quoted) table.
+        const quotedTableFilterClause = appendSalesReportEnquiryFilters(
+            req,
+            request,
+            safeCompany,
+            safeDivision,
+            safeRole,
+            { omitEnquiryMasterDivisionForQuoteOwnJob: true }
+        );
+        const quotedRes = await request.query(
+            buildQuotedMaxPerEnquiryKpiSql(quotedTableFilterClause, safeDivision, safeQuarter)
+        );
 
         // 3. Top 10 Customers
         const topCustomersQuery = `
@@ -1514,40 +1675,22 @@ WITH LatestProbByUpdate AS (
         );
         let probabilityFunnelRes = { recordset: [] };
         try {
-            probabilityFunnelRes = await request.query(`
-            ${funnelLatestProbCte}
-            SELECT 
-                MAX(LTRIM(RTRIM(ISNULL(P.ProbabilityChance, '')))) AS ProbabilityName,
-                ${SQL_PROB_CHANCE_PCT_EXPR} AS ProbabilityPercentage,
-                SUM(${SQL_FUNNEL_NET_QUOTED_VALUE}) AS TotalValue,
-                COUNT(*) AS Count
-            FROM LatestProbFunnelScope P
-            INNER JOIN EnquiryMaster E ON E.RequestNo = P.RequestNo
-            WHERE YEAR(${probDateExpr}) = @year
-              ${safeQuarter ? `AND DATEPART(QUARTER, ${probDateExpr}) = @quarterNums` : ''}
-              AND ${SQL_FUNNEL_FOLLOWUP_STATUS}
-            GROUP BY ${SQL_PROB_CHANCE_PCT_EXPR}
-            HAVING ${SQL_PROB_CHANCE_PCT_EXPR} IS NOT NULL
-            ORDER BY ProbabilityPercentage ASC
-            `);
+            probabilityFunnelRes = await request.query(
+                buildSalesReportProbabilityFunnelAggregateSql(
+                    funnelLatestProbCte,
+                    probDateExpr,
+                    safeQuarter
+                )
+            );
         } catch (pfErr) {
             console.warn('[Sales Report] Funnel Probability fallback:', pfErr.message);
-            probabilityFunnelRes = await request.query(`
-            ${funnelLatestProbCte}
-            SELECT 
-                MAX(LTRIM(RTRIM(ISNULL(P.ProbabilityChance, '')))) AS ProbabilityName,
-                ${SQL_PROB_CHANCE_PCT_EXPR} AS ProbabilityPercentage,
-                SUM(${SQL_FUNNEL_NET_QUOTED_VALUE}) AS TotalValue,
-                COUNT(*) AS Count
-            FROM LatestProbFunnelScope P
-            INNER JOIN EnquiryMaster E ON E.RequestNo = P.RequestNo
-            WHERE YEAR(${probDateExpr}) = @year
-              ${safeQuarter ? `AND DATEPART(QUARTER, ${probDateExpr}) = @quarterNums` : ''}
-              AND ${SQL_FUNNEL_FOLLOWUP_STATUS}
-            GROUP BY ${SQL_PROB_CHANCE_PCT_EXPR}
-            HAVING ${SQL_PROB_CHANCE_PCT_EXPR} IS NOT NULL
-            ORDER BY ProbabilityPercentage ASC
-        `);
+            probabilityFunnelRes = await request.query(
+                buildSalesReportProbabilityFunnelAggregateSql(
+                    funnelLatestProbCte,
+                    probDateExpr,
+                    safeQuarter
+                )
+            );
         }
 
         /**
@@ -1566,11 +1709,19 @@ WITH LatestProbByUpdate AS (
                 effectiveSe: effectiveQuotedSe,
                 seInputName: 'quotedSe',
             });
+            const pendingQuoteScopeClause = buildSalesReportPendingQuoteScopeClause({
+                nonCcBlock,
+                safeCompany,
+                safeDivision,
+                effectiveSe: effectiveQuotedSe,
+                seInputName: 'quotedSe',
+            });
             quotedPendingProbabilityRes = await request.query(
                 buildSalesReportPendingQuotedAggregateSql({
-                    probDateExpr,
+                    probDateExpr: SQL_PENDING_EVENT_DATE_EXPR,
                     safeQuarter,
                     pendingScopeClause: pendingQuotedScopeClause,
+                    pendingQuoteScopeClause,
                     probOwnJobClause: buildSalesReportProbOwnJobClause(safeDivision),
                     quoteOwnJobClause: buildSalesReportQuoteOwnJobDivisionClause(safeDivision),
                 })
@@ -1835,6 +1986,9 @@ router.get('/top-job-booked', async (req, res) => {
             bindInputIfMissing(request, 'statusSe', sql.NVarChar, effectiveQuotedSe);
             bindInputIfMissing(request, 'pendingSe', sql.NVarChar, effectiveQuotedSe);
         }
+        if (req.salesReportNonCcScope && req.salesReportUserEmail) {
+            bindInputIfMissing(request, 'srUserEmail', sql.NVarChar, req.salesReportUserEmail);
+        }
         const isQuotedTopJob = topJobStatusKey === 'Quoted';
         const isPendingTopJob = topJobStatusKey === 'Pending';
         const isFollowUpTopJob = topJobStatusKey === 'Follow Up';
@@ -1886,17 +2040,28 @@ router.get('/top-job-booked', async (req, res) => {
          * Never use generic `filterClause` here — it scopes by latest Probability per enquiry and drops job lines.
          */
         const pendingQuoteOwnJobClause = buildSalesReportQuoteOwnJobDivisionClause(safeDivision);
-        let pendingTopJobFilterClause = '';
+        let pendingTopJobProbScopeClause = '';
+        let pendingTopJobEnquiryScopeClause = '';
+        let pendingTopJobQuoteAccountableClause = '';
         if (isPendingTopJob) {
-            pendingTopJobFilterClause = buildSalesReportPendingScopeClause({
+            pendingTopJobProbScopeClause = buildSalesReportPendingScopeClause({
                 nonCcBlock,
                 safeCompany,
                 safeDivision,
                 effectiveSe: effectiveQuotedSe,
                 seInputName: 'pendingSe',
             });
+            pendingTopJobEnquiryScopeClause = buildSalesReportPendingEnquiryScopeClause({
+                nonCcBlock,
+                safeCompany,
+                safeDivision,
+                seInputName: 'pendingSe',
+            });
+            pendingTopJobQuoteAccountableClause = effectiveQuotedSe
+                ? buildSalesReportQuoteAccountableSeClause(effectiveQuotedSe, 'pendingSe', 'EQ')
+                : '';
         }
-        const topJobScopeClause = isPendingTopJob ? pendingTopJobFilterClause : filterClause;
+        const topJobScopeClause = isPendingTopJob ? pendingTopJobProbScopeClause : filterClause;
 
         let topJobBookedRes = { recordset: [] };
         try {
@@ -2248,11 +2413,13 @@ router.get('/top-job-booked', async (req, res) => {
                                 FROM EnquiryQuotes EQ
                                 WHERE EQ.RequestNo = E.RequestNo
                                   ${pendingQuoteOwnJobClause}
+                                  ${pendingTopJobQuoteAccountableClause}
                             )
                         )
                       )
-                  AND YEAR(${topJobDateExpr}) = @year ${topJobScopeClause}
-                  ${safeQuarter ? `AND DATEPART(QUARTER, ${topJobDateExpr}) = @quarterNums` : ''}
+                  AND YEAR(COALESCE(pendingQ.QuoteDate, P.UpdatedDateTime, P.ExpectedDate, ${SQL_LATEST_QUOTE_DATE_PER_ENQUIRY}, E.EnquiryDate)) = @year
+                  ${pendingTopJobEnquiryScopeClause}
+                  ${safeQuarter ? `AND DATEPART(QUARTER, COALESCE(pendingQ.QuoteDate, P.UpdatedDateTime, P.ExpectedDate, ${SQL_LATEST_QUOTE_DATE_PER_ENQUIRY}, E.EnquiryDate)) = @quarterNums` : ''}
             ) x
             ORDER BY x.JobValue DESC
             `);

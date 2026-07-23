@@ -225,6 +225,8 @@ const TOP_JOB_TABLE_CONFIG = {
 
 const TOP_JOB_QUOTE_TYPE_STATUSES = new Set(['Quoted', 'Won', 'Lost', 'Follow Up']);
 const TOP_JOB_PROB_QUOTE_REF_DATE_STATUSES = new Set(['Won', 'Lost', 'Follow Up']);
+/** Total + chart % use highest line value per enquiry; value column shows each customer row. */
+const TOP_JOB_MAX_PER_ENQUIRY_VALUE_STATUSES = new Set(['Quoted', 'Follow Up']);
 
 const SR_STORAGE_LEGACY = {
     year: 'reports_year',
@@ -402,14 +404,70 @@ function buildTopJobEnquiryGroupMeta(rows) {
     return { continuation, rowSpanAt };
 }
 
-function renderTopJobEnquiryGroupCell(isContinuation, rowSpan, className, content) {
+function renderTopJobEnquiryGroupCell(isContinuation, rowSpan, className, content, style) {
     if (isContinuation) return null;
     const cls = ['sr-detail-table__enquiry-group-cell', className].filter(Boolean).join(' ');
     return (
-        <td rowSpan={rowSpan} className={cls}>
+        <td rowSpan={rowSpan} className={cls} style={style}>
             {content}
         </td>
     );
+}
+
+/** Default Jobs table column widths (px) — shared across all status dropdown options; user-resizable. */
+const DEFAULT_TOP_JOB_COL_WIDTHS = {
+    slNo: 44,
+    requestNo: 90,
+    projectName: 250,
+    customerName: 250,
+    jobValue: 120,
+    chart: 150,
+    metric: 110,
+    quoteDate: 95,
+    bookedDate: 95,
+    lostDate: 95,
+    expectedDate: 105,
+    leadJob: 150,
+    quoteRef: 140,
+    clientName: 250,
+    consultantName: 250,
+    quoteType: 110,
+    concernSe: 150,
+    extra: 180,
+};
+
+const TOP_JOB_CLIP_COLS = new Set([
+    'requestNo',
+    'projectName',
+    'customerName',
+    'metric',
+    'quoteRef',
+    'leadJob',
+    'clientName',
+    'consultantName',
+    'quoteType',
+    'concernSe',
+    'extra',
+]);
+
+function readTopJobColWidths() {
+    try {
+        const raw = localStorage.getItem('reports_topJobColWidths');
+        if (!raw) return { ...DEFAULT_TOP_JOB_COL_WIDTHS };
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_TOP_JOB_COL_WIDTHS };
+        return { ...DEFAULT_TOP_JOB_COL_WIDTHS, ...parsed };
+    } catch {
+        return { ...DEFAULT_TOP_JOB_COL_WIDTHS };
+    }
+}
+
+function writeTopJobColWidths(widths) {
+    try {
+        localStorage.setItem('reports_topJobColWidths', JSON.stringify(widths || {}));
+    } catch {
+        /* ignore */
+    }
 }
 
 /** Custom inverted funnel; numeric values are shown in the summary block below. */
@@ -599,6 +657,10 @@ const SalesReport = () => {
     const [topJobColumnFilters, setTopJobColumnFilters] = useState({});
     const [topJobValueFilter, setTopJobValueFilter] = useState(null);
     const [topJobValueFilterDraft, setTopJobValueFilterDraft] = useState({ mode: 'gt', v1: '', v2: '' });
+    const [topJobColWidths, setTopJobColWidths] = useState(() => readTopJobColWidths());
+    const topJobColWidthsRef = useRef(topJobColWidths);
+    topJobColWidthsRef.current = topJobColWidths;
+    const topJobColResizeRef = useRef({ key: null, startX: 0, startWidth: 0 });
     const [activeHeaderFilter, setActiveHeaderFilter] = useState(null);
     const [headerFilterSearch, setHeaderFilterSearch] = useState('');
     const [headerFilterDraft, setHeaderFilterDraft] = useState([]);
@@ -1184,6 +1246,53 @@ const SalesReport = () => {
         };
     }, [activeHeaderFilter, updateFilterPanelPosition]);
 
+    const getTopJobColStyle = useCallback(
+        (key) => {
+            const w = Number(topJobColWidths[key] ?? DEFAULT_TOP_JOB_COL_WIDTHS[key]);
+            if (!Number.isFinite(w) || w <= 0) return undefined;
+            return { width: w, minWidth: w, maxWidth: w };
+        },
+        [topJobColWidths]
+    );
+
+    const onTopJobColResizeMove = useCallback((e) => {
+        const r = topJobColResizeRef.current;
+        if (!r.key) return;
+        const next = Math.max(60, Math.round(r.startWidth + (e.pageX - r.startX)));
+        setTopJobColWidths((prev) => ({ ...prev, [r.key]: next }));
+    }, []);
+
+    const onTopJobColResizeEnd = useCallback(() => {
+        topJobColResizeRef.current = { key: null, startX: 0, startWidth: 0 };
+        document.removeEventListener('mousemove', onTopJobColResizeMove);
+        document.removeEventListener('mouseup', onTopJobColResizeEnd);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        writeTopJobColWidths(topJobColWidthsRef.current);
+    }, [onTopJobColResizeMove]);
+
+    const startTopJobColResize = useCallback(
+        (e, key) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const startWidth =
+                Number(topJobColWidthsRef.current[key] ?? DEFAULT_TOP_JOB_COL_WIDTHS[key]) || 100;
+            topJobColResizeRef.current = { key, startX: e.pageX, startWidth };
+            document.addEventListener('mousemove', onTopJobColResizeMove);
+            document.addEventListener('mouseup', onTopJobColResizeEnd);
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+        },
+        [onTopJobColResizeMove, onTopJobColResizeEnd]
+    );
+
+    useEffect(() => {
+        return () => {
+            document.removeEventListener('mousemove', onTopJobColResizeMove);
+            document.removeEventListener('mouseup', onTopJobColResizeEnd);
+        };
+    }, [onTopJobColResizeMove, onTopJobColResizeEnd]);
+
     const openHeaderFilter = (key) => {
         if (key === 'jobValue') {
             setHeaderFilterSearch('');
@@ -1242,10 +1351,9 @@ const SalesReport = () => {
     }, [topRowsFiltered]);
     /** Same basis as the blue “Total” row in the value column — bar length + % prefix use this (not max single job). */
     const topJobChartDenominator = useMemo(() => {
-        const raw =
-            topJobStatus === 'Quoted'
-                ? topRowsFilteredQuotedMaxPerEnquiryTotal
-                : topRowsFilteredTotalValue;
+        const raw = TOP_JOB_MAX_PER_ENQUIRY_VALUE_STATUSES.has(topJobStatus)
+            ? topRowsFilteredQuotedMaxPerEnquiryTotal
+            : topRowsFilteredTotalValue;
         const n = Math.abs(Number(raw)) || 0;
         return Number.isFinite(n) ? n : 0;
     }, [topJobStatus, topRowsFilteredQuotedMaxPerEnquiryTotal, topRowsFilteredTotalValue]);
@@ -1612,8 +1720,12 @@ const SalesReport = () => {
     const renderFilterableHeader = (key, label, className = '') => {
         const applied = topJobColumnFilters[key];
         const isFiltered = Array.isArray(applied);
+        const clip = TOP_JOB_CLIP_COLS.has(key) ? 'sr-detail-table__clip' : '';
         return (
-            <th className={`sr-filterable-th ${className}`.trim()}>
+            <th
+                className={`sr-filterable-th sr-resizable-th ${clip} ${className}`.trim()}
+                style={getTopJobColStyle(key)}
+            >
                 <button
                     type="button"
                     className="sr-th-filter-btn"
@@ -1625,6 +1737,11 @@ const SalesReport = () => {
                     <span>{label}</span>
                     <span className={`sr-th-filter-caret${isFiltered ? ' sr-th-filter-caret--active' : ''}`}>▼</span>
                 </button>
+                <span
+                    className="sr-col-resize-handle"
+                    title="Drag to resize column"
+                    onMouseDown={(e) => startTopJobColResize(e, key)}
+                />
             </th>
         );
     };
@@ -1632,7 +1749,7 @@ const SalesReport = () => {
     const renderValueFilterHeader = (label) => {
         const isFiltered = !!topJobValueFilter;
         return (
-            <th className="sr-filterable-th text-end">
+            <th className="sr-filterable-th sr-resizable-th text-end" style={getTopJobColStyle('jobValue')}>
                 <button
                     type="button"
                     className="sr-th-filter-btn"
@@ -1644,9 +1761,29 @@ const SalesReport = () => {
                     <span>{label}</span>
                     <span className={`sr-th-filter-caret${isFiltered ? ' sr-th-filter-caret--active' : ''}`}>▼</span>
                 </button>
+                <span
+                    className="sr-col-resize-handle"
+                    title="Drag to resize column"
+                    onMouseDown={(e) => startTopJobColResize(e, 'jobValue')}
+                />
             </th>
         );
     };
+
+    const renderPlainHeader = (key, label, className = '', title) => (
+        <th
+            className={`sr-resizable-th ${className}`.trim()}
+            style={getTopJobColStyle(key)}
+            title={title}
+        >
+            {label}
+            <span
+                className="sr-col-resize-handle"
+                title="Drag to resize column"
+                onMouseDown={(e) => startTopJobColResize(e, key)}
+            />
+        </th>
+    );
 
     const renderHeaderFilterPortal = () => {
         if (!activeHeaderFilter || !filterPanelPos) return null;
@@ -2250,17 +2387,17 @@ const SalesReport = () => {
                             <table className="table table-sm table-striped table-bordered mb-0 align-middle sr-detail-table">
                                 <thead className="table-secondary">
                                     <tr>
-                                        <th style={{ width: 44 }}>Sl.No.</th>
+                                        {renderPlainHeader('slNo', 'Sl.No.')}
                                         {renderFilterableHeader('requestNo', 'Enquiry No.')}
-                                        {renderFilterableHeader('projectName', 'Project Name', 'sr-detail-table__project-name')}
+                                        {renderFilterableHeader('projectName', 'Project Name')}
                                         {renderFilterableHeader('customerName', 'Customer Name')}
                                         {renderValueFilterHeader(topJobsTableConfig.valueHeader)}
-                                        <th
-                                            className="sr-job-bar-th"
-                                            title="Each row: % of the table Total (same as the blue Total row in the value column); bar length matches that %."
-                                        >
-                                            {topJobsTableConfig.chartHeader}
-                                        </th>
+                                        {renderPlainHeader(
+                                            'chart',
+                                            topJobsTableConfig.chartHeader,
+                                            'sr-job-bar-th',
+                                            'Each row: % of the table Total (same as the blue Total row in the value column); bar length matches that %.'
+                                        )}
                                         {topJobStatus === 'Quoted' ? (
                                             <>
                                                 {renderFilterableHeader('metric', topJobsTableConfig.metricHeader, 'text-end text-nowrap')}
@@ -2330,10 +2467,11 @@ const SalesReport = () => {
                                     ) : (
                                         <>
                                         <tr className="sr-detail-table__total-row">
-                                            <td />
-                                            <td />
+                                            <td style={getTopJobColStyle('slNo')} />
+                                            <td style={getTopJobColStyle('requestNo')} />
                                             <td
-                                                className="text-center fw-semibold small sr-detail-table__project-name"
+                                                className="text-center fw-semibold small sr-detail-table__clip"
+                                                style={getTopJobColStyle('projectName')}
                                                 title="Distinct projects: unique enquiry numbers in this list (multiple quotes for the same enquiry count once)."
                                             >
                                                 {topRowsFilteredDistinctProjectCount > 0
@@ -2344,15 +2482,17 @@ const SalesReport = () => {
                                                       }`
                                                     : ''}
                                             </td>
-                                            <td className="text-end fw-semibold">Total</td>
-                                            <td className="text-end fw-semibold">
+                                            <td className="text-end fw-semibold sr-detail-table__clip" style={getTopJobColStyle('customerName')}>
+                                                Total
+                                            </td>
+                                            <td className="text-end fw-semibold" style={getTopJobColStyle('jobValue')}>
                                                 {formatK(
-                                                    topJobStatus === 'Quoted'
+                                                    TOP_JOB_MAX_PER_ENQUIRY_VALUE_STATUSES.has(topJobStatus)
                                                         ? topRowsFilteredQuotedMaxPerEnquiryTotal
                                                         : topRowsFilteredTotalValue
                                                 )}
                                             </td>
-                                            <td />
+                                            <td style={getTopJobColStyle('chart')} />
                                             {topJobStatus === 'Quoted' ? (
                                                 <>
                                                     <td />
@@ -2406,11 +2546,12 @@ const SalesReport = () => {
                                                 topJobEnquiryGroupMeta.continuation.has(idx);
                                             const enquiryGroupRowSpan =
                                                 topJobEnquiryGroupMeta.rowSpanAt.get(idx) || 1;
+                                            const rowValue = Math.abs(Number(row.JobValue)) || 0;
                                             const chartValue =
+                                                TOP_JOB_MAX_PER_ENQUIRY_VALUE_STATUSES.has(topJobStatus) &&
                                                 enquiryKey
-                                                    ? (topJobEnquiryMaxValueByKey.get(enquiryKey) ??
-                                                      (Math.abs(Number(row.JobValue)) || 0))
-                                                    : Math.abs(Number(row.JobValue)) || 0;
+                                                    ? (topJobEnquiryMaxValueByKey.get(enquiryKey) ?? rowValue)
+                                                    : rowValue;
                                             const v = chartValue;
                                             const denom =
                                                 topJobChartDenominator > 0 ? topJobChartDenominator : topJobValueMax;
@@ -2435,101 +2576,152 @@ const SalesReport = () => {
                                                     key={`${row.RequestNo || row.ProjectName || 'r'}-${String(row.LeadJob || '').slice(0, 40)}-${idx}`}
                                                     className={groupClass}
                                                 >
-                                                    <td>{idx + 1}</td>
+                                                    <td style={getTopJobColStyle('slNo')}>{idx + 1}</td>
                                                     {renderTopJobEnquiryGroupCell(
                                                         isEnquiryGroupContinuation,
                                                         enquiryGroupRowSpan,
                                                         null,
-                                                        row.RequestNo || row.EnquiryNo || '—'
+                                                        row.RequestNo || row.EnquiryNo || '—',
+                                                        getTopJobColStyle('requestNo')
                                                     )}
                                                     {renderTopJobEnquiryGroupCell(
                                                         isEnquiryGroupContinuation,
                                                         enquiryGroupRowSpan,
-                                                        'sr-detail-table__project-name',
+                                                        'sr-detail-table__clip',
                                                         <span title={String(row.ProjectName || '').trim() || undefined}>
                                                             {row.ProjectName || '—'}
-                                                        </span>
+                                                        </span>,
+                                                        getTopJobColStyle('projectName')
                                                     )}
-                                                    <td>{row.CustomerName || '—'}</td>
-                                                    <td className="text-end">{formatK(row.JobValue)}</td>
-                                                    {renderTopJobEnquiryGroupCell(
-                                                        isEnquiryGroupContinuation,
-                                                        enquiryGroupRowSpan,
-                                                        'sr-job-bar-cell',
-                                                        <div className="sr-job-bar-wrap">
-                                                            <span className="sr-job-bar-pct" title={pctTitle}>
-                                                                <span className="sr-job-bar-pct-num">{pctRounded}</span>
-                                                                <span className="sr-job-bar-pct-sym">%</span>
-                                                            </span>
-                                                            <div
-                                                                className="sr-job-bar-track"
-                                                                title={`${pctRounded}% of ${basisLabel} (${formatExactAmountString(v)})`}
-                                                                role="img"
-                                                                aria-label={`Job value ${pctRounded} percent of ${basisLabel}`}
-                                                            >
-                                                                <div className="sr-job-bar-fill" style={{ width: `${barW}%` }} />
+                                                    <td
+                                                        className="sr-detail-table__clip"
+                                                        style={getTopJobColStyle('customerName')}
+                                                        title={String(row.CustomerName || '').trim() || undefined}
+                                                    >
+                                                        {row.CustomerName || '—'}
+                                                    </td>
+                                                    <td className="text-end" style={getTopJobColStyle('jobValue')}>
+                                                        {formatK(row.JobValue)}
+                                                    </td>
+                                                    {TOP_JOB_MAX_PER_ENQUIRY_VALUE_STATUSES.has(topJobStatus) ? (
+                                                        renderTopJobEnquiryGroupCell(
+                                                            isEnquiryGroupContinuation,
+                                                            enquiryGroupRowSpan,
+                                                            'sr-job-bar-cell',
+                                                            <div className="sr-job-bar-wrap">
+                                                                <span className="sr-job-bar-pct" title={pctTitle}>
+                                                                    <span className="sr-job-bar-pct-num">{pctRounded}</span>
+                                                                    <span className="sr-job-bar-pct-sym">%</span>
+                                                                </span>
+                                                                <div
+                                                                    className="sr-job-bar-track"
+                                                                    title={`${pctRounded}% of ${basisLabel} (${formatExactAmountString(v)})`}
+                                                                    role="img"
+                                                                    aria-label={`Job value ${pctRounded} percent of ${basisLabel}`}
+                                                                >
+                                                                    <div className="sr-job-bar-fill" style={{ width: `${barW}%` }} />
+                                                                </div>
+                                                            </div>,
+                                                            getTopJobColStyle('chart')
+                                                        )
+                                                    ) : (
+                                                        <td className="sr-job-bar-cell" style={getTopJobColStyle('chart')}>
+                                                            <div className="sr-job-bar-wrap">
+                                                                <span className="sr-job-bar-pct" title={pctTitle}>
+                                                                    <span className="sr-job-bar-pct-num">{pctRounded}</span>
+                                                                    <span className="sr-job-bar-pct-sym">%</span>
+                                                                </span>
+                                                                <div
+                                                                    className="sr-job-bar-track"
+                                                                    title={`${pctRounded}% of ${basisLabel} (${formatExactAmountString(v)})`}
+                                                                    role="img"
+                                                                    aria-label={`Job value ${pctRounded} percent of ${basisLabel}`}
+                                                                >
+                                                                    <div className="sr-job-bar-fill" style={{ width: `${barW}%` }} />
+                                                                </div>
                                                             </div>
-                                                        </div>
+                                                        </td>
                                                     )}
                                                     {topJobStatus === 'Quoted' ? (
                                                         <>
-                                                            <td className="text-end small text-nowrap">
+                                                            <td
+                                                                className="text-end small text-nowrap sr-detail-table__clip"
+                                                                style={getTopJobColStyle('metric')}
+                                                                title={String(row.QuoteRef || '').trim() || undefined}
+                                                            >
                                                                 {row.QuoteRef || '—'}
                                                             </td>
-                                                            <td className="text-nowrap">
+                                                            <td className="text-nowrap" style={getTopJobColStyle('quoteDate')}>
                                                                 {formatDateShort(row.QuoteDate)}
                                                             </td>
                                                             {renderTopJobEnquiryGroupCell(
                                                                 isEnquiryGroupContinuation,
                                                                 enquiryGroupRowSpan,
-                                                                'text-nowrap',
-                                                                row.LeadJob || '—'
+                                                                'text-nowrap sr-detail-table__clip',
+                                                                <span title={String(row.LeadJob || '').trim() || undefined}>
+                                                                    {row.LeadJob || '—'}
+                                                                </span>,
+                                                                getTopJobColStyle('leadJob')
                                                             )}
                                                         </>
                                                     ) : topJobStatus === 'Won' ? (
                                                         <>
-                                                            <td className="text-end small text-nowrap">
+                                                            <td className="text-end small text-nowrap" style={getTopJobColStyle('metric')}>
                                                                 {renderTopJobsMetricCell(row)}
                                                             </td>
-                                                            <td className="text-nowrap">{formatDateShort(row.BookedDate)}</td>
+                                                            <td className="text-nowrap" style={getTopJobColStyle('bookedDate')}>
+                                                                {formatDateShort(row.BookedDate)}
+                                                            </td>
                                                         </>
                                                     ) : topJobStatus === 'Lost' ? (
                                                         <>
-                                                            <td className="text-end small text-nowrap">
+                                                            <td className="text-end small text-nowrap" style={getTopJobColStyle('metric')}>
                                                                 {renderTopJobsMetricCell(row)}
                                                             </td>
-                                                            <td className="text-nowrap">{formatDateShort(row.LostDate)}</td>
+                                                            <td className="text-nowrap" style={getTopJobColStyle('lostDate')}>
+                                                                {formatDateShort(row.LostDate)}
+                                                            </td>
                                                         </>
                                                     ) : topJobStatus === 'Follow Up' ? (
                                                         <>
-                                                            <td className="text-end small text-nowrap">
+                                                            <td className="text-end small text-nowrap" style={getTopJobColStyle('metric')}>
                                                                 {renderTopJobsMetricCell(row)}
                                                             </td>
-                                                            <td className="text-nowrap">{formatDateShort(row.ExpectedDate)}</td>
+                                                            <td className="text-nowrap" style={getTopJobColStyle('expectedDate')}>
+                                                                {formatDateShort(row.ExpectedDate)}
+                                                            </td>
                                                         </>
                                                     ) : topJobStatus === 'Pending' ? (
                                                         <>
-                                                            <td className="text-end small text-nowrap">
+                                                            <td
+                                                                className="text-end small text-nowrap sr-detail-table__clip"
+                                                                style={getTopJobColStyle('quoteRef')}
+                                                                title={String(row.QuoteRef || '').trim() || undefined}
+                                                            >
                                                                 {row.QuoteRef || '—'}
                                                             </td>
-                                                            <td className="text-nowrap">
+                                                            <td className="text-nowrap" style={getTopJobColStyle('quoteDate')}>
                                                                 {formatDateShort(row.QuoteDate)}
                                                             </td>
-                                                            <td className="text-end small text-nowrap">
+                                                            <td className="text-end small text-nowrap" style={getTopJobColStyle('metric')}>
                                                                 {renderTopJobsMetricCell(row)}
                                                             </td>
                                                         </>
                                                     ) : (
-                                                        <td className="text-end small text-nowrap">
+                                                        <td className="text-end small text-nowrap" style={getTopJobColStyle('metric')}>
                                                             {renderTopJobsMetricCell(row)}
                                                         </td>
                                                     )}
                                                     {TOP_JOB_PROB_QUOTE_REF_DATE_STATUSES.has(topJobStatus) ? (
                                                         <>
-                                                            <td className="text-end small text-nowrap">
+                                                            <td
+                                                                className="text-end small text-nowrap sr-detail-table__clip"
+                                                                style={getTopJobColStyle('quoteRef')}
+                                                                title={String(row.QuoteRef || '').trim() || undefined}
+                                                            >
                                                                 {row.QuoteRef || '—'}
                                                             </td>
-                                                            <td className="text-nowrap">
+                                                            <td className="text-nowrap" style={getTopJobColStyle('quoteDate')}>
                                                                 {formatDateShort(row.QuoteDate)}
                                                             </td>
                                                         </>
@@ -2537,31 +2729,47 @@ const SalesReport = () => {
                                                     {renderTopJobEnquiryGroupCell(
                                                         isEnquiryGroupContinuation,
                                                         enquiryGroupRowSpan,
-                                                        null,
-                                                        row.ClientName || '—'
+                                                        'sr-detail-table__clip',
+                                                        <span title={String(row.ClientName || '').trim() || undefined}>
+                                                            {row.ClientName || '—'}
+                                                        </span>,
+                                                        getTopJobColStyle('clientName')
                                                     )}
                                                     {renderTopJobEnquiryGroupCell(
                                                         isEnquiryGroupContinuation,
                                                         enquiryGroupRowSpan,
-                                                        null,
-                                                        row.ConsultantName || '—'
+                                                        'sr-detail-table__clip',
+                                                        <span title={String(row.ConsultantName || '').trim() || undefined}>
+                                                            {row.ConsultantName || '—'}
+                                                        </span>,
+                                                        getTopJobColStyle('consultantName')
                                                     )}
                                                     {TOP_JOB_QUOTE_TYPE_STATUSES.has(topJobStatus)
                                                         ? renderTopJobEnquiryGroupCell(
                                                               isEnquiryGroupContinuation,
                                                               enquiryGroupRowSpan,
                                                               null,
-                                                              row.QuoteType || '—'
+                                                              row.QuoteType || '—',
+                                                              getTopJobColStyle('quoteType')
                                                           )
                                                         : null}
                                                     {renderTopJobEnquiryGroupCell(
                                                         isEnquiryGroupContinuation,
                                                         enquiryGroupRowSpan,
-                                                        null,
-                                                        row.ConcernSEEEQS || '—'
+                                                        'sr-detail-table__clip',
+                                                        <span title={String(row.ConcernSEEEQS || '').trim() || undefined}>
+                                                            {row.ConcernSEEEQS || '—'}
+                                                        </span>,
+                                                        getTopJobColStyle('concernSe')
                                                     )}
                                                     {topJobsTableConfig.extraHeader ? (
-                                                        <td>{row.ReasonForLost || row.FollowUpRemarks || '—'}</td>
+                                                        <td
+                                                            className="sr-detail-table__clip"
+                                                            style={getTopJobColStyle('extra')}
+                                                            title={String(row.ReasonForLost || row.FollowUpRemarks || '').trim() || undefined}
+                                                        >
+                                                            {row.ReasonForLost || row.FollowUpRemarks || '—'}
+                                                        </td>
                                                     ) : null}
                                                 </tr>
                                             );

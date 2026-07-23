@@ -1506,8 +1506,10 @@ router.get('/access/:requestNo', async (req, res) => {
 });
 
 // GET /api/quotes/prepared-signatory-options?division=...
-// Prepared By = distinct Master_ConcernedSE in division + CCMailIds users for that division only.
-// Signatory = CCMailIds users for that division (falls back to Prepared By when empty).
+// Prepared By = distinct Master_ConcernedSE in division + CCMailIds users for that division only
+//   (notification-excluded addresses omitted from Prepared By).
+// Signatory / Co-Signatory = ALL CCMailIds for that division mapped to Master_ConcernedSE
+//   (falls back to Prepared By when empty).
 router.get('/prepared-signatory-options', async (req, res) => {
     try {
         const division = String(req.query.division || '').trim();

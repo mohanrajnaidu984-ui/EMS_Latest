@@ -1083,9 +1083,17 @@ export function preserveClauseEditorSelectionDuring(jodit, fn) {
         (isClauseEditorSelectionInTable(jodit) || jodit.__emsTableHistorySync);
     const tableBookmark = useTableBookmark ? captureTableCellCaretBookmark(jodit) : null;
     const offset = skipRestore || tableBookmark ? null : captureCollapsedCaretOffset(jodit);
+    /** Invalidate deferred restores when a later keystroke / preserve pass supersedes this one. */
+    const restoreGen = (jodit.__emsCaretRestoreGeneration =
+        (jodit.__emsCaretRestoreGeneration || 0) + 1);
     const result = fn();
+
+    const isRestoreStillCurrent = () =>
+        jodit.__emsCaretRestoreGeneration === restoreGen && !isClauseEditorTypingActive(jodit);
+
     if (tableBookmark) {
-        const restore = () => {
+        const restoreForced = () => {
+            if (jodit.__emsCaretRestoreGeneration !== restoreGen) return;
             jodit.__emsForceCaretRestore = true;
             try {
                 restoreTableCellCaretBookmark(jodit, tableBookmark);
@@ -1093,13 +1101,19 @@ export function preserveClauseEditorSelectionDuring(jodit, fn) {
                 jodit.__emsForceCaretRestore = false;
             }
         };
-        restore();
+        /** Soft: never yank caret after the user has already typed/backspaced again. */
+        const restoreSoft = () => {
+            if (!isRestoreStillCurrent()) return;
+            restoreTableCellCaretBookmark(jodit, tableBookmark);
+        };
+        restoreForced();
         requestAnimationFrame(() => {
-            restore();
-            requestAnimationFrame(restore);
+            restoreSoft();
+            requestAnimationFrame(restoreSoft);
         });
     } else if (offset != null) {
-        const restore = () => {
+        const restoreForced = () => {
+            if (jodit.__emsCaretRestoreGeneration !== restoreGen) return;
             jodit.__emsForceCaretRestore = true;
             try {
                 restoreCollapsedCaretOffset(jodit, offset);
@@ -1107,10 +1121,15 @@ export function preserveClauseEditorSelectionDuring(jodit, fn) {
                 jodit.__emsForceCaretRestore = false;
             }
         };
-        restore();
+        const restoreSoft = () => {
+            if (!isRestoreStillCurrent()) return;
+            /* Without force: skip if caret already moved to a new offset (next Backspace/key). */
+            restoreCollapsedCaretOffset(jodit, offset);
+        };
+        restoreForced();
         requestAnimationFrame(() => {
-            restore();
-            requestAnimationFrame(restore);
+            restoreSoft();
+            requestAnimationFrame(restoreSoft);
         });
     }
     return result;
@@ -1134,6 +1153,8 @@ export function bindClauseEditorTypingCaretGuard(jodit, getEditorBody, onTypingI
             releaseTimer = null;
         }
         jodit.__emsTypingLock = true;
+        /* Cancel stale caret restores from earlier DOM cleanup (Backspace jump). */
+        jodit.__emsCaretRestoreGeneration = (jodit.__emsCaretRestoreGeneration || 0) + 1;
     };
     const release = () => {
         if (releaseTimer) clearTimeout(releaseTimer);
@@ -4183,6 +4204,7 @@ function registerClauseEditorDeleteRenumber(jodit) {
                 if (e.key !== 'Backspace' && e.key !== 'Delete') return;
                 if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
                 jodit.__emsDeleteKeyLock = true;
+                jodit.__emsCaretRestoreGeneration = (jodit.__emsCaretRestoreGeneration || 0) + 1;
             },
             true
         );

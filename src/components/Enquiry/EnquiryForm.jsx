@@ -268,6 +268,7 @@ const EnquiryForm = ({ requestNoToOpen }) => {
         return (saved && activeTab === 'New') ? JSON.parse(saved) : [];
     });
     const [pricedEnquiryForIds, setPricedEnquiryForIds] = useState(() => new Set());
+    const [pricedCustomerNames, setPricedCustomerNames] = useState([]);
 
     useEffect(() => {
         if (activeTab === 'New') {
@@ -645,40 +646,77 @@ const EnquiryForm = ({ requestNoToOpen }) => {
      * Triggered by the `-` button on the Received From listbox. The Customer listbox
      * itself does not expose a remove button (`canRemove={false}`), so this handler is
      * the only path that drops a row. Behavior:
-     *   - Modify mode + pricing already saved: keep the Customer (pricing is keyed by
-     *     customer), drop only its Received From, and pre-fill the dropdowns so the
-     *     user can pick a new contact and click `+` to re-pair it for the same customer.
-     *   - Otherwise: drop both Customer and Received From at the same index, as before.
+     *   - Supports multi-select: all selected pair indices are processed together.
+     *   - Modify mode + that customer's price already updated in Pricing: keep the Customer
+     *     (pricing is keyed by customer), drop only its Received From, and move the customer
+     *     to the unpaired tail so the user can pick a new contact and click `+` to re-pair.
+     *   - Otherwise: drop both Customer and Received From at those indices.
      */
-    const handleRemoveCustomerPair = (selectedIndex) => {
+    const isCustomerPricedInPricingModule = useCallback(
+        (customerName) => {
+            const catalog = masters.customers || [];
+            return (pricedCustomerNames || []).some((priced) =>
+                isSameCompanyName(customerName, priced, catalog)
+            );
+        },
+        [pricedCustomerNames, masters.customers]
+    );
+
+    const handleRemoveCustomerPair = (selectedIndices) => {
         if (isLimitedEdit) return;
         const pairedLen = Math.min(customerList.length, receivedFromList.length);
         if (pairedLen === 0) return;
 
-        let idx = selectedIndex;
-        if (idx == null || idx < 0 || idx >= pairedLen) {
-            idx = pairedLen - 1;
+        let indices = (Array.isArray(selectedIndices) ? selectedIndices : [selectedIndices])
+            .map(Number)
+            .filter((i) => Number.isInteger(i) && i >= 0 && i < pairedLen);
+        if (!indices.length) {
+            indices = [pairedLen - 1];
         }
+        const removeSet = new Set(indices);
 
-        if (isModifyMode && pricedEnquiryForIds.size > 0) {
-            const stayingCustomer = customerList[idx];
-            setReceivedFromList((prev) => prev.filter((_, i) => i !== idx));
-            if (stayingCustomer) {
-                handleInputChange('CustomerName', stayingCustomer);
-                handleInputChange('ReceivedFrom', '');
+        const keptPairs = [];
+        const lockedUnpaired = [];
+        const alreadyUnpaired = customerList.slice(pairedLen);
+
+        for (let i = 0; i < pairedLen; i++) {
+            if (!removeSet.has(i)) {
+                keptPairs.push({ customer: customerList[i], receivedFrom: receivedFromList[i] });
+                continue;
             }
-            return;
+            const cust = customerList[i];
+            if (isModifyMode && isCustomerPricedInPricingModule(cust)) {
+                lockedUnpaired.push(cust);
+            }
+            // Unpriced (or new enquiry): drop both customer and received-from.
         }
 
-        setCustomerList((prev) => prev.filter((_, i) => i !== idx));
-        setReceivedFromList((prev) => prev.filter((_, i) => i !== idx));
+        setCustomerList([...keptPairs.map((p) => p.customer), ...lockedUnpaired, ...alreadyUnpaired]);
+        setReceivedFromList(keptPairs.map((p) => p.receivedFrom));
+
+        if (lockedUnpaired.length) {
+            const names = lockedUnpaired.join(', ');
+            alert(
+                lockedUnpaired.length === 1
+                    ? `"${names}" has a price updated in Pricing and cannot be removed. Only Received From was cleared — select a new contact and click + to re-pair.`
+                    : `These customers have prices updated in Pricing and cannot be removed: ${names}. Only their Received From was cleared — re-pair each with + before saving.`
+            );
+            handleInputChange('CustomerName', lockedUnpaired[0]);
+            handleInputChange('ReceivedFrom', '');
+        }
     };
 
-    const handleRemoveItem = (list, setList, originalList = []) => {
+    const handleRemoveItem = (list, setList, originalList = [], selectedIndices) => {
         if (isLimitedEdit) return;
-        if (list.length > 0) {
-            setList(list.slice(0, -1));
+        if (!list.length) return;
+        let indices = (Array.isArray(selectedIndices) ? selectedIndices : [selectedIndices])
+            .map(Number)
+            .filter((i) => Number.isInteger(i) && i >= 0 && i < list.length);
+        if (!indices.length) {
+            indices = [list.length - 1];
         }
+        const removeSet = new Set(indices);
+        setList(list.filter((_, i) => !removeSet.has(i)));
     };
 
     // --- Modal Open Handlers ---
@@ -1476,6 +1514,7 @@ const EnquiryForm = ({ requestNoToOpen }) => {
         setAckSEList([]);
         setHyperlink({ name: '', url: '' });
         setPricedEnquiryForIds(new Set());
+        setPricedCustomerNames([]);
         setIsModifyMode(false);
         setModifyRequestNo('');
         setWorkflowComputed(null);
@@ -1597,7 +1636,7 @@ const EnquiryForm = ({ requestNoToOpen }) => {
                 await loadAttachmentsForEnquiry(enq.RequestNo);
             }
 
-            // Fetch which EnquiryFor IDs have pricing rows (used to block structure delete)
+            // Fetch which EnquiryFor IDs / customers have pricing rows (block structure/customer delete)
             try {
                 const pricedRes = await fetch(
                     `/api/enquiries/${encodeURIComponent(requestNo)}/enquiryfor/priced-ids`
@@ -1606,11 +1645,17 @@ const EnquiryForm = ({ requestNoToOpen }) => {
                     const priced = await pricedRes.json();
                     const ids = Array.isArray(priced?.pricedIds) ? priced.pricedIds : [];
                     setPricedEnquiryForIds(new Set(ids.map((x) => String(x))));
+                    const custs = Array.isArray(priced?.pricedCustomers) ? priced.pricedCustomers : [];
+                    setPricedCustomerNames(
+                        custs.map((c) => String(c || '').trim()).filter(Boolean)
+                    );
                 } else {
                     setPricedEnquiryForIds(new Set());
+                    setPricedCustomerNames([]);
                 }
             } catch {
                 setPricedEnquiryForIds(new Set());
+                setPricedCustomerNames([]);
             }
 
             setWorkflowComputed(null);
@@ -2586,7 +2631,7 @@ const EnquiryForm = ({ requestNoToOpen }) => {
                                                             onOptionChange={(val) => handleInputChange('EnquiryType', val)}
                                                             listBoxItems={enqTypeList}
                                                             onAdd={handleAddEnqType}
-                                                            onRemove={() => handleRemoveItem(enqTypeList, setEnqTypeList)}
+                                                            onRemove={(idxs) => handleRemoveItem(enqTypeList, setEnqTypeList, [], idxs)}
                                                             error={errors.EnquiryType}
                                                             disabled={!canEdit}
                                                             canRemove={!isLimitedEdit}
@@ -2780,7 +2825,7 @@ const EnquiryForm = ({ requestNoToOpen }) => {
                                                         onOptionChange={(val) => handleInputChange('ConsultantName', val)}
                                                         listBoxItems={consultantList}
                                                         onAdd={handleAddConsultant}
-                                                        onRemove={() => handleRemoveItem(consultantList, setConsultantList, originalConsultantList)}
+                                                        onRemove={(idxs) => handleRemoveItem(consultantList, setConsultantList, originalConsultantList, idxs)}
                                                         showNew={true}
                                                         showEdit={true}
                                                         canEdit={!!formData.ConsultantName}

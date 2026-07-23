@@ -149,6 +149,8 @@ const ProbabilityForm = () => {
     const [colFCustomer, setColFCustomer] = useState(null);
     const [colFStatus, setColFStatus] = useState(null);
     const [colFQuoteType, setColFQuoteType] = useState(null);
+    const [colFProbability, setColFProbability] = useState(null);
+    const [colFExpectedDate, setColFExpectedDate] = useState(null);
     const [colFNet, setColFNet] = useState({ mode: 'all', v1: '', v2: '' });
     const [sortCol, setSortCol] = useState(null);
     const [sortAsc, setSortAsc] = useState(true);
@@ -163,6 +165,8 @@ const ProbabilityForm = () => {
         net: null,
         status: null,
         quoteType: null,
+        probability: null,
+        expectedDate: null,
     });
     const [draftMulti, setDraftMulti] = useState(() => new Set());
     const [draftNet, setDraftNet] = useState({ mode: 'all', v1: '', v2: '' });
@@ -849,6 +853,43 @@ const ProbabilityForm = () => {
         const s = String(quoteTypeForQuoteRef(item) || '').trim();
         return s || '—';
     };
+    const probabilityKey = (item) => {
+        const s = String(item.ProbabilityOption || item.ProbabilityChance || '').trim();
+        return s || '—';
+    };
+    const expectedDateKey = (item) => {
+        const raw = item.ExpectedOrderDate;
+        if (!raw) return '—';
+        try {
+            const d = raw instanceof Date ? raw : new Date(raw);
+            if (Number.isNaN(d.getTime())) return '—';
+            return format(d, 'yyyy-MM-dd');
+        } catch {
+            return '—';
+        }
+    };
+    const formatExpectedDateLabel = (key) => {
+        if (!key || key === '—') return '—';
+        try {
+            const d = new Date(`${key}T00:00:00`);
+            if (Number.isNaN(d.getTime())) return key;
+            return format(d, 'dd-MMM-yyyy', { locale: enUS });
+        } catch {
+            return key;
+        }
+    };
+    const expectedDateSortValue = (item) => {
+        const raw = item.ExpectedOrderDate;
+        if (!raw) return null;
+        const d = raw instanceof Date ? raw : new Date(raw);
+        const t = d.getTime();
+        return Number.isNaN(t) ? null : t;
+    };
+    const probabilitySortValue = (item) => {
+        const s = probabilityKey(item);
+        const m = String(s).match(/(\d+)\s*%/);
+        return m ? Number(m[1]) : -1;
+    };
 
     const columnUniques = useMemo(() => {
         const enquiry = new Set();
@@ -856,19 +897,43 @@ const ProbabilityForm = () => {
         const customer = new Set();
         const status = new Set();
         const quoteType = new Set();
+        const probability = new Set();
+        const expectedDate = new Set();
         for (const item of enquiriesList) {
             enquiry.add(String(item.RequestNo ?? ''));
             project.add(projectKey(item));
             customer.add(customerKey(item));
             status.add(statusKey(item));
             quoteType.add(quoteTypeKey(item));
+            probability.add(probabilityKey(item));
+            expectedDate.add(expectedDateKey(item));
         }
+        const probOrder = [
+            'Low Chance (25%)',
+            '50-50 Chance (50%)',
+            'Medium Chance (75%)',
+            'High Chance (90%)',
+            'Very High Chance (99%)',
+            'No Chance (0%)',
+            '—',
+        ];
         return {
             enquiry: [...enquiry].sort(compareEnquiryNo),
             project: [...project].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
             customer: [...customer].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
             status: [...status].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
             quoteType: [...quoteType].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+            probability: [...probability].sort((a, b) => {
+                const ia = probOrder.indexOf(a);
+                const ib = probOrder.indexOf(b);
+                if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+                return a.localeCompare(b, undefined, { sensitivity: 'base' });
+            }),
+            expectedDate: [...expectedDate].sort((a, b) => {
+                if (a === '—') return 1;
+                if (b === '—') return -1;
+                return a.localeCompare(b);
+            }),
         };
     }, [enquiriesList]);
 
@@ -897,6 +962,12 @@ const ProbabilityForm = () => {
         }
         if (colFQuoteType !== null) {
             rows = rows.filter((r) => colFQuoteType.has(quoteTypeKey(r)));
+        }
+        if (colFProbability !== null) {
+            rows = rows.filter((r) => colFProbability.has(probabilityKey(r)));
+        }
+        if (colFExpectedDate !== null) {
+            rows = rows.filter((r) => colFExpectedDate.has(expectedDateKey(r)));
         }
         if (colFNet && colFNet.mode !== 'all') {
             const v1 = parseFloat(String(colFNet.v1 ?? '').replace(/,/g, '').trim());
@@ -951,6 +1022,20 @@ const ProbabilityForm = () => {
                     case 'quoteType':
                         c = quoteTypeKey(a).localeCompare(quoteTypeKey(b), undefined, { sensitivity: 'base' });
                         break;
+                    case 'probability': {
+                        const pa = probabilitySortValue(a);
+                        const pb = probabilitySortValue(b);
+                        c = pa === pb ? 0 : pa < pb ? -1 : 1;
+                        break;
+                    }
+                    case 'expectedDate': {
+                        const da = expectedDateSortValue(a);
+                        const db = expectedDateSortValue(b);
+                        const fa = da == null ? Number.POSITIVE_INFINITY : da;
+                        const fb = db == null ? Number.POSITIVE_INFINITY : db;
+                        c = fa === fb ? 0 : fa < fb ? -1 : 1;
+                        break;
+                    }
                     default:
                         c = 0;
                 }
@@ -958,7 +1043,21 @@ const ProbabilityForm = () => {
             });
         }
         return rows;
-    }, [enquiriesList, viewSearchText, colFEnquiry, colFProject, colFCustomer, colFStatus, colFQuoteType, colFNet, sortCol, sortAsc, currentUser]);
+    }, [
+        enquiriesList,
+        viewSearchText,
+        colFEnquiry,
+        colFProject,
+        colFCustomer,
+        colFStatus,
+        colFQuoteType,
+        colFProbability,
+        colFExpectedDate,
+        colFNet,
+        sortCol,
+        sortAsc,
+        currentUser,
+    ]);
 
     const listAggregates = useMemo(() => {
         let sumNet = 0;
@@ -1031,7 +1130,15 @@ const ProbabilityForm = () => {
         }
         const rect = el.getBoundingClientRect();
         const isNet = openColFilter === 'net';
-        const baseMinW = openColFilter === 'status' || openColFilter === 'quoteType' ? 220 : isNet ? 240 : 260;
+        const baseMinW =
+            openColFilter === 'status' ||
+            openColFilter === 'quoteType' ||
+            openColFilter === 'probability' ||
+            openColFilter === 'expectedDate'
+                ? 220
+                : isNet
+                  ? 240
+                  : 260;
         const vw = window.innerWidth;
         const vh = window.innerHeight;
         let left = isNet ? rect.right - Math.max(baseMinW, rect.width) : rect.left;
@@ -1076,54 +1183,52 @@ const ProbabilityForm = () => {
         return () => document.removeEventListener('mousedown', onDoc);
     }, [openColFilter]);
 
+    const getMultiFilterAll = (kind) => {
+        if (kind === 'enquiry') return columnUniques.enquiry;
+        if (kind === 'project') return columnUniques.project;
+        if (kind === 'customer') return columnUniques.customer;
+        if (kind === 'status') return columnUniques.status;
+        if (kind === 'quoteType') return columnUniques.quoteType;
+        if (kind === 'probability') return columnUniques.probability;
+        if (kind === 'expectedDate') return columnUniques.expectedDate;
+        return [];
+    };
+
+    const getMultiFilterActive = (kind) => {
+        if (kind === 'enquiry') return colFEnquiry;
+        if (kind === 'project') return colFProject;
+        if (kind === 'customer') return colFCustomer;
+        if (kind === 'status') return colFStatus;
+        if (kind === 'quoteType') return colFQuoteType;
+        if (kind === 'probability') return colFProbability;
+        if (kind === 'expectedDate') return colFExpectedDate;
+        return null;
+    };
+
+    const getMultiFilterSetter = (kind) => {
+        if (kind === 'enquiry') return setColFEnquiry;
+        if (kind === 'project') return setColFProject;
+        if (kind === 'customer') return setColFCustomer;
+        if (kind === 'status') return setColFStatus;
+        if (kind === 'quoteType') return setColFQuoteType;
+        if (kind === 'probability') return setColFProbability;
+        if (kind === 'expectedDate') return setColFExpectedDate;
+        return null;
+    };
+
     const openMultiDraft = (kind) => {
-        const all =
-            kind === 'enquiry'
-                ? columnUniques.enquiry
-                : kind === 'project'
-                  ? columnUniques.project
-                  : kind === 'customer'
-                    ? columnUniques.customer
-                    : kind === 'status'
-                      ? columnUniques.status
-                      : columnUniques.quoteType;
-        const active =
-            kind === 'enquiry'
-                ? colFEnquiry
-                : kind === 'project'
-                  ? colFProject
-                  : kind === 'customer'
-                    ? colFCustomer
-                    : kind === 'status'
-                      ? colFStatus
-                      : colFQuoteType;
+        const all = getMultiFilterAll(kind);
+        const active = getMultiFilterActive(kind);
         setDraftMulti(active !== null ? new Set(active) : new Set(all));
         setFilterSearch('');
         setOpenColFilter(kind);
     };
 
     const applyMultiDraft = (kind) => {
-        const all =
-            kind === 'enquiry'
-                ? columnUniques.enquiry
-                : kind === 'project'
-                  ? columnUniques.project
-                  : kind === 'customer'
-                    ? columnUniques.customer
-                    : kind === 'status'
-                      ? columnUniques.status
-                      : columnUniques.quoteType;
+        const all = getMultiFilterAll(kind);
         const next = new Set(draftMulti);
-        const setter =
-            kind === 'enquiry'
-                ? setColFEnquiry
-                : kind === 'project'
-                  ? setColFProject
-                  : kind === 'customer'
-                    ? setColFCustomer
-                    : kind === 'status'
-                      ? setColFStatus
-                      : setColFQuoteType;
+        const setter = getMultiFilterSetter(kind);
+        if (!setter) return;
         if (next.size === all.length) {
             setter(null);
         } else {
@@ -1133,17 +1238,8 @@ const ProbabilityForm = () => {
     };
 
     const clearMultiFilter = (kind) => {
-        const setter =
-            kind === 'enquiry'
-                ? setColFEnquiry
-                : kind === 'project'
-                  ? setColFProject
-                  : kind === 'customer'
-                    ? setColFCustomer
-                    : kind === 'status'
-                      ? setColFStatus
-                      : setColFQuoteType;
-        setter(null);
+        const setter = getMultiFilterSetter(kind);
+        if (setter) setter(null);
         setOpenColFilter(null);
     };
 
@@ -1204,16 +1300,7 @@ const ProbabilityForm = () => {
         if (kind === 'net') {
             return colFNet && colFNet.mode !== 'all' ? 'text-primary' : 'text-secondary';
         }
-        const s =
-            kind === 'enquiry'
-                ? colFEnquiry
-                : kind === 'project'
-                  ? colFProject
-                  : kind === 'customer'
-                    ? colFCustomer
-                    : kind === 'status'
-                      ? colFStatus
-                      : colFQuoteType;
+        const s = getMultiFilterActive(kind);
         return s !== null ? 'text-primary' : 'text-secondary';
     };
 
@@ -1223,10 +1310,23 @@ const ProbabilityForm = () => {
         setColFCustomer(null);
         setColFStatus(null);
         setColFQuoteType(null);
+        setColFProbability(null);
+        setColFExpectedDate(null);
         setColFNet({ mode: 'all', v1: '', v2: '' });
         setSortCol(null);
         setSortAsc(true);
     };
+
+    useEffect(() => {
+        if (listMode !== 'FollowUp') {
+            setColFProbability(null);
+            setColFExpectedDate(null);
+            if (openColFilter === 'probability' || openColFilter === 'expectedDate') {
+                setOpenColFilter(null);
+            }
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [listMode]);
 
     // --- Render Logic ---
 
@@ -1656,8 +1756,86 @@ const ProbabilityForm = () => {
                                                     </span>
                                                 </div>
                                             </th>
-                                            <th className="px-2 py-1 align-bottom fw-normal" style={{ width: '1300px', textAlign: 'left' }}>
-                                                Details
+                                            <th
+                                                className="px-2 py-1 align-bottom fw-normal"
+                                                style={{ width: '1300px', textAlign: 'left' }}
+                                            >
+                                                {listMode === 'FollowUp' ? (
+                                                    <div className="prob-followup-header-grid">
+                                                        <div className="prob-detail-col-1 fw-normal">Quote Reference</div>
+                                                        <div
+                                                            ref={(el) => {
+                                                                filterHeaderRefs.current.probability = el;
+                                                            }}
+                                                            className="prob-detail-col-2 prob-table-filter-header position-relative"
+                                                            style={{ cursor: 'pointer' }}
+                                                            onClick={(e) => toggleMultiColumnFilter('probability', e)}
+                                                        >
+                                                            <div className="d-flex align-items-end justify-content-between gap-1 w-100">
+                                                                <span className="fw-normal">Probability</span>
+                                                                <span className="d-flex align-items-center gap-1 flex-shrink-0">
+                                                                    <span
+                                                                        className={`user-select-none ${filterActiveClass('probability')}`}
+                                                                        style={{ fontSize: '10px', lineHeight: 1 }}
+                                                                        title="Filter"
+                                                                    >
+                                                                        ▼
+                                                                    </span>
+                                                                    <button
+                                                                        type="button"
+                                                                        data-sort-only="true"
+                                                                        className="btn btn-link p-0 text-decoration-none user-select-none"
+                                                                        style={{ fontSize: '11px', lineHeight: 1 }}
+                                                                        title="Sort"
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            handleSortClick('probability');
+                                                                        }}
+                                                                    >
+                                                                        {sortIndicator('probability')}
+                                                                    </button>
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        <div
+                                                            ref={(el) => {
+                                                                filterHeaderRefs.current.expectedDate = el;
+                                                            }}
+                                                            className="prob-detail-col-3 prob-table-filter-header position-relative"
+                                                            style={{ cursor: 'pointer' }}
+                                                            onClick={(e) => toggleMultiColumnFilter('expectedDate', e)}
+                                                        >
+                                                            <div className="d-flex align-items-end justify-content-between gap-1 w-100">
+                                                                <span className="fw-normal">Expected Date</span>
+                                                                <span className="d-flex align-items-center gap-1 flex-shrink-0">
+                                                                    <span
+                                                                        className={`user-select-none ${filterActiveClass('expectedDate')}`}
+                                                                        style={{ fontSize: '10px', lineHeight: 1 }}
+                                                                        title="Filter"
+                                                                    >
+                                                                        ▼
+                                                                    </span>
+                                                                    <button
+                                                                        type="button"
+                                                                        data-sort-only="true"
+                                                                        className="btn btn-link p-0 text-decoration-none user-select-none"
+                                                                        style={{ fontSize: '11px', lineHeight: 1 }}
+                                                                        title="Sort"
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            handleSortClick('expectedDate');
+                                                                        }}
+                                                                    >
+                                                                        {sortIndicator('expectedDate')}
+                                                                    </button>
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        <div className="prob-detail-col-4 fw-normal">Remarks</div>
+                                                    </div>
+                                                ) : (
+                                                    'Details'
+                                                )}
                                             </th>
                                         </tr>
                                     </thead>
@@ -2045,7 +2223,7 @@ const ProbabilityForm = () => {
                                                             {item.Status === 'FollowUp' && (
                                                                 <>
                                                                     <div className="d-flex flex-column prob-detail-col-1">
-                                                                        <span style={{ fontSize: '10px', color: '#666', marginBottom: '2px' }}>Quote Reference</span>
+                                                                        <span className="prob-detail-field-label visually-hidden">Quote Reference</span>
                                                                         <div style={{ width: '320px', minWidth: '320px', maxWidth: '320px' }}>
                                                                             <Select
                                                                                 className="basic-single"
@@ -2111,13 +2289,14 @@ const ProbabilityForm = () => {
                                                                         </div>
                                                                     </div>
                                                                     <div className="d-flex flex-column prob-detail-col-2">
-                                                                        <span style={{ fontSize: '10px', color: '#666', marginBottom: '2px' }}>Probability</span>
+                                                                        <span className="prob-detail-field-label visually-hidden">Probability</span>
                                                                         <div style={{ width: '180px' }}>
                                                                             <select
                                                                                 className="form-select form-select-sm"
                                                                                 value={item.ProbabilityOption || ''}
                                                                                 onChange={(e) => handleInlineUpdate(item, 'ProbabilityOption', e.target.value)}
                                                                                 onClick={(e) => e.stopPropagation()}
+                                                                                aria-label="Probability"
                                                                             >
                                                                                 <option value="">Select Probability...</option>
                                                                                 <option value="Low Chance (25%)">Low Chance (25%)</option>
@@ -2131,7 +2310,7 @@ const ProbabilityForm = () => {
                                                                     </div>
                                                                     {item.ProbabilityOption && (item.ProbabilityOption.includes('90%') || item.ProbabilityOption.includes('99%')) && (
                                                                         <div className="d-flex flex-column prob-detail-col-3">
-                                                                            <span style={{ fontSize: '10px', color: '#666', marginBottom: '2px' }}>Expected Date</span>
+                                                                            <span className="prob-detail-field-label visually-hidden">Expected Date</span>
                                                                             <div style={{ width: '130px' }}>
                                                                                 <DatePicker
                                                                                     selected={item.ExpectedOrderDate ? new Date(item.ExpectedOrderDate) : null}
@@ -2152,12 +2331,12 @@ const ProbabilityForm = () => {
                                                                     )}
                                                                     {(!item.ProbabilityOption || (!item.ProbabilityOption.includes('90%') && !item.ProbabilityOption.includes('99%'))) && (
                                                                         <div className="d-flex flex-column prob-detail-col-3" aria-hidden="true">
-                                                                            <span style={{ fontSize: '10px', color: 'transparent', marginBottom: '2px' }}>Expected Date</span>
+                                                                            <span className="prob-detail-field-label visually-hidden">Expected Date</span>
                                                                             <div style={{ width: '130px', minHeight: '1.35rem' }} />
                                                                         </div>
                                                                     )}
                                                                     <div className="d-flex flex-column prob-detail-col-4">
-                                                                        <span style={{ fontSize: '10px', color: '#666', marginBottom: '2px' }}>Remarks</span>
+                                                                        <span className="prob-detail-field-label visually-hidden">Remarks</span>
                                                                         <div style={{ width: '250px' }}>
                                                                             <textarea
                                                                                 className="form-control form-control-sm"
@@ -2166,11 +2345,13 @@ const ProbabilityForm = () => {
                                                                                 value={item.ProbabilityRemarks || ''}
                                                                                 onChange={(e) => handleUpdate(item, { ProbabilityRemarks: e.target.value })}
                                                                                 onClick={(e) => e.stopPropagation()}
+                                                                                aria-label="Remarks"
                                                                             />
                                                                         </div>
                                                                     </div>
                                                                 </>
-                                                            )}                                                                      {/* Won UI in 7th Column */}
+                                                            )}
+                                                            {/* Won UI in 7th Column */}
                                                             {item.Status === 'Won' && (
                                                                 <>
                                                                     <div className="d-flex flex-column prob-detail-col-1">
@@ -2620,6 +2801,90 @@ const ProbabilityForm = () => {
                                           Clear
                                       </button>
                                       <button type="button" className="btn btn-sm btn-primary py-0" onClick={() => applyMultiDraft('quoteType')}>
+                                          Apply
+                                      </button>
+                                  </div>
+                              </>
+                          )}
+                          {openColFilter === 'probability' && (
+                              <>
+                                  <input className="form-control form-control-sm mb-2" placeholder="Search..." value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)} />
+                                  <div className="d-flex gap-1 mb-2">
+                                      <button type="button" className="btn btn-sm btn-outline-secondary py-0" onClick={() => setDraftMulti(new Set(columnUniques.probability))}>
+                                          All
+                                      </button>
+                                      <button type="button" className="btn btn-sm btn-outline-secondary py-0" onClick={() => setDraftMulti(new Set())}>
+                                          None
+                                      </button>
+                                  </div>
+                                  <div style={{ maxHeight: 160, overflowY: 'auto' }}>
+                                      {columnUniques.probability
+                                          .filter((v) => !filterSearch || String(v).toLowerCase().includes(filterSearch.toLowerCase()))
+                                          .map((val) => (
+                                              <label key={String(val)} className="d-flex align-items-center gap-2 mb-1 text-truncate" style={{ cursor: 'pointer' }}>
+                                                  <input
+                                                      type="checkbox"
+                                                      checked={draftMulti.has(val)}
+                                                      onChange={() => {
+                                                          setDraftMulti((prev) => {
+                                                              const n = new Set(prev);
+                                                              if (n.has(val)) n.delete(val);
+                                                              else n.add(val);
+                                                              return n;
+                                                          });
+                                                      }}
+                                                  />
+                                                  <span className="text-truncate">{val}</span>
+                                              </label>
+                                          ))}
+                                  </div>
+                                  <div className="d-flex gap-1 mt-2 justify-content-end">
+                                      <button type="button" className="btn btn-sm btn-outline-secondary py-0" onClick={() => clearMultiFilter('probability')}>
+                                          Clear
+                                      </button>
+                                      <button type="button" className="btn btn-sm btn-primary py-0" onClick={() => applyMultiDraft('probability')}>
+                                          Apply
+                                      </button>
+                                  </div>
+                              </>
+                          )}
+                          {openColFilter === 'expectedDate' && (
+                              <>
+                                  <input className="form-control form-control-sm mb-2" placeholder="Search..." value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)} />
+                                  <div className="d-flex gap-1 mb-2">
+                                      <button type="button" className="btn btn-sm btn-outline-secondary py-0" onClick={() => setDraftMulti(new Set(columnUniques.expectedDate))}>
+                                          All
+                                      </button>
+                                      <button type="button" className="btn btn-sm btn-outline-secondary py-0" onClick={() => setDraftMulti(new Set())}>
+                                          None
+                                      </button>
+                                  </div>
+                                  <div style={{ maxHeight: 160, overflowY: 'auto' }}>
+                                      {columnUniques.expectedDate
+                                          .filter((v) => !filterSearch || String(formatExpectedDateLabel(v)).toLowerCase().includes(filterSearch.toLowerCase()) || String(v).toLowerCase().includes(filterSearch.toLowerCase()))
+                                          .map((val) => (
+                                              <label key={String(val)} className="d-flex align-items-center gap-2 mb-1 text-truncate" style={{ cursor: 'pointer' }}>
+                                                  <input
+                                                      type="checkbox"
+                                                      checked={draftMulti.has(val)}
+                                                      onChange={() => {
+                                                          setDraftMulti((prev) => {
+                                                              const n = new Set(prev);
+                                                              if (n.has(val)) n.delete(val);
+                                                              else n.add(val);
+                                                              return n;
+                                                          });
+                                                      }}
+                                                  />
+                                                  <span className="text-truncate">{formatExpectedDateLabel(val)}</span>
+                                              </label>
+                                          ))}
+                                  </div>
+                                  <div className="d-flex gap-1 mt-2 justify-content-end">
+                                      <button type="button" className="btn btn-sm btn-outline-secondary py-0" onClick={() => clearMultiFilter('expectedDate')}>
+                                          Clear
+                                      </button>
+                                      <button type="button" className="btn btn-sm btn-primary py-0" onClick={() => applyMultiDraft('expectedDate')}>
                                           Apply
                                       </button>
                                   </div>

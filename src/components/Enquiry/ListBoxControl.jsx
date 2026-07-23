@@ -29,17 +29,21 @@ const ListBoxControl = ({
 
     const handleRemoveClick = () => {
         if (!onRemove || !listBoxRef.current) return;
-        let idx = listBoxRef.current.selectedIndex;
-        if (idx === -1) {
-            // Fallback: if nothing is explicitly selected, treat the last item as selected
-            idx = listBoxItems.length - 1;
+        const selected = Array.from(listBoxRef.current.selectedOptions || [])
+            .map((opt) => opt.index)
+            .filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < listBoxItems.length)
+            .sort((a, b) => a - b);
+        if (selected.length > 0) {
+            onRemove(selected);
+            return;
         }
-        if (idx >= 0 && idx < listBoxItems.length) {
-            onRemove(idx);
+        // Fallback: if nothing is explicitly selected, treat the last item as selected
+        if (listBoxItems.length > 0) {
+            onRemove([listBoxItems.length - 1]);
             return;
         }
         // Allow consumer fallback logic when list is empty or nothing is selected.
-        onRemove(-1);
+        onRemove([]);
     };
 
     return (
