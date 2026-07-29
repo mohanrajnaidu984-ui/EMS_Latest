@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useAuth } from '../../context/AuthContext';
+import React, { useState, useEffect } from 'react';
+import { useAuth, getRememberMePreference, getRememberedLoginEmail } from '../../context/AuthContext';
 import emsoLogo from '../../assets/ems_logo2.png';
 import { getAcgBrandLogoSrc } from '../../utils/acgBrandLogo';
 import { readApiJson } from '../../utils/apiJson';
@@ -14,12 +14,24 @@ const Login = () => {
     const [step, setStep] = useState('email');
 
     const [formData, setFormData] = useState({
-        email: '',
+        email: getRememberedLoginEmail(),
         password: '',
         newPassword: '',
         confirmPassword: '',
-        rememberMe: false
+        rememberMe: getRememberMePreference()
     });
+
+    useEffect(() => {
+        const remembered = getRememberMePreference();
+        const email = getRememberedLoginEmail();
+        if (remembered || email) {
+            setFormData((prev) => ({
+                ...prev,
+                email: email || prev.email,
+                rememberMe: remembered
+            }));
+        }
+    }, []);
 
     const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState('');
@@ -117,7 +129,7 @@ const Login = () => {
                     RequestNo: data.user.RequestNo,
                     DivisionName: data.user.DivisionName,
                     ProfileImage: data.user.ProfileImage
-                });
+                }, { rememberMe: !!formData.rememberMe });
             } else {
                 setError(data.message || 'Login failed');
             }
@@ -186,7 +198,7 @@ const Login = () => {
                         RequestNo: loginData.user.RequestNo,
                         DivisionName: loginData.user.DivisionName,
                         ProfileImage: loginData.user.ProfileImage
-                    });
+                    }, { rememberMe: !!formData.rememberMe });
                 } else {
                     setStep('password');
                     setError('Password set, but auto-login failed. Please sign in.');

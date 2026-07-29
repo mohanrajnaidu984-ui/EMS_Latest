@@ -606,17 +606,26 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
             const day = String(d.getDate()).padStart(2, '0');
             return `${y}-${m}-${day}`;
         };
+        // Due/Lapsed: with a division selected, only that division's quote blocks the row
+        // (HasQuoteInScope). HasQuoteAny wrongly hid cross-division cases (e.g. BMS lapsed
+        // while HVAC already quoted). With All divisions, any quote still blocks.
+        const divisionSelected =
+            String(filters.division || '').trim() !== '' &&
+            String(filters.division).trim().toLowerCase() !== 'all';
+
         const filtered = data.table.filter((row) => {
             const compareDate = (dateVal) => localYmd(dateVal) === targetDate;
             const todayYmd = todayLocalYmd();
-            const hasAnyQuote = Number(row.HasQuoteAny ?? row.HasQuoteInScope) === 1;
+            const hasBlockingQuote = divisionSelected
+                ? Number(row.HasQuoteInScope) === 1
+                : Number(row.HasQuoteAny ?? row.HasQuoteInScope) === 1;
 
             if (type === 'enquiry') return compareDate(row.EnquiryDate);
             if (type === 'due') {
                 if (!compareDate(dueVal(row))) return false;
                 const dueY = localYmd(dueVal(row));
                 if (!dueY || dueY < todayYmd) return false;
-                if (hasAnyQuote) return false;
+                if (hasBlockingQuote) return false;
                 return true;
             }
             if (type === 'visit') return compareDate(row.SiteVisitDate);
@@ -624,7 +633,7 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
                 if (!compareDate(dueVal(row))) return false;
                 const dueY = localYmd(dueVal(row));
                 if (!dueY || dueY >= todayYmd) return false;
-                if (hasAnyQuote) return false;
+                if (hasBlockingQuote) return false;
                 return true;
             }
             if (type === 'quote' || type === 'newQuote' || type === 'revQuote') {
@@ -634,7 +643,7 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
         });
 
         setFilteredTableData(filtered);
-    }, [data.table, dateState.selectedDate, dateState.selectedType]);
+    }, [data.table, dateState.selectedDate, dateState.selectedType, filters.division]);
 
     useEffect(() => {
         if (!resultsModalOpen) return undefined;

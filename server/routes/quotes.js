@@ -2576,22 +2576,25 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
         let internalAttentionByCleanItemName = {}; // Internal division → { options, defaultAttention, ... }
         let parentCustomerName = null; // Internal parent job name when own job is a subjob
         try {
-            // Get customers from EnquiryCustomer table
+            // Get customers from EnquiryCustomer table (ID order = Enquiry list order / index pairing)
             const customerResult = await sql.query`
-                SELECT CustomerName 
+                SELECT ID, CustomerName 
                 FROM EnquiryCustomer 
                 WHERE RequestNo = ${requestNo}
+                ORDER BY ID
             `;
 
             // Get ReceivedFrom contacts from ReceivedFrom table — JOIN Master_ReceivedFrom to pull
             // the Prefix (Mr./Ms./Dr./…) so the Quote "Attention of" reads "Prefix FullName".
+            // ID order matches Enquiry Received From list (paired by index with EnquiryCustomer).
             const receivedFromResult = await sql.query`
-                SELECT rf.ContactName, rf.CompanyName, mrf.Prefix
+                SELECT rf.ID, rf.ContactName, rf.CompanyName, mrf.Prefix
                 FROM ReceivedFrom rf
                 LEFT JOIN Master_ReceivedFrom mrf
                     ON LTRIM(RTRIM(ISNULL(mrf.ContactName, N''))) = LTRIM(RTRIM(ISNULL(rf.ContactName, N'')))
                    AND LTRIM(RTRIM(ISNULL(mrf.CompanyName, N''))) = LTRIM(RTRIM(ISNULL(rf.CompanyName, N'')))
                 WHERE rf.RequestNo = ${requestNo}
+                ORDER BY rf.ID
             `;
 
             console.log('[Quote API] ReceivedFrom records:', receivedFromResult.recordset);
@@ -2638,11 +2641,43 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
                 }
             });
 
-            // Helper to check if a customer already has a contact (normalized)
+            const normCompanyKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            /** Fold legal suffixes so "Poullaides Construction Company W.L.L." ≈ "Poullaides Construction Co". */
+            const foldCompanyKey = (s) =>
+                normCompanyKey(s)
+                    .replace(/company/g, '')
+                    .replace(/limited/g, '')
+                    .replace(/corporation/g, '')
+                    .replace(/incorporated/g, '')
+                    .replace(/wll/g, '')
+                    .replace(/bsc/g, '')
+                    .replace(/llc/g, '')
+                    .replace(/ltd/g, '')
+                    .replace(/co$/g, '');
+            const companiesMatchLoose = (a, b) => {
+                const na = normCompanyKey(a);
+                const nb = normCompanyKey(b);
+                if (!na || !nb) return false;
+                if (na === nb) return true;
+                const fa = foldCompanyKey(a);
+                const fb = foldCompanyKey(b);
+                if (fa && fb && (fa === fb || (fa.length >= 10 && fb.length >= 10 && (fa.includes(fb) || fb.includes(fa))))) {
+                    return true;
+                }
+                if (na.length >= 12 && nb.length >= 12 && (na.includes(nb) || nb.includes(na))) return true;
+                return false;
+            };
+
+            // Helper to check if a customer already has a contact (normalized / fuzzy)
             const hasContact = (cust) => {
-                const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-                const target = norm(cust);
-                return Object.keys(customerContacts).some(k => norm(k) === target);
+                const target = String(cust || '').trim();
+                return Object.keys(customerContacts).some((k) => companiesMatchLoose(k, target));
+            };
+            const findContactKeyForCustomer = (cust) => {
+                const keys = Object.keys(customerContacts);
+                const hit = keys.find((k) => k.toLowerCase() === String(cust).toLowerCase().trim());
+                if (hit) return hit;
+                return keys.find((k) => companiesMatchLoose(k, cust)) || null;
             };
 
             // Process EnquiryCustomer: one DB row = one customer (full name). Do NOT split on commas —
@@ -2657,6 +2692,26 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
                     }
                 }
             });
+
+            // Enquiry list order: customer[i] ↔ ReceivedFrom[i] (same as Enquiry form).
+            // Prefer this over CompanyName string match — RF company labels often differ
+            // (e.g. "Poullaides Construction Co" vs "Poullaides Construction Company W.L.L.").
+            const defaultAttentionByCustomer = {};
+            const pairedLen = Math.min(
+                customerResult.recordset.length,
+                receivedFromResult.recordset.length
+            );
+            for (let i = 0; i < pairedLen; i++) {
+                const custName = String(customerResult.recordset[i]?.CustomerName || '')
+                    .replace(/[,.]+$/g, '')
+                    .trim();
+                const rfRow = receivedFromResult.recordset[i];
+                const contact = formatNameWithPrefix(rfRow?.ContactName, rfRow?.Prefix);
+                if (!custName || !contact) continue;
+                defaultAttentionByCustomer[custName] = contact;
+                // Always bind paired contact onto the EnquiryCustomer display name.
+                customerContacts[custName] = contact;
+            }
 
             // EnquiryMaster.CustomerName: when EnquiryCustomer rows exist, do NOT merge master — it duplicates
             // SelectedCustomers as one comma-separated string and adds an extra bogus dropdown entry (e.g. "A, B, C, D").
@@ -2705,14 +2760,22 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
                     .join(', ');
             };
 
-            // Map ReceivedFrom for external customers
+            // Only map free-text EnquiryMaster.ReceivedFrom when a customer still has no RF row at all.
+            // Never dump the full comma-separated list onto every unmatched customer (picks wrong Attention).
             externalCustomers.forEach((name) => {
                 const trimmed = String(name).trim();
-                if (trimmed && !hasContact(trimmed) && enquiry.ReceivedFrom) {
-                    const display = enrichContactsWithMasterPrefix(enquiry.ReceivedFrom) || enquiry.ReceivedFrom;
-                    customerContacts[trimmed] = display;
-                    console.log(`[Quote API] Mapped main customer "${trimmed}" to ReceivedFrom: "${display}"`);
-                }
+                if (!trimmed || hasContact(trimmed) || defaultAttentionByCustomer[trimmed]) return;
+                if (!enquiry.ReceivedFrom) return;
+                // Single-contact enquiries only — multi-contact lists must pair by index / company.
+                const parts = String(enquiry.ReceivedFrom)
+                    .split(',')
+                    .map((p) => p.trim())
+                    .filter(Boolean);
+                if (parts.length !== 1) return;
+                const display = enrichContactsWithMasterPrefix(parts[0]) || parts[0];
+                customerContacts[trimmed] = display;
+                defaultAttentionByCustomer[trimmed] = display;
+                console.log(`[Quote API] Mapped lone ReceivedFrom onto customer "${trimmed}": "${display}"`);
             });
 
             // --- HIERARCHY LOGIC: derive Parent Customer for own-job subjob users ---
@@ -2873,31 +2936,34 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
                     const hit = keys.find(k => k.toLowerCase() === String(cust).toLowerCase().trim());
                     if (hit) return hit;
                     const t = normKey(cust);
-                    return keys.find(k => normKey(k) === t) || null;
+                    const exactFold = keys.find(k => normKey(k) === t);
+                    if (exactFold) return exactFold;
+                    return keys.find((k) => companiesMatchLoose(k, cust)) || null;
                 };
                 customerOptions.forEach(cust => {
                     const set = new Set();
                     const ck = findCompanyRfKey(cust);
                     if (ck) byCompany[ck].forEach(x => set.add(x));
-                    const cc = customerContacts[cust];
+                    const ccKey = findContactKeyForCustomer(cust);
+                    const cc = (ccKey && customerContacts[ccKey]) || customerContacts[cust];
                     if (cc) {
                         String(cc).split(',').forEach(p => {
                             const t = p.trim();
                             if (t) set.add(t);
                         });
                     }
-                    if (set.size === 0 && enquiry.ReceivedFrom) {
-                        // Use the global Master_ReceivedFrom prefix map so fallback names also display "<Prefix> <Name>".
-                        String(enquiry.ReceivedFrom).split(',').forEach(p => {
-                            const name = p.trim();
-                            if (!name) return;
-                            const k = name.toLowerCase().replace(/\s+/g, ' ').trim();
-                            const prefix = masterContactPrefixByName.get(k);
-                            const display = formatNameWithPrefix(name, prefix);
-                            if (display) set.add(display);
-                        });
-                    }
-                    externalAttentionOptionsByCustomer[cust] = [...set].sort((a, b) => a.localeCompare(b));
+                    const preferred =
+                        defaultAttentionByCustomer[cust] ||
+                        (cc && !String(cc).includes(',') ? String(cc).trim() : '');
+                    if (preferred) set.add(preferred);
+                    // Do NOT dump the full enquiry.ReceivedFrom list onto unmatched customers —
+                    // that sorted alphabetically and picked the wrong Attention (e.g. Joby for Poullaides).
+                    const rest = [...set]
+                        .filter((name) => name && name !== preferred)
+                        .sort((a, b) => a.localeCompare(b));
+                    externalAttentionOptionsByCustomer[cust] = preferred
+                        ? [preferred, ...rest]
+                        : rest;
                 });
 
                 const normLoose = (x) => String(x || '').toLowerCase().replace(/\s+/g, ' ').trim();

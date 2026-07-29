@@ -1183,6 +1183,8 @@ function registerTableTextSelectionGuard(jodit, getEditorBody) {
         const onTextEditKeyDown = (e) => {
             if (e.key !== 'Backspace' && e.key !== 'Delete') return;
             if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+            /* Multi-cell clear is handled by registerTableCellClearOnDelete. */
+            if (e.defaultPrevented) return;
             clearTableCellBlockSelectionForTextEdit(jodit, getEditorBody);
         };
         doc.addEventListener('selectionchange', onSelectionChange);
@@ -1192,8 +1194,85 @@ function registerTableTextSelectionGuard(jodit, getEditorBody) {
             root.removeEventListener('keydown', onTextEditKeyDown, true);
         });
     };
-
     jodit.e.on('afterInit', attach);
+    attach();
+}
+
+/**
+ * Delete / Backspace clears content of EMS-selected table cells (Word-like).
+ * Native ranges are cleared during multi-cell select, so the browser cannot delete for us.
+ */
+function resolveTableCellsForContentClear(jodit, getEditorBody) {
+    let cells = getSelectedTableCells(jodit).filter((c) => c?.isConnected);
+    if (cells.length < 1) {
+        cells = getStagedTableFormatCells(jodit);
+    }
+    if (cells.length < 1) {
+        const root =
+            (typeof getEditorBody === 'function' && getEditorBody()) ||
+            jodit.editor ||
+            null;
+        cells = [...(root?.querySelectorAll?.(`.${EMS_TABLE_CELL_SELECTED_CLASS}`) || [])];
+    }
+    return cells;
+}
+
+function registerTableCellClearOnDelete(jodit, getEditorBody) {
+    if (!jodit || jodit.__emsTableCellClearOnDelete) return;
+    jodit.__emsTableCellClearOnDelete = true;
+
+    const attach = () => {
+        const root =
+            (typeof getEditorBody === 'function' && getEditorBody()) ||
+            jodit.editor ||
+            null;
+        if (!root || root.__emsTableCellClearOnDeleteBound) return;
+        root.__emsTableCellClearOnDeleteBound = true;
+
+        const onKeyDown = (e) => {
+            if (e.key !== 'Backspace' && e.key !== 'Delete') return;
+            if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+            if (jodit.__emsTableCellDragActive) return;
+
+            /* Let normal typing delete selected text inside a single cell. */
+            if (hasActiveTextRangeSelection(jodit, getEditorBody)) return;
+
+            const cells = resolveTableCellsForContentClear(jodit, getEditorBody);
+            if (cells.length < 1) return;
+
+            /*
+             * Single cell with a caret: browser/Jodit should delete characters normally.
+             * Multi-cell (or one cell block-selected without a caret) → clear contents.
+             */
+            if (cells.length === 1 && hasCollapsedCaretInTableCell(jodit, getEditorBody)) {
+                return;
+            }
+
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof e.stopImmediatePropagation === 'function') {
+                e.stopImmediatePropagation();
+            }
+
+            jodit.__emsPreserveMultiTableSelect = true;
+            cells.forEach((td) => {
+                if (td?.isConnected) td.innerHTML = '<br>';
+            });
+            restoreStagedTableCellSelection(jodit, cells);
+            scheduleTableCellSelectionKeepAlive(jodit, cells, { light: true });
+            if (typeof jodit.synchronizeValues === 'function') {
+                jodit.synchronizeValues();
+            }
+            snapshotTableEditorHistory(jodit);
+        };
+
+        root.addEventListener('keydown', onKeyDown, true);
+        jodit.e.on('beforeDestruct', () => {
+            root.removeEventListener('keydown', onKeyDown, true);
+        });
+    };
+
+    jodit.e.on('afterInit.emsTableCellClearOnDelete', attach);
     attach();
 }
 
@@ -5754,6 +5833,7 @@ export function registerClauseEditorTableHooks(jodit, getEditorBody, options = {
     registerTableStructureCommands(jodit, getEditorBody);
     registerTableMultiCellFormatting(jodit, getEditorBody);
     registerTableFormatSelectionKeeper(jodit, getEditorBody);
+    registerTableCellClearOnDelete(jodit, getEditorBody);
     registerTableTextSelectionGuard(jodit, getEditorBody);
     registerConditionalTableSelection(jodit, getEditorBody);
     registerEditorScrollCleanup(jodit, getEditorBody);

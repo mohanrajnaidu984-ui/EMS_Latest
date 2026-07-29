@@ -158,6 +158,37 @@ function buildDashboardQuoteScopeFilter(isDeptMode, salesEngineer) {
 const SQL_NO_QUOTE_FOR_ENQUIRY = (emAlias = 'em') =>
     `NOT EXISTS (SELECT 1 FROM EnquiryQuotes eq WHERE eq.RequestNo = ${emAlias}.RequestNo)`;
 
+/**
+ * Division-aware "no quote" gate for Due/Lapsed.
+ * When a division is selected, an enquiry remains Due/Lapsed until that division has a quote,
+ * even if some other division on the same enquiry already quoted it.
+ */
+function buildDashboardNoQuoteSql(emAlias = 'em', division = '') {
+    const div = String(division || '').trim();
+    if (!div || div.toLowerCase() === 'all') {
+        return SQL_NO_QUOTE_FOR_ENQUIRY(emAlias);
+    }
+    return `NOT EXISTS (
+        SELECT 1
+        FROM EnquiryQuotes eq
+        WHERE eq.RequestNo = ${emAlias}.RequestNo
+          AND EXISTS (
+                SELECT 1
+                FROM Master_EnquiryFor mefQ
+                WHERE (
+                    UPPER(LTRIM(RTRIM(ISNULL(mefQ.DepartmentName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
+                    OR UPPER(LTRIM(RTRIM(ISNULL(mefQ.ItemName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
+                )
+                  AND LTRIM(RTRIM(ISNULL(mefQ.DivisionCode, ''))) <> ''
+                  AND (
+                    CHARINDEX('/' + UPPER(LTRIM(RTRIM(ISNULL(mefQ.DivisionCode, '')))) + '/', UPPER(ISNULL(eq.QuoteNumber, ''))) > 0
+                    OR CHARINDEX('-' + UPPER(LTRIM(RTRIM(ISNULL(mefQ.DivisionCode, '')))) + '/', UPPER(ISNULL(eq.QuoteNumber, ''))) > 0
+                    OR CHARINDEX('/' + UPPER(LTRIM(RTRIM(ISNULL(mefQ.DivisionCode, '')))) + '-', UPPER(ISNULL(eq.QuoteNumber, ''))) > 0
+                  )
+          )
+    )`;
+}
+
 /** New vs revised quote filter for dashboard calendar chips (RevisionNo 0 = new, >0 = rev). */
 function sqlQuoteRevisionFilterFromCalendarChip(calendarChip) {
     const chip = String(calendarChip || '').trim().toLowerCase();
@@ -348,6 +379,7 @@ function bindDashboardCalendarFilters(request, query, resolved) {
 
 /** Daily grid + monthly totals in one DB round-trip (two result sets). */
 function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter) {
+    const dueNoQuoteSql = buildDashboardNoQuoteSql('fe', '@division');
     const dailyPart = `
             WITH FilteredEnquiries AS (
                 SELECT RequestNo, EnquiryDate, DueDate, SiteVisitDate, Status 
@@ -367,13 +399,13 @@ function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter) {
                 FROM FilteredEnquiries fe
                 WHERE MONTH(fe.DueDate) = @month AND YEAR(fe.DueDate) = @year
                   AND CAST(fe.DueDate AS DATE) >= CAST(@today AS DATE)
-                  AND ${SQL_NO_QUOTE_FOR_ENQUIRY('fe')}
+                  AND ${dueNoQuoteSql}
                 UNION ALL
                 SELECT fe.DueDate as DateVal, 'Lapsed' as Type 
                 FROM FilteredEnquiries fe
                 WHERE MONTH(fe.DueDate) = @month AND YEAR(fe.DueDate) = @year
                 AND CAST(fe.DueDate AS DATE) < CAST(@today AS DATE)
-                AND ${SQL_NO_QUOTE_FOR_ENQUIRY('fe')}
+                AND ${dueNoQuoteSql}
                 UNION ALL
                 SELECT SiteVisitDate as DateVal, 'SiteVisit' as Type FROM FilteredEnquiries WHERE MONTH(SiteVisitDate) = @month AND YEAR(SiteVisitDate) = @year
                 UNION ALL
@@ -416,12 +448,12 @@ function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter) {
                  FROM FilteredEnquiries fe
                  WHERE MONTH(fe.DueDate) = @month AND YEAR(fe.DueDate) = @year
                    AND CAST(fe.DueDate AS DATE) >= CAST(@today AS DATE)
-                   AND ${SQL_NO_QUOTE_FOR_ENQUIRY('fe')}) as due,
+                   AND ${dueNoQuoteSql}) as due,
                 (SELECT COUNT(DISTINCT fe.RequestNo)
                  FROM FilteredEnquiries fe
                  WHERE MONTH(fe.DueDate) = @month AND YEAR(fe.DueDate) = @year
                    AND CAST(fe.DueDate AS DATE) < CAST(@today AS DATE)
-                   AND ${SQL_NO_QUOTE_FOR_ENQUIRY('fe')}) as lapsed,
+                   AND ${dueNoQuoteSql}) as lapsed,
                 (SELECT COUNT(*)
                  FROM EnquiryQuotes eq
                  JOIN EnquiryMaster em ON eq.RequestNo = em.RequestNo
@@ -498,6 +530,7 @@ async function buildDashboardEnquiryListWhere(req, options = {}) {
     let seSql = '';
     if (division && division !== 'All' && (!isSearchActive || enforceDivisionOnSearch)) {
         if (enforceDivisionOnSearch || isDeptMode) {
+            // Do not use LIKE '%' + DepartmentName + '%' — "BMS Project" wrongly matches "IBMS Project".
             divisionSql = ` AND EXISTS (
                     SELECT 1
                     FROM EnquiryFor ef
@@ -505,8 +538,7 @@ async function buildDashboardEnquiryListWhere(req, options = {}) {
                         ef.ItemName = mef.ItemName OR
                         ef.ItemName LIKE '% - ' + mef.ItemName OR
                         ef.ItemName LIKE '%- ' + mef.ItemName OR
-                        ef.ItemName LIKE mef.ItemName + ' %' OR
-                        (mef.DepartmentName IS NOT NULL AND mef.DepartmentName <> '' AND ef.ItemName LIKE '%' + mef.DepartmentName + '%')
+                        ef.ItemName LIKE mef.ItemName + ' %'
                     )
                     WHERE ef.RequestNo = em.RequestNo
                       AND (
@@ -551,9 +583,10 @@ async function buildDashboardEnquiryListWhere(req, options = {}) {
     }
     const todayStr = getDashboardTodayYmd(req.query);
     request.input('today', sql.VarChar(10), todayStr);
+    const noQuoteSql = buildDashboardNoQuoteSql('em', division);
 
     if (status === 'Lapsed' && !isSearchActive) {
-        whereClause += ` AND CONVERT(VARCHAR(10), em.DueDate, 23) < CONVERT(VARCHAR(10), @today, 23) AND ${SQL_NO_QUOTE_FOR_ENQUIRY('em')} `;
+        whereClause += ` AND CONVERT(VARCHAR(10), em.DueDate, 23) < CONVERT(VARCHAR(10), @today, 23) AND ${noQuoteSql} `;
     } else if (status && status !== 'All' && !isSearchActive) {
         whereClause += ` AND em.Status = @status `;
         request.input('status', sql.NVarChar, status);
@@ -564,7 +597,7 @@ async function buildDashboardEnquiryListWhere(req, options = {}) {
 
         if (type === 'Due Date') {
             whereClause += ` AND CONVERT(VARCHAR(10), em.DueDate, 23) BETWEEN CONVERT(VARCHAR(10), @fromDate, 23) AND CONVERT(VARCHAR(10), @toDate, 23) `;
-            whereClause += ` AND ${SQL_NO_QUOTE_FOR_ENQUIRY('em')} `;
+            whereClause += ` AND ${noQuoteSql} `;
             // Open due (matches calendar chips): today/future only; Lapsed uses status=Lapsed + < today below.
             if (String(status || '').trim().toLowerCase() !== 'lapsed') {
                 whereClause += ` AND CAST(em.DueDate AS DATE) >= CAST(@today AS DATE) `;
@@ -595,11 +628,11 @@ async function buildDashboardEnquiryListWhere(req, options = {}) {
             } else if (calendarChip === 'due') {
                 whereClause += ` AND CONVERT(VARCHAR(10), em.DueDate, 23) = CONVERT(VARCHAR(10), @date, 23)
                     AND CAST(em.DueDate AS DATE) >= CAST(@today AS DATE)
-                    AND ${SQL_NO_QUOTE_FOR_ENQUIRY('em')} `;
+                    AND ${noQuoteSql} `;
             } else if (calendarChip === 'lapsed') {
                 whereClause += ` AND CONVERT(VARCHAR(10), em.DueDate, 23) = CONVERT(VARCHAR(10), @date, 23)
                     AND CAST(em.DueDate AS DATE) < CAST(@today AS DATE)
-                    AND ${SQL_NO_QUOTE_FOR_ENQUIRY('em')} `;
+                    AND ${noQuoteSql} `;
             } else if (calendarChip === 'visit') {
                 whereClause += ` AND CONVERT(VARCHAR(10), em.SiteVisitDate, 23) = CONVERT(VARCHAR(10), @date, 23) `;
             } else if (calendarChip === 'newquote') {
@@ -628,10 +661,10 @@ async function buildDashboardEnquiryListWhere(req, options = {}) {
                     CONVERT(VARCHAR(10), em.DueDate, 23) = CONVERT(VARCHAR(10), @today, 23) OR
                     CONVERT(VARCHAR(10), em.SiteVisitDate, 23) = CONVERT(VARCHAR(10), @today, 23)
                 ) `;
-            whereClause += ` AND ${SQL_NO_QUOTE_FOR_ENQUIRY('em')} `;
+            whereClause += ` AND ${noQuoteSql} `;
         } else if (currentMode === 'future') {
             whereClause += ` AND CONVERT(VARCHAR(10), em.DueDate, 23) >= CONVERT(VARCHAR(10), @today, 23) `;
-            whereClause += ` AND ${SQL_NO_QUOTE_FOR_ENQUIRY('em')} `;
+            whereClause += ` AND ${noQuoteSql} `;
         }
     }
 
@@ -901,6 +934,7 @@ router.get('/summary', async (req, res) => {
                 )
             `;
         }
+        const noQuoteSql = buildDashboardNoQuoteSql('em', division);
 
         const today = new Date();
         const query = `
@@ -908,16 +942,16 @@ router.get('/summary', async (req, res) => {
                 (SELECT COUNT(*) FROM EnquiryMaster em WHERE CONVERT(VARCHAR(10), EnquiryDate, 23) = CONVERT(VARCHAR(10), @today, 23) ${baseFilter}) as EnquiriesToday,
                 (SELECT COUNT(*) FROM EnquiryMaster em
                  WHERE CONVERT(VARCHAR(10), DueDate, 23) = CONVERT(VARCHAR(10), @today, 23)
-                   AND ${SQL_NO_QUOTE_FOR_ENQUIRY('em')}
+                   AND ${noQuoteSql}
                    ${baseFilter}) as DueToday,
                 (SELECT COUNT(*) FROM EnquiryMaster em
                  WHERE CONVERT(VARCHAR(10), DueDate, 23) > CONVERT(VARCHAR(10), @today, 23)
-                   AND ${SQL_NO_QUOTE_FOR_ENQUIRY('em')}
+                   AND ${noQuoteSql}
                    ${baseFilter}) as UpcomingDues,
                 (SELECT COUNT(*) FROM EnquiryMaster em WHERE Status IN ('Quoted', 'Quote', 'Submitted') ${baseFilter}) as QuotedCount,
                 (SELECT COUNT(*) FROM EnquiryMaster em
                  WHERE CONVERT(VARCHAR(10), DueDate, 23) < CONVERT(VARCHAR(10), @today, 23)
-                   AND ${SQL_NO_QUOTE_FOR_ENQUIRY('em')}
+                   AND ${noQuoteSql}
                    ${baseFilter}) as LapsedCount
         `;
 

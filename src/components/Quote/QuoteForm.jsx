@@ -6245,9 +6245,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     const clauseSegmentsForPagination = React.useMemo(() => {
         if (!activeClausesList.length) return [];
+        /* Align Page: fine splits for tight packing. Normal preview: coarser segments for faster load. */
         const splitOpts = clausePackSplitMode
             ? { splitListsPerItem: true, splitTableMinRows: 2, splitParagraphs: true }
-            : { splitListsPerItem: true, splitTableMinRows: 4, splitParagraphs: true };
+            : { splitTableMinRows: 8, splitListMinItems: 16, splitParagraphs: false };
         return buildClauseSegmentsForPagination(
             activeClausesList,
             getClauseDisplayBodyHtml,
@@ -6282,9 +6283,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         if (!isQuotePreviewVisible) return;
         /* Keep page packing stable while inline editor is open — remeasure on exit only. */
         if (expandedClause) return;
-        const preview = quotePreviewLayoutRef.current;
-        const host = clauseMeasureHostRef.current;
-        if (!preview || !host) return;
 
         let cancelled = false;
         lastClausePackSigRef.current = '';
@@ -6292,6 +6290,38 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         if (clauseSegmentsForPagination.length === 0) {
             setClauseSegmentPageGroups((prev) => (prev.length ? [] : prev));
+            return () => {
+                cancelled = true;
+            };
+        }
+
+        const runMeasuredPackNow =
+            Boolean(clausePackTightFitRef.current) || Boolean(clausePackSplitMode);
+
+        const applyEstimatedPackQuick = (usablePx = EMS_QUOTE_CONT_USABLE_PX_FALLBACK) => {
+            const fallback = packSegmentsOntoPagesByEstimatedHeight(
+                clauseSegmentsForPagination,
+                usablePx
+            );
+            if (cancelled || !fallback.length) return;
+            setClauseSegmentPageGroups((prev) =>
+                segmentPageGroupsEqual(prev, fallback) ? prev : fallback
+            );
+        };
+
+        /* Fast browse path: estimated packing only (no hidden measure DOM). */
+        if (!runMeasuredPackNow) {
+            applyEstimatedPackQuick();
+            return () => {
+                cancelled = true;
+                clausePackTightFitRef.current = false;
+            };
+        }
+
+        const preview = quotePreviewLayoutRef.current;
+        const host = clauseMeasureHostRef.current;
+        if (!preview || !host) {
+            applyEstimatedPackQuick();
             return () => {
                 cancelled = true;
             };
@@ -6487,23 +6517,28 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             clausePackTightFitRef.current = false;
         };
 
-        /* Three rAFs: segment measure DOM must exist before row-level table pack. */
+        /* Align Page path: estimated first, then DOM measure. */
+        applyEstimatedPack();
+
+        let raf1 = 0;
         let raf2 = 0;
         let raf3 = 0;
-        const id = requestAnimationFrame(() => {
+        raf1 = requestAnimationFrame(() => {
             raf2 = requestAnimationFrame(() => {
                 raf3 = requestAnimationFrame(() => {
                     applyPack();
                 });
             });
         });
+
         return () => {
             cancelled = true;
             clausePackTightFitRef.current = false;
-            cancelAnimationFrame(id);
+            cancelAnimationFrame(raf1);
             cancelAnimationFrame(raf2);
             cancelAnimationFrame(raf3);
         };
+
     }, [
         clausePaginationLayoutKey,
         clauseSegmentsForPagination,
@@ -6538,7 +6573,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const root = document.getElementById('quote-preview');
         if (!root) return;
         initializeAllOfficePastedTableColumns(root);
-    }, [clausePaginationLayoutKey, editingClauseLiveSig]);
+        /* Do not re-run on every editor keystroke (editingClauseLiveSig) — that blocked the UI. */
+    }, [clausePaginationLayoutKey]);
 
     /** Continuation segment groups; if none measured yet, estimate pages so preview is never cover-only. */
     const sanitizedClauseSegmentPageGroups = React.useMemo(() => {
@@ -8889,11 +8925,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const scopeLoading =
             Boolean(scopedQuotePanelFetchKey) &&
             scopedQuotesFetchSettledKey !== scopedQuotePanelFetchKey;
-        return pricingSummaryBusy || leadSwitchShellHold || enquiryLeadLoading || scopeLoading;
+        /* Pricing busy no longer dims preview. */
+        return leadSwitchShellHold || scopeLoading;
     }, [
         quoteShellReady,
         showQuoteListSummaryOverQuote,
-        pricingSummaryBusy,
         leadSwitchShellHold,
         enquiryLeadLoading,
         scopedQuotePanelFetchKey,
@@ -25400,7 +25436,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         className="quote-clause-measure-host"
                                         aria-hidden
                                     >
-                                        {clauseSegmentsForPagination.map((seg, segIdx) => (
+                                        {clausePackSplitMode ? clauseSegmentsForPagination.map((seg, segIdx) => (
                                             <div
                                                 key={`measure-${seg.key}`}
                                                 data-segment-measure-index={segIdx}
@@ -25443,7 +25479,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                     dangerouslySetInnerHTML={{ __html: seg.html }}
                                                 />
                                             </div>
-                                        ))}
+                                        )) : null}
                                     </div>
 
                                     {sheets.map((sheet, sheetIdx) => {

@@ -4,6 +4,9 @@ const AuthContext = createContext();
 
 const STORAGE_EMAIL_KEY = 'currentUserEmail';
 const STORAGE_USER_KEY = 'currentUser';
+const STORAGE_REMEMBER_KEY = 'emsRememberMe';
+/** Email kept for the login form after logout when Remember me was used (not a live session). */
+const STORAGE_REMEMBERED_EMAIL_KEY = 'emsRememberedEmail';
 
 export const useAuth = () => {
     const context = useContext(AuthContext);
@@ -13,7 +16,7 @@ export const useAuth = () => {
     return context;
 };
 
-/** Exact email saved at login (session-first). Use for API `userEmail` / Master_ConcernedSE match. */
+/** Exact email saved at login (session-first, then persistent remember-me). Use for API `userEmail`. */
 export function getStoredLoginEmail() {
     return (
         sessionStorage.getItem(STORAGE_EMAIL_KEY) ||
@@ -22,26 +25,60 @@ export function getStoredLoginEmail() {
     ).trim();
 }
 
+/** Prefill helpers for the login screen (survives logout). */
+export function getRememberMePreference() {
+    return localStorage.getItem(STORAGE_REMEMBER_KEY) === '1';
+}
+
+export function getRememberedLoginEmail() {
+    return (localStorage.getItem(STORAGE_REMEMBERED_EMAIL_KEY) || '').trim();
+}
+
 export { STORAGE_EMAIL_KEY as LOGIN_EMAIL_STORAGE_KEY };
 
-function setStoredLoginEmail(email) {
+function isRememberMeEnabled() {
+    return localStorage.getItem(STORAGE_REMEMBER_KEY) === '1';
+}
+
+function setRememberMePreference(enabled, email = '') {
+    if (enabled) {
+        localStorage.setItem(STORAGE_REMEMBER_KEY, '1');
+        const v = String(email || '').trim();
+        if (v) localStorage.setItem(STORAGE_REMEMBERED_EMAIL_KEY, v);
+    } else {
+        localStorage.removeItem(STORAGE_REMEMBER_KEY);
+        localStorage.removeItem(STORAGE_REMEMBERED_EMAIL_KEY);
+    }
+}
+
+function setStoredLoginEmail(email, { persistent = false } = {}) {
     const v = String(email || '').trim();
     if (!v) {
         sessionStorage.removeItem(STORAGE_EMAIL_KEY);
+        localStorage.removeItem(STORAGE_EMAIL_KEY);
         return;
     }
     sessionStorage.setItem(STORAGE_EMAIL_KEY, v);
+    if (persistent) localStorage.setItem(STORAGE_EMAIL_KEY, v);
+    else localStorage.removeItem(STORAGE_EMAIL_KEY);
 }
 
-function setStoredCurrentUser(user) {
+function setStoredCurrentUser(user, { persistent = false } = {}) {
     if (!user) {
         sessionStorage.removeItem(STORAGE_USER_KEY);
+        localStorage.removeItem(STORAGE_USER_KEY);
         return;
     }
-    sessionStorage.setItem(STORAGE_USER_KEY, JSON.stringify(user));
+    const json = JSON.stringify(user);
+    sessionStorage.setItem(STORAGE_USER_KEY, json);
+    if (persistent) localStorage.setItem(STORAGE_USER_KEY, json);
+    else localStorage.removeItem(STORAGE_USER_KEY);
 }
 
-function clearLegacyLocalAuth() {
+/** End the signed-in session. Keeps Remember-me checkbox + email for the next login form. */
+function clearSessionAuthStorage() {
+    sessionStorage.removeItem(STORAGE_USER_KEY);
+    sessionStorage.removeItem(STORAGE_EMAIL_KEY);
     localStorage.removeItem(STORAGE_USER_KEY);
     localStorage.removeItem(STORAGE_EMAIL_KEY);
 }
@@ -104,16 +141,16 @@ export const AuthProvider = ({ children }) => {
         setCurrentUser((prev) => {
             const base = prev || {};
             const merged = applyRgiAdmin(applyProfileMerge(base, profile));
-            setStoredCurrentUser(merged);
+            setStoredCurrentUser(merged, { persistent: isRememberMeEnabled() });
             return merged;
         });
     }, []);
 
     useEffect(() => {
+        const persistent = isRememberMeEnabled();
         const storedUser =
             sessionStorage.getItem(STORAGE_USER_KEY) ||
-            localStorage.getItem(STORAGE_USER_KEY);
-        const loginEmail = getStoredLoginEmail();
+            (persistent ? localStorage.getItem(STORAGE_USER_KEY) : null);
 
         let userData = null;
         if (storedUser) {
@@ -124,6 +161,12 @@ export const AuthProvider = ({ children }) => {
             }
         }
 
+        // Stale local user without remember-me flag — drop it (session-only policy).
+        if (!persistent && !sessionStorage.getItem(STORAGE_USER_KEY)) {
+            localStorage.removeItem(STORAGE_USER_KEY);
+            localStorage.removeItem(STORAGE_EMAIL_KEY);
+        }
+
         if (userData) {
             const stored = getStoredLoginEmail();
             const patched = stored
@@ -131,16 +174,14 @@ export const AuthProvider = ({ children }) => {
                 : userData;
             const migrated = applyRgiAdmin(patched);
             setCurrentUser(migrated);
-            // Migrate any legacy localStorage auth into this tab session, then drop legacy copy.
-            setStoredCurrentUser(migrated);
-            if (stored) setStoredLoginEmail(stored);
-            clearLegacyLocalAuth();
+            setStoredCurrentUser(migrated, { persistent });
+            if (stored) setStoredLoginEmail(stored, { persistent });
         }
 
         // Older sessions: `currentUser` JSON had email but `currentUserEmail` was never set — backfill for pricing API.
         const emailFromUser = (userData?.EmailId || userData?.email || userData?.MailId || '').trim();
         if (emailFromUser && !getStoredLoginEmail()) {
-            setStoredLoginEmail(emailFromUser);
+            setStoredLoginEmail(emailFromUser, { persistent });
         }
 
         const email = getStoredLoginEmail() || userData?.EmailId || userData?.email || userData?.MailId;
@@ -149,17 +190,21 @@ export const AuthProvider = ({ children }) => {
         }
     }, [mergeProfileForEmail]);
 
-    const login = (userData) => {
+    const login = (userData, options = {}) => {
+        const persistent = !!options.rememberMe;
+
         let finalUserData = applyRgiAdmin({ ...userData });
         const storedEmail = (finalUserData.EmailId || finalUserData.email || finalUserData.MailId || '').toString().trim();
+        setRememberMePreference(persistent, storedEmail);
+
         if (storedEmail) {
             finalUserData.EmailId = storedEmail;
             finalUserData.email = storedEmail;
-            setStoredLoginEmail(storedEmail);
+            setStoredLoginEmail(storedEmail, { persistent });
         }
 
         setCurrentUser(finalUserData);
-        setStoredCurrentUser(finalUserData);
+        setStoredCurrentUser(finalUserData, { persistent });
 
         if (storedEmail) {
             mergeProfileForEmail(storedEmail);
@@ -168,10 +213,8 @@ export const AuthProvider = ({ children }) => {
 
     const logout = () => {
         setCurrentUser(null);
-        sessionStorage.removeItem(STORAGE_USER_KEY);
-        sessionStorage.removeItem(STORAGE_EMAIL_KEY);
-        // Prevent auto-login from older localStorage fallback on next load.
-        clearLegacyLocalAuth();
+        // Keep emsRememberMe + emsRememberedEmail so the login checkbox/email stay filled.
+        clearSessionAuthStorage();
         window.location.href = '/';
     };
 
@@ -185,7 +228,7 @@ export const AuthProvider = ({ children }) => {
             if (currentUser) {
                 const updatedUser = { ...currentUser, ProfileImage: base64 };
                 setCurrentUser(updatedUser);
-                setStoredCurrentUser(updatedUser);
+                setStoredCurrentUser(updatedUser, { persistent: isRememberMeEnabled() });
             }
         } catch (err) {
             console.error('Failed to update profile image:', err);
