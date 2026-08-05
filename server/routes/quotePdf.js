@@ -12,11 +12,36 @@ const {
     newPage: newPooledPdfPage,
     releaseAfterJob: releasePooledBrowser,
     closePooledBrowser,
+    markBrowserUnhealthy,
 } = require('../lib/quotePdfBrowserPool.cjs');
-const { msSince, logStage, headerJson, isPerfLogEnabled } = require('../lib/quotePdfPerf.cjs');
+const { msSince, logStage, headerJson, isPerfLogEnabled, printPerfReport } = require('../lib/quotePdfPerf.cjs');
 const { logQuotePdfPaginationDiagnostics, isPaginationDebugEnabled } = require('../lib/quotePdfPaginationDebug.cjs');
 
 const router = express.Router();
+
+/** In-memory logo data URLs keyed by absolute path + mtime (avoids FS read per PDF). */
+const logoDataUrlCache = new Map();
+const LOGO_CACHE_MAX = 64;
+
+function readLogoDataUrlCached(diskPath) {
+    let stat;
+    try {
+        stat = fs.statSync(diskPath);
+    } catch {
+        return null;
+    }
+    const key = `${diskPath}|${stat.mtimeMs}|${stat.size}`;
+    const hit = logoDataUrlCache.get(key);
+    if (hit) return hit;
+    const buf = fs.readFileSync(diskPath);
+    const dataUrl = `data:${mimeForLogoPath(diskPath)};base64,${buf.toString('base64')}`;
+    if (logoDataUrlCache.size >= LOGO_CACHE_MAX) {
+        const first = logoDataUrlCache.keys().next().value;
+        logoDataUrlCache.delete(first);
+    }
+    logoDataUrlCache.set(key, dataUrl);
+    return dataUrl;
+}
 
 /** Beyond this, use file:// load instead of setContent (CDP limits / IIS hangs). */
 const SETCONTENT_SAFE_MAX = 8_000_000;
@@ -305,13 +330,46 @@ html[data-preview-pdf="1"] #quote-preview {
     -moz-osx-font-smoothing: grayscale !important;
     text-rendering: auto !important;
 }
-html[data-preview-pdf="1"] #quote-preview *:not(.quote-digital-signature-stamp):not(.quote-signature-stamp-caption):not(.quote-signature-stamp-body) {
+html[data-preview-pdf="1"] #quote-preview *:not(.quote-digital-signature-stamp):not(.quote-signature-stamp-caption):not(.quote-signature-stamp-body):not(svg):not(svg *):not(.quote-header-quote-meta-ic-wrap):not(.quote-header-quote-meta-ic-wrap *):not(.quote-header-address-meta-ic-wrap):not(.quote-header-address-meta-ic-wrap *) {
     -webkit-font-smoothing: antialiased !important;
     -moz-osx-font-smoothing: grayscale !important;
     text-rendering: auto !important;
     transform: none !important;
     filter: none !important;
     backdrop-filter: none !important;
+}
+/** Lucide stroke icons — Chromium PDF often drops CSS stroke; pin presentation + print colors. */
+html[data-preview-pdf="1"] .quote-header-quote-meta-ic-wrap svg,
+html[data-preview-pdf="1"] .quote-header-address-meta-ic-wrap svg {
+    display: block !important;
+    stroke: #ffffff !important;
+    color: #ffffff !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+}
+html[data-preview-pdf="1"] .quote-header-quote-meta-ic-wrap svg path,
+html[data-preview-pdf="1"] .quote-header-quote-meta-ic-wrap svg line,
+html[data-preview-pdf="1"] .quote-header-quote-meta-ic-wrap svg circle,
+html[data-preview-pdf="1"] .quote-header-quote-meta-ic-wrap svg polyline,
+html[data-preview-pdf="1"] .quote-header-quote-meta-ic-wrap svg polygon,
+html[data-preview-pdf="1"] .quote-header-quote-meta-ic-wrap svg rect,
+html[data-preview-pdf="1"] .quote-header-address-meta-ic-wrap svg path,
+html[data-preview-pdf="1"] .quote-header-address-meta-ic-wrap svg line,
+html[data-preview-pdf="1"] .quote-header-address-meta-ic-wrap svg circle,
+html[data-preview-pdf="1"] .quote-header-address-meta-ic-wrap svg polyline,
+html[data-preview-pdf="1"] .quote-header-address-meta-ic-wrap svg polygon,
+html[data-preview-pdf="1"] .quote-header-address-meta-ic-wrap svg rect {
+    stroke: #ffffff !important;
+    fill: none !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+}
+html[data-preview-pdf="1"] .quote-header-quote-meta-ic-wrap img,
+html[data-preview-pdf="1"] .quote-header-address-meta-ic-wrap img {
+    display: block !important;
+    width: 11px !important;
+    height: 11px !important;
 }
 html[data-preview-pdf="1"] .quote-a4-sheet {
     position: relative !important;
@@ -427,7 +485,7 @@ async function embedLocalUploadLogosInPage(page) {
     }, QUOTE_LOGO_IMG_SELECTOR);
 
     const uploadsRoot = path.join(__dirname, '..', 'uploads');
-    let embedded = 0;
+    const embeds = [];
 
     for (const row of rows) {
         if (/^data:/i.test(row.src)) continue;
@@ -452,38 +510,52 @@ async function embedLocalUploadLogosInPage(page) {
 
         let dataUrl;
         try {
-            const buf = fs.readFileSync(diskPath);
-            dataUrl = `data:${mimeForLogoPath(diskPath)};base64,${buf.toString('base64')}`;
+            dataUrl = readLogoDataUrlCached(diskPath);
+            if (!dataUrl) {
+                console.warn('[quote-pdf] logo read failed:', diskPath);
+                continue;
+            }
         } catch (e) {
             console.warn('[quote-pdf] logo read failed:', diskPath, e && e.message);
             continue;
         }
 
+        embeds.push({ index: row.index, dataUrl, rel, diskPath });
+    }
+
+    if (embeds.length) {
         await page.evaluate(
-            (sel, dataUrl, targetIndex) => {
+            (sel, items) => {
                 const imgs = [...document.querySelectorAll(sel)];
-                const img = imgs[targetIndex];
-                if (img) {
-                    img.src = dataUrl;
-                    img.removeAttribute('srcset');
+                for (const item of items) {
+                    const img = imgs[item.index];
+                    if (img) {
+                        img.src = item.dataUrl;
+                        img.removeAttribute('srcset');
+                    }
                 }
             },
             QUOTE_LOGO_IMG_SELECTOR,
-            dataUrl,
-            row.index
+            embeds.map(({ index, dataUrl }) => ({ index, dataUrl }))
         );
-        embedded += 1;
-        pdfStepLog('logo embedded', { rel, diskPath });
+        for (const e of embeds) {
+            pdfStepLog('logo embedded', { rel: e.rel, diskPath: e.diskPath });
+        }
     }
-    return embedded;
+    return embeds.length;
 }
 
 /** Brief wait after logos are embedded as data URLs (no long network waits). */
 async function waitForImagesLoaded(page) {
-    const capMs = Math.min(quotePdfPageTimeoutMs(), 8000);
+    const needsWait = await page.evaluate(() =>
+        Array.from(document.images || []).some((img) => !img.complete)
+    );
+    if (!needsWait) return;
+
+    const capMs = Math.min(quotePdfPageTimeoutMs(), 2500);
     await page.evaluate((maxMs) => {
         const imgs = Array.from(document.images || []);
-        const perImgMs = 1500;
+        const perImgMs = 800;
         return Promise.race([
             Promise.all(
                 imgs.map(
@@ -501,6 +573,243 @@ async function waitForImagesLoaded(page) {
             new Promise((resolve) => setTimeout(resolve, maxMs)),
         ]);
     }, capMs);
+}
+
+/**
+ * Single Chromium round-trip: fonts + style clean + empty-sheet prune + A4 layout pin.
+ * Replaces three serial page.evaluate calls.
+ */
+async function prepareLoadedHtmlForPdf(page) {
+    return page.evaluate(async () => {
+        if (document.fonts && document.fonts.ready) {
+            await Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 800))]);
+        }
+
+        const root = document.getElementById('quote-print-root');
+        if (root) {
+            root.querySelectorAll('[style]').forEach((el) => {
+                if (!el.style) return;
+                const fam = el.style.fontFamily || '';
+                if (/inter|calibri|arial/i.test(fam)) {
+                    el.style.removeProperty('font-family');
+                }
+                if (el.style.transform && el.style.transform !== 'none') {
+                    el.style.removeProperty('transform');
+                }
+                if (el.style.filter && el.style.filter !== 'none') {
+                    el.style.removeProperty('filter');
+                }
+                if (el.style.webkitFontSmoothing) {
+                    el.style.removeProperty('-webkit-font-smoothing');
+                }
+            });
+        }
+
+        function quoteSheetHasBodyContent(sheetEl) {
+            if (!sheetEl || !sheetEl.querySelector) return false;
+            const sels = [
+                '.quote-cover-first-page',
+                '.header-section',
+                '.quote-clause-block',
+                '.quote-digital-signature-stamp',
+                '.clause-content table',
+                '.clause-content img',
+            ];
+            for (const sel of sels) {
+                const nodes = sheetEl.querySelectorAll(sel);
+                for (const node of nodes) {
+                    if (node.matches && node.matches('img[src]') && node.getAttribute('src')) return true;
+                    if (node.matches && node.matches('table')) return true;
+                    if (node.matches && node.matches('.quote-digital-signature-stamp')) return true;
+                    const text = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
+                    if (text.length > 0) return true;
+                }
+            }
+            const content = sheetEl.querySelector('.quote-sheet-main-flex .content-section');
+            if (content) {
+                const prose = (content.innerText || '')
+                    .replace(/\s+/g, ' ')
+                    .replace(/Page\s+\d+\s+of\s+\d+/gi, '')
+                    .trim();
+                if (prose.length > 12) return true;
+            }
+            return false;
+        }
+
+        function renumberQuoteSheetPageIndicators(previewRoot) {
+            const sheets = [...previewRoot.querySelectorAll('.quote-a4-sheet')];
+            const total = sheets.length;
+            sheets.forEach((sheet, i) => {
+                const ind = sheet.querySelector('.quote-print-page-indicator');
+                if (ind) ind.textContent = `Page ${i + 1} of ${total}`;
+            });
+        }
+
+        let removed = 0;
+        const preview = document.getElementById('quote-preview');
+        if (preview) {
+            preview.querySelectorAll('.quote-a4-sheet--word-flow-extra, [data-word-flow-extra]').forEach((el) => {
+                el.remove();
+                removed += 1;
+            });
+            preview.querySelectorAll('.quote-clause-word-flow-ribbon').forEach((el) => {
+                el.remove();
+                removed += 1;
+            });
+
+            let sheets = [...preview.querySelectorAll('.quote-a4-sheet')];
+            while (sheets.length > 1) {
+                const last = sheets[sheets.length - 1];
+                if (!quoteSheetHasBodyContent(last)) {
+                    last.remove();
+                    removed += 1;
+                    sheets = [...preview.querySelectorAll('.quote-a4-sheet')];
+                } else {
+                    break;
+                }
+            }
+
+            sheets = [...preview.querySelectorAll('.quote-a4-sheet')];
+            sheets.forEach((sheet, idx) => {
+                if (idx === 0) return;
+                if (!quoteSheetHasBodyContent(sheet)) {
+                    sheet.remove();
+                    removed += 1;
+                }
+            });
+
+            if (removed > 0) renumberQuoteSheetPageIndicators(preview);
+
+            const finalSheets = [...preview.querySelectorAll('.quote-a4-sheet')];
+            const lastSheet = finalSheets[finalSheets.length - 1];
+            if (lastSheet) {
+                lastSheet.style.setProperty('page-break-after', 'avoid', 'important');
+                lastSheet.style.setProperty('break-after', 'avoid', 'important');
+            }
+        }
+
+        const pinSheetGrid = (sheetEl, isCover) => {
+            sheetEl.style.setProperty('box-sizing', 'border-box', 'important');
+            sheetEl.style.setProperty('width', '210mm', 'important');
+            sheetEl.style.setProperty('padding', '15mm', 'important');
+            sheetEl.style.setProperty('margin', '0 auto', 'important');
+            sheetEl.style.setProperty('height', '297mm', 'important');
+            sheetEl.style.setProperty('min-height', '297mm', 'important');
+            sheetEl.style.setProperty('max-height', '297mm', 'important');
+            sheetEl.style.setProperty('display', 'grid', 'important');
+            sheetEl.style.setProperty('grid-template-columns', 'minmax(0, 1fr)', 'important');
+            sheetEl.style.setProperty('grid-template-rows', 'auto minmax(0, 1fr) auto', 'important');
+            sheetEl.style.setProperty('align-content', 'stretch', 'important');
+            sheetEl.style.setProperty('overflow', 'hidden', 'important');
+            const logo = sheetEl.querySelector(':scope > .quote-sheet-logo-row');
+            if (logo) {
+                logo.style.setProperty('grid-row', '1', 'important');
+                logo.style.setProperty('display', 'flex', 'important');
+                logo.style.setProperty('flex-direction', 'row', 'important');
+                logo.style.setProperty('justify-content', 'flex-end', 'important');
+                logo.style.setProperty('align-items', 'flex-start', 'important');
+                logo.style.setProperty('width', '100%', 'important');
+                logo.style.setProperty('text-align', 'right', 'important');
+                logo.querySelectorAll(':scope > div').forEach((wrap) => {
+                    wrap.style.setProperty('width', '100%', 'important');
+                    wrap.style.setProperty('text-align', 'right', 'important');
+                    wrap.style.setProperty('display', 'block', 'important');
+                });
+            }
+            const main = sheetEl.querySelector(':scope > .quote-sheet-main-flex');
+            const content = sheetEl.querySelector('.quote-sheet-main-flex > .content-section');
+            const spacer = sheetEl.querySelector('.quote-cover-page1-spacer');
+            const header = sheetEl.querySelector('.header-section');
+            if (main) {
+                main.style.setProperty('grid-row', '2', 'important');
+                main.style.setProperty('min-height', '0', 'important');
+                main.style.setProperty('height', '100%', 'important');
+                main.style.setProperty('display', 'flex', 'important');
+                main.style.setProperty('flex-direction', 'column', 'important');
+                main.style.setProperty('overflow', 'hidden', 'important');
+            }
+            if (content) {
+                content.style.setProperty('flex', isCover ? '1 1 0' : '0 1 auto', 'important');
+                content.style.setProperty('min-height', '0', 'important');
+                if (isCover) {
+                    content.style.setProperty('display', 'flex', 'important');
+                    content.style.setProperty('flex-direction', 'column', 'important');
+                }
+            }
+            if (header) header.style.setProperty('flex', '0 0 auto', 'important');
+            if (isCover && spacer) {
+                spacer.style.setProperty('flex', '1 1 0', 'important');
+                spacer.style.setProperty('min-height', '0', 'important');
+            }
+            const footer = sheetEl.querySelector(':scope > .footer-section');
+            if (footer) {
+                footer.style.setProperty('grid-row', '3', 'important');
+                footer.style.setProperty('align-self', 'end', 'important');
+            }
+        };
+        document.querySelectorAll('#quote-print-root .quote-a4-sheet').forEach((sheetEl) => {
+            const isCover = !sheetEl.classList.contains('quote-a4-sheet--continuation');
+            pinSheetGrid(sheetEl, isCover);
+        });
+        document.querySelectorAll('.quote-preview-zoom-viewport, .quote-preview-zoom-shell').forEach((el) => {
+            el.style.setProperty('transform', 'none', 'important');
+            el.style.setProperty('width', '100%', 'important');
+            el.style.setProperty('flex', 'none', 'important');
+            el.style.setProperty('height', 'auto', 'important');
+            el.style.setProperty('overflow', 'visible', 'important');
+        });
+        document.querySelectorAll('.quote-a4-sheet').forEach((sheetEl) => {
+            ['page-break-before', 'page-break-after', 'break-before', 'break-after'].forEach((prop) => {
+                sheetEl.style.setProperty(prop, 'auto', 'important');
+            });
+            sheetEl.style.removeProperty('page-break-inside');
+            sheetEl.style.removeProperty('break-inside');
+        });
+        const sheets = [...document.querySelectorAll('#quote-preview .quote-a4-sheet')];
+        const lastSheet = sheets[sheets.length - 1];
+        if (lastSheet) {
+            lastSheet.style.setProperty('page-break-after', 'avoid', 'important');
+            lastSheet.style.setProperty('break-after', 'avoid', 'important');
+        }
+        document.querySelectorAll('.quote-continuation-header').forEach((hdr) => {
+            hdr.style.setProperty('display', 'flex', 'important');
+            hdr.style.setProperty('flex-direction', 'row', 'important');
+            hdr.style.setProperty('justify-content', 'flex-end', 'important');
+            hdr.style.setProperty('align-items', 'flex-start', 'important');
+            hdr.style.setProperty('width', '100%', 'important');
+            hdr.style.setProperty('text-align', 'right', 'important');
+        });
+        document.querySelectorAll('.quote-sheet-logo-row img, .quote-continuation-header img').forEach((img) => {
+            img.style.setProperty('max-height', '68px', 'important');
+            img.style.setProperty('height', 'auto', 'important');
+            img.style.setProperty('width', 'auto', 'important');
+            img.style.setProperty('max-width', '212px', 'important');
+            img.style.setProperty('object-fit', 'contain', 'important');
+            img.style.setProperty('display', 'inline-block', 'important');
+            img.style.setProperty('margin-left', 'auto', 'important');
+            img.style.setProperty('margin-right', '0', 'important');
+            img.style.setProperty('float', 'none', 'important');
+        });
+
+        /** Pin Lucide strokes if client did not rasterize (Chromium PDF drops CSS stroke). */
+        document
+            .querySelectorAll(
+                '.quote-header-quote-meta-ic-wrap svg, .quote-header-address-meta-ic-wrap svg'
+            )
+            .forEach((svg) => {
+                svg.setAttribute('stroke', '#ffffff');
+                svg.setAttribute('color', '#ffffff');
+                svg.style.setProperty('stroke', '#ffffff', 'important');
+                svg.style.setProperty('color', '#ffffff', 'important');
+                svg.querySelectorAll('path, line, circle, polyline, polygon, rect').forEach((el) => {
+                    const stroke = el.getAttribute('stroke');
+                    if (!stroke || stroke === 'currentColor') el.setAttribute('stroke', '#ffffff');
+                    el.style.setProperty('stroke', '#ffffff', 'important');
+                });
+            });
+
+        return { removed };
+    });
 }
 
 /**
@@ -578,12 +887,16 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
     const perfT0 = Date.now();
     const perf = {
         htmlChars: String(html).length,
+        databaseMs: 0,
+        calculationsMs: 0,
         dataPrepMs: 0,
         browserLaunchMs: 0,
         pageLoadMs: 0,
         imagesMs: 0,
+        layoutPrepMs: 0,
         renderMs: 0,
         restrictMs: 0,
+        responseMs: 0,
         totalMs: 0,
     };
 
@@ -616,7 +929,8 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
     let puppeteerUserDataDir = null;
     let page = null;
     try {
-        const resolvedChrome = resolvePuppeteerChromeExecutable(puppeteer);
+        /** Skip slow chrome --version spawn; PE check + puppeteer.launch are authoritative. */
+        const resolvedChrome = resolvePuppeteerChromeExecutable(puppeteer, { skipSpawnProbe: true });
         const { executablePath: chromeExe, checked, reason, spawnProbe, trustedEnvPath, source } = resolvedChrome;
         if (!chromeExe) {
             console.error('[quote-pdf] Chrome executable not found.', {
@@ -646,7 +960,7 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
             getPdfTempDir(),
             `ems-puppeteer-pool-${process.pid}`
         );
-        pdfStepLog('browser.launch/acquire start', { executable: chromeExe, userDataDir: puppeteerUserDataDir });
+        pdfStepLog('browser.launch/acquire start', { executable: chromeExe, userDataDir: puppeteerUserDataDir, source });
         const tBrowser = Date.now();
         const launchOpts = buildChromeLaunchOptions(chromeExe, puppeteerUserDataDir);
         let acquireAttempt = 0;
@@ -660,7 +974,8 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
                     throw launchErr;
                 }
                 acquireAttempt += 1;
-                await closePooledBrowser().catch(() => {});
+                /** Refcount-aware: closes now if idle, otherwise drains after sibling jobs finish. */
+                await closePooledBrowser({ force: false }).catch(() => {});
                 pdfStepLog('browser.launch retry after timeout', { attempt: acquireAttempt });
             }
         }
@@ -673,8 +988,10 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
 
         pdfStepLog('page.setup', { emulateScreen: useScreenMedia, viewport: '794x1123' });
         await setupPdfRequestInterception(page);
-        await page.emulateMediaType(useScreenMedia ? 'screen' : 'print');
-        await page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 1 });
+        await Promise.all([
+            page.emulateMediaType(useScreenMedia ? 'screen' : 'print'),
+            page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 1 }),
+        ]);
 
         const tLoad = Date.now();
         const loadResult = await loadHtmlInPage(page, htmlForPdf);
@@ -699,159 +1016,19 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
         perf.imagesMs = msSince(tImg);
         logStage('generate', 'Stage 2 Images/logos', perf.imagesMs);
 
-        console.log('[quote-pdf] Evaluating font/style cleaning...');
+        const tLayout = Date.now();
         try {
-            await page.evaluate(async () => {
-                if (document.fonts && document.fonts.ready) {
-                    await Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 5000))]);
-                }
-                const root = document.getElementById('quote-print-root');
-                if (!root) return;
-                root.querySelectorAll('[style]').forEach((el) => {
-                    if (!el.style) return;
-                    const fam = el.style.fontFamily || '';
-                    if (/inter|calibri|arial/i.test(fam)) {
-                        el.style.removeProperty('font-family');
-                    }
-                    if (el.style.transform && el.style.transform !== 'none') {
-                        el.style.removeProperty('transform');
-                    }
-                    if (el.style.filter && el.style.filter !== 'none') {
-                        el.style.removeProperty('filter');
-                    }
-                    if (el.style.webkitFontSmoothing) {
-                        el.style.removeProperty('-webkit-font-smoothing');
-                    }
-                });
-            });
-        } catch (evalErr) {
-            console.warn('[quote-pdf] evaluate style cleaning warning:', evalErr && evalErr.message);
-        }
-
-        console.log('[quote-pdf] Pruning empty A4 sheets before render...');
-        try {
-            const { pruneEmptyQuoteSheetsInDocument } = require('../lib/quotePrintSheetValidation.cjs');
-            const removed = await page.evaluate(pruneEmptyQuoteSheetsInDocument);
-            if (removed > 0) {
-                console.log(`[quote-pdf] Removed ${removed} empty continuation sheet(s).`);
+            pdfStepLog('prepareLoadedHtmlForPdf start');
+            const prep = await prepareLoadedHtmlForPdf(page);
+            if (prep && prep.removed > 0) {
+                console.log(`[quote-pdf] Removed ${prep.removed} empty continuation sheet(s).`);
             }
-        } catch (pruneErr) {
-            console.warn('[quote-pdf] prune empty sheets warning:', pruneErr && pruneErr.message);
+            pdfStepLog('prepareLoadedHtmlForPdf done', { removed: prep?.removed || 0 });
+        } catch (prepErr) {
+            console.warn('[quote-pdf] layout prep warning:', prepErr && prepErr.message);
         }
-
-        try {
-            await page.evaluate(() => {
-                const pinSheetGrid = (sheetEl, isCover) => {
-                    sheetEl.style.setProperty('box-sizing', 'border-box', 'important');
-                    sheetEl.style.setProperty('width', '210mm', 'important');
-                    sheetEl.style.setProperty('padding', '15mm', 'important');
-                    sheetEl.style.setProperty('margin', '0 auto', 'important');
-                    sheetEl.style.setProperty('height', '297mm', 'important');
-                    sheetEl.style.setProperty('min-height', '297mm', 'important');
-                    sheetEl.style.setProperty('max-height', '297mm', 'important');
-                    sheetEl.style.setProperty('display', 'grid', 'important');
-                    sheetEl.style.setProperty('grid-template-columns', 'minmax(0, 1fr)', 'important');
-                    sheetEl.style.setProperty('grid-template-rows', 'auto minmax(0, 1fr) auto', 'important');
-                    sheetEl.style.setProperty('align-content', 'stretch', 'important');
-                    sheetEl.style.setProperty('overflow', 'hidden', 'important');
-                    const logo = sheetEl.querySelector(':scope > .quote-sheet-logo-row');
-                    if (logo) {
-                        logo.style.setProperty('grid-row', '1', 'important');
-                        logo.style.setProperty('display', 'flex', 'important');
-                        logo.style.setProperty('flex-direction', 'row', 'important');
-                        logo.style.setProperty('justify-content', 'flex-end', 'important');
-                        logo.style.setProperty('align-items', 'flex-start', 'important');
-                        logo.style.setProperty('width', '100%', 'important');
-                        logo.style.setProperty('text-align', 'right', 'important');
-                        logo.querySelectorAll(':scope > div').forEach((wrap) => {
-                            wrap.style.setProperty('width', '100%', 'important');
-                            wrap.style.setProperty('text-align', 'right', 'important');
-                            wrap.style.setProperty('display', 'block', 'important');
-                        });
-                    }
-                    const main = sheetEl.querySelector(':scope > .quote-sheet-main-flex');
-                    const content = sheetEl.querySelector('.quote-sheet-main-flex > .content-section');
-                    const spacer = sheetEl.querySelector('.quote-cover-page1-spacer');
-                    const header = sheetEl.querySelector('.header-section');
-                    if (main) {
-                        main.style.setProperty('grid-row', '2', 'important');
-                        main.style.setProperty('min-height', '0', 'important');
-                        main.style.setProperty('height', '100%', 'important');
-                        main.style.setProperty('display', 'flex', 'important');
-                        main.style.setProperty('flex-direction', 'column', 'important');
-                        main.style.setProperty('overflow', 'hidden', 'important');
-                    }
-                    if (content) {
-                        content.style.setProperty('flex', isCover ? '1 1 0' : '0 1 auto', 'important');
-                        content.style.setProperty('min-height', '0', 'important');
-                        if (isCover) {
-                            content.style.setProperty('display', 'flex', 'important');
-                            content.style.setProperty('flex-direction', 'column', 'important');
-                        }
-                    }
-                    if (header) header.style.setProperty('flex', '0 0 auto', 'important');
-                    if (isCover && spacer) {
-                        spacer.style.setProperty('flex', '1 1 0', 'important');
-                        spacer.style.setProperty('min-height', '0', 'important');
-                    }
-                    const footer = sheetEl.querySelector(':scope > .footer-section');
-                    if (footer) {
-                        footer.style.setProperty('grid-row', '3', 'important');
-                        footer.style.setProperty('align-self', 'end', 'important');
-                    }
-                };
-                document.querySelectorAll('#quote-print-root .quote-a4-sheet').forEach((sheetEl) => {
-                    const isCover = !sheetEl.classList.contains('quote-a4-sheet--continuation');
-                    pinSheetGrid(sheetEl, isCover);
-                });
-                document.querySelectorAll('.quote-preview-zoom-viewport, .quote-preview-zoom-shell').forEach((el) => {
-                    el.style.setProperty('transform', 'none', 'important');
-                    el.style.setProperty('width', '100%', 'important');
-                    el.style.setProperty('flex', 'none', 'important');
-                    el.style.setProperty('height', 'auto', 'important');
-                    el.style.setProperty('overflow', 'visible', 'important');
-                });
-                document.querySelectorAll('.quote-a4-sheet').forEach((sheetEl) => {
-                    ['page-break-before', 'page-break-after', 'break-before', 'break-after'].forEach((prop) => {
-                        sheetEl.style.setProperty(prop, 'auto', 'important');
-                    });
-                    sheetEl.style.removeProperty('page-break-inside');
-                    sheetEl.style.removeProperty('break-inside');
-                });
-                const sheets = [...document.querySelectorAll('#quote-preview .quote-a4-sheet')];
-                const lastSheet = sheets[sheets.length - 1];
-                if (lastSheet) {
-                    lastSheet.style.setProperty('page-break-after', 'avoid', 'important');
-                    lastSheet.style.setProperty('break-after', 'avoid', 'important');
-                }
-                document
-                    .querySelectorAll('.quote-continuation-header')
-                    .forEach((hdr) => {
-                        hdr.style.setProperty('display', 'flex', 'important');
-                        hdr.style.setProperty('flex-direction', 'row', 'important');
-                        hdr.style.setProperty('justify-content', 'flex-end', 'important');
-                        hdr.style.setProperty('align-items', 'flex-start', 'important');
-                        hdr.style.setProperty('width', '100%', 'important');
-                        hdr.style.setProperty('text-align', 'right', 'important');
-                    });
-                document
-                    .querySelectorAll('.quote-sheet-logo-row img, .quote-continuation-header img')
-                    .forEach((img) => {
-                        img.style.setProperty('max-height', '68px', 'important');
-                        img.style.setProperty('height', 'auto', 'important');
-                        img.style.setProperty('width', 'auto', 'important');
-                        img.style.setProperty('max-width', '212px', 'important');
-                        img.style.setProperty('object-fit', 'contain', 'important');
-                        /* inline-block honors parent text-align:right in block flow; margin-left:auto covers the flex path. Keeps logo top-right without touching header/footer geometry. */
-                        img.style.setProperty('display', 'inline-block', 'important');
-                        img.style.setProperty('margin-left', 'auto', 'important');
-                        img.style.setProperty('margin-right', '0', 'important');
-                        img.style.setProperty('float', 'none', 'important');
-                    });
-            });
-        } catch (coverLayoutErr) {
-            console.warn('[quote-pdf] page-break cleanup warning:', coverLayoutErr && coverLayoutErr.message);
-        }
+        perf.layoutPrepMs = msSince(tLayout);
+        logStage('generate', 'Stage 2 Layout prep', perf.layoutPrepMs);
 
         try {
             const pagStats = await logQuotePdfPaginationDiagnostics(page);
@@ -870,26 +1047,33 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
         const tRestrict = Date.now();
         buf = await applyQuotePdfRestrictions(buf);
         perf.restrictMs = msSince(tRestrict);
+        logStage('generate', 'Stage 2 Restrict', perf.restrictMs);
 
-        perf.totalMs = msSince(perfT0);
-        logStage('generate', 'TOTAL', perf.totalMs, perf);
-
+        const tResponse = Date.now();
         const safeName = String(filename || 'quote.pdf').replace(/[^\w.\-]+/g, '_');
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
-        const perfHeader = headerJson(perf);
-        if (perfHeader) res.setHeader('X-EMS-PDF-Timing', perfHeader);
         if (isQuotePdfRestrictEnabled()) {
             res.setHeader('X-EMS-PDF-Restricted', '1');
         }
-        return res.send(buf);
+        /** Pre-send totals (responseMs filled after send for console report). */
+        perf.totalMs = msSince(perfT0);
+        const perfHeader = headerJson(perf);
+        if (perfHeader) res.setHeader('X-EMS-PDF-Timing', perfHeader);
+        res.send(buf);
+        perf.responseMs = msSince(tResponse);
+        perf.totalMs = msSince(perfT0);
+        logStage('generate', 'TOTAL', perf.totalMs, perf);
+        printPerfReport(perf);
+        return;
     } catch (err) {
         const raw = err && err.message ? String(err.message) : String(err);
-        if (/Timed out after waiting \d+ms/i.test(raw)) {
-            await closePooledBrowser().catch(() => {});
-        }
-        if (/Target closed|Protocol error|Browser closed|Session closed|Connection closed/i.test(raw)) {
-            await closePooledBrowser().catch(() => {});
+        if (
+            /Timed out after waiting \d+ms/i.test(raw) ||
+            /Target closed|Protocol error|Browser closed|Session closed|Connection closed/i.test(raw)
+        ) {
+            /** Do not kill sibling in-flight PDFs — drain close after this page releases. */
+            markBrowserUnhealthy();
         }
         console.error('[quote-pdf] PDF generation error handler caught:', err);
         let msg = raw.trim() || 'pdf_generation_failed';
@@ -938,4 +1122,47 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
     }
 });
 
+/**
+ * Warm Puppeteer browser after server listen so the first Download is not a cold Chrome launch.
+ * Fire-and-forget; never blocks startup.
+ */
+async function warmQuotePdfBrowserPool() {
+    if (String(process.env.EMS_QUOTE_PDF_SERVER_ENABLED || '').trim() !== '1') {
+        return { skipped: true, reason: 'server_pdf_disabled' };
+    }
+    if (String(process.env.QUOTE_PDF_WARM_ON_START || '1').trim() === '0') {
+        return { skipped: true, reason: 'warm_disabled' };
+    }
+    let puppeteer;
+    try {
+        puppeteer = require('puppeteer');
+    } catch {
+        return { skipped: true, reason: 'puppeteer_unavailable' };
+    }
+    const resolved = resolvePuppeteerChromeExecutable(puppeteer, { skipSpawnProbe: true });
+    if (!resolved.executablePath) {
+        return { skipped: true, reason: resolved.reason || 'chrome_missing' };
+    }
+    const userDataDir = path.join(getPdfTempDir(), `ems-puppeteer-pool-${process.pid}`);
+    const t0 = Date.now();
+    let page = null;
+    try {
+        const launchOpts = buildChromeLaunchOptions(resolved.executablePath, userDataDir);
+        ({ page } = await newPooledPdfPage(puppeteer, launchOpts));
+        await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 15000 });
+        console.log(`[quote-pdf] browser pool warmed in ${Date.now() - t0}ms (${resolved.source || 'chrome'})`);
+        return { ok: true, ms: Date.now() - t0, executable: resolved.executablePath };
+    } catch (err) {
+        console.warn('[quote-pdf] browser warm failed:', err && err.message ? err.message : err);
+        /** Only tear down if nothing else is using the pool (refcount-aware). */
+        await closePooledBrowser({ force: false }).catch(() => {});
+        return { ok: false, error: err && err.message ? err.message : String(err) };
+    } finally {
+        if (page) await page.close().catch(() => {});
+        releasePooledBrowser();
+    }
+}
+
 module.exports = router;
+module.exports.warmQuotePdfBrowserPool = warmQuotePdfBrowserPool;
+module.exports.buildChromeLaunchOptions = buildChromeLaunchOptions;

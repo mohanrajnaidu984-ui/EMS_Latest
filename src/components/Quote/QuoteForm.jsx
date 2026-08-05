@@ -5120,6 +5120,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     if (data && typeof data.emsQuotePdfServerEnabled !== 'undefined') {
                         setServerPdfEnabled(!!data.emsQuotePdfServerEnabled);
                     }
+                    /** Reuse this health result for the next 60s so Download skips a second probe. */
+                    if (data?.puppeteer !== false && data?.chromeReady !== false) {
+                        quotePdfHealthOkUntil = Date.now() + 60000;
+                    }
                     if (data?.emsQuotePdfPerfLog && typeof window !== 'undefined') {
                         try {
                             window.localStorage.setItem('emsQuotePerf', '1');
@@ -19248,12 +19252,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         }
         const promise = fetchQuotePdfBlobInner({ forceFreshLayout: bypassCache })
             .then((result) => {
-                quotePdfBlobCacheRef.current = {
-                    key,
-                    blob: result.blob,
-                    fileName: result.fileName,
-                    promise: null,
-                };
+                const cur = quotePdfBlobCacheRef.current;
+                /** Ignore stale completions if a newer export superseded this promise/key. */
+                if (cur.promise === promise || (cur.key === key && !cur.blob)) {
+                    quotePdfBlobCacheRef.current = {
+                        key,
+                        blob: result.blob,
+                        fileName: result.fileName,
+                        promise: null,
+                    };
+                }
                 return result;
             })
             .catch((err) => {
@@ -19323,15 +19331,25 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
      * Falls back to html2pdf, then browser Print / Save as PDF.
      */
     const downloadPDF = async () => {
-        /** Never reuse a cached blob — prior warm/capture passes can leave stale layout in cache. */
-        quotePdfBlobCacheRef.current = { key: '', blob: null, fileName: '', promise: null };
-
         setIsUploading(true);
         setExportBusyLabel('Generating PDF...');
         try {
             if (serverPdfEnabled) {
                 try {
-                    const { blob, fileName } = await fetchQuotePdfBlob({ bypassCache: true });
+                    /**
+                     * Reuse hover-warmed blob/promise when the preview cache key still matches.
+                     * Only force a fresh render when nothing useful is cached (avoids double Chromium work).
+                     */
+                    const key = buildQuotePdfExportCacheKey();
+                    const cache = quotePdfBlobCacheRef.current;
+                    const canReuseWarm =
+                        cache.key === key && Boolean(cache.blob || cache.promise);
+                    if (!canReuseWarm) {
+                        quotePdfBlobCacheRef.current = { key: '', blob: null, fileName: '', promise: null };
+                    }
+                    const { blob, fileName } = await fetchQuotePdfBlob({
+                        bypassCache: !canReuseWarm,
+                    });
                     const tDl = quotePerfStart('PDF — file save');
                     triggerBlobDownload(blob, fileName);
                     tDl.end();

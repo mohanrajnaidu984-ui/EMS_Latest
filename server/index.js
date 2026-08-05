@@ -618,6 +618,7 @@ const dashboardRoutes = require('./routes/dashboard'); // New Dashboard Routes
 const pricingRoutes = require('./routes/pricing'); // Pricing Module Routes
 const quotesRoutes = require('./routes/quotes'); // Quote Module Routes
 const quotePdfRoutes = require('./routes/quotePdf');
+const { warmQuotePdfBrowserPool } = quotePdfRoutes;
 app.use('/api', apiRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/pricing', pricingRoutes);
@@ -3564,6 +3565,12 @@ async function startServer() {
         console.log(`EMS attachments root (enquiries): ${resolveEnquiryAttachmentsBase()}`);
         console.log(`EMS attachments root (quotes): ${resolveQuoteAttachmentsBase()}`);
         console.log(`Database pool connected: ${isPoolConnected()}`);
+        /** Non-blocking: first PDF download reuses this Chromium instead of paying cold launch. */
+        setImmediate(() => {
+            warmQuotePdfBrowserPool().catch((err) => {
+                console.warn('[quote-pdf] warm on start error:', err && err.message ? err.message : err);
+            });
+        });
     });
     server.keepAliveTimeout = parseInt(process.env.HTTP_KEEP_ALIVE_TIMEOUT_MS || '65000', 10);
     server.headersTimeout = parseInt(process.env.HTTP_HEADERS_TIMEOUT_MS || '66000', 10);

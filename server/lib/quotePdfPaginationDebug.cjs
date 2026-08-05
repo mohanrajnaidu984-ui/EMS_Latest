@@ -1,11 +1,11 @@
 /**
  * Log per-sheet heights before Puppeteer PDF render (PM2 stdout).
- * Enable: EMS_QUOTE_PDF_PERF_LOG=1 or EMS_QUOTE_PDF_DEBUG_PAGINATION=1
+ * Enable: EMS_QUOTE_PDF_DEBUG_PAGINATION=1 only (not tied to PERF_LOG — avoids extra evaluate on every PDF).
  */
 
 function isPaginationDebugEnabled() {
     const on = (v) => String(v || '').trim() === '1' || /^true$/i.test(String(v || ''));
-    return on(process.env.EMS_QUOTE_PDF_DEBUG_PAGINATION) || on(process.env.EMS_QUOTE_PDF_PERF_LOG);
+    return on(process.env.EMS_QUOTE_PDF_DEBUG_PAGINATION);
 }
 
 /**

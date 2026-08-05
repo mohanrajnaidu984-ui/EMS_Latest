@@ -5,7 +5,8 @@ import {
     BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer,
     PieChart, Pie, Cell, CartesianGrid
 } from 'recharts';
-import { Printer, Mail, Maximize2, Minimize2, FilterX } from 'lucide-react';
+import { Printer, Mail, Maximize2, Minimize2, FilterX, FileSpreadsheet } from 'lucide-react';
+import { downloadJobsTableXlsx } from './salesReportJobsExcel';
 import './SalesReport.css';
 
 /** A4 landscape printable area (mm margins each side). */
@@ -1547,6 +1548,26 @@ const SalesReport = () => {
         window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     };
 
+    const handleDownloadJobsExcel = async () => {
+        if (topJobsLoading) return;
+        if (!topRowsFiltered.length) {
+            window.alert('No data to export');
+            return;
+        }
+        try {
+            await downloadJobsTableXlsx({
+                rows: topRowsFiltered,
+                topJobStatus,
+                tableConfig: topJobsTableConfig,
+                headingLabel: topJobsHeadingWord,
+                meta: { year, company, division, role }
+            });
+        } catch (err) {
+            console.error('Jobs Excel export failed', err);
+            window.alert(err?.message || 'Failed to export Excel workbook');
+        }
+    };
+
     const renderColumnFilterPopoverBody = (key) => {
         const options = topJobFilterOptions[key] || [];
         const searchQ = String(headerFilterSearch || '').trim().toLowerCase();
@@ -2364,6 +2385,16 @@ const SalesReport = () => {
                                     aria-label={tableExpanded ? 'Collapse table view' : 'Expand table view'}
                                 >
                                     {tableExpanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="btn btn-sm btn-outline-light sr-table-excel-btn me-2"
+                                    onClick={handleDownloadJobsExcel}
+                                    title="Download table as Excel (.xlsx)"
+                                    aria-label="Download Jobs table as Excel workbook"
+                                    disabled={topJobsLoading || topRowsFiltered.length === 0}
+                                >
+                                    <FileSpreadsheet size={13} />
                                 </button>
                                 <label className="visually-hidden" htmlFor="sr-top-jobs-status">
                                     Filter top jobs by status

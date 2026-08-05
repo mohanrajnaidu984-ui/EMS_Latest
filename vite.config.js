@@ -10,6 +10,15 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    optimizeDeps: {
+      include: ['exceljs']
+    },
+    resolve: {
+      alias: {
+        // Prefer browser build so Vite/client does not pull Node fs/stream polyfills.
+        exceljs: 'exceljs/dist/exceljs.min.js'
+      }
+    },
     server: {
       /** Stable URL for bookmarks; if busy Vite tries the next port (strictPort: false). */
       port: 5174,

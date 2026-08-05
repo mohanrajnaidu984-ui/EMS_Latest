@@ -899,6 +899,99 @@ export async function embedQuoteLogoImagesInClone(cloneRoot, liveRoot) {
     );
 }
 
+const QUOTE_META_ICON_WRAP_SEL =
+    '.quote-header-quote-meta-ic-wrap, .quote-header-address-meta-ic-wrap';
+
+function forceWhiteStrokeOnSvgClone(svg) {
+    const cloneSvg = svg.cloneNode(true);
+    cloneSvg.setAttribute('stroke', '#ffffff');
+    cloneSvg.setAttribute('color', '#ffffff');
+    if (!cloneSvg.getAttribute('fill')) cloneSvg.setAttribute('fill', 'none');
+    cloneSvg.querySelectorAll('path, line, circle, polyline, polygon, rect').forEach((el) => {
+        const stroke = el.getAttribute('stroke');
+        if (!stroke || stroke === 'currentColor') el.setAttribute('stroke', '#ffffff');
+        const fill = el.getAttribute('fill');
+        if (fill === 'currentColor') el.setAttribute('fill', '#ffffff');
+        else if (!fill || fill === 'none') el.setAttribute('fill', 'none');
+    });
+    return cloneSvg;
+}
+
+function loadImageFromUrl(url) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('meta icon image load failed'));
+        img.src = url;
+    });
+}
+
+/**
+ * Chromium page.pdf() often drops Lucide SVG strokes (colored tiles, empty glyphs).
+ * Rasterize meta icons to PNG so PDF matches on-screen preview.
+ */
+export async function rasterizeQuoteMetaIconsInClone(cloneRoot) {
+    if (!cloneRoot || typeof document === 'undefined') return;
+    const wraps = [...cloneRoot.querySelectorAll(QUOTE_META_ICON_WRAP_SEL)];
+    if (!wraps.length) return;
+
+    await Promise.all(
+        wraps.map(async (wrap) => {
+            const svg = wrap.querySelector('svg');
+            if (!svg) return;
+            try {
+                const cloneSvg = forceWhiteStrokeOnSvgClone(svg);
+                let svgStr = new XMLSerializer().serializeToString(cloneSvg);
+                if (!/\sxmlns=/.test(svgStr)) {
+                    svgStr = svgStr.replace(/<svg\b/, '<svg xmlns="http://www.w3.org/2000/svg"');
+                }
+                const w = Math.max(Number(svg.getAttribute('width')) || 11, 11);
+                const h = Math.max(Number(svg.getAttribute('height')) || 11, 11);
+                const scale = 4;
+                const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgStr)}`;
+                const img = await loadImageFromUrl(dataUrl);
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.ceil(w * scale);
+                canvas.height = Math.ceil(h * scale);
+                const ctx = canvas.getContext('2d');
+                if (!ctx) {
+                    /** Fallback: keep SVG but pin stroke attributes for Puppeteer. */
+                    svg.setAttribute('stroke', '#ffffff');
+                    svg.setAttribute('color', '#ffffff');
+                    svg.querySelectorAll('path, line, circle, polyline, polygon, rect').forEach((el) => {
+                        if (!el.getAttribute('stroke') || el.getAttribute('stroke') === 'currentColor') {
+                            el.setAttribute('stroke', '#ffffff');
+                        }
+                    });
+                    return;
+                }
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                const png = canvas.toDataURL('image/png');
+                const replacement = document.createElement('img');
+                replacement.setAttribute('src', png);
+                replacement.setAttribute('alt', '');
+                replacement.setAttribute('width', String(w));
+                replacement.setAttribute('height', String(h));
+                replacement.style.cssText = `display:block;width:${w}px;height:${h}px;max-width:${w}px;max-height:${h}px;`;
+                svg.replaceWith(replacement);
+            } catch {
+                try {
+                    svg.setAttribute('stroke', '#ffffff');
+                    svg.setAttribute('color', '#ffffff');
+                    svg.querySelectorAll('path, line, circle, polyline, polygon, rect').forEach((el) => {
+                        if (!el.getAttribute('stroke') || el.getAttribute('stroke') === 'currentColor') {
+                            el.setAttribute('stroke', '#ffffff');
+                        }
+                    });
+                } catch {
+                    /* ignore */
+                }
+            }
+        })
+    );
+}
+
 export function captureQuotePrintRootInnerHtmlForPdf(rootEl) {
     const clone = cloneQuotePrintRootForExport(rootEl);
     return clone ? clone.innerHTML : '';
@@ -924,6 +1017,7 @@ export async function captureQuotePrintRootInnerHtmlForPdfAsync(rootEl) {
     }
     stripPdfCaptureSheetLayoutInlineStyles(clone, { preserveCoverLayout: hasCoverLetter });
     await embedQuoteLogoImagesInClone(clone, root);
+    await rasterizeQuoteMetaIconsInClone(clone);
 
     const mount = mountQuoteCloneOffscreen(clone);
     let fragmentHtml = '';
@@ -1247,6 +1341,7 @@ export async function prepareQuotePrintRootCloneForHtml2pdf(rootEl) {
     normalizeSheetNodesForHtml2pdf(clone);
 
     await embedQuoteLogoImagesInClone(clone, root);
+    await rasterizeQuoteMetaIconsInClone(clone);
 
     const mount = mountQuoteCloneOffscreen(clone);
     try {
@@ -1640,8 +1735,25 @@ html[data-preview-pdf="1"] .quote-header-quote-panel-mid .quote-header-quote-met
 html[data-preview-pdf="1"] .quote-header-quote-panel-mid .quote-header-quote-meta-ic-wrap svg {
     display: block !important;
     stroke: #ffffff !important;
+    color: #ffffff !important;
+    overflow: visible !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
+}
+html[data-preview-pdf="1"] .quote-header-quote-panel-mid .quote-header-quote-meta-ic-wrap svg path,
+html[data-preview-pdf="1"] .quote-header-quote-panel-mid .quote-header-quote-meta-ic-wrap svg line,
+html[data-preview-pdf="1"] .quote-header-quote-panel-mid .quote-header-quote-meta-ic-wrap svg circle,
+html[data-preview-pdf="1"] .quote-header-quote-panel-mid .quote-header-quote-meta-ic-wrap svg polyline,
+html[data-preview-pdf="1"] .quote-header-quote-panel-mid .quote-header-quote-meta-ic-wrap svg polygon,
+html[data-preview-pdf="1"] .quote-header-quote-panel-mid .quote-header-quote-meta-ic-wrap svg rect {
+    stroke: #ffffff !important;
+    fill: none !important;
+}
+html[data-preview-pdf="1"] .quote-header-quote-meta-ic-wrap img,
+html[data-preview-pdf="1"] .quote-header-address-meta-ic-wrap img {
+    display: block !important;
+    width: 11px !important;
+    height: 11px !important;
 }
 html[data-preview-pdf="1"] .quote-header-quote-meta-ic-wrap--ref {
     color: #ffffff !important;

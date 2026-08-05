@@ -591,6 +591,18 @@ function buildSalesReportPendingQuotedAggregateSql({
                         P.RequestNo,
                         COALESCE(
                             ${SQL_PROB_NETQUOTED_PARSED},
+                            (
+                                SELECT MAX(LQ.QuoteAmount)
+                                FROM LatestQuotePerOwnJob LQ
+                                WHERE LQ.RequestNo = P.RequestNo
+                                  AND (
+                                    UPPER(LTRIM(RTRIM(ISNULL(P.OwnJobName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(LQ.QuoteOwnJob, N''))))
+                                    OR (
+                                        LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))) = N''
+                                        AND UPPER(LTRIM(RTRIM(ISNULL(P.QuoteOwnJob, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(LQ.QuoteOwnJob, N''))))
+                                    )
+                                  )
+                            ),
                             CAST(0 AS DECIMAL(18,2))
                         ) AS ScopedValue
                     FROM LatestProbPendingFunnelScope P
@@ -856,7 +868,9 @@ function getTopJobProbValueExpr(topJobStatus) {
     const key = sanitizeInput(topJobStatus);
     if (key === 'Won') return `(${SQL_PROB_WON_VALUE})`;
     if (key === 'Quoted') return `COALESCE(${SQL_PROB_NETQUOTED_PARSED}, ${SQL_LATEST_QUOTE_AMOUNT_PER_ENQUIRY}, CAST(0 AS DECIMAL(18,2)))`;
-    if (key === 'Pending') return `COALESCE(${SQL_PROB_NETQUOTED_PARSED}, ${SQL_LATEST_QUOTE_AMOUNT_PER_ENQUIRY}, CAST(0 AS DECIMAL(18,2)))`;
+    // Pending uses OwnJob-scoped quote amount in /top-job-booked (never enquiry-wide latest —
+    // that pulled parent/sibling division totals while Quote Ref stayed on OwnJob).
+    if (key === 'Pending') return `ISNULL(${SQL_PROB_NETQUOTED_PARSED}, CAST(0 AS DECIMAL(18,2)))`;
     if (key === 'Follow Up') return `ISNULL(${SQL_PROB_NETQUOTED_PARSED}, CAST(0 AS DECIMAL(18,2)))`;
     if (key === 'Lost') return `(${SQL_PROB_COMPETITOR_PRICE})`;
     return `(${SQL_PROB_JOB_VALUE})`;
@@ -2359,7 +2373,11 @@ router.get('/top-job-booked', async (req, res) => {
                         NULLIF(LTRIM(RTRIM(ISNULL(P.LeadJobName, N''))), N''),
                         N''
                     ))) AS LeadJob,
-                    ${topJobValueExpr} AS JobValue,
+                    COALESCE(
+                        NULLIF(pendingQ.QuoteAmount, 0),
+                        ${SQL_PROB_NETQUOTED_PARSED},
+                        CAST(0 AS DECIMAL(18,2))
+                    ) AS JobValue,
                     P.GrossMargin AS WonGrossProfit,
                     P.Status,
                     P.ProbabilityChance,
@@ -2382,20 +2400,31 @@ router.get('/top-job-booked', async (req, res) => {
                 OUTER APPLY (
                     SELECT TOP 1
                         LTRIM(RTRIM(ISNULL(Q.QuoteNumber, N''))) AS QuoteRef,
-                        COALESCE(Q.UpdatedAt, Q.QuoteDate) AS QuoteDate
+                        COALESCE(Q.UpdatedAt, Q.QuoteDate) AS QuoteDate,
+                        ISNULL(
+                            TRY_CONVERT(
+                                DECIMAL(18,2),
+                                REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(ISNULL(Q.TotalAmount, '0'))), ',', ''), 'BD', ''), ' ', '')
+                            ),
+                            0
+                        ) AS QuoteAmount
                     FROM EnquiryQuotes Q
                     WHERE Q.RequestNo = E.RequestNo
                       ${buildSalesReportQuoteOwnJobDivisionClause(safeDivision, 'Q')}
                       AND (
                             P.RequestNo IS NULL
-                            OR UPPER(LTRIM(RTRIM(ISNULL(Q.OwnJob, N'')))) = UPPER(LTRIM(RTRIM(COALESCE(
-                                NULLIF(LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))), N''),
-                                NULLIF(LTRIM(RTRIM(ISNULL(P.LeadJobName, N''))), N''),
-                                N''
-                            ))))
+                            OR (
+                                LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))) <> N''
+                                AND UPPER(LTRIM(RTRIM(ISNULL(Q.OwnJob, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))))
+                            )
                             OR (
                                 LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))) = N''
+                                AND LTRIM(RTRIM(ISNULL(P.QuoteOwnJob, N''))) <> N''
                                 AND UPPER(LTRIM(RTRIM(ISNULL(Q.OwnJob, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(P.QuoteOwnJob, N''))))
+                            )
+                            OR (
+                                LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))) = N''
+                                AND LTRIM(RTRIM(ISNULL(P.QuoteOwnJob, N''))) = N''
                             )
                           )
                     ORDER BY

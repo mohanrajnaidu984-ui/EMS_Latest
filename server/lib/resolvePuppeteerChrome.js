@@ -11,6 +11,9 @@ const MIN_CHROME_EXE_BYTES = 500_000;
 
 /** Reuse last good path in-process (health + /generate share the same PM2 worker). */
 let cachedResolution = null;
+/** Brief negative cache so a hung --version probe is not repeated on every PDF click. */
+let negativeCacheUntil = 0;
+let negativeCacheResult = null;
 
 function normalizeExecutablePath(value) {
     let p = String(value || '').trim();
@@ -50,6 +53,12 @@ function isUsableWindowsExe(filePath) {
     return hasWindowsPeHeader(filePath);
 }
 
+function spawnProbeTimeoutMs() {
+    const n = Number(process.env.PUPPETEER_SPAWN_PROBE_TIMEOUT_MS);
+    /** Default 3s — bundled Chrome --version can take 10s+ and previously blocked PDF for 20s. */
+    return Number.isFinite(n) && n > 0 ? n : 3000;
+}
+
 /**
  * Quick spawn test — catches EFTYPE before Puppeteer launch.
  * Chrome 109 on Server 2012 R2 may need --no-sandbox for child_process spawn.
@@ -62,7 +71,7 @@ function probeChromeExecutableSync(filePath) {
     const args = ['--no-sandbox', '--disable-gpu', '--version'];
     try {
         const r = spawnSync(filePath, args, {
-            timeout: 20000,
+            timeout: spawnProbeTimeoutMs(),
             windowsHide: true,
             encoding: 'utf8',
         });
@@ -88,6 +97,41 @@ function pushCandidate(list, seen, value, meta = {}) {
     list.push({ path: p, ...meta });
 }
 
+/** Installed browser paths — usually start much faster than Puppeteer's downloaded Chrome. */
+function findSystemChromeCandidates(candidates, seen) {
+    if (process.platform === 'win32') {
+        const roots = [
+            process.env.PROGRAMFILES,
+            process.env['PROGRAMFILES(X86)'],
+            process.env.LOCALAPPDATA,
+        ].filter(Boolean);
+        for (const root of roots) {
+            pushCandidate(
+                candidates,
+                seen,
+                path.join(root, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+                { source: 'system-chrome' }
+            );
+            pushCandidate(
+                candidates,
+                seen,
+                path.join(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+                { source: 'system-edge' }
+            );
+        }
+        return;
+    }
+    for (const p of [
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/google-chrome',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/snap/bin/chromium',
+    ]) {
+        pushCandidate(candidates, seen, p, { source: 'system-chrome' });
+    }
+}
+
 /** Walk a cache tree and return the newest usable chrome.exe. */
 function findChromeExeUnderCacheDir(cacheRoot, checked, maxDepth = 8) {
     if (!cacheRoot || !fs.existsSync(cacheRoot)) return null;
@@ -99,22 +143,20 @@ function findChromeExeUnderCacheDir(cacheRoot, checked, maxDepth = 8) {
     while (stack.length) {
         const { dir, depth } = stack.pop();
         if (depth > maxDepth) continue;
-
-        let entries;
+        let ents;
         try {
-            entries = fs.readdirSync(dir, { withFileTypes: true });
+            ents = fs.readdirSync(dir, { withFileTypes: true });
         } catch {
             continue;
         }
-
-        for (const ent of entries) {
+        for (const ent of ents) {
             const full = path.join(dir, ent.name);
             if (ent.isDirectory()) {
                 stack.push({ dir: full, depth: depth + 1 });
                 continue;
             }
-            if (!/chrome\.exe$/i.test(ent.name)) continue;
-            checked.push(full);
+            if (!ent.isFile() || !/^chrome\.exe$/i.test(ent.name)) continue;
+            if (checked && !checked.includes(full)) checked.push(full);
             if (!isUsableWindowsExe(full)) continue;
             let mtime = 0;
             try {
@@ -178,6 +220,9 @@ function buildCandidateList(puppeteer) {
         pushCandidate(candidates, seen, envPath, { source: 'env', trustedEnv: true });
     }
 
+    /** Prefer system Chrome/Edge before Puppeteer cache — spawn --version is ~1s vs ~10s locally. */
+    findSystemChromeCandidates(candidates, seen);
+
     try {
         if (puppeteer && typeof puppeteer.executablePath === 'function') {
             pushCandidate(candidates, seen, puppeteer.executablePath(), { source: 'puppeteer' });
@@ -203,7 +248,16 @@ function finalizeResolution(resolved, checked, extra = {}) {
     };
     if (resolved) {
         cachedResolution = out;
+        negativeCacheUntil = 0;
+        negativeCacheResult = null;
     }
+    return out;
+}
+
+function finalizeNegative(checked, reason) {
+    const out = { executablePath: null, checked, reason };
+    negativeCacheResult = out;
+    negativeCacheUntil = Date.now() + 30_000;
     return out;
 }
 
@@ -221,10 +275,19 @@ function resolvePuppeteerChromeExecutable(puppeteer, opts = {}) {
         cachedResolution = null;
     }
 
+    if (!opts.bypassCache && Date.now() < negativeCacheUntil && negativeCacheResult) {
+        return {
+            ...negativeCacheResult,
+            checked: [...(negativeCacheResult.checked || [])],
+            fromNegativeCache: true,
+        };
+    }
+
     const skipSpawnProbe = !!opts.skipSpawnProbe;
     const { candidates, checked } = buildCandidateList(puppeteer);
     let lastSpawnError = '';
     let lastInvalidReason = '';
+    let peValidFallback = null;
 
     for (const candidate of candidates) {
         const resolved = candidate.path;
@@ -267,6 +330,28 @@ function resolvePuppeteerChromeExecutable(puppeteer, opts = {}) {
                     'PUPPETEER_EXECUTABLE_PATH passed PE validation but spawn --version probe failed; using env path because Puppeteer launch is authoritative.',
             });
         }
+
+        /**
+         * System / cache Chrome: PE-valid but --version hung/timed out (AV, Session 0).
+         * Prefer first PE-valid candidate over returning null (which previously blocked PDF for 20s+).
+         */
+        if (!peValidFallback) {
+            peValidFallback = {
+                resolved,
+                spawnProbe,
+                source: candidate.source,
+            };
+        }
+    }
+
+    if (peValidFallback) {
+        return finalizeResolution(peValidFallback.resolved, checked, {
+            spawnProbe: peValidFallback.spawnProbe,
+            source: peValidFallback.source,
+            trustedEnvPath: false,
+            spawnProbeWarning:
+                'Chrome PE validation passed but spawn --version probe failed; using path because Puppeteer launch is authoritative.',
+        });
     }
 
     const reason =
@@ -277,7 +362,7 @@ function resolvePuppeteerChromeExecutable(puppeteer, opts = {}) {
                 : 'No valid chrome.exe found. Set PUPPETEER_EXECUTABLE_PATH or install Chrome 109 via helpers\\fix_puppeteer_pdf_ws2012.bat.'
             : 'Chrome/Chromium executable not found for Puppeteer.';
 
-    return { executablePath: null, checked, reason };
+    return finalizeNegative(checked, reason);
 }
 
 module.exports = {
