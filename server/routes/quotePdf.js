@@ -16,7 +16,13 @@ const {
 } = require('../lib/quotePdfBrowserPool.cjs');
 const { msSince, logStage, headerJson, isPerfLogEnabled, printPerfReport } = require('../lib/quotePdfPerf.cjs');
 const { logQuotePdfPaginationDiagnostics, isPaginationDebugEnabled } = require('../lib/quotePdfPaginationDebug.cjs');
+const {
+    streamPdfBufferToResponse,
+    storePdfForTokenDownload,
+    streamTokenPdfToResponse,
+} = require('../lib/quotePdfResponseStream.cjs');
 
+const { PDFDocument } = require('pdf-lib');
 const router = express.Router();
 
 /** In-memory logo data URLs keyed by absolute path + mtime (avoids FS read per PDF). */
@@ -302,7 +308,7 @@ router.get('/health', async (req, res) => {
         emsQuotePdfServerEnabled: serverPdfEnabled,
         emsQuotePdfPerfLog: isPerfLogEnabled(),
         emsQuotePdfDebugPagination: isPaginationDebugEnabled(),
-        quotePdfCssVersion: '2026-06-05-footer-auto',
+        quotePdfCssVersion: '2026-08-26-latest',
         quotePdfAssetOrigin: (process.env.QUOTE_PDF_ASSET_ORIGIN || `http://127.0.0.1:${serverListenPort()}`).replace(
             /\/$/,
             ''
@@ -394,6 +400,39 @@ html[data-preview-pdf="1"] .quote-clause-heading-panel h3 {
     font-family: inherit !important;
 }
 ${QUOTE_UNIFIED_SHEET_EXPORT_CSS}
+html[data-preview-pdf="1"] #quote-preview:has(.quote-a4-sheet--landscape),
+html[data-preview-pdf="1"] #quote-preview:has(.quote-a4-sheet[data-page-orientation="landscape"]) {
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    margin: 0 !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] {
+    width: 297mm !important;
+    min-width: 297mm !important;
+    max-width: 297mm !important;
+    min-height: 210mm !important;
+    height: 210mm !important;
+    max-height: 210mm !important;
+    margin: 0 !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .quote-sheet-main-flex,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .content-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .header-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .footer-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .quote-clause-block,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .clause-content,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .quote-sheet-main-flex,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .content-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .header-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .footer-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .quote-clause-block,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .clause-content {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+}
 </style>`;
 }
 
@@ -689,13 +728,24 @@ async function prepareLoadedHtmlForPdf(page) {
         }
 
         const pinSheetGrid = (sheetEl, isCover) => {
+            const isLandscape =
+                sheetEl.classList.contains('quote-a4-sheet--landscape') ||
+                sheetEl.getAttribute('data-page-orientation') === 'landscape';
+            if (isLandscape) sheetEl.classList.add('quote-a4-sheet--landscape');
+            const sheetW = isLandscape ? '297mm' : '210mm';
+            const sheetH = isLandscape ? '210mm' : '297mm';
+            ['width', 'min-width', 'max-width', 'height', 'min-height', 'max-height', 'margin'].forEach((prop) =>
+                sheetEl.style.removeProperty(prop)
+            );
             sheetEl.style.setProperty('box-sizing', 'border-box', 'important');
-            sheetEl.style.setProperty('width', '210mm', 'important');
+            sheetEl.style.setProperty('width', sheetW, 'important');
+            sheetEl.style.setProperty('min-width', sheetW, 'important');
+            sheetEl.style.setProperty('max-width', sheetW, 'important');
             sheetEl.style.setProperty('padding', '15mm', 'important');
-            sheetEl.style.setProperty('margin', '0 auto', 'important');
-            sheetEl.style.setProperty('height', '297mm', 'important');
-            sheetEl.style.setProperty('min-height', '297mm', 'important');
-            sheetEl.style.setProperty('max-height', '297mm', 'important');
+            sheetEl.style.setProperty('margin', '0', 'important');
+            sheetEl.style.setProperty('height', sheetH, 'important');
+            sheetEl.style.setProperty('min-height', sheetH, 'important');
+            sheetEl.style.setProperty('max-height', sheetH, 'important');
             sheetEl.style.setProperty('display', 'grid', 'important');
             sheetEl.style.setProperty('grid-template-columns', 'minmax(0, 1fr)', 'important');
             sheetEl.style.setProperty('grid-template-rows', 'auto minmax(0, 1fr) auto', 'important');
@@ -746,11 +796,55 @@ async function prepareLoadedHtmlForPdf(page) {
                 footer.style.setProperty('grid-row', '3', 'important');
                 footer.style.setProperty('align-self', 'end', 'important');
             }
+            if (isLandscape) {
+                sheetEl
+                    .querySelectorAll(
+                        '.quote-sheet-main-flex, .content-section, .header-section, .footer-section, .quote-clause-block, .clause-content'
+                    )
+                    .forEach((el) => {
+                        el.style.setProperty('width', '100%', 'important');
+                        el.style.setProperty('max-width', '100%', 'important');
+                        el.style.setProperty('box-sizing', 'border-box', 'important');
+                    });
+            }
         };
+        // Ensure @page rules are present as a stylesheet (not just sent HTML) so Chrome PDF engine picks them up.
+        if (!document.getElementById('ems-page-rules')) {
+            const st = document.createElement('style');
+            st.id = 'ems-page-rules';
+            st.textContent = `
+                @page { size: A4 portrait; margin: 0; }
+                @page quote-landscape { size: A4 landscape; margin: 0; }
+                .quote-a4-sheet--landscape { page: quote-landscape; }
+            `;
+            document.head.appendChild(st);
+        }
+
         document.querySelectorAll('#quote-print-root .quote-a4-sheet').forEach((sheetEl) => {
             const isCover = !sheetEl.classList.contains('quote-a4-sheet--continuation');
             pinSheetGrid(sheetEl, isCover);
         });
+        const previewRoot = document.getElementById('quote-preview');
+        const printRootEl = document.getElementById('quote-print-root');
+        if (previewRoot) {
+            ['width', 'min-width', 'max-width', 'margin', 'padding', 'min-height', 'height'].forEach((prop) =>
+                previewRoot.style.removeProperty(prop)
+            );
+            previewRoot.style.setProperty('margin', '0', 'important');
+            previewRoot.style.setProperty('padding', '0', 'important');
+            previewRoot.style.setProperty('align-items', 'stretch', 'important');
+            previewRoot.style.setProperty('min-width', '0', 'important');
+            previewRoot.style.setProperty('width', 'auto', 'important');
+            previewRoot.style.setProperty('max-width', 'none', 'important');
+        }
+        if (printRootEl) {
+            printRootEl.style.setProperty('margin', '0', 'important');
+            printRootEl.style.setProperty('min-width', '0', 'important');
+            printRootEl.style.setProperty('width', 'auto', 'important');
+            printRootEl.style.setProperty('max-width', 'none', 'important');
+        }
+        document.body.style.setProperty('display', 'block', 'important');
+        document.body.style.setProperty('margin', '0', 'important');
         document.querySelectorAll('.quote-preview-zoom-viewport, .quote-preview-zoom-shell').forEach((el) => {
             el.style.setProperty('transform', 'none', 'important');
             el.style.setProperty('width', '100%', 'important');
@@ -779,6 +873,27 @@ async function prepareLoadedHtmlForPdf(page) {
             hdr.style.setProperty('width', '100%', 'important');
             hdr.style.setProperty('text-align', 'right', 'important');
         });
+
+        /** Strip spell-check spans / broken attribute tails that leak into PDF text. */
+        document.querySelectorAll('.ems-spell-mark, [data-spell-id]').forEach((span) => {
+            const parent = span.parentNode;
+            if (!parent) return;
+            while (span.firstChild) parent.insertBefore(span.firstChild, span);
+            parent.removeChild(span);
+        });
+        document.querySelectorAll('.clause-content, .jodit-wysiwyg').forEach((el) => {
+            let s = el.innerHTML || '';
+            if (!/ems-spell-mark|data-suggestions|background-repeat:repeat-x !important;background-position:0 100%/i.test(s)) {
+                return;
+            }
+            s = s.replace(/<span\b[^>]*\bems-spell-mark\b[^>]*>([\s\S]*?)<\/span>/gi, '$1');
+            s = s.replace(
+                /!?important;background-repeat:repeat-x !important;background-position:0 100% !important;background-size:100% 2px !important;padding-bottom:1px !important;text-decoration:none !important;[\s\S]*?(?:&gt;|>)(?:[^<]{0,400}?\)\.?)?/gi,
+                ''
+            );
+            el.innerHTML = s;
+        });
+
         document.querySelectorAll('.quote-sheet-logo-row img, .quote-continuation-header img').forEach((img) => {
             img.style.setProperty('max-height', '68px', 'important');
             img.style.setProperty('height', 'auto', 'important');
@@ -846,40 +961,263 @@ async function loadHtmlInPage(page, html) {
     return { tmpPath: null, navigationUrl, mode: 'setContent' };
 }
 
-async function renderPdfBuffer(page) {
-    const stableA4 = {
-        printBackground: true,
-        format: 'A4',
-        margin: { top: '0', right: '0', bottom: '0', left: '0' },
-        preferCSSPageSize: false,
-    };
+/**
+ * Portrait-only render — proven stable path (all sheets portrait).
+ */
+async function renderPortraitPdfBuffer(page) {
     const timeoutMs = quotePdfPageTimeoutMs();
-    pdfStepLog('page.pdf start', { timeoutMs });
-
-    const runPdf = () => page.pdf(stableA4);
+    await page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 1 });
+    pdfStepLog('page.pdf start (portrait-only)', { timeoutMs });
     const buf = await Promise.race([
-        runPdf(),
-        new Promise((_, reject) =>
-            setTimeout(() => reject(new Error(`page.pdf timed out after ${timeoutMs}ms`)), timeoutMs)
-        ),
+        page.pdf({ printBackground: true, format: 'A4', margin: { top: '0', right: '0', bottom: '0', left: '0' }, preferCSSPageSize: false }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`page.pdf timed out after ${timeoutMs}ms`)), timeoutMs)),
     ]).catch(async (e1) => {
-        console.warn('[quote-pdf] pdf stable A4 retry:', e1 && e1.message);
-        return page.pdf({
-            printBackground: true,
-            format: 'A4',
-            margin: { top: '0', right: '0', bottom: '0', left: '0' },
-            preferCSSPageSize: true,
-        });
+        console.warn('[quote-pdf] portrait retry:', e1 && e1.message);
+        return page.pdf({ printBackground: true, format: 'A4', margin: { top: '0', right: '0', bottom: '0', left: '0' } });
     });
-
-    pdfStepLog('page.pdf done', { bytes: buf?.length || 0 });
+    pdfStepLog('page.pdf done (portrait-only)', { bytes: buf?.length || 0 });
     return buf;
 }
 
+function mmToPx(mmStr) {
+    const n = parseFloat(String(mmStr || '').replace(/mm$/i, ''));
+    return Math.max(1, Math.round((n / 25.4) * 96));
+}
+
+/** Match viewport to one sheet so page.pdf(width/height) captures from (0,0), not a centered 1200px canvas. */
+async function setPdfViewportForSheet(page, sheetW, sheetH) {
+    const w = mmToPx(sheetW);
+    const h = mmToPx(sheetH);
+    await page.setViewport({ width: w, height: h, deviceScaleFactor: 1 });
+    await page.evaluate((widthMm, heightMm) => {
+        document.documentElement.style.setProperty('margin', '0', 'important');
+        document.documentElement.style.setProperty('padding', '0', 'important');
+        document.documentElement.style.setProperty('width', widthMm, 'important');
+        document.documentElement.style.setProperty('min-width', '0', 'important');
+        document.body.style.setProperty('margin', '0', 'important');
+        document.body.style.setProperty('padding', '0', 'important');
+        document.body.style.setProperty('display', 'block', 'important');
+        document.body.style.setProperty('width', widthMm, 'important');
+        document.body.style.setProperty('min-width', '0', 'important');
+        const printRoot = document.getElementById('quote-print-root');
+        const preview = document.getElementById('quote-preview');
+        if (printRoot) {
+            printRoot.style.setProperty('margin', '0', 'important');
+            printRoot.style.setProperty('padding', '0', 'important');
+            printRoot.style.setProperty('width', widthMm, 'important');
+            printRoot.style.setProperty('min-width', '0', 'important');
+            printRoot.style.setProperty('max-width', 'none', 'important');
+        }
+        if (preview) {
+            preview.style.setProperty('margin', '0', 'important');
+            preview.style.setProperty('padding', '0', 'important');
+            preview.style.setProperty('width', widthMm, 'important');
+            preview.style.setProperty('min-width', '0', 'important');
+            preview.style.setProperty('max-width', 'none', 'important');
+            preview.style.setProperty('align-items', 'stretch', 'important');
+        }
+    }, sheetW, sheetH);
+}
+
+/**
+ * Show only one sheet for isolated vector PDF render; keep display:grid on the visible sheet.
+ */
+async function isolateQuoteSheetForPdfRender(page, idx, sheetW, sheetH) {
+    await page.evaluate((sheetIndex, w, h) => {
+        /**
+         * Export CSS injects `@page { size: A4 portrait }`. Chromium still applies that default
+         * even when page.pdf() passes explicit width/height with preferCSSPageSize:false, which
+         * yields a portrait MediaBox while the sheet DOM is pinned to landscape width — content
+         * appears letterboxed on page 2+. Strip all @page rules and inject one rule for this sheet.
+         */
+        document.querySelectorAll('style').forEach((st) => {
+            if (st.id === 'ems-isolated-page-size') return;
+            st.textContent = st.textContent.replace(/@page[^{]*\{[^}]*\}/g, '');
+        });
+        document.getElementById('ems-page-rules')?.remove();
+        let pageSizeStyle = document.getElementById('ems-isolated-page-size');
+        if (!pageSizeStyle) {
+            pageSizeStyle = document.createElement('style');
+            pageSizeStyle.id = 'ems-isolated-page-size';
+            document.head.appendChild(pageSizeStyle);
+        }
+        pageSizeStyle.textContent = `@page { size: ${w} ${h}; margin: 0; }`;
+
+        const preview = document.getElementById('quote-preview');
+        const printRoot = document.getElementById('quote-print-root');
+        if (preview) {
+            ['width', 'min-width', 'max-width', 'margin', 'padding'].forEach((prop) =>
+                preview.style.removeProperty(prop)
+            );
+            preview.style.setProperty('width', w, 'important');
+            preview.style.setProperty('max-width', w, 'important');
+            preview.style.setProperty('min-width', '0', 'important');
+            preview.style.setProperty('margin', '0', 'important');
+            preview.style.setProperty('padding', '0', 'important');
+            preview.style.setProperty('align-items', 'stretch', 'important');
+        }
+        if (printRoot) {
+            printRoot.style.setProperty('width', w, 'important');
+            printRoot.style.setProperty('max-width', w, 'important');
+            printRoot.style.setProperty('min-width', '0', 'important');
+            printRoot.style.setProperty('margin', '0', 'important');
+        }
+        document.body.style.setProperty('display', 'block', 'important');
+        document.body.style.setProperty('margin', '0', 'important');
+        document.body.style.setProperty('width', w, 'important');
+        [...document.querySelectorAll('#quote-preview .quote-a4-sheet')].forEach((s, j) => {
+            if (j === sheetIndex) {
+                if (
+                    s.classList.contains('quote-a4-sheet--landscape') ||
+                    s.getAttribute('data-page-orientation') === 'landscape'
+                ) {
+                    s.classList.add('quote-a4-sheet--landscape');
+                }
+                s.style.setProperty('display', 'grid', 'important');
+                s.style.setProperty('width', w, 'important');
+                s.style.setProperty('min-width', w, 'important');
+                s.style.setProperty('max-width', w, 'important');
+                s.style.setProperty('height', h, 'important');
+                s.style.setProperty('min-height', h, 'important');
+                s.style.setProperty('max-height', h, 'important');
+                s.style.setProperty('margin', '0', 'important');
+                /**
+                 * For isolated Puppeteer renders we already force the target paper size via
+                 * page.pdf({ width, height }). Keeping the named CSS page assignment
+                 * (`page: quote-landscape`) can cause Chromium to emit an extra blank/offset
+                 * page before the real sheet. Neutralize it here so the isolated render has
+                 * exactly one page sized only by the explicit width/height above.
+                 */
+                s.style.setProperty('page', 'auto', 'important');
+                ['page-break-before', 'page-break-after', 'break-before', 'break-after'].forEach((prop) => {
+                    s.style.setProperty(prop, 'auto', 'important');
+                });
+                s.querySelectorAll(
+                    '.quote-sheet-main-flex, .content-section, .header-section, .footer-section, .quote-clause-block, .clause-content'
+                ).forEach((el) => {
+                    el.style.setProperty('width', '100%', 'important');
+                    el.style.setProperty('max-width', '100%', 'important');
+                });
+            } else {
+                s.style.setProperty('display', 'none', 'important');
+            }
+        });
+    }, idx, sheetW, sheetH);
+}
+
+async function restoreAllQuoteSheetsAfterPdfRender(page) {
+    await page.evaluate(() => {
+        document.querySelectorAll('#quote-preview .quote-a4-sheet').forEach((s) => {
+            s.style.setProperty('display', 'grid', 'important');
+            s.style.removeProperty('page');
+        });
+        const preview = document.getElementById('quote-preview');
+        const printRoot = document.getElementById('quote-print-root');
+        if (preview) {
+            preview.style.removeProperty('width');
+            preview.style.removeProperty('max-width');
+            preview.style.removeProperty('min-width');
+        }
+        if (printRoot) {
+            printRoot.style.removeProperty('width');
+            printRoot.style.removeProperty('max-width');
+        }
+    });
+}
+
+/**
+ * Mixed orientation: render each sheet in isolation at its own size.
+ * Avoids copying pages from a wide-viewport full-doc render (portrait sheets were shifted right).
+ */
+async function renderMixedOrientationPdfBuffer(page, sheetInfos) {
+    const timeoutMs = quotePdfPageTimeoutMs();
+    pdfStepLog('mixed orientation render start', { sheetCount: sheetInfos.length });
+
+    const mergedDoc = await PDFDocument.create();
+
+    for (let i = 0; i < sheetInfos.length; i++) {
+        const { isLandscape } = sheetInfos[i];
+        const w = isLandscape ? '297mm' : '210mm';
+        const h = isLandscape ? '210mm' : '297mm';
+
+        await isolateQuoteSheetForPdfRender(page, i, w, h);
+        await setPdfViewportForSheet(page, w, h);
+
+        const pageBuf = await Promise.race([
+            page.pdf({
+                printBackground: true,
+                width: w,
+                height: h,
+                margin: { top: '0', right: '0', bottom: '0', left: '0' },
+                preferCSSPageSize: false,
+            }),
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error(`sheet ${i} timed out after ${timeoutMs}ms`)), timeoutMs)
+            ),
+        ]);
+
+        const sheetDoc = await PDFDocument.load(pageBuf);
+        const pageCount = sheetDoc.getPageCount();
+        let pageIndex = 0;
+        if (pageCount > 1) {
+            const sizes = [];
+            for (let p = 0; p < pageCount; p++) {
+                const single = await PDFDocument.create();
+                const [copied] = await single.copyPages(sheetDoc, [p]);
+                single.addPage(copied);
+                sizes.push((await single.save()).length);
+            }
+            pageIndex = sizes.indexOf(Math.max(...sizes));
+        }
+        const [sheetPage] = await mergedDoc.copyPages(sheetDoc, [pageIndex]);
+        mergedDoc.addPage(sheetPage);
+        const mergedSize = sheetPage.getSize();
+        pdfStepLog(`sheet ${i} done (${isLandscape ? 'landscape' : 'portrait'} isolated)`, {
+            w,
+            h,
+            srcPages: pageCount,
+            usedPage: pageIndex,
+            pdfW: Math.round(mergedSize.width),
+            pdfH: Math.round(mergedSize.height),
+        });
+    }
+
+    await restoreAllQuoteSheetsAfterPdfRender(page);
+
+    const merged = Buffer.from(await mergedDoc.save());
+    pdfStepLog('mixed orientation render done', { pages: sheetInfos.length, bytes: merged.length });
+    return merged;
+}
+
+async function renderPdfBuffer(page, { hasLandscapeSheets = false } = {}) {
+    if (!hasLandscapeSheets) return renderPortraitPdfBuffer(page);
+
+    const sheetInfos = await page.evaluate(() =>
+        [...document.querySelectorAll('#quote-preview .quote-a4-sheet')]
+            .filter((s) => !s.classList.contains('quote-clause-measure-host') && !s.hasAttribute('data-pack-measure-shell'))
+            .map((s) => ({
+                isLandscape:
+                    s.classList.contains('quote-a4-sheet--landscape') ||
+                    s.getAttribute('data-page-orientation') === 'landscape',
+            }))
+    ).catch(() => []);
+
+    if (!sheetInfos.length) return renderPortraitPdfBuffer(page);
+    return renderMixedOrientationPdfBuffer(page, sheetInfos);
+}
+
 router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
-    const { html, filename, emulateScreen } = req.body || {};
+    const { html, filename, emulateScreen, delivery } = req.body || {};
     /** When true (default), @media print is ignored — layout matches Quote tab on-screen CSS (grid/flex A4 sheets). */
     const useScreenMedia = emulateScreen !== false;
+    /**
+     * delivery=link → generate PDF, store temp file, return JSON with short-lived GET URL.
+     * Browser then downloads via GET (native streaming; works through IIS/ARR with responseBufferLimit=0).
+     * Default remains binary PDF body (email / existing clients).
+     */
+    const wantDownloadLink =
+        String(delivery || '').toLowerCase() === 'link' ||
+        String(req.query.delivery || '').toLowerCase() === 'link';
     if (!html || typeof html !== 'string') {
         return res.status(400).json({ error: 'html_required' });
     }
@@ -986,11 +1324,26 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
         page.setDefaultTimeout(pageTimeoutMs);
         page.setDefaultNavigationTimeout(pageTimeoutMs);
 
-        pdfStepLog('page.setup', { emulateScreen: useScreenMedia, viewport: '794x1123' });
+        try {
+            const browser = typeof page.browser === 'function' ? page.browser() : null;
+            const ver = browser && typeof browser.version === 'function' ? await browser.version() : null;
+            pdfStepLog('browser.version', {
+                version: ver || undefined,
+                executable: chromeExe,
+                source,
+                printBackground: true,
+                emulateScreen: useScreenMedia,
+            });
+        } catch (verErr) {
+            console.warn('[quote-pdf] browser.version probe failed:', verErr && verErr.message);
+        }
+
+        pdfStepLog('page.setup', { emulateScreen: useScreenMedia, viewport: '1200x1700' });
         await setupPdfRequestInterception(page);
         await Promise.all([
             page.emulateMediaType(useScreenMedia ? 'screen' : 'print'),
-            page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 1 }),
+            // 1200px wide covers landscape A4 (≈1123px at 96dpi); height is just a viewport hint.
+            page.setViewport({ width: 1200, height: 1700, deviceScaleFactor: 1 }),
         ]);
 
         const tLoad = Date.now();
@@ -1040,7 +1393,11 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
         }
 
         const tRender = Date.now();
-        let buf = Buffer.from(await renderPdfBuffer(page));
+        const hasLandscapeSheets = await page.evaluate(() =>
+            document.querySelector('.quote-a4-sheet--landscape') !== null
+        ).catch(() => false);
+        pdfStepLog('landscape detection', { hasLandscapeSheets });
+        let buf = Buffer.from(await renderPdfBuffer(page, { hasLandscapeSheets }));
         perf.renderMs = msSince(tRender);
         logStage('generate', 'Stage 2 PDF render', perf.renderMs);
 
@@ -1051,16 +1408,34 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
 
         const tResponse = Date.now();
         const safeName = String(filename || 'quote.pdf').replace(/[^\w.\-]+/g, '_');
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
-        if (isQuotePdfRestrictEnabled()) {
-            res.setHeader('X-EMS-PDF-Restricted', '1');
-        }
         /** Pre-send totals (responseMs filled after send for console report). */
         perf.totalMs = msSince(perfT0);
         const perfHeader = headerJson(perf);
-        if (perfHeader) res.setHeader('X-EMS-PDF-Timing', perfHeader);
-        res.send(buf);
+        const extraHeaders = {};
+        if (isQuotePdfRestrictEnabled()) {
+            extraHeaders['X-EMS-PDF-Restricted'] = '1';
+        }
+        if (perfHeader) {
+            extraHeaders['X-EMS-PDF-Timing'] = perfHeader;
+        }
+
+        if (wantDownloadLink) {
+            const stored = storePdfForTokenDownload(buf, safeName);
+            perf.responseMs = msSince(tResponse);
+            perf.totalMs = msSince(perfT0);
+            logStage('generate', 'TOTAL', perf.totalMs, { ...perf, delivery: 'link' });
+            printPerfReport(perf);
+            return res.status(201).json({
+                delivery: 'link',
+                downloadPath: stored.downloadPath,
+                fileName: stored.fileName,
+                bytes: stored.bytes,
+                expiresInMs: stored.expiresInMs,
+                timing: perf,
+            });
+        }
+
+        await streamPdfBufferToResponse(res, buf, safeName, extraHeaders);
         perf.responseMs = msSince(tResponse);
         perf.totalMs = msSince(perfT0);
         logStage('generate', 'TOTAL', perf.totalMs, perf);
@@ -1119,6 +1494,22 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
             }
         }
         /** Profile dir is owned by the browser pool — deleted only in closePooledBrowser(). */
+    }
+});
+
+/**
+ * Browser-native PDF download (streams from disk). Used after POST /generate with delivery=link.
+ * Prefer this in production HTTP (non-secure-context) so the browser download manager streams to disk
+ * instead of holding the full PDF in a JS Blob after IIS ARR buffering.
+ */
+router.get('/file/:token', async (req, res) => {
+    try {
+        await streamTokenPdfToResponse(req.params.token, res);
+    } catch (err) {
+        console.error('[quote-pdf] token download failed:', err && err.message ? err.message : err);
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'download_failed', message: err.message || 'Download failed' });
+        }
     }
 });
 

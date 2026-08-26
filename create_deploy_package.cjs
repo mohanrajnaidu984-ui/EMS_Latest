@@ -1,9 +1,9 @@
-/**
+﻿/**
  * Build IIS deployment folder EMS_Deploy_YYYY-MM-DD (same layout as EMS_Deploy_2026-06-03).
  * Includes quote PDF (Puppeteer), Outlook/email draft routes, and local helper script.
  *
  * Usage: node create_deploy_package.cjs [--skip-uploads] [--with-node-modules]
- *        (production: no node_modules in zip — npm ci on server with Node 22 LTS)
+ *        (production: no node_modules in zip â€” npm ci on server with Node 22 LTS)
  */
 const fs = require('fs');
 const path = require('path');
@@ -12,15 +12,16 @@ const { execSync } = require('child_process');
 const PROJECT_ROOT = __dirname;
 const skipNpmInstall = process.argv.includes('--skip-npm-install');
 const skipUploads = process.argv.includes('--skip-uploads');
-/** Pre-install node_modules on build machine (smoke test only — production must run npm ci on server). */
+/** Pre-install node_modules on build machine (smoke test only â€” production must run npm ci on server). */
 const withNodeModules = process.argv.includes('--with-node-modules');
-const BASELINE_VERSION = '2026-08-03-latest';
-const PDF_CSS_VERSION = '2026-06-05-footer-auto';
+const BASELINE_VERSION = '2026-08-26-latest';
+const PDF_CSS_VERSION = '2026-08-26-latest';
 const FRONTEND_BUNDLE_MARKERS = [
     'data-ems-html2pdf',
     'margin-top: auto !important',
     'grid-template-rows: auto minmax(0, 1fr) auto !important',
     '_${Date.now()}.pdf',
+    'f0f9ff',
 ];
 const dateStamp = new Date().toISOString().slice(0, 10);
 const DEPLOY_DIR = path.join(PROJECT_ROOT, `EMS_Deploy_${dateStamp}`);
@@ -93,22 +94,22 @@ function copyDirFiltered(srcDir, destDir, filterFn) {
 function verifyFrontendBundle() {
     const assetsDir = path.join(FRONTEND_DIR, 'assets');
     if (!fs.existsSync(assetsDir)) {
-        console.error('❌ frontend/assets missing after build copy.');
+        console.error('âŒ frontend/assets missing after build copy.');
         process.exit(1);
     }
     const mainJs = fs.readdirSync(assetsDir).find((f) => /^index-.*\.js$/.test(f));
     if (!mainJs) {
-        console.error('❌ No index-*.js in frontend/assets');
+        console.error('âŒ No index-*.js in frontend/assets');
         process.exit(1);
     }
     const bundle = fs.readFileSync(path.join(assetsDir, mainJs), 'utf8');
     const missing = FRONTEND_BUNDLE_MARKERS.filter((m) => !bundle.includes(m));
     if (missing.length) {
-        console.error('❌ Frontend bundle missing PDF fix markers:', missing.join(', '));
-        console.error('   Rebuild with .env.production (VITE_SERVER_ORIGIN=http://151.50.1.114:81)');
+        console.error('âŒ Frontend bundle missing PDF fix markers:', missing.join(', '));
+        console.error('   Rebuild with .env.production (VITE_SERVER_ORIGIN=http://151.50.1.38)');
         process.exit(1);
     }
-    console.log(`✅ Verified frontend PDF fix in assets/${mainJs}`);
+    console.log(`âœ… Verified frontend PDF fix in assets/${mainJs}`);
 }
 
 function patchBackendPackageJsonFor2012R2() {
@@ -118,7 +119,7 @@ function patchBackendPackageJsonFor2012R2() {
         pkg.dependencies.puppeteer = '19.4.0';
     }
     fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
-    console.log('✅ backend/package.json pinned puppeteer@19.4.0 (Windows Server 2012 R2).');
+    console.log('âœ… backend/package.json pinned puppeteer@19.4.0 (Windows Server 2012 R2).');
 }
 
 function writeEnvProduction2012R2() {
@@ -126,10 +127,10 @@ function writeEnvProduction2012R2() {
     const dest = path.join(BACKEND_DIR, '.env.production.2012r2');
     if (fs.existsSync(stable)) {
         fs.copyFileSync(stable, dest);
-        console.log('✅ backend/.env.production.2012r2 (from deploy/production.2012r2.env)');
+        console.log('âœ… backend/.env.production.2012r2 (from deploy/production.2012r2.env)');
         return;
     }
-    const content = `# EMS Production — Windows Server 2012 R2 (151.50.1.114:81)
+    const content = `# EMS Production â€” Windows Server 2012 R2 (151.50.1.38)
 # Copy to backend/.env on first install, or let helpers\\REPLACE_AND_RESTART.bat do it.
 # After changes: pm2 restart EMS-API --update-env
 
@@ -139,7 +140,7 @@ DB_SERVER=151.50.1.116
 DB_DATABASE=EMS_DB
 
 PORT=5002
-EMS_PUBLIC_API_URL=http://151.50.1.114:81
+EMS_PUBLIC_API_URL=http://151.50.1.38
 
 SMTP_HOST=almoayyedcg-com.mail.protection.outlook.com
 SMTP_PORT=25
@@ -172,36 +173,36 @@ PUPPETEER_EXECUTABLE_PATH=C:\\inetpub\\wwwroot\\EMS\\backend\\.cache\\chromium-c
 function verifyRequiredFiles() {
     const missing = REQUIRED_BACKEND_PATHS.filter((p) => !fs.existsSync(path.join(BACKEND_DIR, p)));
     if (missing.length) {
-        console.error('❌ Package verification failed — missing backend files:');
+        console.error('âŒ Package verification failed â€” missing backend files:');
         missing.forEach((p) => console.error('   -', p));
         process.exit(1);
     }
     const quotesJs = fs.readFileSync(path.join(BACKEND_DIR, 'routes/quotes.js'), 'utf8');
     if (!quotesJs.includes("router.post('/outlook-draft'")) {
-        console.error('❌ routes/quotes.js is missing POST /outlook-draft');
+        console.error('âŒ routes/quotes.js is missing POST /outlook-draft');
         process.exit(1);
     }
     const indexJs = fs.readFileSync(path.join(BACKEND_DIR, 'index.js'), 'utf8');
     if (!indexJs.includes('/api/quote-pdf')) {
-        console.error('❌ index.js is missing /api/quote-pdf mount');
+        console.error('âŒ index.js is missing /api/quote-pdf mount');
         process.exit(1);
     }
     if (!indexJs.includes('resolveWritableEnquiryUploadDestination')) {
-        console.error('❌ index.js missing enquiry attachment local-fallback (resolveWritableEnquiryUploadDestination)');
+        console.error('âŒ index.js missing enquiry attachment local-fallback (resolveWritableEnquiryUploadDestination)');
         process.exit(1);
     }
     if (!indexJs.includes('/api/system/attachment-storage-probe')) {
-        console.error('❌ index.js missing /api/system/attachment-storage-probe');
+        console.error('âŒ index.js missing /api/system/attachment-storage-probe');
         process.exit(1);
     }
     const attachmentsRoot = fs.readFileSync(path.join(BACKEND_DIR, 'lib/attachmentsRoot.js'), 'utf8');
     if (!attachmentsRoot.includes('resolveWritableEnquiryUploadDestination')) {
-        console.error('❌ lib/attachmentsRoot.js missing UNC local-fallback writer');
+        console.error('âŒ lib/attachmentsRoot.js missing UNC local-fallback writer');
         process.exit(1);
     }
     const quotePdfJs = fs.readFileSync(path.join(BACKEND_DIR, 'routes/quotePdf.js'), 'utf8');
     if (!quotePdfJs.includes(PDF_CSS_VERSION)) {
-        console.error(`❌ routes/quotePdf.js missing quotePdfCssVersion: ${PDF_CSS_VERSION}`);
+        console.error(`âŒ routes/quotePdf.js missing quotePdfCssVersion: ${PDF_CSS_VERSION}`);
         process.exit(1);
     }
     const exportCss = fs.readFileSync(path.join(BACKEND_DIR, 'lib/quotePrintExportCss.cjs'), 'utf8');
@@ -212,24 +213,24 @@ function verifyRequiredFiles() {
             exportCss.includes('grid-row: 3'));
     if (!hasFooterPin) {
         console.error(
-            '❌ quotePrintExportCss.cjs missing footer pin (margin-top: auto or A4 grid footer row)'
+            'âŒ quotePrintExportCss.cjs missing footer pin (margin-top: auto or A4 grid footer row)'
         );
         process.exit(1);
     }
     const chromeResolver = fs.readFileSync(path.join(BACKEND_DIR, 'lib/resolvePuppeteerChrome.js'), 'utf8');
     if (!chromeResolver.includes('trustedEnvPath')) {
-        console.error('❌ resolvePuppeteerChrome.js missing trustedEnvPath fix (Chrome 109 on 2012 R2)');
+        console.error('âŒ resolvePuppeteerChrome.js missing trustedEnvPath fix (Chrome 109 on 2012 R2)');
         process.exit(1);
     }
     if (!chromeResolver.includes('chromium-chrome')) {
-        console.error('❌ resolvePuppeteerChrome.js missing chromium-chrome109 cache search');
+        console.error('âŒ resolvePuppeteerChrome.js missing chromium-chrome109 cache search');
         process.exit(1);
     }
-    console.log('✅ Verified PDF + Outlook/email draft backend modules.');
+    console.log('âœ… Verified PDF + Outlook/email draft backend modules.');
 }
 
 function writeEnvProductionExample() {
-    const content = `# EMS Production — copy to .env (Node.js 22 LTS required)
+    const content = `# EMS Production â€” copy to .env (Node.js 22 LTS required)
 # See PRODUCTION_DEPLOYMENT_BASELINE.md
 
 # --- Database (EMS production) ---
@@ -248,7 +249,7 @@ SMTP_PASS=your_smtp_password
 SMTP_ENCRYPTION=STARTTLS
 SMTP_IPV4=1
 
-# --- Attachments (UNC — PM2 user needs Modify) ---
+# --- Attachments (UNC â€” PM2 user needs Modify) ---
 ENQUIRY_ATTACHMENTS_ROOT=\\\\151.50.20.129\\ems app
 
 # --- Enquiry notifications (Outlook COM fails under PM2/IIS) ---
@@ -257,11 +258,11 @@ EMS_ENQUIRY_NOTIFY_SMTP_FALLBACK=1
 
 # --- Quote PDF (REQUIRED for server PDF = local behavior) ---
 EMS_QUOTE_PDF_SERVER_ENABLED=1
-# Puppeteer on server uses loopback Express — keep 127.0.0.1:5002 (NOT http://151.50.1.114:81).
-# Users open EMS at :81; frontend build sets VITE_SERVER_ORIGIN=http://151.50.1.114:81.
+# Puppeteer on server uses loopback Express â€” keep 127.0.0.1:5002 (NOT http://151.50.1.38).
+# Users open EMS at :81; frontend build sets VITE_SERVER_ORIGIN=http://151.50.1.38.
 QUOTE_PDF_ASSET_ORIGIN=http://127.0.0.1:5002
 # Windows Server 2012 R2: puppeteer@19.4.0 + Chrome 109 only (see WINDOWS_SERVER_2012_R2_PDF.md)
-# Do NOT run: npx puppeteer browsers install chrome (installs Chrome 146 — fails on 2012 R2)
+# Do NOT run: npx puppeteer browsers install chrome (installs Chrome 146 â€” fails on 2012 R2)
 # PUPPETEER_CHROME_MILESTONE=109
 # PUPPETEER_EXECUTABLE_PATH=C:\\inetpub\\wwwroot\\EMS\\backend\\.cache\\chromium-chrome109\\chrome-win-1069273\\chrome-win\\chrome.exe
 PUPPETEER_LAUNCH_TIMEOUT_MS=180000
@@ -273,7 +274,7 @@ QUOTE_PDF_SINGLE_PROCESS=0
 EMS_QUOTE_PDF_PERF_LOG=1
 EMS_QUOTE_PDF_DEBUG_PAGINATION=1
 
-# --- PDF restrictions (muhammara native module — Node 22 only) ---
+# --- PDF restrictions (muhammara native module â€” Node 22 only) ---
 # Set 0 if muhammara fails after npm ci; PDF generation still works
 QUOTE_PDF_RESTRICT=1
 # QUOTE_PDF_OWNER_PASSWORD=EMS-Quote-Owner-Do-Not-Share
@@ -290,7 +291,7 @@ function copyDeployExtras() {
     if (fs.existsSync(lockSrc)) {
         fs.copyFileSync(lockSrc, path.join(BACKEND_DIR, 'package-lock.json'));
     } else {
-        console.warn('⚠️ server/package-lock.json missing — run npm install in server/ before packaging.');
+        console.warn('âš ï¸ server/package-lock.json missing â€” run npm install in server/ before packaging.');
     }
     const nvmrc = path.join(PROJECT_ROOT, 'server', '.nvmrc');
     if (fs.existsSync(nvmrc)) {
@@ -334,13 +335,13 @@ Layout matches production reference \`EMS_Deploy_2026-06-03\`.
 |--------|---------|
 | \`frontend/\` | React build + \`web.config\` (IIS SPA + /api proxy) |
 | \`frontend/dist/\` | Same assets (legacy IIS paths) |
-| \`backend/\` | Node.js API (Express) — **install node_modules on server** |
+| \`backend/\` | Node.js API (Express) â€” **install node_modules on server** |
 | \`helpers/\` | Outlook local helper + utility batch files |
 
 ### Included features (this release)
 
 - **Quote PDF**: \`POST /api/quote-pdf/generate\` (Puppeteer / Chrome, browser pool + perf timing)
-- **Quote Outlook draft**: \`POST /api/quotes/outlook-draft\` (Windows COM — API must run on a PC with classic Outlook if used)
+- **Quote Outlook draft**: \`POST /api/quotes/outlook-draft\` (Windows COM â€” API must run on a PC with classic Outlook if used)
 - **Quote email fields**: \`GET /api/quotes/outlook-email-fields\`
 - **Quote .eml draft**: \`POST /api/quotes/email-draft\`
 - **Enquiry Outlook/SMTP**: \`/api/enquiries/outlook-*\`
@@ -351,14 +352,14 @@ Layout matches production reference \`EMS_Deploy_2026-06-03\`.
 ## Prerequisites (Windows Server)
 
 1. **IIS** with URL Rewrite + Application Request Routing (ARR) proxy enabled  
-2. **Node.js 22 LTS** (64-bit) — **not Node 24** (see PRODUCTION_DEPLOYMENT_BASELINE.md)  
+2. **Node.js 22 LTS** (64-bit) â€” **not Node 24** (see PRODUCTION_DEPLOYMENT_BASELINE.md)  
 3. **SQL Server** reachable from the API host  
-4. **Google Chrome** (or Chromium) for quote PDF — path in \`backend/.env\`  
+4. **Google Chrome** (or Chromium) for quote PDF â€” path in \`backend/.env\`  
 5. **PM2** (recommended): \`npm install -g pm2\`
 
 ---
 
-## Step 1 — Copy files
+## Step 1 â€” Copy files
 
 Example target:
 
@@ -377,7 +378,7 @@ If the server already has a **larger** live \`uploads\` tree, **merge** (do not 
 
 ---
 
-## Step 2 — Permissions
+## Step 2 â€” Permissions
 
 On **C:\\inetpub\\wwwroot\\EMS\\** (or your site root):
 
@@ -386,7 +387,7 @@ On **C:\\inetpub\\wwwroot\\EMS\\** (or your site root):
 
 ---
 
-## Step 3 — Backend configuration
+## Step 3 â€” Backend configuration
 
 \`\`\`powershell
 cd C:\\inetpub\\wwwroot\\EMS\\backend
@@ -398,7 +399,7 @@ notepad .env
 
 ---
 
-## Step 4 — Install API dependencies (on server, Node 22)
+## Step 4 â€” Install API dependencies (on server, Node 22)
 
 \`\`\`powershell
 cd C:\\inetpub\\wwwroot\\EMS\\backend
@@ -411,7 +412,7 @@ Or run \`helpers\\install_dependencies.bat\`. **Do not copy node_modules from an
 
 ---
 
-## Step 5 — Start API with PM2
+## Step 5 â€” Start API with PM2
 
 \`\`\`powershell
 cd C:\\inetpub\\wwwroot\\EMS
@@ -430,23 +431,23 @@ http://localhost:5002/api/quote-pdf/health?launch=1
 
 Expect: \`emsQuotePdfServerEnabled: true\`, \`quotePdfCssVersion: "${PDF_CSS_VERSION}"\`, \`launchProbe.ok: true\`.
 
-**Redeploy (existing server):** copy package → run \`REPLACE_AND_RESTART.bat\` — see \`ONE_CLICK_DEPLOY.md\`.
+**Redeploy (existing server):** copy package â†’ run \`REPLACE_AND_RESTART.bat\` â€” see \`ONE_CLICK_DEPLOY.md\`.
 
 ---
 
-## Step 6 — IIS website
+## Step 6 â€” IIS website
 
-1. IIS Manager → **Add Website**  
+1. IIS Manager â†’ **Add Website**  
    - Physical path: \`C:\\inetpub\\wwwroot\\EMS\\frontend\`  
    - Port: **80** or your HTTPS binding  
-2. Site → **URL Rewrite** — frontend/web.config proxies /api/* → http://localhost:5002/api/*  
-3. Server level → **Application Request Routing** → **Enable proxy**
+2. Site â†’ **URL Rewrite** â€” frontend/web.config proxies /api/* â†’ http://localhost:5002/api/*  
+3. Server level â†’ **Application Request Routing** â†’ **Enable proxy**
 
 **Long requests:** Increase IIS/ARR timeout for quote PDF (up to 3 minutes). Adjust ARR proxyTimeout if PDFs fail at 120s.
 
 ---
 
-## Step 7 — Quote email / Outlook on user PCs
+## Step 7 â€” Quote email / Outlook on user PCs
 
 Server-side \`/api/quotes/outlook-draft\` only works if Node runs **on the same Windows desktop** as **classic Outlook** (unusual on IIS).
 
@@ -459,19 +460,19 @@ Server-side \`/api/quotes/outlook-draft\` only works if Node runs **on the same 
 
 ---
 
-## Step 8 — Smoke tests
+## Step 8 â€” Smoke tests
 
 | Test | Expected |
 |------|----------|
 | Open EMS home | UI loads |
 | Enquiry list | Data from API |
-| Quote → Download PDF | PDF without blank pages |
-| Quote → Email (helper running) | Outlook draft with PDF |
+| Quote â†’ Download PDF | PDF without blank pages |
+| Quote â†’ Email (helper running) | Outlook draft with PDF |
 | GET /api/quote-pdf/health | \`emsQuotePdfServerEnabled: true\`, \`quotePdfCssVersion\` set |
 | PM2 logs | \`[quote-pdf][perf]\` on PDF download |
 
 **Full baseline:** \`PRODUCTION_DEPLOYMENT_BASELINE.md\`  
-**Enterprise walkthrough (151.50.1.114:81):** \`IIS_ENTERPRISE_DEPLOYMENT_GUIDE.md\`
+**Enterprise walkthrough (151.50.1.38):** \`IIS_ENTERPRISE_DEPLOYMENT_GUIDE.md\`
 
 ### IIS port 81 quick setup (Administrator PowerShell)
 
@@ -481,7 +482,7 @@ cd C:\\inetpub\\wwwroot\\EMS\\helpers
 .\\setup_iis_site_port81.ps1
 \`\`\`
 
-User URL: **http://151.50.1.114:81**
+User URL: **http://151.50.1.38**
 
 ---
 
@@ -497,21 +498,21 @@ User URL: **http://151.50.1.114:81**
 
 - **PDF 500 / chrome_not_configured**: Install Chrome; set PUPPETEER_EXECUTABLE_PATH; run npx puppeteer browsers install chrome as the PM2 user.  
 - **Blank PDF pages**: Use server PDF (this build); do not set VITE_QUOTE_PDF_BROWSER_DOWNLOAD=1 when building frontend.  
-- **Outlook does not open**: Start local helper on the user PC; use classic Outlook, not “New Outlook”.  
+- **Outlook does not open**: Start local helper on the user PC; use classic Outlook, not â€œNew Outlookâ€.  
 - **API 502 from IIS**: PM2 not running or wrong port in \`web.config\`.  
 - **emsQuotePdfServerEnabled false**: Set \`EMS_QUOTE_PDF_SERVER_ENABLED=1\` in \`.env\`, \`pm2 restart EMS-API --update-env\`.  
 - **muhammara NODE_MODULE_VERSION**: Server must use **Node 22**, then \`npm ci --omit=dev\`. Or \`QUOTE_PDF_RESTRICT=0\`.  
-- **Enquiry upload EPERM on UNC**: PM2 as SYSTEM uses **HOSTNAME$** on the share — grant Modify on \`\\\\151.50.20.129\\ems app\\Enquiries\` to the web server computer account, or run PM2 as a domain user with share access. This build auto-falls back to \`EMS\\data\\ems-attachments\` when UNC is not writable. Probe: \`/api/system/attachment-storage-probe?requestNo=187&division=BMS%20Project\`.  
+- **Enquiry upload EPERM on UNC**: PM2 as SYSTEM uses **HOSTNAME$** on the share â€” grant Modify on \`\\\\151.50.20.129\\ems app\\Enquiries\` to the web server computer account, or run PM2 as a domain user with share access. Local backend fallback is **disabled** â€” uploads fail until UNC is writable. Probe: \`/api/system/attachment-storage-probe?requestNo=187&division=BMS%20Project\`.  
 `;
     fs.writeFileSync(path.join(DEPLOY_DIR, 'DEPLOYMENT_GUIDE.md'), guide, 'utf8');
 }
 
 function writeReplaceAndRestartScripts() {
     const replaceBat = `@echo off
-title EMS — One-click redeploy (PM2 restart)
+title EMS â€” One-click redeploy (PM2 restart)
 cd /d "%~dp0"
 echo ============================================================
-echo   EMS redeploy — site root: %CD%
+echo   EMS redeploy â€” site root: %CD%
 echo   Package: EMS_Deploy_${dateStamp}
 echo   Expected CSS: ${PDF_CSS_VERSION}
 echo ============================================================
@@ -532,7 +533,7 @@ if not exist backend\\.env (
   )
 )
 if not exist backend\\node_modules (
-  echo ERROR: backend\\node_modules missing — first-time install required.
+  echo ERROR: backend\\node_modules missing â€” first-time install required.
   echo Run once: helpers\\fix_puppeteer_pdf_ws2012.bat
   echo Then run this script again.
   pause
@@ -560,11 +561,11 @@ set VERIFY_ERR=%ERRORLEVEL%
 echo.
 if %VERIFY_ERR% equ 0 (
   echo ============================================================
-  echo   DONE — open http://151.50.1.114:81 and hard-refresh Ctrl+Shift+R
+  echo   DONE â€” open http://151.50.1.38 and hard-refresh Ctrl+Shift+R
   echo ============================================================
 ) else (
   echo ============================================================
-  echo   PM2 restarted but verification failed — see messages above.
+  echo   PM2 restarted but verification failed â€” see messages above.
   echo   If Chrome/Puppeteer failed: helpers\\fix_puppeteer_pdf_ws2012.bat
   echo ============================================================
 )
@@ -578,15 +579,15 @@ exit /b %VERIFY_ERR%
 function writeOneClickDeployMd() {
     const doc = `# EMS One-Click Redeploy (${dateStamp})
 
-**Target:** \`C:\\inetpub\\wwwroot\\EMS\` on **151.50.1.114:81** (Windows Server 2012 R2)
+**Target:** \`C:\\inetpub\\wwwroot\\EMS\` on **151.50.1.38** (Windows Server 2012 R2)
 
 This package includes the **footer-pin PDF fix** (\`quotePdfCssVersion: ${PDF_CSS_VERSION}\`).
 
 ---
 
-## Quick redeploy (existing server — one restart)
+## Quick redeploy (existing server â€” one restart)
 
-### Step 1 — Copy package to server
+### Step 1 â€” Copy package to server
 
 Copy **everything** in this folder into \`C:\\inetpub\\wwwroot\\EMS\\\`:
 
@@ -599,12 +600,12 @@ Copy **everything** in this folder into \`C:\\inetpub\\wwwroot\\EMS\\\`:
 
 **Do NOT delete or overwrite on the server:**
 
-- \`backend\\.env\` — production secrets + Chrome 109 path
-- \`backend\\node_modules\\\` — already installed (puppeteer@19.4.0)
-- \`backend\\uploads\\\` — logos and stored files
-- \`backend\\.cache\\chromium-chrome109\\\` — Chrome 109 binary
+- \`backend\\.env\` â€” production secrets + Chrome 109 path
+- \`backend\\node_modules\\\` â€” already installed (puppeteer@19.4.0)
+- \`backend\\uploads\\\` â€” logos and stored files
+- \`backend\\.cache\\chromium-chrome109\\\` â€” Chrome 109 binary
 
-### Step 2 — Run one script (as PM2 user)
+### Step 2 â€” Run one script (as PM2 user)
 
 Double-click:
 
@@ -619,11 +620,11 @@ cd C:\\inetpub\\wwwroot\\EMS
 .\\REPLACE_AND_RESTART.bat
 \`\`\`
 
-### Step 3 — Browser
+### Step 3 â€” Browser
 
-Open **http://151.50.1.114:81** → press **Ctrl+Shift+R** (hard refresh).
+Open **http://151.50.1.38** â†’ press **Ctrl+Shift+R** (hard refresh).
 
-Test **Quote → Download PDF** — footer should sit at bottom of page 1.
+Test **Quote â†’ Download PDF** â€” footer should sit at bottom of page 1.
 
 ---
 
@@ -651,7 +652,7 @@ Helper listens on **http://127.0.0.1:39281**.
 
 | Check | Expected |
 |-------|----------|
-| \`http://151.50.1.114:81/api/quote-pdf/health?launch=1\` | \`quotePdfCssVersion: "${PDF_CSS_VERSION}"\` |
+| \`http://151.50.1.38/api/quote-pdf/health?launch=1\` | \`quotePdfCssVersion: "${PDF_CSS_VERSION}"\` |
 | Same JSON | \`launchProbe.ok: true\`, \`chromeSpawnProbe.ok: true\` |
 | Browser F12 during Download PDF | \`[QuotePerf] PDF Download complete\` (no html2pdf fallback) |
 
@@ -717,7 +718,7 @@ call "%~dp0fix_puppeteer_pdf_ws2012.bat"
 title EMS Fix Puppeteer PDF
 echo === EMS Puppeteer PDF repair ===
 echo Windows user: %USERDOMAIN%\\%USERNAME%
-echo PM2 is per-user — run this script as the account that owns EMS-API.
+echo PM2 is per-user â€” run this script as the account that owns EMS-API.
 echo.
 cd /d "%~dp0..\\backend"
 node -v
@@ -742,7 +743,7 @@ echo.
 echo [5/5] Start or restart EMS-API
 pm2 describe EMS-API >nul 2>&1
 if errorlevel 1 (
-  echo EMS-API not found for %USERNAME% — starting fresh...
+  echo EMS-API not found for %USERNAME% â€” starting fresh...
   if not exist logs mkdir logs
   pm2 start ecosystem.config.cjs
   pm2 save
@@ -798,7 +799,7 @@ pause
     fs.writeFileSync(
         path.join(HELPERS_DIR, 'redeploy.bat'),
         `@echo off
-title EMS Redeploy (code update only — preserves node_modules + Chrome 109)
+title EMS Redeploy (code update only â€” preserves node_modules + Chrome 109)
 call "%~dp0REPLACE_AND_RESTART.bat"
 `,
         'utf8'
@@ -819,7 +820,7 @@ node -e "require('./quote-outlook-local-helper.cjs')" 2>nul
 if errorlevel 1 (
   echo.
   echo If backend not found, copy the full EMS folder from the server:
-  echo   \\\\151.50.1.114\\EMS\\
+  echo   \\\\151.50.1.38\\EMS\\
   echo so that backend\\ sits next to helpers\\
   echo.
 )
@@ -847,13 +848,13 @@ Write-Host "ARR configured. Restart IIS if needed: iisreset"
         path.join(HELPERS_DIR, 'setup_iis_site_port81.ps1'),
         [
             '# Requires: Run as Administrator',
-            '# Creates EMS app pool + website on port 81 for http://151.50.1.114:81',
+            '# Creates EMS app pool + website on port 81 for http://151.50.1.38',
             'param(',
             "    [string]$SiteRoot = 'C:\\inetpub\\wwwroot\\EMS',",
             "    [string]$SiteName = 'EMS',",
             "    [string]$AppPoolName = 'EMS-Web',",
             '    [int]$Port = 81,',
-            "    [string]$BindingIp = '151.50.1.114'",
+            "    [string]$BindingIp = '151.50.1.38'",
             ')',
             'Import-Module WebAdministration -ErrorAction Stop',
             "$frontendPath = Join-Path $SiteRoot 'frontend'",
@@ -883,7 +884,7 @@ Write-Host "ARR configured. Restart IIS if needed: iisreset"
     );
 }
 
-/** Copy server/uploads (logos, quote files) — required for PDF logos on fresh IIS install. */
+/** Copy server/uploads (logos, quote files) â€” required for PDF logos on fresh IIS install. */
 function copyBackendUploads() {
     const srcUploads = path.join(PROJECT_ROOT, 'server', 'uploads');
     const destUploads = path.join(BACKEND_DIR, 'uploads');
@@ -920,7 +921,7 @@ function copyBackendUploads() {
         subdirs: subdirs.sort(),
     };
     fs.writeFileSync(path.join(destUploads, 'UPLOADS_MANIFEST.json'), JSON.stringify(manifest, null, 2), 'utf8');
-    console.log(`✅ uploads: ${fileCount} files (${manifest.totalMb} MB), folders: ${subdirs.join(', ') || '(root only)'}`);
+    console.log(`âœ… uploads: ${fileCount} files (${manifest.totalMb} MB), folders: ${subdirs.join(', ') || '(root only)'}`);
     return manifest;
 }
 
@@ -1028,7 +1029,7 @@ if (skipUploads) {
 } else {
     uploadsMeta = copyBackendUploads();
     if (uploadsMeta.fileCount === 0) {
-        console.warn('⚠️ server/uploads is empty — PDF logos may be missing until logos are uploaded.');
+        console.warn('âš ï¸ server/uploads is empty â€” PDF logos may be missing until logos are uploaded.');
     }
 }
 
@@ -1045,7 +1046,7 @@ writeDeploymentGuide();
 writeManifest(uploadsMeta);
 
 if (withNodeModules && !skipNpmInstall) {
-    console.log('Installing backend deps on build machine (npm ci — for smoke test only)...');
+    console.log('Installing backend deps on build machine (npm ci â€” for smoke test only)...');
     try {
         const lock = path.join(BACKEND_DIR, 'package-lock.json');
         if (fs.existsSync(lock)) {
@@ -1053,19 +1054,20 @@ if (withNodeModules && !skipNpmInstall) {
         } else {
             execSync('npm install --omit=dev', { cwd: BACKEND_DIR, stdio: 'inherit' });
         }
-        console.log('✅ backend/node_modules installed (re-run npm ci on server with Node 22).');
+        console.log('âœ… backend/node_modules installed (re-run npm ci on server with Node 22).');
     } catch (err) {
-        console.warn('⚠️ npm ci failed — run helpers/install_dependencies.bat on the server.');
+        console.warn('âš ï¸ npm ci failed â€” run helpers/install_dependencies.bat on the server.');
     }
 } else {
-    console.log('Package ships without node_modules — run helpers/install_dependencies.bat on server (Node 22).');
+    console.log('Package ships without node_modules â€” run helpers/install_dependencies.bat on server (Node 22).');
     if (fs.existsSync(path.join(BACKEND_DIR, 'node_modules'))) {
         fs.rmSync(path.join(BACKEND_DIR, 'node_modules'), { recursive: true, force: true });
     }
 }
 
 console.log('\n========================================================');
-console.log('✅ Deployment package ready:');
+console.log('âœ… Deployment package ready:');
 console.log(`   ${DEPLOY_DIR}`);
 console.log('   Read DEPLOYMENT_GUIDE.md in that folder.');
 console.log('========================================================\n');
+

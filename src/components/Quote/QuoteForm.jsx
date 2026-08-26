@@ -26,8 +26,11 @@ import {
     Clock,
     FilterX,
     UserCheck,
+    RectangleHorizontal,
 } from 'lucide-react';
 import DashboardQuoteSummaryTable from '../Dashboard/DashboardQuoteSummaryTable';
+import ExcelDownloadButton from '../shared/ExcelDownloadButton';
+import { downloadQuoteListXlsx } from './quoteListExcel';
 import '../../styles/emsTableColumnFilters.css';
 import CreatableSelect from 'react-select/creatable';
 import { format, parseISO, addDays } from 'date-fns';
@@ -75,6 +78,7 @@ import {
     EMS_QUOTE_PRICING_TABLE_HEADER_BG,
     EMS_QUOTE_PRICING_TABLE_HEADER_COLOR,
     EMS_QUOTE_PRICING_TABLE_TOTAL_BG,
+    EMS_QUOTE_PRICING_TABLE_DISCOUNT_BG,
     EMS_QUOTE_PRICING_TABLE_DESC_COL_WIDTH,
     EMS_QUOTE_PRICING_TABLE_AMOUNT_COL_WIDTH,
     EMS_QUOTE_PRICING_TABLE_WIDTH,
@@ -102,6 +106,11 @@ import {
     clauseHeadingPlainText,
 } from './clauseEditorExternalHeading';
 import { stripClauseEditorExportEmptyNodes, inlineBlobImagesInDomRoot, normalizeClauseProseTextColors, normalizeClauseProseTextColorsInString } from './clauseEditorExportHtml';
+import {
+    decorateHtmlWithSpellMarks,
+    stripSpellMarksFromHtml,
+    subscribeSpellDictionaryReady,
+} from './clauseEditorSpellcheck';
 import { stripClauseEditorSpuriousBlankRows, normalizeClauseListHtml } from './clauseEditorListPresets';
 import {
     CLAUSE_LIST_STYLES_CSS,
@@ -158,9 +167,12 @@ import {
     buildClauseSegmentsForPagination,
     buildQuotePackMeasureFooterHtml,
     EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
+    EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK,
     mergeSegmentsIntoSheetBlocks,
     packClauseSegmentsForContinuationPages,
     packSegmentsOntoPagesByEstimatedHeight,
+    packSegmentsOntoPagesByEstimatedHeightPerPage,
+    quoteA4InnerContentMm,
     segmentPageGroupsEqual,
 } from './quoteClausePagination';
 import {
@@ -652,15 +664,51 @@ function preparedByRowEmailMatchesName(rowEmail, preparedByName, usersList) {
     return !!byEmail && normPreparedByName(byEmail.FullName) === normPreparedByName(preparedByName);
 }
 
-function resolvePreparedByEmailFromName(name, usersList, currentUser) {
+function resolvePreparedByEmailFromName(name, usersList, currentUser, preparedByOptions = []) {
     const fromUser = findUserByPreparedByName(name, usersList);
     const email = String(fromUser?.EmailId || fromUser?.email || '').trim();
     if (email) return email;
+    const n = normPreparedByName(name);
+    const po = (preparedByOptions || []).find(
+        (o) =>
+            normPreparedByName(String(o.value || '')) === n ||
+            normPreparedByName(String(o.label || '')) === n
+    );
+    const optEmail = String(po?.email || '').trim();
+    if (optEmail) return optEmail;
     const selfName = (currentUser?.FullName || currentUser?.name || '').trim();
-    if (normPreparedByName(selfName) === normPreparedByName(name)) {
+    if (normPreparedByName(selfName) === n) {
         return String(currentUser?.EmailId || currentUser?.email || currentUser?.MailId || '').trim();
     }
     return '';
+}
+
+function resolvePreparedByContactFromName(name, usersList, currentUser, preparedByOptions = []) {
+    const fromUser = findUserByPreparedByName(name, usersList);
+    const uMob = (fromUser?.MobileNumber != null ? String(fromUser.MobileNumber) : '').trim();
+    if (uMob) return uMob;
+    const n = normPreparedByName(name);
+    const po = (preparedByOptions || []).find(
+        (o) =>
+            normPreparedByName(String(o.value || '')) === n ||
+            normPreparedByName(String(o.label || '')) === n
+    );
+    const pMob = (po?.mobileNumber != null ? String(po.mobileNumber) : '').trim();
+    if (pMob) return pMob;
+    const selfName = (currentUser?.FullName || currentUser?.name || '').trim();
+    if (normPreparedByName(selfName) === n) {
+        return (currentUser?.MobileNumber != null ? String(currentUser.MobileNumber) : '').trim();
+    }
+    return '';
+}
+
+/** Persist / preview email for the selected Prepared By person (not the login session). */
+function resolvePreparedByEmailForPersist(name, usersList, currentUser, preparedByOptions = [], fallbackEmail = '') {
+    const fromName = resolvePreparedByEmailFromName(name, usersList, currentUser, preparedByOptions);
+    if (fromName) return fromName;
+    const fb = String(fallbackEmail || '').trim();
+    if (fb && preparedByRowEmailMatchesName(fb, name, usersList)) return fb;
+    return String(currentUser?.email || currentUser?.EmailId || currentUser?.MailId || '').trim();
 }
 
 /**
@@ -668,30 +716,16 @@ function resolvePreparedByEmailFromName(name, usersList, currentUser) {
  */
 function buildSubjobQuoteHeaderDisplayFromRow(q, usersList, preparedByOptions) {
     if (!q || typeof q !== 'object') return null;
-    const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
-    const email = String(q.PreparedByEmail ?? q.preparedbyemail ?? '').toLowerCase().trim();
-    let contact = '';
-    if (email && Array.isArray(usersList)) {
-        const u = usersList.find((x) => String(x.EmailId || x.email || '').toLowerCase().trim() === email);
-        if (u?.MobileNumber != null) {
-            contact = String(u.MobileNumber).trim().replace(/^tel\s*:?\s*/i, '').trim();
-        }
-    }
     const prepName = String(q.PreparedBy ?? q.preparedby ?? '').trim();
-    if (!contact && prepName && Array.isArray(usersList)) {
-        const n = norm(prepName);
-        const fromU = usersList.find((x) => norm(x.FullName) === n);
-        if (fromU?.MobileNumber != null) {
-            contact = String(fromU.MobileNumber).trim().replace(/^tel\s*:?\s*/i, '').trim();
-        }
-    }
-    if (!contact && prepName && Array.isArray(preparedByOptions)) {
-        const n = norm(prepName);
-        const po = preparedByOptions.find(
-            (o) => norm(String(o.value || '')) === n || norm(String(o.label || '')) === n
-        );
-        const pMob = (po?.mobileNumber != null ? String(po.mobileNumber) : '').trim();
-        if (pMob) contact = pMob.replace(/^tel\s*:?\s*/i, '').trim();
+    const storedEmail = String(q.PreparedByEmail ?? q.preparedbyemail ?? '').trim();
+    const fromNameEmail = resolvePreparedByEmailFromName(prepName, usersList, null, preparedByOptions);
+    const preparedByEmail =
+        storedEmail && preparedByRowEmailMatchesName(storedEmail, prepName, usersList)
+            ? storedEmail
+            : fromNameEmail || storedEmail;
+    let contact = resolvePreparedByContactFromName(prepName, usersList, null, preparedByOptions);
+    if (contact) {
+        contact = contact.replace(/^tel\s*:?\s*/i, '').trim();
     }
     const ymd = quoteRowDateToInputYmd(q);
     const validityDayCount = parseInt(q.ValidityDays ?? q.validitydays ?? 30, 10);
@@ -720,7 +754,7 @@ function buildSubjobQuoteHeaderDisplayFromRow(q, usersList, preparedByOptions) {
         toAttention: String(q.ToAttention ?? q.toattention ?? '').trim(),
         preparedBy: prepName,
         preparedByContact: contact,
-        preparedByEmail: String(q.PreparedByEmail ?? q.preparedbyemail ?? '').trim(),
+        preparedByEmail,
         quoteNumber: String(q.QuoteNumber ?? q.quoteNumber ?? '').trim(),
         quoteDateYmd: ymd,
         validityDisplay,
@@ -1030,10 +1064,13 @@ function separateClauseSubNumberLines(html) {
 }
 
 /** Preview/PDF body: only renumber clause majors for order; HTML structure mirrors the editor. */
-function getClauseDisplayBodyHtml(html, listKey, displayMajor) {
+function getClauseDisplayBodyHtml(html, listKey, displayMajor, options = {}) {
     const canon = CLAUSE_MAJOR_BY_LIST_KEY[listKey];
     const renumbered = renumberClauseMajorInHtml(html, canon, displayMajor);
-    return normalizeClauseProseTextColorsInString(renumbered);
+    const normalized = normalizeClauseProseTextColorsInString(renumbered);
+    /* Spell decorate is expensive (full Hunspell). Skip while a clause editor is open / on demand. */
+    if (options.spell === false) return normalized;
+    return decorateHtmlWithSpellMarks(stripSpellMarksFromHtml(normalized));
 }
 
 /** Stored clause HTML uses canonical majors (5.x in template); persist display → canonical on save. */
@@ -1148,13 +1185,24 @@ function buildClause41LumpSumString(grandTotalNum, numberToWordsFn) {
     return `${formatBhdAmount(n)} (${numberToWordsFn(n)})`;
 }
 
+/**
+ * Match `BD #,###.###` plus an optional plain-text `(…)` lump-sum.
+ * Must NOT use `[\s\S]*?` inside parens — spell-mark CSS (`linear-gradient(...)`) contains `)`,
+ * and matching that truncates the tag so style/`data-suggestions` tails leak as visible junk text.
+ */
+const CLAUSE_41_BD_FIGURES = String.raw`-?BD(?:\s|&nbsp;)*-?[\d,]+\.\d{2,4}`;
+const CLAUSE_41_PLAIN_PAREN = String.raw`\((?:[^<)]|&nbsp;)*\)`;
+const CLAUSE_41_LUMP_IN_HTML_RE = new RegExp(
+    String.raw`(${CLAUSE_41_BD_FIGURES})(?:\s*${CLAUSE_41_PLAIN_PAREN})?`,
+    'i'
+);
+
 function replaceClause41LumpSumInElementHtml(innerHtml, totalString) {
-    let inner = String(innerHtml || '');
+    let inner = stripSpellMarksFromHtml(String(innerHtml || ''));
     if (!inner.trim()) return inner;
     inner = inner.replace(/\[Amount in figures and words\]/gi, totalString);
-    const lumpRe = /(-?BD(?:\s|&nbsp;)*-?[\d,]+\.\d{2,4})(?:\s*\([\s\S]*?\))?/i;
     let replaced = false;
-    inner = inner.replace(lumpRe, (match) => {
+    inner = inner.replace(CLAUSE_41_LUMP_IN_HTML_RE, (match) => {
         if (replaced) return match;
         replaced = true;
         return totalString;
@@ -1164,7 +1212,7 @@ function replaceClause41LumpSumInElementHtml(innerHtml, totalString) {
 
 /** DOM-aware clause 4.1 sync — Jodit often splits "shall be BD …" across inline tags. */
 function patchClause41LumpSumInHtml(html, grandTotalNum, numberToWordsFn) {
-    const raw = String(html || '');
+    const raw = stripSpellMarksFromHtml(String(html || ''));
     if (!Number.isFinite(Number(grandTotalNum))) {
         return separateClauseSubNumberLines(raw);
     }
@@ -1195,29 +1243,42 @@ function patchClause41LumpSumInHtml(html, grandTotalNum, numberToWordsFn) {
     }
 
     const betweenTags = String.raw`(?:<[^>]+>|&nbsp;|\s)*`;
-    const bdFigures = String.raw`-?BD(?:\s|&nbsp;)*-?[\d,]+\.\d{2,4}`;
     const clause41Lump = new RegExp(
-        String.raw`(4\.1\.[\s\S]{0,4000}?\bshall be\s*${betweenTags})(${bdFigures}(?:\s*\([\s\S]*?\))?|\[Amount in figures and words\])`,
+        String.raw`(4\.1\.[\s\S]{0,4000}?\bshall be\s*${betweenTags})(${CLAUSE_41_BD_FIGURES}(?:\s*${CLAUSE_41_PLAIN_PAREN})?|\[Amount in figures and words\])`,
         'i'
     );
     if (clause41Lump.test(out)) {
         out = out.replace(clause41Lump, `$1${totalString}`);
     } else {
         out = out.replace(
-            new RegExp(String.raw`(\bshall be\s*${betweenTags})(${bdFigures}(?:\s*\([\s\S]*?\))?)`, 'i'),
+            new RegExp(
+                String.raw`(\bshall be\s*${betweenTags})(${CLAUSE_41_BD_FIGURES}(?:\s*${CLAUSE_41_PLAIN_PAREN})?)`,
+                'i'
+            ),
             `$1${totalString}`
         );
     }
-    return separateClauseSubNumberLines(out);
+    return separateClauseSubNumberLines(stripSpellMarksFromHtml(out));
 }
 
 function patchClause41LumpSumInWysiwyg(wys, grandTotalNum, numberToWordsFn) {
     if (!wys || !Number.isFinite(Number(grandTotalNum))) return;
     const totalString = buildClause41LumpSumString(grandTotalNum, numberToWordsFn);
+    const sel = wys.ownerDocument?.getSelection?.();
+    const anchor = sel?.anchorNode || null;
+    const anchorEl =
+        anchor?.nodeType === 3
+            ? anchor.parentElement
+            : anchor?.nodeType === 1
+              ? anchor
+              : null;
+
     wys.querySelectorAll('p,div,li').forEach((el) => {
         if (el.closest(`#${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}`)) return;
         const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
         if (!/4\.1\./.test(text) || !/\bshall be\b/i.test(text)) return;
+        /* Never rewrite the block the user is typing in — innerHTML reset jumps caret to start. */
+        if (anchorEl && el.contains(anchorEl)) return;
         const next = replaceClause41LumpSumInElementHtml(el.innerHTML, totalString);
         if (next !== el.innerHTML) el.innerHTML = next;
     });
@@ -1384,7 +1445,7 @@ function buildEmsAutoPricingTableHtml(summary, activeJobs) {
     const padIndent = '2px 10px 2px 16px';
     const cellBorder = EMS_QUOTE_PRICING_TABLE_CELL_BORDER;
     const fmtBhd = (n) =>
-        `BD ${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 })}`;
+        `BD ${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}`;
     let tableHtml = `<table id="${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}" data-ems-pricing-cols="fixed" style="width:${EMS_QUOTE_PRICING_TABLE_WIDTH};table-layout:fixed;border-collapse:collapse;margin-top:${EMS_QUOTE_PRICING_TABLE_MARGIN_TOP};margin-bottom:6px;font-size:11px;line-height:1.25;border:${EMS_QUOTE_PRICING_TABLE_OUTER_BORDER};">`;
     tableHtml += emsPricingTableColgroupHtml();
     tableHtml +=
@@ -1433,14 +1494,15 @@ function buildEmsAutoPricingTableHtml(summary, activeJobs) {
 function formatBhdAmount(n) {
     const num = Number(n || 0);
     if (!Number.isFinite(num)) return 'BD 0.000';
-    const absFmt = Math.abs(num).toLocaleString(undefined, {
+    const absFmt = Math.abs(num).toLocaleString('en-US', {
         minimumFractionDigits: 3,
         maximumFractionDigits: 3,
     });
     return num < 0 ? `-BD ${absFmt}` : `BD ${absFmt}`;
 }
 
-const EMS_PRICING_FOOTER_LABEL_RE = /^(Total \(Base Price\)|VAT\s*10%|Grand Total)/i;
+const EMS_PRICING_FOOTER_LABEL_RE =
+    /^(Total \(Base Price\)|Discount(\s*\([\d.]+%\))?|Final Discounted Price|VAT\s*10%|Grand Total)/i;
 
 /** Parse BD cell text — supports negatives, commas, accounting parentheses, and "-BD". */
 function isIncompleteBhdAmountText(raw) {
@@ -1459,14 +1521,65 @@ function isIncompleteBhdAmountText(raw) {
 }
 
 function isDiscountPricingLabel(label) {
-    return /^discount$/i.test(String(label || '').trim());
+    return /^discount(\s*\([\d.]+%\))?$/i.test(String(label || '').trim())
+        || /^discount(\s+[\d.]+%)?$/i.test(String(label || '').trim());
+}
+
+function isFinalDiscountedPricingLabel(label) {
+    return /^Final Discounted Price$/i.test(String(label || '').trim());
+}
+
+/** Label like "Discount (10%)" from amount ÷ Total (Base Price). */
+function formatDiscountRowLabel(discountAmt, baseTotal) {
+    const base = Math.abs(Number(baseTotal) || 0);
+    const disc = Math.abs(Number(discountAmt) || 0);
+    if (!base || !disc) return 'Discount';
+    const pct = (disc / base) * 100;
+    const rounded = Math.round(pct * 100) / 100;
+    const numStr = Number.isInteger(rounded)
+        ? String(rounded)
+        : String(rounded.toFixed(2)).replace(/\.?0+$/, '');
+    return `Discount (${numStr}%)`;
+}
+
+/** Default Discount amount — "-BD " prefix; user may delete the minus. */
+const EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT = '-BD ';
+
+/** True when the typed discount text should keep a leading minus after format. */
+function discountAmountTextPrefersMinus(raw) {
+    const txt = String(raw || '')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .trim();
+    if (!txt) return true;
+    if (/^-/.test(txt)) return true;
+    if (/^\(\s*[\d,]/.test(txt)) return true;
+    if (/\bBD\s+-/i.test(txt)) return true;
+    /* Explicit positive "BD …" or bare digits — user removed the minus. */
+    if (/^BD\b/i.test(txt)) return false;
+    if (/^[\d.,]+$/.test(txt)) return false;
+    return true;
+}
+
+/** Format Discount amount as "-BD 1,200.000" or "BD 1,200.000" (preserves user minus choice). */
+function formatDiscountAmountDisplay(raw, parsed) {
+    if (parsed == null || !Number.isFinite(parsed)) return EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT;
+    const magnitude = Math.abs(parsed);
+    const useMinus = discountAmountTextPrefersMinus(raw);
+    if (magnitude === 0) {
+        return useMinus ? EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT : formatBhdAmount(0);
+    }
+    return formatBhdAmount(useMinus ? -magnitude : magnitude);
 }
 
 function isPricingTableHeaderRow(label) {
     return /^(Description|Amount(\s*\([^)]*\))?)$/i.test(String(label || '').trim());
 }
 
-/** Discount rows subtract from base total; positive typed values are treated as discounts. */
+/**
+ * Legacy: discount line items above Total subtract from the line sum.
+ * Mid-footer Discount (below Total) is excluded via footer-label break — not summed here.
+ */
 function parsePricingLineAmount(label, amount) {
     const n = Number(amount);
     if (!Number.isFinite(n)) return 0;
@@ -1507,14 +1620,16 @@ function isEmsPricingFooterRowEl(rowKind, label) {
     const labelTrim = String(label || '').trim();
     if (EMS_PRICING_FOOTER_LABEL_RE.test(labelTrim)) return true;
     if (rowKind === 'total' && /^Total\s*\(Base Price\)/i.test(labelTrim)) return true;
+    if (rowKind === 'discount' && isDiscountPricingLabel(labelTrim)) return true;
+    if (rowKind === 'final-discounted' && isFinalDiscountedPricingLabel(labelTrim)) return true;
     if (rowKind === 'vat' && /^VAT\b/i.test(labelTrim)) return true;
     if (rowKind === 'grand-vat' && /^Grand Total with VAT/i.test(labelTrim)) return true;
     if (rowKind === 'grand' && /^Grand Total/i.test(labelTrim)) return true;
     return false;
 }
 
-const EMS_PRICING_FOOTER_ROW_KIND_RE = /^(total|vat|grand-vat|grand)$/i;
-const EMS_PRICING_FOOTER_AMOUNT_ATTR_RE = /^(total|vat|grand-vat|grand)$/i;
+const EMS_PRICING_FOOTER_ROW_KIND_RE = /^(total|discount|final-discounted|vat|grand-vat|grand)$/i;
+const EMS_PRICING_FOOTER_AMOUNT_ATTR_RE = /^(total|discount|final-discounted|vat|grand-vat|grand)$/i;
 
 /** All data rows — includes line items Jodit may have parked in thead above a separate tbody. */
 function getPricingTableDataRows(table) {
@@ -1729,40 +1844,129 @@ function getActivePricingTableAmountCell(table) {
     return td;
 }
 
-function normalizeDiscountRowsInPricingTable(table, { skipCell = null } = {}) {
-    if (!table?.querySelectorAll) return;
-    sanitizeMisplacedPricingFooterAttrsInTable(table);
+function findPricingTableRowByKindOrLabel(table, { rowKind, labelTest }) {
+    if (!table) return null;
     for (const row of getPricingTableDataRows(table)) {
         const cells = row.cells || [];
         if (cells.length < 2) continue;
         const label = String(cells[0].textContent || '').trim();
-        if (isPricingTableFooterLabel(label)) break;
-        const isDiscountRow = isDiscountPricingLabel(label) || !label;
+        const kind = String(row.getAttribute('data-ems-row') || '').trim();
+        if (rowKind && kind === rowKind) return row;
+        if (typeof labelTest === 'function' && labelTest(label)) return row;
+    }
+    return null;
+}
+
+function pricingTableHasDiscountBlock(table) {
+    if (!table) return false;
+    return Boolean(
+        findPricingTableRowByKindOrLabel(table, {
+            rowKind: 'discount',
+            labelTest: isDiscountPricingLabel,
+        })
+        || findPricingTableRowByKindOrLabel(table, {
+            rowKind: 'final-discounted',
+            labelTest: isFinalDiscountedPricingLabel,
+        })
+    );
+}
+
+/** Absolute discount magnitude from the Discount footer row (blank → 0). */
+function parseDiscountAmountFromPricingTable(table) {
+    const row = findPricingTableRowByKindOrLabel(table, {
+        rowKind: 'discount',
+        labelTest: isDiscountPricingLabel,
+    });
+    if (!row) return 0;
+    const amtCell = row.cells[row.cells.length - 1];
+    const amtText = amtCell?.textContent;
+    if (!String(amtText || '').trim() || isIncompleteBhdAmountText(amtText)) return 0;
+    const parsed = parseBhdAmountText(amtText);
+    if (parsed == null || !Number.isFinite(parsed)) return 0;
+    return Math.abs(parsed);
+}
+
+function calcTaxedBaseFromPricingTable(table, lineBaseTotal) {
+    const base = roundBhdAmount(lineBaseTotal);
+    if (!pricingTableHasDiscountBlock(table)) return base;
+    return roundBhdAmount(base - parseDiscountAmountFromPricingTable(table));
+}
+
+function normalizeDiscountRowsInPricingTable(table, { skipCell = null, baseTotal = null } = {}) {
+    if (!table?.querySelectorAll) return;
+    sanitizeMisplacedPricingFooterAttrsInTable(table);
+    const lineBase =
+        baseTotal != null && Number.isFinite(baseTotal)
+            ? roundBhdAmount(baseTotal)
+            : parseBaseTotalFromPricingTableElement(table);
+    for (const row of getPricingTableDataRows(table)) {
+        const cells = row.cells || [];
+        if (cells.length < 2) continue;
+        const label = String(cells[0].textContent || '').trim();
+        const rowKind = String(row.getAttribute('data-ems-row') || '').trim();
+        const isDiscountRow = rowKind === 'discount' || isDiscountPricingLabel(label);
         if (!isDiscountRow) continue;
         const amtCell = cells[cells.length - 1];
+        const labelCell = cells[0];
         const isActiveCell = Boolean(skipCell && amtCell === skipCell);
-        if (isIncompleteBhdAmountText(amtCell?.textContent)) continue;
-        const parsed = parseBhdAmountText(amtCell?.textContent);
-        if (parsed == null || !Number.isFinite(parsed) || parsed === 0) continue;
-        if (!isActiveCell) {
-            const normalized = parsed > 0 ? -Math.abs(parsed) : parsed;
-            const formatted = formatBhdAmount(normalized);
-            if ((amtCell.textContent || '').trim() !== formatted) amtCell.textContent = formatted;
-        }
         row.setAttribute('data-ems-row', 'discount');
         amtCell.setAttribute('data-ems-amount', 'discount');
+        const raw = String(amtCell?.textContent || '').trim();
+        if (!raw) {
+            if (!isActiveCell) amtCell.textContent = EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT;
+            if (lineBase != null) {
+                const nextLabel = formatDiscountRowLabel(0, lineBase);
+                if ((labelCell.textContent || '').trim() !== nextLabel) labelCell.textContent = nextLabel;
+            }
+            continue;
+        }
+        if (isIncompleteBhdAmountText(amtCell?.textContent)) {
+            if (!isActiveCell) {
+                if (!raw || raw === '-' || /^-\s*BD\s*$/i.test(raw)) {
+                    amtCell.textContent = EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT;
+                }
+            }
+            if (lineBase != null) {
+                const nextLabel = formatDiscountRowLabel(0, lineBase);
+                if ((labelCell.textContent || '').trim() !== nextLabel) labelCell.textContent = nextLabel;
+            }
+            continue;
+        }
+        const parsed = parseBhdAmountText(amtCell?.textContent);
+        if (parsed == null || !Number.isFinite(parsed)) continue;
+        const magnitude = Math.abs(parsed);
+        if (!isActiveCell) {
+            const formatted = formatDiscountAmountDisplay(raw, parsed);
+            if ((amtCell.textContent || '').trim() !== formatted) amtCell.textContent = formatted;
+        }
+        if (lineBase != null) {
+            const nextLabel = formatDiscountRowLabel(magnitude, lineBase);
+            if ((labelCell.textContent || '').trim() !== nextLabel) labelCell.textContent = nextLabel;
+        }
     }
 }
 
 function patchPricingTableFooterDom(table, baseTotal) {
     if (!table) return;
     sanitizeMisplacedPricingFooterAttrsInTable(table);
-    const { vat, grandWithVat } = calcPricingTotalsFromBase(baseTotal);
+    const hasDiscount = pricingTableHasDiscountBlock(table);
+    const taxedBase = calcTaxedBaseFromPricingTable(table, baseTotal);
+    const { vat, grandWithVat } = calcPricingTotalsFromBase(taxedBase);
     const footerValues = [
         { attr: 'total', rowKind: 'total', label: 'Total (Base Price)', text: formatBhdAmount(baseTotal) },
+    ];
+    if (hasDiscount) {
+        footerValues.push({
+            attr: 'final-discounted',
+            rowKind: 'final-discounted',
+            label: 'Final Discounted Price',
+            text: formatBhdAmount(taxedBase),
+        });
+    }
+    footerValues.push(
         { attr: 'vat', rowKind: 'vat', label: 'VAT 10%', text: formatBhdAmount(vat) },
         { attr: 'grand-vat', rowKind: 'grand-vat', label: 'Grand Total with VAT 10%', text: formatBhdAmount(grandWithVat) },
-    ];
+    );
     footerValues.forEach(({ attr, rowKind, label, text }) => {
         let patched = false;
         for (const row of getPricingTableDataRows(table)) {
@@ -1783,17 +1987,215 @@ function patchPricingTableFooterDom(table, baseTotal) {
             if ((c.textContent || '').trim() !== text) c.textContent = text;
         });
     });
+    if (hasDiscount) {
+        const discountRow = findPricingTableRowByKindOrLabel(table, {
+            rowKind: 'discount',
+            labelTest: isDiscountPricingLabel,
+        });
+        if (discountRow?.cells?.length >= 2) {
+            discountRow.setAttribute('data-ems-row', 'discount');
+            const amtCell = discountRow.cells[discountRow.cells.length - 1];
+            const labelCell = discountRow.cells[0];
+            amtCell.setAttribute('data-ems-amount', 'discount');
+            const discAmt = parseDiscountAmountFromPricingTable(table);
+            const nextLabel = formatDiscountRowLabel(discAmt, baseTotal);
+            if ((labelCell.textContent || '').trim() !== nextLabel) labelCell.textContent = nextLabel;
+            const rawAmt = String(amtCell.textContent || '').trim();
+            if (!rawAmt) amtCell.textContent = EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT;
+        }
+    }
+}
+
+function getPricingFooterCellStyleFromTotalRow(totalRow) {
+    const labelStyle = totalRow?.cells?.[0]?.getAttribute?.('style') || '';
+    const amountStyle = totalRow?.cells?.[totalRow.cells.length - 1]?.getAttribute?.('style') || labelStyle;
+    if (labelStyle) return { labelStyle, amountStyle };
+    const pad = EMS_QUOTE_PRICING_TABLE_CELL_PADDING;
+    const cellBorder = EMS_QUOTE_PRICING_TABLE_CELL_BORDER;
+    const fallback =
+        `padding:${pad};border:${cellBorder};border-top:1px solid #94a3b8;text-align:right;font-size:11px;font-weight:700;background:${EMS_QUOTE_PRICING_TABLE_TOTAL_BG};color:#0f172a;`;
+    return { labelStyle: fallback, amountStyle: fallback };
+}
+
+function withPricingDiscountRowBackground(style) {
+    const raw = String(style || '');
+    if (/background\s*:/i.test(raw)) {
+        return raw.replace(/background\s*:[^;]+/gi, `background:${EMS_QUOTE_PRICING_TABLE_DISCOUNT_BG}`);
+    }
+    return `${raw}${raw && !raw.trim().endsWith(';') ? ';' : ''}background:${EMS_QUOTE_PRICING_TABLE_DISCOUNT_BG}`;
+}
+
+function getPricingDiscountFooterCellStyles(totalRow) {
+    const { labelStyle, amountStyle } = getPricingFooterCellStyleFromTotalRow(totalRow);
+    return {
+        labelStyle: withPricingDiscountRowBackground(labelStyle),
+        amountStyle: withPricingDiscountRowBackground(amountStyle),
+    };
+}
+
+/** Insert Discount + Final Discounted Price between Total (Base Price) and VAT. */
+function insertDiscountBlockIntoPricingTable(table) {
+    if (!table || pricingTableHasDiscountBlock(table)) return false;
+    const totalRow = findPricingTableRowByKindOrLabel(table, {
+        rowKind: 'total',
+        labelTest: (label) => /^Total\s*\(Base Price\)/i.test(label),
+    });
+    if (!totalRow?.parentNode) return false;
+
+    const doc = table.ownerDocument || document;
+    const { labelStyle, amountStyle } = getPricingDiscountFooterCellStyles(totalRow);
+    const createFooterRow = (rowKind, amountAttr, label, amountText) => {
+        const tr = doc.createElement('tr');
+        tr.setAttribute('data-ems-row', rowKind);
+        const tdLabel = doc.createElement('td');
+        tdLabel.setAttribute('style', labelStyle);
+        tdLabel.textContent = label;
+        const tdAmt = doc.createElement('td');
+        tdAmt.setAttribute('data-ems-amount', amountAttr);
+        tdAmt.setAttribute('style', amountStyle);
+        tdAmt.textContent = amountText;
+        tr.appendChild(tdLabel);
+        tr.appendChild(tdAmt);
+        return tr;
+    };
+
+    const lineBase =
+        parseBaseTotalFromPricingTableElement(table)
+        ?? parseBhdAmountText(totalRow.cells[totalRow.cells.length - 1]?.textContent)
+        ?? 0;
+    const discountRow = createFooterRow(
+        'discount',
+        'discount',
+        'Discount',
+        EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT
+    );
+    const finalRow = createFooterRow(
+        'final-discounted',
+        'final-discounted',
+        'Final Discounted Price',
+        formatBhdAmount(roundBhdAmount(lineBase))
+    );
+    const insertAfter = totalRow.nextSibling;
+    totalRow.parentNode.insertBefore(discountRow, insertAfter);
+    discountRow.parentNode.insertBefore(finalRow, discountRow.nextSibling);
+    patchPricingTableFooterDom(table, roundBhdAmount(lineBase));
+    return true;
+}
+
+function extractPricingDiscountStateFromHtml(html) {
+    const tableHtml = extractEmsAutoPricingTableHtml(html);
+    if (!tableHtml || typeof DOMParser === 'undefined') return null;
+    try {
+        const doc = new DOMParser().parseFromString(tableHtml, 'text/html');
+        const table = doc.querySelector('table');
+        if (!table || !pricingTableHasDiscountBlock(table)) return null;
+        const discountRow = findPricingTableRowByKindOrLabel(table, {
+            rowKind: 'discount',
+            labelTest: isDiscountPricingLabel,
+        });
+        const amtText = String(discountRow?.cells?.[discountRow.cells.length - 1]?.textContent || '').trim();
+        return { amountText: amtText };
+    } catch (_e) {
+        return null;
+    }
+}
+
+function applyDiscountBlockToPricingTableElement(table, discountState) {
+    if (!table || !discountState) return false;
+    if (!pricingTableHasDiscountBlock(table)) {
+        if (!insertDiscountBlockIntoPricingTable(table)) return false;
+    }
+    const discountRow = findPricingTableRowByKindOrLabel(table, {
+        rowKind: 'discount',
+        labelTest: isDiscountPricingLabel,
+    });
+    if (discountRow?.cells?.length >= 2) {
+        const amtCell = discountRow.cells[discountRow.cells.length - 1];
+        const nextAmt = String(discountState.amountText || '').trim() || EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT;
+        if ((amtCell.textContent || '').trim() !== nextAmt) amtCell.textContent = nextAmt;
+    }
+    const lineBase = parseBaseTotalFromPricingTableElement(table);
+    if (lineBase != null && Number.isFinite(lineBase)) {
+        normalizeDiscountRowsInPricingTable(table, { baseTotal: lineBase });
+        patchPricingTableFooterDom(table, lineBase);
+    }
+    return true;
+}
+
+function applyDiscountBlockToPricingTermsHtml(html, discountState, numberToWordsFn) {
+    if (!discountState) return String(html || '');
+    const tableHtml = extractEmsAutoPricingTableHtml(html);
+    if (!tableHtml || typeof DOMParser === 'undefined') return String(html || '');
+    try {
+        const doc = new DOMParser().parseFromString(tableHtml, 'text/html');
+        const table = doc.querySelector('table');
+        if (!table) return String(html || '');
+        applyDiscountBlockToPricingTableElement(table, discountState);
+        const lineBase = parseBaseTotalFromPricingTableElement(table);
+        const taxedBase =
+            lineBase != null && Number.isFinite(lineBase)
+                ? calcTaxedBaseFromPricingTable(table, lineBase)
+                : null;
+        const grandWithVat =
+            taxedBase != null ? calcPricingTotalsFromBase(taxedBase).grandWithVat : null;
+        const sanitizedTable = table.outerHTML;
+        const idAttr = EMS_AUTO_PRICE_SUMMARY_TABLE_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const tableRe = new RegExp(
+            `<table[^>]*(?:id=["']${idAttr}["']|data-ems-pricing-cols=["']fixed["'])[^>]*>[\\s\\S]*?<\\/table>`,
+            'i'
+        );
+        let out = String(html || '').replace(tableRe, sanitizedTable);
+        if (grandWithVat != null && typeof numberToWordsFn === 'function') {
+            out = patchClause41LumpSumInHtml(out, grandWithVat, numberToWordsFn);
+        }
+        return out;
+    } catch (_e) {
+        return String(html || '');
+    }
+}
+
+function insertDiscountBlockIntoPricingTermsHtml(html, numberToWordsFn) {
+    const tableHtml = extractEmsAutoPricingTableHtml(html);
+    if (!tableHtml || typeof DOMParser === 'undefined') return null;
+    try {
+        const doc = new DOMParser().parseFromString(tableHtml, 'text/html');
+        const table = doc.querySelector('table');
+        if (!table) return null;
+        if (pricingTableHasDiscountBlock(table)) return null;
+        if (!insertDiscountBlockIntoPricingTable(table)) return null;
+        const lineBase = parseBaseTotalFromPricingTableElement(table);
+        const taxedBase =
+            lineBase != null && Number.isFinite(lineBase)
+                ? calcTaxedBaseFromPricingTable(table, lineBase)
+                : null;
+        const grandWithVat =
+            taxedBase != null ? calcPricingTotalsFromBase(taxedBase).grandWithVat : null;
+        const sanitizedTable = table.outerHTML;
+        const idAttr = EMS_AUTO_PRICE_SUMMARY_TABLE_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const tableRe = new RegExp(
+            `<table[^>]*(?:id=["']${idAttr}["']|data-ems-pricing-cols=["']fixed["'])[^>]*>[\\s\\S]*?<\\/table>`,
+            'i'
+        );
+        let out = String(html || '').replace(tableRe, sanitizedTable);
+        if (grandWithVat != null && typeof numberToWordsFn === 'function') {
+            out = patchClause41LumpSumInHtml(out, grandWithVat, numberToWordsFn);
+        }
+        return ensurePricingTableColgroupInHtml(out);
+    } catch (_e) {
+        return null;
+    }
 }
 
 function applyPricingTableRecalcDomPatches(liveTable, baseTotal) {
     if (!liveTable) return;
     const jodit = resolveActiveClauseEditorJodit();
     const activeCell = getActivePricingTableAmountCell(liveTable);
-    const whileTyping = isClauseEditorTypingActive(jodit);
     const run = () => {
-        if (!whileTyping) {
-            normalizeDiscountRowsInPricingTable(liveTable, { skipCell: activeCell });
-        }
+        /* Skip rewriting the amount cell under the caret; still format other discount display + %. */
+        normalizeDiscountRowsInPricingTable(liveTable, {
+            skipCell: activeCell,
+            baseTotal,
+        });
         patchPricingTableFooterDom(liveTable, baseTotal);
     };
     if (jodit) {
@@ -1830,17 +2232,36 @@ function recalcPricingTermsEditorHtml(val, numberToWordsFn) {
         /* footer patch is best-effort */
     }
 
-    const grandWithVat = calcPricingTotalsFromBase(baseTotal).grandWithVat;
+    let taxedBase = baseTotal;
+    if (liveTable && pricingTableHasDiscountBlock(liveTable)) {
+        taxedBase = calcTaxedBaseFromPricingTable(liveTable, baseTotal);
+    } else if (extractPricingDiscountStateFromHtml(html)) {
+        try {
+            const doc = new DOMParser().parseFromString(
+                extractEmsAutoPricingTableHtml(html) || '',
+                'text/html'
+            );
+            const table = doc.querySelector('table');
+            if (table) taxedBase = calcTaxedBaseFromPricingTable(table, baseTotal);
+        } catch (_e) {
+            /* keep baseTotal */
+        }
+    }
+    const grandWithVat = calcPricingTotalsFromBase(taxedBase).grandWithVat;
 
     const wys = liveTable?.closest('.jodit-wysiwyg');
     const jodit = resolveActiveClauseEditorJodit();
     if (wys) {
         try {
-            const patchClause41 = () => patchClause41LumpSumInWysiwyg(wys, grandWithVat, numberToWordsFn);
-            if (jodit) {
-                preserveClauseEditorSelectionDuring(jodit, patchClause41);
-            } else {
-                patchClause41();
+            /* Skip live 4.1 DOM rewrite while typing — string sync below still updates parent state. */
+            const skipLivePatch = Boolean(jodit && isClauseEditorTypingActive(jodit));
+            if (!skipLivePatch) {
+                const patchClause41 = () => patchClause41LumpSumInWysiwyg(wys, grandWithVat, numberToWordsFn);
+                if (jodit) {
+                    preserveClauseEditorSelectionDuring(jodit, patchClause41);
+                } else {
+                    patchClause41();
+                }
             }
             html = wys.innerHTML;
         } catch (_domErr) {
@@ -1850,6 +2271,7 @@ function recalcPricingTermsEditorHtml(val, numberToWordsFn) {
 
     let synced = ensurePricingTableColgroupInHtml(updatePricingTableFooterCellsInHtml(html, baseTotal));
     synced = patchClause41LumpSumInHtml(synced, grandWithVat, numberToWordsFn);
+    synced = stripSpellMarksFromHtml(synced);
     if (normalizeClauseHtmlPreservingTables(synced) === normalizeClauseHtmlPreservingTables(val)) {
         return null;
     }
@@ -3502,6 +3924,12 @@ const tableStyles = `
         font-weight: 700 !important;
         border-top: 1px solid #94a3b8 !important;
     }
+    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="discount"] td,
+    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td {
+        background: ${EMS_QUOTE_PRICING_TABLE_DISCOUNT_BG} !important;
+        font-weight: 700 !important;
+        border-top: 1px solid #94a3b8 !important;
+    }
     /* Pasted tables (Excel/Word) often wrap text in <p>/<div> per cell. The .clause-content
        'p + p' and '> * + *' rules below would otherwise add vertical rhythm INSIDE each cell
        and inflate row heights. Neutralize that so pasted tables keep their source spacing. */
@@ -3541,6 +3969,8 @@ const tableStyles = `
     .clause-content table#ems-auto-price-summary-table td:nth-child(2),
     .clause-content table#ems-auto-price-summary-table td[data-ems-amount],
     .clause-content table#ems-auto-price-summary-table tr[data-ems-row="total"] td:first-child,
+    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="discount"] td:first-child,
+    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td:first-child,
     .clause-content table#ems-auto-price-summary-table tr[data-ems-row="vat"] td:first-child,
     .clause-content table#ems-auto-price-summary-table tr[data-ems-row="grand-vat"] td:first-child,
     .clause-content table#ems-auto-price-summary-table tr[data-ems-row="grand"] td:first-child {
@@ -3726,6 +4156,18 @@ function resolveClauseDisplayRenumberContext(contentKey, orderedClauses, clauses
 function queryQuotePreviewVisibleSheets(root = document.getElementById('quote-preview')) {
     if (!root?.querySelectorAll) return [];
     return [...root.querySelectorAll('.quote-a4-sheet:not([data-pack-measure-shell])')];
+}
+
+/** Map 1-based visible page number to `sheets` array index (skips hidden continuation sheets while editing). */
+function visibleSheetIndexForPageNumber(pageNum, sheets, expandedClause) {
+    const target = Math.max(1, parseInt(String(pageNum), 10) || 1);
+    let visible = 0;
+    for (let i = 0; i < (sheets || []).length; i++) {
+        if (shouldSkipSheetWhileEditingClause(sheets[i], expandedClause)) continue;
+        visible += 1;
+        if (visible === target) return i;
+    }
+    return 0;
 }
 
 function isQuoteClauseBlockActive(block, expandedClause) {
@@ -3975,6 +4417,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     }, []);
     const prevBrowsePreviousQuotesRef = useRef(false);
     const browsePreviousQuotesRevisionsRef = useRef(false);
+    /** One-shot: run Align Page after draft / Previous Quotes content is applied into the preview. */
+    const pendingAutoAlignPreviewRef = useRef(false);
     const [quoteDraftReloadNonce, setQuoteDraftReloadNonce] = useState(0);
     const [quoteDraftHydrated, setQuoteDraftHydrated] = useState(false);
     const [quoteDraftPendingBaselineReset, setQuoteDraftPendingBaselineReset] = useState(false);
@@ -4237,6 +4681,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     // Expanded clause for editing
     const [expandedClause, setExpandedClause] = useState(null);
+    const [spellDictReady, setSpellDictReady] = useState(false);
+    useEffect(() => subscribeSpellDictionaryReady(() => setSpellDictReady(true)), []);
 
     // Company Header Info
     const [quoteLogo, setQuoteLogo] = useState(null);
@@ -4452,11 +4898,49 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const [showQuoteListSummaryOverQuote, setShowQuoteListSummaryOverQuote] = useState(false);
     const quoteSummaryClearColFiltersRef = useRef(() => {});
     const [quoteSummaryHasColFilters, setQuoteSummaryHasColFilters] = useState(false);
+    const [quoteListFilteredRows, setQuoteListFilteredRows] = useState([]);
 
     const quoteListDisplayRows = React.useMemo(
         () => (quoteListCategory === QUOTE_LIST_CATEGORY.SEARCH ? quoteSearchResults : pendingQuotes),
         [quoteListCategory, quoteSearchResults, pendingQuotes],
     );
+
+    useEffect(() => {
+        setQuoteListFilteredRows(quoteListDisplayRows);
+    }, [quoteListDisplayRows]);
+
+    const handleQuoteListExcelDownload = useCallback(async () => {
+        const rows = Array.isArray(quoteListFilteredRows) ? quoteListFilteredRows : quoteListDisplayRows;
+        if (!rows.length) {
+            window.alert('No data to export');
+            return;
+        }
+        const isSearch = quoteListCategory === QUOTE_LIST_CATEGORY.SEARCH;
+        try {
+            await downloadQuoteListXlsx({
+                rows,
+                mode: isSearch ? 'search' : 'pending',
+                meta: {
+                    division: quoteListDivision || '',
+                    category: isSearch ? 'Search Quote' : 'Pending Quote',
+                    searchQuery: String(quoteListSearchCriteria || '').trim(),
+                    dateFrom: quoteListDateFrom || '',
+                    dateTo: quoteListDateTo || ''
+                }
+            });
+        } catch (err) {
+            console.error('Quote Excel export failed', err);
+            window.alert(err?.message || 'Failed to export Excel workbook');
+        }
+    }, [
+        quoteListFilteredRows,
+        quoteListDisplayRows,
+        quoteListCategory,
+        quoteListDivision,
+        quoteListSearchCriteria,
+        quoteListDateFrom,
+        quoteListDateTo
+    ]);
 
     useEffect(() => {
         if (quoteListDivision && quoteListDivision.trim()) {
@@ -5106,6 +5590,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     // Feature Flag: EMS_QUOTE_PDF_SERVER_ENABLED (queried from health API, fallback to build env)
     const [serverPdfEnabled, setServerPdfEnabled] = useState(!QUOTE_PDF_BROWSER_DOWNLOAD);
+    const [quotePdfCssVersion, setQuotePdfCssVersion] = useState('');
 
     useEffect(() => {
         let active = true;
@@ -5133,6 +5618,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     }
                     if (data?.quotePdfCssVersion) {
                         console.info('[Quote PDF] server css profile:', data.quotePdfCssVersion, data.chromeEngine || '');
+                        setQuotePdfCssVersion(String(data.quotePdfCssVersion));
                     }
                 }
             } catch (err) {
@@ -5333,6 +5819,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         setQuoteDraftId(null);
         setQuoteNumber('');
         setLoadedEnquiryQuoteRowForPreview(null);
+        pendingAutoAlignPreviewRef.current = true;
     }, [currentUser]);
 
     const applyNoDraftQuoteDefaults = applyFreshQuoteShellDefaults;
@@ -6042,6 +6529,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const [quotePreviewPageInfo, setQuotePreviewPageInfo] = useState({ current: 1, total: 1 });
     const [quotePreviewZoomInput, setQuotePreviewZoomInput] = useState('100');
     const [quotePreviewPageInput, setQuotePreviewPageInput] = useState('1');
+    /** Per-sheet orientation (0-based `sheets` index). Cover page stays portrait. */
+    const [quotePageOrientations, setQuotePageOrientations] = useState({});
     const [isEditingQuotePreviewZoomInput, setIsEditingQuotePreviewZoomInput] = useState(false);
     const [isEditingQuotePreviewPageInput, setIsEditingQuotePreviewPageInput] = useState(false);
     quotePreviewZoomRef.current = quotePreviewZoom;
@@ -6152,6 +6641,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const [clausePackSplitMode, setClausePackSplitMode] = useState(false);
     const clausePackTightFitRef = useRef(false);
     const alignQuotePreviewPagesRef = useRef(async () => {});
+    /** True while Align Page (manual or auto) is measuring / packing sheets. */
+    const [quoteAlignPageBusy, setQuoteAlignPageBusy] = useState(false);
     const [coverLetterExtraPadPx, setCoverLetterExtraPadPx] = useState(0);
     /** When true, cover letter gap equalization must not move the signatory block (user-placed signature). */
     const coverSignatoryLayoutLockedRef = useRef(false);
@@ -6168,6 +6659,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         }
     }, []);
     const editingClauseLiveHtmlRef = useRef({ key: null, html: '' });
+    const editingClauseLiveSigTimerRef = useRef(null);
     const editingClauseReflowTimerRef = useRef(null);
     const [editingClauseLiveSig, setEditingClauseLiveSig] = useState('');
     /** Checked clauses in UI order (preview + measurement source). */
@@ -6232,8 +6724,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const headingSig = Object.entries(clauseHeadingHtml || {})
             .map(([k, v]) => `${k}:${String(v || '').length}`)
             .join('|');
-        return `${ordered}|${std}|${cust}|${headingSig}`;
-    }, [orderedClauses, clauses, clauseContent, clauseHeadingHtml, customClauses]);
+        const orientSig = Object.entries(quotePageOrientations || {})
+            .filter(([, v]) => v === 'landscape')
+            .map(([k]) => k)
+            .sort()
+            .join(',');
+        return `${ordered}|${std}|${cust}|${headingSig}|spell:${spellDictReady ? 1 : 0}|orient:${orientSig}`;
+    }, [orderedClauses, clauses, clauseContent, clauseHeadingHtml, customClauses, spellDictReady, quotePageOrientations]);
 
     /** Editor-driven pricing body changes must refresh preview segments without churning layout packing on every keystroke. */
     const pricingTermsEditorSig = React.useMemo(() => {
@@ -6253,12 +6750,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const splitOpts = clausePackSplitMode
             ? { splitListsPerItem: true, splitTableMinRows: 2, splitParagraphs: true }
             : { splitTableMinRows: 8, splitListMinItems: 16, splitParagraphs: false };
+        /* While editing, skip Hunspell decorate — it re-ran on every keystroke and caused typing lag. */
+        const formatBody = expandedClause
+            ? (html, listKey, displayMajor) =>
+                  getClauseDisplayBodyHtml(html, listKey, displayMajor, { spell: false })
+            : getClauseDisplayBodyHtml;
         return buildClauseSegmentsForPagination(
             activeClausesList,
-            getClauseDisplayBodyHtml,
+            formatBody,
             splitOpts
         );
-    }, [activeClausesList, clausePaginationLayoutKey, pricingTermsEditorSig, clausePackSplitMode]);
+    }, [activeClausesList, clausePaginationLayoutKey, pricingTermsEditorSig, clausePackSplitMode, expandedClause]);
 
     const isQuotePreviewVisible = quoteShellReady;
 
@@ -6294,6 +6796,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         if (clauseSegmentsForPagination.length === 0) {
             setClauseSegmentPageGroups((prev) => (prev.length ? [] : prev));
+            setQuoteAlignPageBusy((busy) => (busy ? false : busy));
             return () => {
                 cancelled = true;
             };
@@ -6303,10 +6806,20 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             Boolean(clausePackTightFitRef.current) || Boolean(clausePackSplitMode);
 
         const applyEstimatedPackQuick = (usablePx = EMS_QUOTE_CONT_USABLE_PX_FALLBACK) => {
-            const fallback = packSegmentsOntoPagesByEstimatedHeight(
-                clauseSegmentsForPagination,
-                usablePx
+            const hasLandscapeSheets = Object.values(quotePageOrientations || {}).some(
+                (v) => v === 'landscape'
             );
+            const fallback = hasLandscapeSheets
+                ? packSegmentsOntoPagesByEstimatedHeightPerPage(
+                      clauseSegmentsForPagination,
+                      (continuationPageIdx) => {
+                          const sheetIdx = continuationPageIdx + 1;
+                          return quotePageOrientations[sheetIdx] === 'landscape'
+                              ? EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK
+                              : EMS_QUOTE_CONT_USABLE_PX_FALLBACK;
+                      }
+                  )
+                : packSegmentsOntoPagesByEstimatedHeight(clauseSegmentsForPagination, usablePx);
             if (cancelled || !fallback.length) return;
             setClauseSegmentPageGroups((prev) =>
                 segmentPageGroupsEqual(prev, fallback) ? prev : fallback
@@ -6316,6 +6829,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         /* Fast browse path: estimated packing only (no hidden measure DOM). */
         if (!runMeasuredPackNow) {
             applyEstimatedPackQuick();
+            setQuoteAlignPageBusy((busy) => (busy ? false : busy));
             return () => {
                 cancelled = true;
                 clausePackTightFitRef.current = false;
@@ -6326,21 +6840,32 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const host = clauseMeasureHostRef.current;
         if (!preview || !host) {
             applyEstimatedPackQuick();
+            setQuoteAlignPageBusy((busy) => (busy ? false : busy));
             return () => {
                 cancelled = true;
             };
         }
 
-        /* Match PDF: sheets are always 210mm wide (see .quote-a4-sheet). Measure at inner content width (210mm − 15mm padding each side, box-sizing: border-box). */
-        const sheetInnerContentMm = 210 - 15 * 2;
-        const innerW = Math.round(quoteMmToPx(sheetInnerContentMm));
-        host.style.width = `${Math.max(280, innerW)}px`;
+        /* Match PDF: inner content width depends on sheet orientation (210mm or 297mm page width). */
+        const defaultInnerW = Math.round(quoteMmToPx(quoteA4InnerContentMm(false).innerWidthMm));
+        host.style.width = `${Math.max(280, defaultInnerW)}px`;
+
+        const isContinuationSheetLandscape = (continuationPageIdx) =>
+            quotePageOrientations[continuationPageIdx + 1] === 'landscape';
 
         const applyEstimatedPack = (usablePx = EMS_QUOTE_CONT_USABLE_PX_FALLBACK) => {
-            const fallback = packSegmentsOntoPagesByEstimatedHeight(
-                clauseSegmentsForPagination,
-                usablePx
+            const hasLandscapeSheets = Object.values(quotePageOrientations || {}).some(
+                (v) => v === 'landscape'
             );
+            const fallback = hasLandscapeSheets
+                ? packSegmentsOntoPagesByEstimatedHeightPerPage(
+                      clauseSegmentsForPagination,
+                      (continuationPageIdx) =>
+                          isContinuationSheetLandscape(continuationPageIdx)
+                              ? EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK
+                              : usablePx
+                  )
+                : packSegmentsOntoPagesByEstimatedHeight(clauseSegmentsForPagination, usablePx);
             if (cancelled || !fallback.length) return;
             setClauseSegmentPageGroups((prev) =>
                 segmentPageGroupsEqual(prev, fallback) ? prev : fallback
@@ -6377,6 +6902,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     requestAnimationFrame(() => applyPack());
                 } else {
                     applyEstimatedPack();
+                    setQuoteAlignPageBusy((busy) => (busy ? false : busy));
                 }
                 return;
             }
@@ -6385,10 +6911,18 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 ?.querySelectorAll('[data-pack-merge-measure]')
                 ?.forEach((el) => el.remove());
             let mergeMeasureEl = previewRoot?.querySelector('[data-pack-merge-measure]');
+            const innerWidthPxForContinuation = (continuationPageIdx) =>
+                Math.round(
+                    quoteMmToPx(
+                        quoteA4InnerContentMm(isContinuationSheetLandscape(continuationPageIdx))
+                            .innerWidthMm
+                    )
+                );
+
             if (!mergeMeasureEl && previewRoot) {
                 mergeMeasureEl = document.createElement('div');
                 mergeMeasureEl.setAttribute('data-pack-merge-measure', '1');
-                mergeMeasureEl.style.width = `${Math.max(280, innerW)}px`;
+                mergeMeasureEl.style.width = `${Math.max(280, defaultInnerW)}px`;
                 mergeMeasureEl.style.boxSizing = 'border-box';
                 mergeMeasureEl.style.position = 'absolute';
                 mergeMeasureEl.style.left = '-9999px';
@@ -6398,8 +6932,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 previewRoot.appendChild(mergeMeasureEl);
             }
 
-            /** Measure at full content height — never inside overflow:hidden / 297mm grid (scrollHeight was capped → one page + clipped rows). */
-            mergeMeasureEl.innerHTML = `<div data-pack-measure-shell class="quote-a4-sheet quote-a4-sheet--continuation" style="width:${Math.max(280, innerW)}px;box-sizing:border-box;overflow:visible;display:block">
+            const configureMergeMeasureShellWidth = (innerWPx) => {
+                const w = `${Math.max(280, innerWPx)}px`;
+                if (mergeMeasureEl) mergeMeasureEl.style.width = w;
+                const shell = mergeMeasureEl?.querySelector('[data-pack-measure-shell]');
+                if (shell) shell.style.width = w;
+            };
+
+            /** Measure at full content height — never inside overflow:hidden / fixed grid (scrollHeight was capped → clipped rows). */
+            mergeMeasureEl.innerHTML = `<div data-pack-measure-shell class="quote-a4-sheet quote-a4-sheet--continuation" style="width:${Math.max(280, defaultInnerW)}px;box-sizing:border-box;overflow:visible;display:block">
                 <div class="quote-sheet-logo-row" aria-hidden="true" style="width:100%;min-height:68px;margin-bottom:${EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM}"></div>
                 <div class="quote-sheet-main-flex" style="display:flex;flex-direction:column;width:100%">
                 <div data-pack-measure-content class="content-section" style="width:100%;box-sizing:border-box;overflow:visible;height:auto;max-height:none;flex:0 1 auto"></div>
@@ -6410,13 +6951,28 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             const measureLogo = mergeMeasureEl.querySelector('.quote-sheet-logo-row');
             const measureFooter = mergeMeasureEl.querySelector('.footer-section');
             const measureContent = mergeMeasureEl.querySelector('[data-pack-measure-content]');
-            const gridInnerPx = quoteMmToPx(297 - 15 * 2);
-            const contUsablePx = Math.max(
-                gridInnerPx -
-                    (measureLogo?.offsetHeight || 0) -
-                    (measureFooter?.offsetHeight || 0),
-                200
-            );
+
+            const computeContUsablePx = (isLandscape) => {
+                const gridInnerPx = quoteMmToPx(quoteA4InnerContentMm(isLandscape).innerHeightMm);
+                return Math.max(
+                    gridInnerPx -
+                        (measureLogo?.offsetHeight || 0) -
+                        (measureFooter?.offsetHeight || 0),
+                    200
+                );
+            };
+
+            const portraitContUsablePx = computeContUsablePx(false);
+
+            const usablePxForContinuationPage = (continuationPageIdx) =>
+                computeContUsablePx(isContinuationSheetLandscape(continuationPageIdx));
+
+            const packContentLimitPxForPage = (continuationPageIdx) =>
+                Math.max(
+                    usablePxForContinuationPage(continuationPageIdx) -
+                        (clausePackTightFitRef.current ? 12 : 48),
+                    200
+                );
 
             const renderBlocksHtml = (groupIndices) => {
                 const blocks = mergeSegmentsIntoSheetBlocks(
@@ -6448,21 +7004,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     .join('');
             };
 
-            const packContentLimitPx = Math.max(
-                contUsablePx - (clausePackTightFitRef.current ? 12 : 48),
-                200
-            );
-
-            const preparePackMeasureContent = (groupIndices) => {
+            const preparePackMeasureContent = (groupIndices, continuationPageIdx = 0) => {
                 if (!groupIndices?.length || !measureContent) return;
+                configureMergeMeasureShellWidth(innerWidthPxForContinuation(continuationPageIdx));
                 measureContent.innerHTML = renderBlocksHtml(groupIndices);
                 applyAllTableRowHeightsInRoot(measureContent);
                 void measureContent.offsetHeight;
             };
 
-            const measureMergedGroupPx = (groupIndices) => {
+            const measureMergedGroupPx = (groupIndices, continuationPageIdx = 0) => {
                 if (!groupIndices?.length || !measureContent) return 0;
-                preparePackMeasureContent(groupIndices);
+                preparePackMeasureContent(groupIndices, continuationPageIdx);
                 const contentH = Math.max(
                     Math.round(measureContent.scrollHeight),
                     Math.round(measureContent.offsetHeight),
@@ -6474,43 +7026,56 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 return groupIndices.reduce((s, gi) => s + Math.max(heights[gi] || 0, 1), 0);
             };
 
-            /** Same overflow:hidden + max-height test as continuation sheet render — one rule for pack and fill. */
-            const overflowTest = (groupIndices) => {
+            /** Same overflow:hidden + max-height test as continuation sheet render — per-page orientation. */
+            const overflowTestForPage = (continuationPageIdx, groupIndices) => {
                 if (!groupIndices?.length || !measureContent) return false;
-                preparePackMeasureContent(groupIndices);
+                preparePackMeasureContent(groupIndices, continuationPageIdx);
+                const limitPx = packContentLimitPxForPage(continuationPageIdx);
                 measureContent.style.boxSizing = 'border-box';
                 measureContent.style.width = '100%';
-                measureContent.style.maxHeight = `${packContentLimitPx}px`;
+                measureContent.style.maxHeight = `${limitPx}px`;
                 measureContent.style.overflow = 'hidden';
                 void measureContent.offsetHeight;
-                const overflows = measureContent.scrollHeight > packContentLimitPx + 2;
+                const overflows = measureContent.scrollHeight > limitPx + 2;
                 measureContent.style.maxHeight = '';
                 measureContent.style.overflow = '';
                 return overflows;
             };
 
+            const packOptions = {
+                ...(clausePackTightFitRef.current ? { tightFit: true } : {}),
+                usablePxForContinuationPage,
+                overflowTestForPage,
+            };
+
             const remaining = clauseSegmentsForPagination.map((_, i) => i);
-            const packOptions = clausePackTightFitRef.current
-                ? { tightFit: true, overflowTest }
-                : { overflowTest };
             let continuation = packClauseSegmentsForContinuationPages(
                 remaining,
                 measureMergedGroupPx,
-                contUsablePx,
+                portraitContUsablePx,
                 clauseSegmentsForPagination,
                 packOptions,
                 heights
             );
             if (!continuation.length) {
-                continuation = packSegmentsOntoPagesByEstimatedHeight(
-                    clauseSegmentsForPagination,
-                    contUsablePx
-                );
+                continuation = Object.values(quotePageOrientations || {}).some((v) => v === 'landscape')
+                    ? packSegmentsOntoPagesByEstimatedHeightPerPage(
+                          clauseSegmentsForPagination,
+                          (continuationPageIdx) =>
+                              isContinuationSheetLandscape(continuationPageIdx)
+                                  ? EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK
+                                  : portraitContUsablePx
+                      )
+                    : packSegmentsOntoPagesByEstimatedHeight(
+                          clauseSegmentsForPagination,
+                          portraitContUsablePx
+                      );
             }
             const sig = JSON.stringify(continuation);
             if (cancelled) return;
             if (lastClausePackSigRef.current === sig) {
                 clausePackTightFitRef.current = false;
+                setQuoteAlignPageBusy((busy) => (busy ? false : busy));
                 return;
             }
             lastClausePackSigRef.current = sig;
@@ -6519,6 +7084,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 segmentPageGroupsEqual(prev, continuation) ? prev : continuation
             );
             clausePackTightFitRef.current = false;
+            setQuoteAlignPageBusy((busy) => (busy ? false : busy));
         };
 
         /* Align Page path: estimated first, then DOM measure. */
@@ -6552,6 +7118,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         clausePackRetryNonce,
         quoteAlignPageNonce,
         clausePackSplitMode,
+        quotePageOrientations,
     ]);
 
     /** If measured packing never settles, nudge a remeasure so preview does not stay cover-only. */
@@ -6577,8 +7144,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const root = document.getElementById('quote-preview');
         if (!root) return;
         initializeAllOfficePastedTableColumns(root);
-        /* Do not re-run on every editor keystroke (editingClauseLiveSig) — that blocked the UI. */
-    }, [clausePaginationLayoutKey]);
+        /* Re-run when page packing changes — mid-table page breaks must not re-measure columns locally. */
+    }, [clausePaginationLayoutKey, clauseSegmentPageGroups]);
 
     /** Continuation segment groups; if none measured yet, estimate pages so preview is never cover-only. */
     const sanitizedClauseSegmentPageGroups = React.useMemo(() => {
@@ -6590,8 +7157,20 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             )
             .filter((g) => g.length > 0);
         if (filtered.length) return filtered;
+        const hasLandscapeSheets = Object.values(quotePageOrientations || {}).some((v) => v === 'landscape');
+        if (hasLandscapeSheets) {
+            return packSegmentsOntoPagesByEstimatedHeightPerPage(
+                clauseSegmentsForPagination,
+                (continuationPageIdx) => {
+                    const sheetIdx = continuationPageIdx + 1;
+                    return quotePageOrientations[sheetIdx] === 'landscape'
+                        ? EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK
+                        : EMS_QUOTE_CONT_USABLE_PX_FALLBACK;
+                }
+            );
+        }
         return packSegmentsOntoPagesByEstimatedHeight(clauseSegmentsForPagination);
-    }, [clauseSegmentPageGroups, clauseSegmentsForPagination]);
+    }, [clauseSegmentPageGroups, clauseSegmentsForPagination, quotePageOrientations]);
 
     /** Final safety net: if rendered continuation sheet still overflows, move last segment to next page. */
     useLayoutEffect(() => {
@@ -7695,15 +8274,26 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             );
         }
 
+        const preservedDiscount = extractPricingDiscountStateFromHtml(currentTerms);
+        if (preservedDiscount && !extractPricingDiscountStateFromHtml(nextHtml)) {
+            nextHtml = applyDiscountBlockToPricingTermsHtml(
+                nextHtml,
+                preservedDiscount,
+                numberToWordsBHD
+            );
+        }
+
         // 4.1 lump-sum prose should match checked-job total (grand with VAT when present).
         const previewGrand = parseLumpSumFromAutoTableHtml(pricingTermsAutoTablePreviewHtml);
         const livePrice = parseLumpSumFromAutoTableHtml(nextHtml);
         const totalForProse =
-            previewGrand != null && Number.isFinite(previewGrand)
-                ? previewGrand
-                : livePrice != null && Number.isFinite(livePrice)
-                  ? livePrice
-                  : fallbackGrandBaseTotal;
+            preservedDiscount && livePrice != null && Number.isFinite(livePrice)
+                ? livePrice
+                : previewGrand != null && Number.isFinite(previewGrand)
+                  ? previewGrand
+                  : livePrice != null && Number.isFinite(livePrice)
+                    ? livePrice
+                    : fallbackGrandBaseTotal;
         const synced = applyTableRowHeightModelInHtmlString(
             ensurePricingTableColgroupInHtml(
                 syncPricingTerms41LumpSumProse(
@@ -9003,6 +9593,31 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         );
     }, [enquiryData?.enquiry?.RequestNo, scopedEnquiryQuotesParams, existingQuotes]);
 
+    /** Union of client-matched existingQuotes rows and settled scoped GET rows for Save/Revision id resolution. */
+    const persistedRowsForScope = React.useMemo(() => {
+        const rn = String(enquiryData?.enquiry?.RequestNo ?? '').trim();
+        const p = scopedEnquiryQuotesParams;
+        const byId = new Map();
+        const add = (q) => {
+            const id = quoteRowId(q);
+            if (id != null && String(id).trim() !== '') byId.set(String(id), q);
+        };
+        (quotesMatchingScopedTuple || []).forEach(add);
+        if (p && rn && scopedQuotesFetchSettledKey === scopedQuotePanelFetchKey) {
+            (quoteScopedForPanel || [])
+                .filter((q) => quoteRowMatchesEnquiryScopedParams(q, p, rn))
+                .forEach(add);
+        }
+        return Array.from(byId.values());
+    }, [
+        enquiryData?.enquiry?.RequestNo,
+        scopedEnquiryQuotesParams,
+        quotesMatchingScopedTuple,
+        quoteScopedForPanel,
+        scopedQuotesFetchSettledKey,
+        scopedQuotePanelFetchKey,
+    ]);
+
     /** Save only when no DB quote for this enquiry+lead+ownjob+ToName tuple; Revision only when one exists. */
     const hasPersistedQuoteForScope = React.useMemo(() => {
         if (!enquiryData?.enquiry?.RequestNo) return false;
@@ -9011,8 +9626,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const hasRowId = quoteId != null && String(quoteId).trim() !== '';
 
         if (scopedEnquiryQuotesParams) {
-            // Client-side tuple (unscoped list) — do not wait on scoped GET; fixes Save/Revision when API row shape or fetch key lags.
-            if (quotesMatchingScopedTuple.length > 0) return true;
+            if (persistedRowsForScope.length > 0) return true;
             // In-memory quote ref must still belong to THIS RequestNo+LeadJob+ToName+OwnJob tuple (not another row on same enquiry).
             if (hasRowId && savedRefShape) {
                 const hit = (existingQuotes || []).find((q) => String(quoteRowId(q) ?? '') === String(quoteId ?? ''));
@@ -9028,11 +9642,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 }
             }
             if (scopedQuotesFetchSettledKey !== scopedQuotePanelFetchKey) return false;
-            const rn = String(enquiryData?.enquiry?.RequestNo ?? '').trim();
-            const strictScoped = (quoteScopedForPanel || []).filter((q) =>
-                quoteRowMatchesEnquiryScopedParams(q, scopedEnquiryQuotesParams, rn)
-            );
-            return strictScoped.length > 0;
+            return false;
         }
         return hasRowId;
     }, [
@@ -9040,8 +9650,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         scopedEnquiryQuotesParams,
         scopedQuotesFetchSettledKey,
         scopedQuotePanelFetchKey,
-        quoteScopedForPanel,
-        quotesMatchingScopedTuple.length,
+        persistedRowsForScope.length,
         quoteId,
         quoteNumber,
         existingQuotes,
@@ -9049,30 +9658,22 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     /** Enable Revision when quoteId is set or a matching tuple row has a DB id (scoped GET may be empty). */
     const latestPersistedRowForRevise = React.useMemo(() => {
-        if (!quotesMatchingScopedTuple?.length) return null;
-        return [...quotesMatchingScopedTuple].sort((a, b) => {
+        if (!persistedRowsForScope?.length) return null;
+        return [...persistedRowsForScope].sort((a, b) => {
             const r = (Number(b.RevisionNo) || 0) - (Number(a.RevisionNo) || 0);
             if (r !== 0) return r;
             const ta = Date.parse(a.QuoteDate || 0) || 0;
             const tb = Date.parse(b.QuoteDate || 0) || 0;
             return tb - ta;
         })[0];
-    }, [quotesMatchingScopedTuple]);
+    }, [persistedRowsForScope]);
 
     const canRevisePersistedQuote = React.useMemo(() => {
         const ridLatest = quoteRowId(latestPersistedRowForRevise);
         if (ridLatest != null && String(ridLatest).trim() !== '') return true;
-        const p = scopedEnquiryQuotesParams;
-        const rn = enquiryData?.enquiry?.RequestNo;
-        if (quoteId != null && String(quoteId).trim() !== '' && p && rn) {
-            const hit = (existingQuotes || []).find((q) => String(quoteRowId(q) ?? '') === String(quoteId ?? ''));
-            return !!(
-                hit &&
-                quoteRowMatchesEnquiryScopedParams(hit, p, String(rn).trim())
-            );
-        }
+        if (quoteId != null && String(quoteId).trim() !== '') return true;
         return false;
-    }, [quoteId, latestPersistedRowForRevise, scopedEnquiryQuotesParams, enquiryData?.enquiry?.RequestNo, existingQuotes]);
+    }, [quoteId, latestPersistedRowForRevise]);
 
     // Auto-resolve active tabs based on calculated permissions
     useEffect(() => {
@@ -10045,6 +10646,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             Array.isArray(pricingData?.jobs) && pricingData.jobs.some((j) => j.visible !== false);
         return hasVisibleJobs && (hasEditable || hasLead);
     }, [currentUser, enquiryData, quoteListDivision, pricingData]);
+
+    /** Save / Revision — lead tab owners plus CC coordinators with pricing visibility (matches /api/quotes/access). */
+    const canSaveOrReviseQuote = () => canEdit() || canCollaborateOnQuoteDraft();
 
     // Click outside handler
     useEffect(() => {
@@ -12859,7 +13463,19 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             }
         }
 
-        setLoadedQuotePreparedByEmail(String(quote.PreparedByEmail ?? quote.preparedbyemail ?? '').trim());
+        {
+            const fromRowName = String(quote.PreparedBy ?? quote.preparedby ?? '').trim();
+            const rowEmail = String(quote.PreparedByEmail ?? quote.preparedbyemail ?? '').trim();
+            setLoadedQuotePreparedByEmail(
+                resolvePreparedByEmailForPersist(
+                    fromRowName,
+                    usersList,
+                    currentUser,
+                    preparedByOptions,
+                    rowEmail
+                )
+            );
+        }
 
         const tabAtLoadForRecipient = (calculatedTabs || []).find((t) => String(t.id) === effectiveQuoteTab);
         const skipRecipientFromRow = !!tabAtLoadForRecipient?.isSubJobTab || preserveRecipient;
@@ -13111,6 +13727,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         } else {
             setLoadedEnquiryQuoteRowForPreview(null);
         }
+        // Draft + Previous Quotes + Approvals: Align Page after content lands (before estimated-only preview settles).
+        pendingAutoAlignPreviewRef.current = true;
     };
     loadQuoteRef.current = loadQuote;
 
@@ -13934,8 +14552,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     const handleRevise = async () => {
         const sortedTuple = (() => {
-            if (!quotesMatchingScopedTuple?.length) return [];
-            return [...quotesMatchingScopedTuple].sort((a, b) => {
+            if (!persistedRowsForScope?.length) return [];
+            return [...persistedRowsForScope].sort((a, b) => {
                 const r = (Number(b.RevisionNo) || 0) - (Number(a.RevisionNo) || 0);
                 if (r !== 0) return r;
                 const ta = Date.parse(a.QuoteDate || 0) || 0;
@@ -15265,6 +15883,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         >
                             Clear
                         </button>
+                        <ExcelDownloadButton
+                            onClick={handleQuoteListExcelDownload}
+                            disabled={
+                                quoteSearchLoading ||
+                                !(Array.isArray(quoteListFilteredRows)
+                                    ? quoteListFilteredRows.length
+                                    : quoteListDisplayRows.length)
+                            }
+                        />
                         {quoteListDisplayRows.length > 0 ? (
                             <button
                                 type="button"
@@ -15293,9 +15920,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             quoteListDivisions,
             quoteListDivisionsLoading,
             quoteListDisplayRows.length,
+            quoteListFilteredRows.length,
             quoteSummaryHasColFilters,
             handleQuoteListSearch,
             handleQuoteListClear,
+            handleQuoteListExcelDownload,
             handleQuoteListDivisionChange,
         ]
     );
@@ -15405,6 +16034,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 }}
                 onFilterStateChange={({ hasColumnFilters }) => {
                     setQuoteSummaryHasColFilters(hasColumnFilters);
+                }}
+                onDisplayRowsChange={(rows) => {
+                    setQuoteListFilteredRows(Array.isArray(rows) ? rows : []);
                 }}
             />
         );
@@ -15592,6 +16224,76 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             : normalizeClauseListHtmlInString(next);
         setClauseContent((prev) => ({ ...prev, [key]: normalized }));
     };
+
+    const handleInsertPricingDiscountRows = useCallback(() => {
+        if (embeddedApprovalReview) return;
+        markQuoteDraftEdited();
+        pricingTermsUserTouchedRef.current = true;
+
+        const focusDiscountAmount = (table) => {
+            const row = findPricingTableRowByKindOrLabel(table, {
+                rowKind: 'discount',
+                labelTest: isDiscountPricingLabel,
+            });
+            const amtCell = row?.cells?.[row.cells.length - 1];
+            if (!amtCell) return;
+            try {
+                amtCell.focus?.();
+                const sel = window.getSelection?.();
+                if (sel) {
+                    const range = document.createRange();
+                    range.selectNodeContents(amtCell);
+                    range.collapse(false);
+                    sel.removeAllRanges();
+                    sel.addRange(range);
+                }
+            } catch (_e) {
+                /* focus is best-effort */
+            }
+        };
+
+        const liveTable = findLiveEmsPricingTableElement();
+        if (liveTable) {
+            if (pricingTableHasDiscountBlock(liveTable)) {
+                focusDiscountAmount(liveTable);
+                return;
+            }
+            if (!insertDiscountBlockIntoPricingTable(liveTable)) return;
+            const wys = liveTable.closest('.jodit-wysiwyg');
+            const lineBase = parseBaseTotalFromPricingTableElement(liveTable);
+            const taxedBase =
+                lineBase != null && Number.isFinite(lineBase)
+                    ? calcTaxedBaseFromPricingTable(liveTable, lineBase)
+                    : null;
+            const grandWithVat =
+                taxedBase != null ? calcPricingTotalsFromBase(taxedBase).grandWithVat : null;
+            if (wys && grandWithVat != null) {
+                try {
+                    patchClause41LumpSumInWysiwyg(wys, grandWithVat, numberToWordsBHD);
+                } catch (_e) {
+                    /* prose patch best-effort */
+                }
+            }
+            const html = ensurePricingTableColgroupInHtml(
+                wys?.innerHTML
+                    || clauseContentRef.current?.pricingTerms
+                    || ''
+            );
+            const with41 =
+                grandWithVat != null
+                    ? patchClause41LumpSumInHtml(html, grandWithVat, numberToWordsBHD)
+                    : html;
+            updateClauseContent('pricingTerms', with41);
+            focusDiscountAmount(liveTable);
+            return;
+        }
+
+        const currentHtml = String(clauseContentRef.current?.pricingTerms || '');
+        if (extractPricingDiscountStateFromHtml(currentHtml)) return;
+        const nextHtml = insertDiscountBlockIntoPricingTermsHtml(currentHtml, numberToWordsBHD);
+        if (!nextHtml) return;
+        updateClauseContent('pricingTerms', nextHtml);
+    }, [embeddedApprovalReview, markQuoteDraftEdited, numberToWordsBHD]);
 
     const handlePreviewClauseEditorChange = useCallback(
         (contentKey, isCustom, clauseId, val) => {
@@ -15918,9 +16620,19 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const key = contentKey || editingClauseLiveHtmlRef.current.key;
         const body = html ?? editingClauseLiveHtmlRef.current.html ?? '';
         if (!key) return;
-        setEditingClauseLiveSig(
-            `${key}:${String(body).length}:${String(body).slice(-48)}`
-        );
+        editingClauseLiveHtmlRef.current = { key, html: body };
+        const sig = `${key}:${String(body).length}:${String(body).slice(-48)}`;
+        if (key === 'pricingTerms') {
+            setEditingClauseLiveSig(sig);
+            return;
+        }
+        if (editingClauseLiveSigTimerRef.current) {
+            clearTimeout(editingClauseLiveSigTimerRef.current);
+        }
+        editingClauseLiveSigTimerRef.current = setTimeout(() => {
+            editingClauseLiveSigTimerRef.current = null;
+            setEditingClauseLiveSig(sig);
+        }, 400);
     }, []);
 
     const bumpEditingClauseReflow = useCallback(() => {
@@ -15964,7 +16676,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             previewClauseEditorSyncTimerRef.current = setTimeout(() => {
                 previewClauseEditorSyncTimerRef.current = null;
                 flushPreviewClauseEditorSync();
-            }, 80);
+            }, 320);
             return cleaned;
         },
         [
@@ -16089,6 +16801,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     /** Re-run A4 page packing + cover-letter gaps + table column widths (same as after refresh). */
     const alignQuotePreviewPages = useCallback(async () => {
+        /* Busy + empty groups first so the overlay stays until measured pack repopulates sheets. */
+        flushSync(() => {
+            setQuoteAlignPageBusy(true);
+            setClauseSegmentPageGroups([]);
+        });
         const editingKey = expandedClause;
         if (editingKey) {
             await commitActiveClausePreviewEdit(editingKey);
@@ -16130,6 +16847,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (root) initializeAllOfficePastedTableColumns(root);
         });
     }, [commitActiveClausePreviewEdit, expandedClause]);
+
+    /** Safety: never leave “Aligning page…” stuck if measured pack never settles. */
+    useEffect(() => {
+        if (!quoteAlignPageBusy) return undefined;
+        const safety = window.setTimeout(() => setQuoteAlignPageBusy(false), 8000);
+        return () => window.clearTimeout(safety);
+    }, [quoteAlignPageBusy, quoteAlignPageNonce]);
 
     React.useLayoutEffect(() => {
         alignQuotePreviewPagesRef.current = alignQuotePreviewPages;
@@ -16660,6 +17384,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     );
 
     const handlePreviewClauseEditorReflow = useCallback(() => {
+        const host = quotePreviewToolbarAnchorRef.current;
+        const jodit = host?.__emsActiveClauseEditorJodit;
+        if (jodit?.__emsTypingLock || jodit?.__emsDeleteKeyLock || jodit?.__emsListApplyLock) {
+            return;
+        }
         const wys = document.querySelector(
             '#quote-preview .quote-clause-inline-editor .jodit-wysiwyg'
         );
@@ -16672,6 +17401,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             }
         }
         requestAnimationFrame(() => {
+            if (jodit?.__emsTypingLock) return;
             document
                 .querySelectorAll(
                     '#quote-preview .quote-clause-inline-editor .jodit-workplace, #quote-preview .quote-clause-inline-editor .jodit-container'
@@ -16683,13 +17413,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     el.style.setProperty('height', 'auto', 'important');
                     el.style.setProperty('max-height', 'none', 'important');
                 });
-            const wys = document.querySelector(
+            const liveWys = document.querySelector(
                 '#quote-preview .quote-clause-inline-editor .jodit-wysiwyg'
             );
-            if (wys instanceof HTMLElement) {
-                const h = Math.max(wys.scrollHeight, wys.offsetHeight);
+            if (liveWys instanceof HTMLElement) {
+                const h = Math.max(liveWys.scrollHeight, liveWys.offsetHeight);
                 if (h > 0) {
-                    wys.style.setProperty('min-height', `${h}px`, 'important');
+                    liveWys.style.setProperty('min-height', `${h}px`, 'important');
                 }
             }
         });
@@ -16847,9 +17577,31 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             clauses,
             customClauses
         );
-        if (!renumberCtx) return raw;
-        return getClauseDisplayBodyHtml(raw, renumberCtx.listKey, renumberCtx.displayMajor);
+        if (!renumberCtx) return stripSpellMarksFromHtml(raw);
+        return stripSpellMarksFromHtml(
+            getClauseDisplayBodyHtml(raw, renumberCtx.listKey, renumberCtx.displayMajor, {
+                spell: false,
+            })
+        );
     }, [expandedClause, customClauses, clauseContent, orderedClauses, clauses]);
+
+    /** Freeze seed HTML for the open edit session — parent flushes must not re-push html into Jodit. */
+    const clauseEditorMountSeed = React.useMemo(() => {
+        if (!expandedClause) return '';
+        return expandedClauseEditorSeedHtml || '';
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- only refresh when switching clauses
+    }, [expandedClause]);
+
+    useLayoutEffect(() => {
+        if (!expandedClause) {
+            editingClauseLiveHtmlRef.current = { key: null, html: '' };
+            return;
+        }
+        editingClauseLiveHtmlRef.current = {
+            key: expandedClause,
+            html: clauseEditorMountSeed,
+        };
+    }, [expandedClause, clauseEditorMountSeed]);
 
     useEffect(() => {
         if (!expandedClause) return undefined;
@@ -16862,17 +17614,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         document.addEventListener('keydown', onKeyDown, true);
         return () => document.removeEventListener('keydown', onKeyDown, true);
     }, [expandedClause, exitClausePreviewEdit]);
-
-    useEffect(() => {
-        if (!expandedClause) {
-            editingClauseLiveHtmlRef.current = { key: null, html: '' };
-            return;
-        }
-        editingClauseLiveHtmlRef.current = {
-            key: expandedClause,
-            html: expandedClauseEditorSeedHtml || '',
-        };
-    }, [expandedClause, expandedClauseEditorSeedHtml]);
 
     useLayoutEffect(() => {
         const preserved = clauseEditScrollPreserveRef.current;
@@ -16958,7 +17699,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             window.clearTimeout(clearRefTimer);
             resizeObserver?.disconnect();
         };
-    }, [expandedClause, expandedClauseEditorSeedHtml, restoreClauseEditScrollAnchor]);
+    }, [expandedClause, clauseEditorMountSeed, restoreClauseEditScrollAnchor]);
 
     useLayoutEffect(() => {
         if (expandedClause) return undefined;
@@ -16993,7 +17734,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             tryFocus();
         }, 180);
         return () => window.clearTimeout(t0);
-    }, [expandedClause, expandedClauseEditorSeedHtml, restoreClauseEditScrollAnchor]);
+    }, [expandedClause, clauseEditorMountSeed, restoreClauseEditScrollAnchor]);
 
     useEffect(() => {
         if (!expandedClause) return;
@@ -17009,8 +17750,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
 
     const getQuotePayload = useCallback((customDivisionCode = null) => {
-        /** Session user (header / AuthContext) — same source as API userEmail; not read from login storage alone. */
-        const sessionUserEmail = (currentUser?.email || currentUser?.EmailId || currentUser?.MailId || '').trim();
+        const pickerOpts = divisionPickerOptions?.preparedBy || preparedByOptions || [];
+        const selectedPreparedByEmail = resolvePreparedByEmailForPersist(
+            preparedBy,
+            usersList,
+            currentUser,
+            pickerOpts,
+            loadedQuotePreparedByEmail
+        );
 
         /** Quote ref Dept/Div must follow the **active Previous Quotes tab job** (e.g. HVAC → HVP), not the login profile’s default division (e.g. BMS → BMP). */
         const branchCodesFromActiveQuoteTab = (() => {
@@ -17160,7 +17907,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             requestNo: enquiryData.enquiry.RequestNo,
             validityDays,
             preparedBy: preparedBy,
-            preparedByEmail: sessionUserEmail,
+            preparedByEmail: selectedPreparedByEmail,
             ...clauses,
             ...clauseContent,
             clauseHeadingHtml: JSON.stringify(clauseHeadingHtml || {}),
@@ -17223,7 +17970,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             digitalSignaturesJson: serializeDigitalStampsForApi(quoteDigitalStamps),
             approvalWorkflowJson: serializeApprovalWorkflowJson(approvalWorkflowSteps),
         };
-    }, [enquiryData, selectedJobs, pricingSummary, currentUser, quoteListDivision, pricingData, validityDays, preparedBy, clauses, clauseContent, clauseHeadingHtml, ownjobBasePriceForEnquiryQuoteTotal, customClauses, orderedClauses, quoteDate, customerReference, reasonForRevision, quoteTypeList, subject, signatory, signatoryDesignation, coSignatory, coSignatoryDesignation, approvalWorkflowSteps, toName, toAddress, toPhone, toEmail, toFax, toAttention, activeQuoteTab, calculatedTabs, effectiveQuoteTabs, selectedLeadId, jobsPool, enquiryData?.divisionsHierarchy, enquiryData?.companyDetails, quoteDigitalStamps]);
+    }, [enquiryData, selectedJobs, pricingSummary, currentUser, quoteListDivision, pricingData, validityDays, preparedBy, loadedQuotePreparedByEmail, usersList, preparedByOptions, divisionPickerOptions, clauses, clauseContent, clauseHeadingHtml, ownjobBasePriceForEnquiryQuoteTotal, customClauses, orderedClauses, quoteDate, customerReference, reasonForRevision, quoteTypeList, subject, signatory, signatoryDesignation, coSignatory, coSignatoryDesignation, approvalWorkflowSteps, toName, toAddress, toPhone, toEmail, toFax, toAttention, activeQuoteTab, calculatedTabs, effectiveQuoteTabs, selectedLeadId, jobsPool, enquiryData?.divisionsHierarchy, enquiryData?.companyDetails, quoteDigitalStamps]);
 
     /**
      * Flush inline editors and merge live Jodit buffers — used before Draft Save so PricingTerms
@@ -17766,6 +18513,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 sessionDivision: String(
                     quoteListDivision || currentUser?.Department || currentUser?.Division || ''
                 ).trim(),
+                userEmail: String(
+                    currentUser?.email || currentUser?.EmailId || currentUser?.MailId || ''
+                ).trim(),
             };
             const res = await fetch(`${API_BASE}/api/quotes/quote-drafts`, {
                 method: 'POST',
@@ -18038,6 +18788,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             isDraftRow: true,
         });
         quoteDraftPendingClauseReapplyRef.current = false;
+        pendingAutoAlignPreviewRef.current = true;
     }, [browsePreviousQuotesRevisions, pricingStableSig, applyQuoteClauseBundleFromRow]);
 
     const saveQuote = useCallback(async (isAutoSave = false, suppressCollisionAlert = false) => {
@@ -18701,6 +19452,37 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         setIsEditingQuotePreviewPageInput(false);
     }, [quotePreviewPageInput, quotePreviewPageInfo.current, scrollQuotePreviewToPage]);
 
+    const currentQuotePreviewSheetIdx = React.useMemo(
+        () =>
+            visibleSheetIndexForPageNumber(
+                quotePreviewPageInfo.current,
+                sheets,
+                expandedClause
+            ),
+        [quotePreviewPageInfo.current, sheets, expandedClause]
+    );
+
+    const isCurrentQuotePageLandscape =
+        quotePageOrientations[currentQuotePreviewSheetIdx] === 'landscape';
+
+    const quotePreviewHasLandscapeSheet = Object.values(quotePageOrientations).some((v) => v === 'landscape');
+    const quotePreviewContainerWidth = quotePreviewHasLandscapeSheet ? '297mm' : '210mm';
+
+    const toggleQuotePreviewPageLandscape = useCallback(() => {
+        const sheetIdx = visibleSheetIndexForPageNumber(
+            quotePreviewPageInfo.current,
+            sheets,
+            expandedClause
+        );
+        if (sheetIdx <= 0) return;
+        setQuotePageOrientations((prev) => {
+            const next = { ...prev };
+            if (next[sheetIdx] === 'landscape') delete next[sheetIdx];
+            else next[sheetIdx] = 'landscape';
+            return next;
+        });
+    }, [quotePreviewPageInfo.current, sheets, expandedClause]);
+
     useEffect(() => {
         if (!isQuotePreviewVisible) return undefined;
         const scroller = quotePreviewZoomViewportRef.current;
@@ -19112,10 +19894,45 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         }, 60_000);
     };
 
+    /**
+     * Native browser download via GET (Content-Disposition). Streams to disk through IIS/ARR
+     * without holding the full PDF in a JS Blob — critical on http://IP production (no secure context).
+     */
+    const triggerNativeUrlDownload = (url, fileName) => {
+        const href = String(url || '').trim();
+        if (!href) throw new Error('Missing PDF download URL');
+        const safeName = String(fileName || 'quote.pdf').replace(/[/\\?%*:|"<>]/g, '_');
+        const a = document.createElement('a');
+        a.href = href;
+        a.download = safeName;
+        a.rel = 'noopener';
+        a.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;z-index:-1';
+        document.body.appendChild(a);
+        try {
+            a.click();
+        } catch (e) {
+            console.warn('[triggerNativeUrlDownload] anchor.click failed — falling back to location assign', e);
+            window.location.assign(href);
+        }
+        window.setTimeout(() => {
+            try {
+                a.remove();
+            } catch (_) {
+                /* ignore */
+            }
+        }, 5_000);
+    };
+
     const buildQuotePdfExportCacheKey = () => {
         const preview = document.getElementById('quote-preview');
         const sheetCount = queryQuotePreviewVisibleSheets(preview).length;
         const clauseBlocks = preview?.querySelectorAll('.quote-clause-block')?.length ?? 0;
+        // Include page orientations so toggling landscape invalidates the cache.
+        const orientationKey = Object.entries(quotePageOrientations)
+            .filter(([, v]) => v === 'landscape')
+            .map(([k]) => k)
+            .sort()
+            .join(',');
         return [
             enquiryData?.enquiry?.RequestNo || '',
             String(quoteNumber || quoteId || ''),
@@ -19125,13 +19942,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             printWithHeader ? '1' : '0',
             (pricingData?.jobs?.length ?? 0),
             orderedClauses?.join(',') ?? '',
+            orientationKey,
+            quotePdfCssVersion || '',
         ].join('|');
     };
 
-    const fetchQuotePdfBlobInner = async ({ forceFreshLayout = false } = {}) => {
+    const fetchQuotePdfBlobInner = async ({ forceFreshLayout = false, delivery = 'binary' } = {}) => {
         const stages = {};
         const tTotal = quotePerfStart('PDF Download (total)');
         const printRoot = document.getElementById('quote-print-root');
+        const wantLink = String(delivery || '').toLowerCase() === 'link';
 
         const tHealth = quotePerfStart('PDF — API health');
         await assertQuotePdfApiReachable();
@@ -19170,8 +19990,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             try {
                 res = await fetchQuotePdfApi('/api/quote-pdf/generate', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ html, filename: fname, emulateScreen: true }),
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(wantLink ? { Accept: 'application/json' } : { Accept: 'application/pdf' }),
+                    },
+                    body: JSON.stringify({
+                        html,
+                        filename: fname,
+                        emulateScreen: true,
+                        ...(wantLink ? { delivery: 'link' } : {}),
+                    }),
                     cache: 'no-store',
                     signal: pdfCtrl?.signal,
                 });
@@ -19182,10 +20010,36 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 const raw = await res.text();
                 parseQuotePdfErrorResponse(res, raw);
             }
+
+            if (wantLink) {
+                const data = await res.json();
+                stages.renderMs = tRender.end({ delivery: 'link', bytes: data?.bytes || 0 });
+                stages.totalMs = tTotal.end();
+                quotePerfSummary('PDF Download (link)', stages);
+                const downloadPath = String(data?.downloadPath || '').trim();
+                if (!downloadPath) {
+                    throw new Error('Server did not return a PDF download link.');
+                }
+                return {
+                    delivery: 'link',
+                    downloadPath,
+                    fileName: data.fileName || fname,
+                    bytes: data.bytes || 0,
+                };
+            }
+
             const tBlob = quotePerfStart('PDF — blob / download stream');
-            const ab = await res.arrayBuffer();
+            /** Prefer streaming read into one Blob to reduce peak intermediate copies vs arrayBuffer()+new Blob. */
+            let blob;
+            if (res.body && typeof res.blob === 'function') {
+                blob = await res.blob();
+            } else {
+                const ab = await res.arrayBuffer();
+                blob = new Blob([ab], { type: 'application/pdf' });
+            }
             stages.renderMs = tRender.end();
-            const head = new Uint8Array(ab.byteLength ? ab.slice(0, 5) : ab);
+            const headBuf = await blob.slice(0, 5).arrayBuffer();
+            const head = new Uint8Array(headBuf);
             const isPdf =
                 head.length >= 4 &&
                 head[0] === 0x25 &&
@@ -19193,7 +20047,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 head[2] === 0x44 &&
                 head[3] === 0x46; /* %PDF */
             if (!isPdf) {
-                const text = new TextDecoder().decode(ab.slice(0, 1200)).trim();
+                const text = (await blob.slice(0, 1200).text()).trim();
                 try {
                     const j = JSON.parse(text);
                     throw new Error(
@@ -19220,14 +20074,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     /* ignore */
                 }
             }
-            const blob = new Blob([ab], { type: 'application/pdf' });
-            stages.blobMs = tBlob.end({ bytes: ab.byteLength });
+            if (blob.type !== 'application/pdf') {
+                blob = new Blob([blob], { type: 'application/pdf' });
+            }
+            stages.blobMs = tBlob.end({ bytes: blob.size });
             stages.totalMs = tTotal.end();
             quotePerfSummary('PDF Download', stages);
             console.log(
                 `[QuotePerf] PDF Download complete: ${stages.totalMs}ms (capture ${stages.captureMs}ms, html ${stages.htmlGenMs}ms, render ${stages.renderMs}ms)`
             );
-            return { blob, fileName: fname };
+            return { blob, fileName: fname, delivery: 'binary' };
         } finally {
             clearCoverPdfCaptureInlineStyles(printRoot);
             const letter = quoteCoverLetterRef.current;
@@ -19315,7 +20171,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         try {
             const tRender = quotePerfStart('PDF html2pdf — rendering');
-            await html2pdf().set(buildHtml2pdfOptions(fname)).from(clone).save();
+            await html2pdf().set(buildHtml2pdfOptions(fname, clone)).from(clone).save();
             stages.renderMs = tRender.end();
             stages.totalMs = tTotal.end();
             quotePerfSummary('PDF html2pdf', stages);
@@ -19337,25 +20193,50 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (serverPdfEnabled) {
                 try {
                     /**
-                     * Reuse hover-warmed blob/promise when the preview cache key still matches.
-                     * Only force a fresh render when nothing useful is cached (avoids double Chromium work).
+                     * Reuse hover-warmed blob when available (instant local-like download).
+                     * Otherwise use delivery=link so the browser download manager streams via GET
+                     * (avoids holding large PDFs in JS memory; works better through IIS/ARR).
                      */
                     const key = buildQuotePdfExportCacheKey();
                     const cache = quotePdfBlobCacheRef.current;
                     const canReuseWarm =
                         cache.key === key && Boolean(cache.blob || cache.promise);
-                    if (!canReuseWarm) {
-                        quotePdfBlobCacheRef.current = { key: '', blob: null, fileName: '', promise: null };
+                    if (canReuseWarm) {
+                        const { blob, fileName } = await fetchQuotePdfBlob({
+                            bypassCache: false,
+                        });
+                        if (blob) {
+                            const tDl = quotePerfStart('PDF — file save');
+                            triggerBlobDownload(blob, fileName);
+                            tDl.end();
+                            return;
+                        }
                     }
-                    const { blob, fileName } = await fetchQuotePdfBlob({
-                        bypassCache: !canReuseWarm,
+
+                    quotePdfBlobCacheRef.current = { key: '', blob: null, fileName: '', promise: null };
+                    const linkResult = await fetchQuotePdfBlobInner({
+                        forceFreshLayout: true,
+                        delivery: 'link',
                     });
+                    if (linkResult?.delivery === 'link' && linkResult.downloadPath) {
+                        const tDl = quotePerfStart('PDF — native link download');
+                        triggerNativeUrlDownload(linkResult.downloadPath, linkResult.fileName);
+                        tDl.end();
+                        return;
+                    }
+
+                    const { blob, fileName } = linkResult?.blob
+                        ? linkResult
+                        : await fetchQuotePdfBlob({ bypassCache: true });
                     const tDl = quotePerfStart('PDF — file save');
                     triggerBlobDownload(blob, fileName);
                     tDl.end();
                     return;
                 } catch (serverErr) {
-                    console.warn('[downloadPDF] server PDF failed, trying client html2pdf:', serverErr);
+                    console.warn(
+                        '[downloadPDF] server PDF failed (Puppeteer/Chrome), falling back to client html2pdf — overlays use HTML2PDF_EXPORT_STYLES:',
+                        serverErr && serverErr.message ? serverErr.message : serverErr
+                    );
                 }
             }
 
@@ -19996,37 +20877,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         [companyApproverUsers]
     );
 
-    /** Prepared-by line on quote preview: mobile from Master_ConcernedSE.MobileNumber (users list / enquiry options / logged-in profile). */
+    /** Prepared-by line on quote preview: mobile of the selected Prepared By person. */
     const preparedByContactFromMaster = React.useMemo(() => {
-        const name = (preparedBy || '').trim();
-        if (!name) return '';
-        const n = normPreparedByName(name);
-        const rowEmail = (loadedQuotePreparedByEmail || '').toLowerCase().trim();
-        if (
-            rowEmail &&
-            preparedByRowEmailMatchesName(rowEmail, name, usersList)
-        ) {
-            const byEmail = findUserByPreparedByEmail(rowEmail, usersList);
-            const mob = (byEmail?.MobileNumber != null ? String(byEmail.MobileNumber) : '').trim();
-            if (mob) return mob;
-        }
-        const fromUsers = findUserByPreparedByName(name, usersList);
-        const uMob = (fromUsers?.MobileNumber != null ? String(fromUsers.MobileNumber) : '').trim();
-        if (uMob) return uMob;
-        const po = preparedByOptions.find(
-            (o) =>
-                normPreparedByName(String(o.value || '')) === n ||
-                normPreparedByName(String(o.label || '')) === n
+        return resolvePreparedByContactFromName(
+            preparedBy,
+            usersList,
+            currentUser,
+            computedPreparedByOptions
         );
-        const pMob = (po?.mobileNumber != null ? String(po.mobileNumber) : '').trim();
-        if (pMob) return pMob;
-        const selfName = (currentUser?.FullName || currentUser?.name || '').trim();
-        if (normPreparedByName(selfName) === n) {
-            const cMob = (currentUser?.MobileNumber != null ? String(currentUser.MobileNumber) : '').trim();
-            if (cMob) return cMob;
-        }
-        return '';
-    }, [loadedQuotePreparedByEmail, preparedBy, usersList, preparedByOptions, currentUser]);
+    }, [preparedBy, usersList, computedPreparedByOptions, currentUser]);
 
     /** Quote preview / PDF: enquiry types as a single line (reference “Type” row). */
     const quotePreviewTypeLine = React.useMemo(() => {
@@ -20043,16 +20902,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         return t;
     }, [preparedByContactFromMaster]);
 
-    /** Prepared By email for quote header — row email when it matches the selected name, else Master_ConcernedSE by name. */
+    /** Prepared By email for quote header — always the selected person's Master_ConcernedSE email. */
     const quotePreviewPreparedByEmailDisplay = React.useMemo(() => {
         const name = (preparedBy || '').trim();
         if (!name) return '';
-        const rowEmail = String(loadedQuotePreparedByEmail || '').trim();
-        if (rowEmail && preparedByRowEmailMatchesName(rowEmail, name, usersList)) {
-            return rowEmail;
-        }
-        return resolvePreparedByEmailFromName(name, usersList, currentUser);
-    }, [loadedQuotePreparedByEmail, preparedBy, usersList, currentUser]);
+        return (
+            resolvePreparedByEmailFromName(name, usersList, currentUser, computedPreparedByOptions) ||
+            String(loadedQuotePreparedByEmail || '').trim()
+        );
+    }, [loadedQuotePreparedByEmail, preparedBy, usersList, currentUser, computedPreparedByOptions]);
 
     /** Browse / approval mode: A4 document header uses selected EnquiryQuotes row only (strict backend source). */
     const subjobQuoteA4HeaderDisplay = React.useMemo(() => {
@@ -20214,6 +21072,57 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         calculatedTabs,
         quoteTabsFingerprint,
         getFilteredQuotesForPreviousQuotesTab,
+    ]);
+
+    /**
+     * Draft + Previous Quotes + Approvals: run Align Page once preview content is ready so A4 packing
+     * uses measured tight fit instead of the fast estimated layout alone.
+     */
+    useEffect(() => {
+        if (!pendingAutoAlignPreviewRef.current) return;
+        if (!quoteShellReady || showQuoteListSummaryOverQuote) return;
+        if (shouldBlankQuotePreviewInBrowse) {
+            pendingAutoAlignPreviewRef.current = false;
+            return;
+        }
+        if (quotePreviewUpdating) return;
+        if (expandedClause) return;
+        if (
+            !embeddedApprovalReview &&
+            !browsePreviousQuotesRevisions &&
+            !quoteDraftHydrated
+        ) {
+            return;
+        }
+
+        let cancelled = false;
+        let raf2 = 0;
+        const raf1 = requestAnimationFrame(() => {
+            raf2 = requestAnimationFrame(() => {
+                if (cancelled || !pendingAutoAlignPreviewRef.current) return;
+                pendingAutoAlignPreviewRef.current = false;
+                void alignQuotePreviewPagesRef.current?.();
+            });
+        });
+        return () => {
+            cancelled = true;
+            cancelAnimationFrame(raf1);
+            if (raf2) cancelAnimationFrame(raf2);
+        };
+    }, [
+        embeddedApprovalReview,
+        quoteShellReady,
+        showQuoteListSummaryOverQuote,
+        shouldBlankQuotePreviewInBrowse,
+        quotePreviewUpdating,
+        browsePreviousQuotesRevisions,
+        quoteDraftHydrated,
+        expandedClause,
+        clausePaginationLayoutKey,
+        quoteId,
+        quoteNumber,
+        activeQuoteTab,
+        loadedEnquiryQuoteRowForPreview,
     ]);
 
     const attentionSelectOptions = React.useMemo(() => {
@@ -20418,6 +21327,31 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         }}
                     />
                     of {quotePreviewTotalPages}
+                    <button
+                        type="button"
+                        className={`quote-preview-status-landscape-btn${
+                            isCurrentQuotePageLandscape ? ' quote-preview-status-landscape-btn--active' : ''
+                        }`}
+                        title={
+                            currentQuotePreviewSheetIdx <= 0
+                                ? 'Cover page stays portrait'
+                                : isCurrentQuotePageLandscape
+                                  ? 'Portrait this page'
+                                  : 'Landscape this page'
+                        }
+                        aria-label={
+                            currentQuotePreviewSheetIdx <= 0
+                                ? 'Landscape not available on cover page'
+                                : isCurrentQuotePageLandscape
+                                  ? 'Set current page to portrait'
+                                  : 'Set current page to landscape'
+                        }
+                        aria-pressed={isCurrentQuotePageLandscape}
+                        disabled={currentQuotePreviewSheetIdx <= 0}
+                        onClick={toggleQuotePreviewPageLandscape}
+                    >
+                        <RectangleHorizontal size={13} strokeWidth={2.2} aria-hidden="true" />
+                    </button>
                 </span>
             );
             const modeBadge = (
@@ -20458,25 +21392,26 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             quotePreviewTotalPages,
             browsePreviousQuotesRevisions,
             embeddedApprovalReview,
+            currentQuotePreviewSheetIdx,
+            isCurrentQuotePageLandscape,
+            toggleQuotePreviewPageLandscape,
         ]
     );
 
     const quotePreviewStatusBar = React.useMemo(
         () => {
-            if (embeddedApprovalReview) return null;
             const { zoomField, pageField } = quotePreviewStatusParts;
             return (
                 <div
-                    className="quote-preview-status-bar"
+                    className="quote-preview-status-bar quote-preview-status-bar--approval-panel"
                     aria-label="Preview zoom and page"
-                    style={{ flexShrink: 0 }}
                 >
                     {zoomField}
                     {pageField}
                 </div>
             );
         },
-        [embeddedApprovalReview, quotePreviewStatusParts]
+        [quotePreviewStatusParts]
     );
 
     const approvalToolbarBtnPx = 30;
@@ -20819,20 +21754,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     const quoteApprovalInlineToolbar = React.useMemo(() => {
         if (!embeddedApprovalReview) return null;
-        const { zoomField, pageField, modeBadge } = quotePreviewStatusParts;
+        const { modeBadge } = quotePreviewStatusParts;
         return (
             <div
                 className="quote-approval-toolbar-inline"
                 aria-label="Quote approval preview toolbar"
             >
                 <div className="quote-approval-toolbar-mode">{modeBadge}</div>
-                <div
-                    className="quote-approval-toolbar-center"
-                    aria-label="Preview zoom and page"
-                >
-                    {zoomField}
-                    {pageField}
-                </div>
                 <div className="quote-approval-toolbar-actions">{quoteToolbarActionButtons}</div>
             </div>
         );
@@ -21298,7 +22226,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             {/* Save: enabled only when no persisted quote for this enquiry+lead+tab tuple+customer; Revision only when one exists */}
                             <button
                                 onClick={() => saveQuote()}
-                                disabled={disableSaveRevisionInBrowse || saving || !canEdit() || !saveButtonScopeReady || hasPersistedQuoteForScope || isEditingRestricted}
+                                disabled={disableSaveRevisionInBrowse || saving || !canSaveOrReviseQuote() || !saveButtonScopeReady || hasPersistedQuoteForScope || isEditingRestricted}
                                 style={{
                                     display: 'flex',
                                     alignItems: 'center',
@@ -21307,11 +22235,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     minHeight: '28px',
                                     padding: '0 12px',
                                     boxSizing: 'border-box',
-                                    background: (disableSaveRevisionInBrowse || !canEdit() || !saveButtonScopeReady || hasPersistedQuoteForScope || isEditingRestricted) ? '#f1f5f9' : '#1e293b',
-                                    color: (disableSaveRevisionInBrowse || !canEdit() || !saveButtonScopeReady || hasPersistedQuoteForScope || isEditingRestricted) ? '#94a3b8' : 'white',
+                                    background: (disableSaveRevisionInBrowse || !canSaveOrReviseQuote() || !saveButtonScopeReady || hasPersistedQuoteForScope || isEditingRestricted) ? '#f1f5f9' : '#1e293b',
+                                    color: (disableSaveRevisionInBrowse || !canSaveOrReviseQuote() || !saveButtonScopeReady || hasPersistedQuoteForScope || isEditingRestricted) ? '#94a3b8' : 'white',
                                     border: 'none',
                                     borderRadius: '6px',
-                                    cursor: (disableSaveRevisionInBrowse || !canEdit() || !saveButtonScopeReady || hasPersistedQuoteForScope || isEditingRestricted) ? 'not-allowed' : 'pointer',
+                                    cursor: (disableSaveRevisionInBrowse || !canSaveOrReviseQuote() || !saveButtonScopeReady || hasPersistedQuoteForScope || isEditingRestricted) ? 'not-allowed' : 'pointer',
                                     fontWeight: '600',
                                     fontSize: '11px',
                                     opacity: saving ? 0.7 : 1,
@@ -21321,7 +22249,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     saving ? 'Saving…' :
                                     disableSaveRevisionInBrowse ? 'Disable "Previous Quotes / Revisions" to enable Save.' :
                                     isEditingRestricted ? 'Editing is restricted for this tab' :
-                                    !canEdit() ? 'No permission to save (admin/lead access, pricing scope, or tab ownership required)' :
+                                    !canSaveOrReviseQuote() ? 'No permission to save (admin/lead access, pricing scope, CC coordinator, or tab ownership required)' :
                                     !saveButtonScopeReady ? 'Loading quote scope…' :
                                     hasPersistedQuoteForScope ? 'A quote already exists for this enquiry and customer. Use Revision to change it.' :
                                     ''
@@ -21334,7 +22262,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             {hasPersistedQuoteForScope && (
                                 <button
                                     onClick={handleRevise}
-                                    disabled={disableSaveRevisionInBrowse || saving || !canEdit() || isEditingRestricted || !canRevisePersistedQuote}
+                                    disabled={disableSaveRevisionInBrowse || saving || !canSaveOrReviseQuote() || isEditingRestricted || !canRevisePersistedQuote}
                                     style={{
                                         display: 'flex',
                                         alignItems: 'center',
@@ -21344,14 +22272,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         padding: '0 12px',
                                         boxSizing: 'border-box',
                                         background:
-                                            disableSaveRevisionInBrowse || !canEdit() || isEditingRestricted || !canRevisePersistedQuote
+                                            disableSaveRevisionInBrowse || !canSaveOrReviseQuote() || isEditingRestricted || !canRevisePersistedQuote
                                                 ? '#94a3b8'
                                                 : '#0284c7',
                                         color: 'white',
                                         border: 'none',
                                         borderRadius: '6px',
                                         cursor:
-                                            disableSaveRevisionInBrowse || !canEdit() || isEditingRestricted || !canRevisePersistedQuote
+                                            disableSaveRevisionInBrowse || !canSaveOrReviseQuote() || isEditingRestricted || !canRevisePersistedQuote
                                                 ? 'not-allowed'
                                                 : 'pointer',
                                         fontWeight: '600',
@@ -21363,8 +22291,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                             ? 'Disable "Previous Quotes / Revisions" to enable Revision.'
                                             : isEditingRestricted
                                             ? 'Editing is restricted for this tab'
-                                            : !canEdit()
-                                              ? 'No permission to revise'
+                                            : !canSaveOrReviseQuote()
+                                              ? 'No permission to revise (admin/lead access, pricing scope, CC coordinator, or tab ownership required)'
                                               : !canRevisePersistedQuote
                                                 ? 'Loading quote…'
                                                 : ''
@@ -22138,12 +23066,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                 onChange={(newValue) => {
                                                     const newName = newValue ? String(newValue.value || '').trim() : '';
                                                     setPreparedBy(newName);
+                                                    const optEmail = String(newValue?.email || '').trim();
                                                     setLoadedQuotePreparedByEmail(
-                                                        resolvePreparedByEmailFromName(
-                                                            newName,
-                                                            usersList,
-                                                            currentUser
-                                                        )
+                                                        optEmail ||
+                                                            resolvePreparedByEmailFromName(
+                                                                newName,
+                                                                usersList,
+                                                                currentUser,
+                                                                computedPreparedByOptions
+                                                            )
                                                     );
                                                 }}
                                                 options={computedPreparedByOptions}
@@ -22806,25 +23737,36 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         }`}
                                         aria-label="Clause formatting toolbar"
                                     />
+                                    <div className="quote-preview-clause-edit-bar-actions">
+                                    <button
+                                        type="button"
+                                        className="quote-disc-pct-btn no-print"
+                                        title="Add Discount and Final Discounted Price rows"
+                                        aria-label="Add discount rows"
+                                        disabled={Boolean(embeddedApprovalReview)}
+                                        onClick={() => {
+                                            if (embeddedApprovalReview) return;
+                                            handleInsertPricingDiscountRows();
+                                        }}
+                                    >
+                                        Disc%
+                                    </button>
                                     <button
                                         type="button"
                                         className="quote-align-page-btn no-print"
-                                        title={
-                                            embeddedApprovalReview
-                                                ? 'Align Page is not available in approval review'
-                                                : 'Align Page'
-                                        }
-                                        aria-label="Align Page"
-                                        disabled={embeddedApprovalReview}
+                                        title={quoteAlignPageBusy ? 'Aligning page…' : 'Align Page'}
+                                        aria-label={quoteAlignPageBusy ? 'Aligning page' : 'Align Page'}
+                                        aria-busy={quoteAlignPageBusy}
+                                        disabled={quoteAlignPageBusy}
                                         onClick={() => {
-                                            if (embeddedApprovalReview) return;
+                                            if (quoteAlignPageBusy) return;
                                             void alignQuotePreviewPagesRef.current?.();
                                         }}
                                     >
-                                        Align Page
+                                        {quoteAlignPageBusy ? 'Aligning…' : 'Align Page'}
                                     </button>
                                     </div>
-                                    {quotePreviewStatusBar}
+                                    </div>
                                     </div>
                                     {isQuotePreviewVisible && !shouldBlankQuotePreviewInBrowse && !expandedClause ? (
                                     <div className="quote-preview-toolbar-keeper" aria-hidden="true">
@@ -22881,6 +23823,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     zIndex: 2,
                                 }}
                             >
+                                {quotePreviewStatusBar}
                                 <QuoteApprovalWorkflow
                                     steps={approvalWorkflowSteps}
                                     stepsLoading={approvalWorkflowStepsLoading}
@@ -23178,7 +24121,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             {/* Preview scroll host — clause toolbar is above this row (full panel width). */}
                             <div
                                 className={`quote-preview-column-host${
-                                    quotePreviewUpdating ? ' quote-preview-column-host--loading' : ''
+                                    (quotePreviewUpdating || quoteAlignPageBusy) && !expandedClause
+                                        ? ' quote-preview-column-host--loading'
+                                        : ''
                                 }${embeddedApprovalReview ? ' quote-preview-column-host--approval' : ''}`}
                                 style={{
                                     flex: '1 1 0',
@@ -23194,20 +24139,28 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     position: 'relative',
                                     zIndex: 1,
                                 }}
-                                aria-busy={quotePreviewUpdating}
+                                aria-busy={
+                                    !expandedClause && (quotePreviewUpdating || quoteAlignPageBusy)
+                                }
                             >
-                            {quotePreviewUpdating ? (
+                            {(quotePreviewUpdating || quoteAlignPageBusy) && !expandedClause ? (
                                 <div
                                     className="quote-preview-content-loading"
                                     aria-live="polite"
-                                    aria-label="Updating quote preview"
+                                    aria-label={
+                                        quoteAlignPageBusy
+                                            ? 'Aligning quote pages'
+                                            : 'Updating quote preview'
+                                    }
                                 >
                                     <span
                                         className="spinner-border text-primary quote-preview-content-loading__spinner"
                                         role="status"
                                         aria-hidden="true"
                                     />
-                                    <span className="quote-preview-content-loading__text">Updating preview…</span>
+                                    <span className="quote-preview-content-loading__text">
+                                        {quoteAlignPageBusy ? 'Aligning page…' : 'Updating preview…'}
+                                    </span>
                                 </div>
                             ) : null}
                             {/* Print root: repeat header/footer are siblings of #quote-preview so position:fixed works in print (not inside absolute #quote-preview). */}
@@ -23493,6 +24446,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         pointer-events: none;
                                         transition: opacity 0.15s ease;
                                     }
+                                    /* Edit Mode: never block typing even if a loading class leaks on. */
+                                    .quote-preview-column-host--loading #quote-print-root .quote-clause-block--editing,
+                                    .quote-preview-column-host--loading #quote-print-root .quote-clause-block--editing .jodit-wysiwyg,
+                                    .quote-preview-column-host--loading #quote-print-root .quote-clause-inline-editor {
+                                        pointer-events: auto !important;
+                                        opacity: 1 !important;
+                                    }
                                     .quote-preview-content-loading {
                                         position: absolute;
                                         inset: 0;
@@ -23539,23 +24499,43 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         z-index: 120;
                                         width: 100%;
                                         max-width: 100%;
+                                        min-width: 0;
                                         min-height: 28px;
                                         box-sizing: border-box;
                                         background: #dfe8f4;
                                         border-bottom: 1px solid #b8c6da;
                                         border-radius: 6px 6px 0 0;
                                         box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06);
+                                        overflow: hidden;
                                     }
                                     .quote-preview-clause-edit-bar-cluster {
                                         display: flex;
                                         flex: 1 1 auto;
                                         align-items: stretch;
                                         min-width: 0;
+                                        max-width: 100%;
+                                        overflow: hidden;
                                     }
-                                    .quote-align-page-btn {
+                                    .quote-preview-clause-edit-bar-actions {
+                                        display: flex;
+                                        flex: 0 0 auto;
+                                        align-items: center;
+                                        align-self: stretch;
+                                        gap: 2px;
+                                        padding: 0 4px 0 2px;
+                                        margin-left: auto;
+                                        background: #dfe8f4;
+                                        border-left: 1px solid #c5d0e0;
+                                        box-sizing: border-box;
+                                        position: relative;
+                                        z-index: 2;
+                                        flex-shrink: 0;
+                                    }
+                                    .quote-align-page-btn,
+                                    .quote-disc-pct-btn {
                                         flex-shrink: 0;
                                         align-self: center;
-                                        margin: 2px 6px 2px 2px;
+                                        margin: 2px 0;
                                         padding: 2px 10px;
                                         font-size: 12px;
                                         font-weight: 600;
@@ -23567,19 +24547,28 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         cursor: pointer;
                                         white-space: nowrap;
                                         box-sizing: border-box;
+                                        position: relative;
+                                        z-index: 1;
                                     }
-                                    .quote-align-page-btn:hover {
+                                    .quote-disc-pct-btn {
+                                        margin-right: 0;
+                                    }
+                                    .quote-align-page-btn:hover,
+                                    .quote-disc-pct-btn:hover {
                                         background: #dbeafe;
                                         border-color: #60a5fa;
                                     }
-                                    .quote-align-page-btn:active {
+                                    .quote-align-page-btn:active,
+                                    .quote-disc-pct-btn:active {
                                         background: #bfdbfe;
                                     }
-                                    .quote-align-page-btn:focus-visible {
+                                    .quote-align-page-btn:focus-visible,
+                                    .quote-disc-pct-btn:focus-visible {
                                         outline: none;
                                         box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.35);
                                     }
-                                    .quote-align-page-btn:disabled {
+                                    .quote-align-page-btn:disabled,
+                                    .quote-disc-pct-btn:disabled {
                                         color: #94a3b8;
                                         background: #f1f5f9;
                                         border-color: #cbd5e1;
@@ -23587,7 +24576,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         opacity: 0.85;
                                     }
                                     .quote-align-page-btn:disabled:hover,
-                                    .quote-align-page-btn:disabled:active {
+                                    .quote-align-page-btn:disabled:active,
+                                    .quote-disc-pct-btn:disabled:hover,
+                                    .quote-disc-pct-btn:disabled:active {
                                         background: #f1f5f9;
                                         border-color: #cbd5e1;
                                     }
@@ -23595,11 +24586,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         position: relative;
                                         flex: 1 1 auto;
                                         min-width: 0;
+                                        max-width: 100%;
                                         min-height: 28px;
                                         box-sizing: border-box;
                                         background: #dfe8f4;
-                                        overflow: visible;
+                                        overflow: hidden;
                                         pointer-events: auto;
+                                        z-index: 0;
                                     }
                                     .quote-preview-clause-edit-bar .jodit-toolbar,
                                     .quote-preview-clause-edit-bar .jodit-toolbar__box,
@@ -23618,27 +24611,74 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     .quote-preview-status-bar {
                                         display: flex;
                                         align-items: center;
-                                        gap: 8px;
+                                        flex-wrap: nowrap;
+                                        gap: 6px;
                                         flex-shrink: 0;
-                                        padding: 0 6px 0 10px;
-                                        margin-left: 4px;
                                         font-size: 11px;
                                         font-weight: 500;
                                         color: #64748b;
                                         white-space: nowrap;
-                                        border-left: 1px solid #b8c6da;
-                                        background: #dfe8f4;
+                                    }
+                                    .quote-preview-status-bar--approval-panel {
+                                        justify-content: flex-start;
+                                        flex-wrap: nowrap;
+                                        align-items: center;
+                                        gap: 6px;
+                                        width: 100%;
+                                        max-width: 100%;
+                                        margin: 0 0 10px 0;
+                                        padding: 4px 6px;
+                                        box-sizing: border-box;
+                                        background: #e8eef6;
+                                        border: 1px solid #c5d0e0;
+                                        border-radius: 6px;
+                                        overflow: hidden;
+                                    }
+                                    .quote-preview-status-bar--approval-panel .quote-preview-status-field,
+                                    .quote-preview-status-bar--approval-panel .quote-preview-status-page-label {
+                                        flex: 0 1 auto;
+                                        flex-wrap: nowrap;
+                                        white-space: nowrap;
+                                        min-width: 0;
+                                    }
+                                    .quote-preview-status-bar--approval-panel .quote-preview-status-input {
+                                        width: 32px;
+                                        min-width: 28px;
+                                        padding: 1px 2px;
+                                        font-size: 11px;
+                                        line-height: 1.25;
+                                    }
+                                    .quote-preview-status-bar--approval-panel .quote-preview-status-input--zoom {
+                                        width: 40px;
+                                        min-width: 36px;
+                                    }
+                                    .quote-preview-status-bar--approval-panel .quote-preview-status-input--page {
+                                        width: 28px;
+                                        min-width: 24px;
+                                    }
+                                    .quote-preview-status-bar--approval-panel .quote-preview-status-page-label {
+                                        gap: 3px;
+                                    }
+                                    .quote-preview-status-bar--approval-panel .quote-preview-status-landscape-btn {
+                                        width: 20px;
+                                        height: 18px;
+                                        margin-left: 1px;
                                     }
                                     .quote-preview-status-field {
                                         display: inline-flex;
                                         align-items: center;
                                         gap: 1px;
                                         margin: 0;
+                                        flex-shrink: 0;
+                                        white-space: nowrap;
                                     }
                                     .quote-preview-status-page-label {
                                         display: inline-flex;
                                         align-items: center;
-                                        gap: 4px;
+                                        flex-wrap: nowrap;
+                                        gap: 3px;
+                                        flex-shrink: 0;
+                                        white-space: nowrap;
                                     }
                                     .quote-preview-status-input {
                                         width: 36px;
@@ -23658,6 +24698,31 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     }
                                     .quote-preview-status-input--page {
                                         width: 32px;
+                                    }
+                                    .quote-preview-status-landscape-btn {
+                                        display: inline-flex;
+                                        align-items: center;
+                                        justify-content: center;
+                                        width: 22px;
+                                        height: 20px;
+                                        padding: 0;
+                                        margin-left: 2px;
+                                        border: 1px solid #cbd5e1;
+                                        border-radius: 4px;
+                                        background: #fff;
+                                        color: #64748b;
+                                        cursor: pointer;
+                                        vertical-align: middle;
+                                        flex-shrink: 0;
+                                    }
+                                    .quote-preview-status-landscape-btn--active {
+                                        border-color: #3b82f6;
+                                        background: #eff6ff;
+                                        color: #2563eb;
+                                    }
+                                    .quote-preview-status-landscape-btn:disabled {
+                                        opacity: 0.45;
+                                        cursor: not-allowed;
                                     }
                                     .quote-preview-status-input:focus {
                                         outline: none;
@@ -23733,36 +24798,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         line-height: 1;
                                         box-sizing: border-box;
                                     }
-                                    .quote-approval-toolbar-center {
-                                        display: flex;
-                                        align-items: center;
-                                        justify-content: center;
-                                        gap: 10px;
-                                        justify-self: center;
-                                        font-size: 13.75px;
-                                        font-weight: 500;
-                                        color: #64748b;
-                                    }
-                                    .quote-approval-toolbar-center .quote-preview-status-input {
-                                        width: 45px;
-                                        padding: 2px 4px;
-                                        font-size: 13.75px;
-                                        line-height: 1.35;
-                                        border-radius: 5px;
-                                    }
-                                    .quote-approval-toolbar-center .quote-preview-status-input--zoom {
-                                        width: 55px;
-                                    }
-                                    .quote-approval-toolbar-center .quote-preview-status-input--page {
-                                        width: 40px;
-                                    }
-                                    .quote-approval-toolbar-center .quote-preview-status-page-label {
-                                        gap: 5px;
-                                    }
                                     .quote-approval-toolbar-actions {
                                         display: flex;
                                         align-items: center;
                                         justify-self: end;
+                                        grid-column: 3;
                                     }
                                     .quote-approval-toolbar-actions .quote-toolbar-action-buttons {
                                         margin-left: 0;
@@ -23857,17 +24897,20 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         visibility: visible !important;
                                         opacity: 1 !important;
                                         width: 100% !important;
+                                        max-width: 100% !important;
                                         border: none !important;
                                         border-radius: 0 !important;
                                         background: #dfe8f4 !important;
+                                        overflow: hidden !important;
                                     }
                                     .quote-preview-clause-edit-bar .jodit-toolbar-editor-collection {
                                         flex-wrap: nowrap !important;
                                         overflow: hidden !important;
+                                        max-width: 100% !important;
                                     }
                                     .quote-preview-clause-edit-bar:not(.quote-preview-clause-edit-bar--idle) .jodit-toolbar-editor-collection,
                                     .quote-preview-clause-edit-bar:not(.quote-preview-clause-edit-bar--idle) .jodit-toolbar__box {
-                                        overflow: visible !important;
+                                        overflow: hidden !important;
                                     }
                                     .quote-preview-clause-edit-bar .jodit-toolbar__box {
                                         overflow: hidden !important;
@@ -23989,6 +25032,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         height: 297mm;
                                         overflow: hidden;
                                         background: #fff !important;
+                                    }
+                                    #quote-preview .quote-clause-word-flow-wrap .quote-clause-block--editing,
+                                    #quote-preview .quote-clause-word-flow-wrap .quote-clause-block--editing .quote-clause-inline-editor,
+                                    #quote-preview .quote-clause-word-flow-wrap .quote-clause-block--editing .jodit-wysiwyg {
+                                        pointer-events: auto !important;
                                     }
                                     #quote-preview .quote-clause-word-flow-page-frame {
                                         position: absolute;
@@ -24223,6 +25271,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         max-width: 100%;
                                         min-width: 0;
                                     }
+                                    #quote-preview .clause-content span.ems-spell-mark {
+                                        border-bottom: 2px wavy #0078d4 !important;
+                                        background-image: linear-gradient(#0078d4, #0078d4) !important;
+                                        background-repeat: repeat-x !important;
+                                        background-position: 0 100% !important;
+                                        background-size: 100% 2px !important;
+                                        padding-bottom: 1px !important;
+                                        text-decoration: none !important;
+                                    }
                                     #quote-preview .quote-clause-block--continuation .clause-content {
                                         padding-left: var(--quote-cover-text-inset, 8px) !important;
                                         padding-right: calc(14px * 1.69) !important;
@@ -24351,6 +25408,24 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         max-height: 297mm;
                                         height: 297mm;
                                         overflow: hidden;
+                                    }
+                                    .quote-a4-sheet--landscape {
+                                        width: 297mm !important;
+                                        min-width: 297mm !important;
+                                        max-width: 297mm !important;
+                                        min-height: 210mm !important;
+                                        max-height: 210mm !important;
+                                        height: 210mm !important;
+                                    }
+                                    .quote-a4-sheet--landscape.quote-a4-sheet--continuation {
+                                        min-height: 210mm !important;
+                                        max-height: 210mm !important;
+                                        height: 210mm !important;
+                                    }
+                                    #quote-preview:has(.quote-a4-sheet--landscape) {
+                                        width: 297mm !important;
+                                        min-width: 297mm !important;
+                                        max-width: 297mm !important;
                                     }
                                     #quote-preview .quote-clause-word-flow-wrap > .quote-a4-sheet .content-section {
                                         flex: 1 1 auto !important;
@@ -24859,6 +25934,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         color: #0f172a;
                                         font-weight: 400;
                                         padding-left: 4px !important;
+                                        white-space: normal !important;
+                                        word-wrap: break-word !important;
+                                        overflow-wrap: anywhere !important;
                                     }
                                     .quote-cover-meta-table tbody tr.quote-cover-meta-row-mid:first-child td:first-child {
                                         border-radius: 5px 0 0 0;
@@ -25133,6 +26211,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         font-weight: 700 !important;
                                         border-top: 1px solid #94a3b8 !important;
                                     }
+                                    #quote-preview .clause-content table#ems-auto-price-summary-table tr[data-ems-row="discount"] td,
+                                    #quote-preview .clause-content table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td {
+                                        background: ${EMS_QUOTE_PRICING_TABLE_DISCOUNT_BG} !important;
+                                        font-weight: 700 !important;
+                                        border-top: 1px solid #94a3b8 !important;
+                                    }
                                     /* Sign-off panel: 3% shorter from bottom; top (margin-top) unchanged */
                                     #quote-preview .quote-cover-sign-off.quote-cover-body-panel:not(.quote-cover-letter):not(.quote-clause-heading-panel) {
                                         padding-bottom: ${EMS_QUOTE_COVER_SIGN_OFF_BODY_PAD_BOTTOM_PREVIEW} !important;
@@ -25221,6 +26305,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                             background: white !important;
                                             visibility: visible !important;
                                             overflow: visible !important;
+                                        }
+
+                                        .quote-a4-sheet--landscape,
+                                        .quote-a4-sheet[data-page-orientation="landscape"] {
+                                            width: 297mm !important;
+                                            min-width: 297mm !important;
+                                            max-width: 297mm !important;
+                                            min-height: 210mm !important;
+                                            height: 210mm !important;
+                                            max-height: 210mm !important;
                                         }
 
                                         .quote-a4-sheet--continuation .quote-sheet-main-flex {
@@ -25429,9 +26523,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         outline: 'none',
                                         borderRadius: 0,
                                         boxShadow: 'none',
-                                        width: '210mm',
-                                        minWidth: '210mm',
-                                        maxWidth: '210mm',
+                                        width: quotePreviewContainerWidth,
+                                        minWidth: quotePreviewContainerWidth,
+                                        maxWidth: quotePreviewContainerWidth,
                                 margin: '0 auto',
                                         minHeight: 'auto',
                                         boxSizing: 'border-box',
@@ -25513,10 +26607,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                     quotePreviewClauseEditAllowed
                                                 )
                                             );
+                                        const sheetIsLandscape =
+                                            quotePageOrientations[sheetIdx] === 'landscape';
                                         const sheetNode = (
                                         <div 
                                             key={`sheet-${sheetIdx}`} 
-                                            className={`quote-a4-sheet${sheetIdx > 0 ? ' quote-a4-sheet--continuation' : ''}${sheetHasEditingBlock ? ' quote-a4-sheet--clause-editing' : ''}`}
+                                            data-sheet-index={sheetIdx}
+                                            data-page-orientation={sheetIsLandscape ? 'landscape' : 'portrait'}
+                                            className={`quote-a4-sheet${sheetIdx > 0 ? ' quote-a4-sheet--continuation' : ''}${sheetHasEditingBlock ? ' quote-a4-sheet--clause-editing' : ''}${sheetIsLandscape ? ' quote-a4-sheet--landscape' : ''}`}
                                             onDragOver={handleQuoteSheetSignatureDragOver}
                                             onDrop={handleQuotePreviewSignatureDrop}
                                         >
@@ -25995,7 +27093,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                             <ClauseEditor
                                                                                 key={`preview-clause-editor-${expandedClause}`}
                                                                                 html={
-                                                                                    expandedClauseEditorSeedHtml ||
+                                                                                    clauseEditorMountSeed ||
                                                                                     block.bodyHtml ||
                                                                                     ''
                                                                                 }

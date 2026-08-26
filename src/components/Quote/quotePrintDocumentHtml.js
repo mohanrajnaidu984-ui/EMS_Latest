@@ -4,6 +4,11 @@
 
 import { QUOTE_UNIFIED_SHEET_EXPORT_CSS } from './quotePrintExportCss.js';
 import {
+    buildEmsOfficePasteTablePresentationCss,
+    initializeAllOfficePastedTableColumns,
+} from './clauseEditorTable.js';
+import { stripSpellMarksFromDom, stripSpellMarksFromHtml } from './clauseEditorSpellcheck.js';
+import {
     removeEmptyQuoteA4Sheets,
     renumberQuoteSheetPageIndicators,
 } from './quotePrintSheetValidation.js';
@@ -46,6 +51,7 @@ import {
     EMS_QUOTE_PRICING_TABLE_HEADER_BG,
     EMS_QUOTE_PRICING_TABLE_HEADER_COLOR,
     EMS_QUOTE_PRICING_TABLE_TOTAL_BG,
+    EMS_QUOTE_PRICING_TABLE_DISCOUNT_BG,
     EMS_QUOTE_PRICING_TABLE_BORDER_COLOR,
     EMS_QUOTE_PRICING_TABLE_COLUMN_SYNC_CSS,
     EMS_QUOTE_PRICING_TABLE_PRESENTATION_CSS,
@@ -466,15 +472,27 @@ export function clearCoverSpacerInlineStylesForPdf(letterEl) {
 }
 
 /** Pin one A4 sheet via inline grid (matches on-screen #quote-preview .quote-a4-sheet). */
+function isQuoteSheetLandscape(sheetEl) {
+    if (!sheetEl) return false;
+    if (sheetEl.classList.contains('quote-a4-sheet--landscape')) return true;
+    return sheetEl.getAttribute('data-page-orientation') === 'landscape';
+}
+
 function pinQuoteA4SheetGridInline(sheetEl, { isCover = false } = {}) {
     if (!sheetEl) return;
+    const isLandscape = isQuoteSheetLandscape(sheetEl);
+    if (isLandscape) sheetEl.classList.add('quote-a4-sheet--landscape');
+    const sheetW = isLandscape ? '297mm' : '210mm';
+    const sheetH = isLandscape ? '210mm' : '297mm';
     sheetEl.style.setProperty('box-sizing', 'border-box', 'important');
-    sheetEl.style.setProperty('width', '210mm', 'important');
+    sheetEl.style.setProperty('width', sheetW, 'important');
+    sheetEl.style.setProperty('min-width', sheetW, 'important');
+    sheetEl.style.setProperty('max-width', sheetW, 'important');
     sheetEl.style.setProperty('padding', '15mm', 'important');
-    sheetEl.style.setProperty('margin', '0 auto', 'important');
-    sheetEl.style.setProperty('height', '297mm', 'important');
-    sheetEl.style.setProperty('min-height', '297mm', 'important');
-    sheetEl.style.setProperty('max-height', '297mm', 'important');
+    sheetEl.style.setProperty('margin', '0', 'important');
+    sheetEl.style.setProperty('height', sheetH, 'important');
+    sheetEl.style.setProperty('min-height', sheetH, 'important');
+    sheetEl.style.setProperty('max-height', sheetH, 'important');
     sheetEl.style.setProperty('display', 'grid', 'important');
     sheetEl.style.setProperty('grid-template-columns', 'minmax(0, 1fr)', 'important');
     sheetEl.style.setProperty('grid-template-rows', 'auto minmax(0, 1fr) auto', 'important');
@@ -543,6 +561,18 @@ function pinQuoteA4SheetGridInline(sheetEl, { isCover = false } = {}) {
         footer.style.removeProperty('flex');
     }
 
+    if (isLandscape) {
+        sheetEl
+            .querySelectorAll(
+                '.quote-sheet-main-flex, .content-section, .header-section, .footer-section, .quote-clause-block, .clause-content'
+            )
+            .forEach((el) => {
+                el.style.setProperty('width', '100%', 'important');
+                el.style.setProperty('max-width', '100%', 'important');
+                el.style.setProperty('box-sizing', 'border-box', 'important');
+            });
+    }
+
     sheetEl.querySelectorAll('.quote-digital-signature-stamp[data-ems-sig-frozen="1"]').forEach((stamp) => {
         const left = stamp.getAttribute('data-ems-sig-left');
         const top = stamp.getAttribute('data-ems-sig-top');
@@ -565,6 +595,7 @@ function pinQuoteA4SheetsInFragmentHtml(html) {
             );
             const root = doc.getElementById('ems-quote-fragment-pin-root');
             if (root) {
+                resetQuotePreviewContainerForPdfExport(root.querySelector('#quote-preview'));
                 root.querySelectorAll('.quote-a4-sheet').forEach((sheet) => {
                     if (sheet.classList.contains('quote-clause-measure-host')) return;
                     if (sheet.hasAttribute('data-pack-measure-shell')) return;
@@ -597,7 +628,36 @@ function stripElementInlineStyles(el, props) {
     for (const prop of props) el.style.removeProperty(prop);
 }
 
+/** Strip preview container sizing from on-screen React inline styles (210mm) — breaks landscape PDF. */
+const PDF_CAPTURE_PREVIEW_CONTAINER_PROPS = [
+    'width',
+    'min-width',
+    'max-width',
+    'min-height',
+    'height',
+    'margin',
+    'padding',
+    'transform',
+];
+
+function resetQuotePreviewContainerForPdfExport(previewEl) {
+    if (!previewEl) return;
+    stripElementInlineStyles(previewEl, PDF_CAPTURE_PREVIEW_CONTAINER_PROPS);
+    previewEl.style.setProperty('display', 'flex', 'important');
+    previewEl.style.setProperty('flex-direction', 'column', 'important');
+    previewEl.style.setProperty('align-items', 'stretch', 'important');
+    previewEl.style.setProperty('margin', '0', 'important');
+    previewEl.style.setProperty('padding', '0', 'important');
+    previewEl.style.setProperty('gap', '0', 'important');
+    previewEl.style.removeProperty('width');
+    previewEl.style.removeProperty('max-width');
+    previewEl.style.removeProperty('min-width');
+}
+
 const PDF_CAPTURE_SHEET_LAYOUT_PROPS = [
+    'width',
+    'min-width',
+    'max-width',
     'height',
     'min-height',
     'max-height',
@@ -692,17 +752,15 @@ function flattenQuotePreviewZoomWrappersInClone(clone) {
         viewport.parentNode.insertBefore(preview, viewport);
         viewport.remove();
     }
-    stripElementInlineStyles(preview, ['transform', 'margin', 'padding', 'min-height', 'height']);
-    preview.style.setProperty('width', '210mm');
-    preview.style.setProperty('margin', '0 auto');
-    preview.style.setProperty('padding', '0');
+    resetQuotePreviewContainerForPdfExport(preview);
 }
 
 function mountQuoteCloneOffscreen(clone) {
     const wrap = document.createElement('div');
     wrap.setAttribute('data-ems-pdf-offscreen-capture', '1');
+    // Width is wider than landscape A4 (297mm ≈ 1123px) so landscape sheets are not clipped during capture.
     wrap.style.cssText =
-        'position:fixed;left:-12000px;top:0;width:210mm;visibility:hidden;pointer-events:none;overflow:hidden;z-index:-1';
+        'position:fixed;left:-12000px;top:0;width:350mm;visibility:hidden;pointer-events:none;overflow:hidden;z-index:-1';
     document.documentElement.appendChild(wrap);
     wrap.appendChild(clone);
     return wrap;
@@ -716,14 +774,12 @@ function finalizeAllSheetsLayoutOnClone(clone, { preserveCoverLayout = false } =
     stripPdfCaptureSheetLayoutInlineStyles(clone, { preserveCoverLayout });
     const preview = clone.querySelector('#quote-preview');
     if (preview) {
-        preview.style.setProperty('display', 'flex', 'important');
-        preview.style.setProperty('flex-direction', 'column', 'important');
-        preview.style.setProperty('align-items', 'stretch', 'important');
-        preview.style.setProperty('width', '210mm', 'important');
-        preview.style.setProperty('max-width', '210mm', 'important');
-        preview.style.setProperty('margin', '0 auto', 'important');
-        preview.style.setProperty('padding', '0', 'important');
-        preview.style.setProperty('gap', '0', 'important');
+        resetQuotePreviewContainerForPdfExport(preview);
+    }
+    const printRoot = clone.querySelector('#quote-print-root');
+    if (printRoot) {
+        stripElementInlineStyles(printRoot, ['width', 'min-width', 'max-width', 'margin']);
+        printRoot.style.setProperty('margin', '0', 'important');
     }
     clone.querySelectorAll('.quote-a4-sheet').forEach((sheet) => {
         const isCover = !sheet.classList.contains('quote-a4-sheet--continuation');
@@ -781,7 +837,7 @@ function cloneQuotePrintRootForExport(rootEl) {
     /** Inline preview editors → static clause HTML for print/PDF. */
     clone.querySelectorAll('.quote-clause-inline-editor').forEach((wrap) => {
         const wys = wrap.querySelector('.jodit-wysiwyg');
-        const html = wys?.innerHTML || '';
+        const html = stripSpellMarksFromHtml(wys?.innerHTML || '');
         const staticDiv = document.createElement('div');
         staticDiv.className = 'clause-content';
         staticDiv.style.fontSize = '13px';
@@ -1027,6 +1083,8 @@ export async function captureQuotePrintRootInnerHtmlForPdfAsync(rootEl) {
                 requestAnimationFrame(() => requestAnimationFrame(resolve));
             });
         }
+        initializeAllOfficePastedTableColumns(clone);
+        stripSpellMarksFromDom(clone);
         finalizeAllSheetsLayoutOnClone(clone, { preserveCoverLayout: hasCoverLetter });
         if (hasCoverLetter) {
             mirrorCoverSignOffStylesFromLive(root, clone);
@@ -1131,15 +1189,15 @@ ${HTML2PDF_PAGE_BREAK_OVERRIDES}
     background: #fff !important;
     padding: 0 !important;
     margin: 0 auto !important;
-    width: 210mm !important;
-    max-width: 210mm !important;
+    width: auto !important;
+    max-width: none !important;
     box-shadow: none !important;
     gap: 0 !important;
 }
 #quote-preview {
     display: flex !important;
     flex-direction: column !important;
-    align-items: center !important;
+    align-items: stretch !important;
 }
 .quote-a4-sheet {
     position: relative !important;
@@ -1221,18 +1279,47 @@ ${HTML2PDF_PAGE_BREAK_OVERRIDES}
     box-sizing: border-box !important;
     text-align: left !important;
 }
-.clause-content table {
+.clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]) {
     table-layout: fixed !important;
     width: 100% !important;
     border-collapse: collapse !important;
 }
-.quote-preview-panel-shell,
-.quote-cover-body-panel,
-.quote-cover-meta-table,
+${buildEmsOfficePasteTablePresentationCss('.clause-content')}
+/**
+ * Match Quote preview overlays (#f0f9ff). Do NOT force background:transparent on
+ * .quote-cover-body-panel / .quote-preview-panel-shell — that wiped light-blue panels
+ * when production fell back to html2pdf (Puppeteer/Edge launch failure).
+ */
+.quote-preview-panel-shell {
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: none !important;
+}
+.quote-cover-body-panel {
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: none !important;
+    background: ${EMS_QUOTE_COVER_META_MID_BG} !important;
+    background-color: ${EMS_QUOTE_COVER_META_MID_BG} !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+}
+.quote-header-address-panel-body,
+.quote-header-quote-panel-mid,
+.quote-cover-meta-row-mid td:first-child,
+.quote-cover-meta-row-mid td:last-child {
+    background: ${EMS_QUOTE_COVER_META_MID_BG} !important;
+    background-color: ${EMS_QUOTE_COVER_META_MID_BG} !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+}
+.quote-cover-meta-table {
+    border: none !important;
+    box-shadow: none !important;
+}
 .quote-clause-heading-panel {
     border: none !important;
     box-shadow: none !important;
-    background: transparent !important;
+    background: ${EMS_QUOTE_CLAUSE_HEADING_BG} !important;
+    background-color: ${EMS_QUOTE_CLAUSE_HEADING_BG} !important;
 }
 .quote-print-footer-wrap {
     width: 50% !important;
@@ -1336,7 +1423,7 @@ export async function prepareQuotePrintRootCloneForHtml2pdf(rootEl) {
     }
     clone.querySelectorAll(':scope > .quote-print-repeat-strip').forEach((n) => n.remove());
 
-    /** Keep embedded preview <style> for panels/tables; HTML2PDF_EXPORT_STYLES overrides height/breaks only. */
+    /** Keep embedded preview <style> for panels/tables; HTML2PDF_EXPORT_STYLES overrides sheet/breaks and pins overlay colors. */
     removeEmptyElementsFromClone(clone);
     normalizeSheetNodesForHtml2pdf(clone);
 
@@ -1350,6 +1437,8 @@ export async function prepareQuotePrintRootCloneForHtml2pdf(rootEl) {
                 requestAnimationFrame(() => requestAnimationFrame(resolve));
             });
         }
+        initializeAllOfficePastedTableColumns(clone);
+        stripSpellMarksFromDom(clone);
         finalizeAllSheetsLayoutOnClone(clone, { preserveCoverLayout: hasCoverLetter });
         if (hasCoverLetter) {
             mirrorCoverSignOffStylesFromLive(root, clone);
@@ -1376,9 +1465,14 @@ export async function prepareQuotePrintRootCloneForHtml2pdf(rootEl) {
 }
 
 /** html2pdf.js options aligned with HTML2PDF_EXPORT_STYLES (no sheet "before" breaks). */
-export function buildHtml2pdfOptions(filename) {
-    /** ~210mm at 96dpi — keeps html2canvas width aligned with A4 sheet CSS */
-    const a4WidthPx = Math.round((210 / 25.4) * 96);
+export function buildHtml2pdfOptions(filename, rootEl) {
+    const root =
+        rootEl || (typeof document !== 'undefined' ? document.getElementById('quote-print-root') : null);
+    const hasLandscape = Boolean(root?.querySelector?.('.quote-a4-sheet--landscape'));
+    const widthMm = hasLandscape ? 297 : 210;
+    /** ~mm at 96dpi — match widest sheet so landscape pages are not clipped */
+    const a4WidthPx = Math.round((widthMm / 25.4) * 96);
+    const overlayBg = EMS_QUOTE_COVER_META_MID_BG;
     return {
         margin: 0,
         filename: filename || 'Quote.pdf',
@@ -1390,6 +1484,27 @@ export function buildHtml2pdfOptions(filename) {
             useCORS: true,
             logging: false,
             letterRendering: true,
+            /** Page canvas fill; panel overlays are painted from element CSS / onclone. */
+            backgroundColor: '#ffffff',
+            onclone: (clonedDoc) => {
+                const pin = (el) => {
+                    if (!el?.style) return;
+                    el.style.setProperty('background', overlayBg, 'important');
+                    el.style.setProperty('background-color', overlayBg, 'important');
+                    el.style.setProperty('-webkit-print-color-adjust', 'exact', 'important');
+                    el.style.setProperty('print-color-adjust', 'exact', 'important');
+                };
+                clonedDoc
+                    .querySelectorAll(
+                        '.quote-cover-body-panel, .quote-header-address-panel-body, .quote-header-quote-panel-mid'
+                    )
+                    .forEach(pin);
+                clonedDoc
+                    .querySelectorAll(
+                        '.quote-cover-meta-row-mid td:first-child, .quote-cover-meta-row-mid td:last-child'
+                    )
+                    .forEach(pin);
+            },
         },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
         pagebreak: {
@@ -1476,43 +1591,42 @@ html[data-preview-pdf="1"] body {
     background: white !important;
     margin: 0 !important;
     padding: 0 !important;
-    display: flex !important;
-    flex-direction: column !important;
-    align-items: center !important;
-    justify-content: flex-start !important;
+    display: block !important;
     box-sizing: border-box !important;
-    min-width: 210mm !important;
+    /* No min-width: each page is sized by its @page rule (portrait 210mm, landscape 297mm). */
 }
 html[data-preview-pdf="1"] #quote-print-root {
     background: white !important;
     padding: 0 !important;
-    margin: 0 auto !important;
-    width: 210mm !important;
-    max-width: 210mm !important;
+    margin: 0 !important;
     display: block !important;
     box-sizing: border-box !important;
+    /* Width is auto so landscape sheets (297mm) are not clipped by a 210mm constraint. */
+    width: auto !important;
+    max-width: none !important;
+    min-width: 0 !important;
 }
 html[data-preview-pdf="1"] #quote-preview {
     display: flex !important;
     flex-direction: column !important;
-    align-items: center !important;
+    align-items: stretch !important;
     gap: 0 !important;
     padding: 0 !important;
-    margin: 0 auto !important;
+    margin: 0 !important;
     background: white !important;
-    width: 210mm !important;
-    min-width: 210mm !important;
-    max-width: 210mm !important;
     box-sizing: border-box !important;
+    /* Let sheets define width: portrait sheets are 210mm, landscape are 297mm. */
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
 }
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet {
     flex-shrink: 0 !important;
 }
 html[data-preview-pdf="1"] .quote-document-root {
-    width: 100% !important;
-    max-width: 210mm !important;
-    margin-left: auto !important;
-    margin-right: auto !important;
+    width: auto !important;
+    max-width: none !important;
+    margin: 0 !important;
     box-sizing: border-box !important;
 }
 /** Print/PDF: block imgs ignore parent text-align — keep logo right-aligned like on-screen flex layout */
@@ -1983,11 +2097,12 @@ html[data-preview-pdf="1"] .quote-sheet-main-flex {
     width: 100% !important;
     box-sizing: border-box !important;
 }
-html[data-preview-pdf="1"] .clause-content table {
+html[data-preview-pdf="1"] .clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]) {
     width: 100% !important;
     max-width: 100% !important;
     box-sizing: border-box !important;
 }
+${buildEmsOfficePasteTablePresentationCss('html[data-preview-pdf="1"] .clause-content')}
 html[data-preview-pdf="1"] .quote-cover-meta-table {
     width: 100% !important;
     table-layout: fixed !important;
@@ -2021,6 +2136,9 @@ html[data-preview-pdf="1"] .quote-cover-meta-table td:last-child {
     color: #0f172a !important;
     font-weight: 400 !important;
     padding-left: 4px !important;
+    white-space: normal !important;
+    word-wrap: break-word !important;
+    overflow-wrap: anywhere !important;
 }
 html[data-preview-pdf="1"] .quote-cover-meta-table tbody tr.quote-cover-meta-row-mid:first-child td:first-child {
     border-radius: 5px 0 0 0 !important;
@@ -2320,126 +2438,123 @@ html[data-preview-pdf="1"] .footer-section .quote-print-footer-company > div {
  * #quote-preview { width: 100% } and fixed sheet heights — blank or narrow pages. These rules win via
  * higher specificity + @media print so output matches on-screen preview.
  */
-@media print {
-    html[data-preview-pdf="1"],
-    html[data-preview-pdf="1"] body {
-        width: 210mm !important;
-        max-width: 210mm !important;
-        margin: 0 auto !important;
-        padding: 0 !important;
-        background: #fff !important;
-        -webkit-print-color-adjust: exact !important;
-        print-color-adjust: exact !important;
-    }
-    html[data-preview-pdf="1"] #quote-print-root.print-wrapper {
-        width: 210mm !important;
-        min-width: 210mm !important;
-        max-width: 210mm !important;
-        margin: 0 auto !important;
-        padding: 0 !important;
-    }
-    html[data-preview-pdf="1"] #quote-preview {
-        display: flex !important;
-        flex-direction: column !important;
-        align-items: center !important;
-        width: 210mm !important;
-        min-width: 210mm !important;
-        max-width: 210mm !important;
-        margin: 0 auto !important;
-        padding: 0 !important;
-        background: #fff !important;
-    }
-    html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet {
-        flex-shrink: 0 !important;
-    }
-    html[data-preview-pdf="1"] .quote-sheet-logo-row {
-        grid-row: 1 !important;
-        display: flex !important;
-        flex-direction: row !important;
-        justify-content: flex-end !important;
-        align-items: flex-start !important;
-        width: 100% !important;
-        text-align: right !important;
-        margin-bottom: ${EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM} !important;
-        box-sizing: border-box !important;
-    }
-    html[data-preview-pdf="1"] .quote-sheet-logo-row > div,
-    html[data-preview-pdf="1"] .quote-continuation-header > div {
-        width: 100% !important;
-        text-align: right !important;
-        display: block !important;
-    }
-    html[data-preview-pdf="1"] .quote-sheet-logo-row img,
-    html[data-preview-pdf="1"] .quote-continuation-header img {
-        max-height: 68px !important;
-        height: auto !important;
-        width: auto !important;
-        max-width: 212px !important;
-        display: inline-block !important;
-        margin-left: auto !important;
-        margin-right: 0 !important;
-        float: none !important;
-        object-fit: contain !important;
-        object-position: right top !important;
-    }
-    html[data-preview-pdf="1"] .quote-a4-sheet > .footer-section {
-        grid-row: 3 !important;
-        align-self: end !important;
-        flex-shrink: 0 !important;
-        margin-top: 0 !important;
-        padding-top: 3px !important;
-        min-height: ${EMS_QUOTE_PRINT_FOOTER_MIN_HEIGHT} !important;
-        box-sizing: border-box !important;
-    }
-    html[data-preview-pdf="1"] .footer-section {
-        display: flex !important;
-        flex-direction: column !important;
-        align-items: stretch !important;
-        width: 100% !important;
-        max-width: 100% !important;
-        box-sizing: border-box !important;
-        break-inside: avoid !important;
-        page-break-inside: avoid !important;
-    }
-    html[data-preview-pdf="1"] .quote-print-page-indicator {
-        display: block !important;
-        width: 100% !important;
-        max-width: 100% !important;
-        text-align: right !important;
-        box-sizing: border-box !important;
-    }
-    html[data-preview-pdf="1"] .quote-print-footer-wrap {
-        display: block !important;
-        width: 50% !important;
-        max-width: 50% !important;
-        margin-left: auto !important;
-        margin-right: 0 !important;
-        box-sizing: border-box !important;
-    }
-    html[data-preview-pdf="1"] .quote-print-footer-company {
-        display: block !important;
-        width: 100% !important;
-        max-width: 100% !important;
-        text-align: right !important;
-        box-sizing: border-box !important;
-    }
-    html[data-preview-pdf="1"] .footer-section .quote-print-page-indicator {
-        padding-bottom: 3px !important;
-    }
-    html[data-preview-pdf="1"] .footer-section > hr.quote-section-rule {
-        border: 0 !important;
-        border-top: ${EMS_QUOTE_PRINT_FOOTER_RULE_WIDTH_PDF} solid #94a3b8 !important;
-        height: 0 !important;
-        box-sizing: border-box !important;
-    }
-    html[data-preview-pdf="1"] .footer-section .quote-print-footer-company > div {
-        margin: 0 !important;
-        line-height: 1.1 !important;
-    }
-    html[data-preview-pdf="1"] .no-print,
-    html[data-preview-pdf="1"] .ems-browser-pdf-hint {
-        display: none !important;
-    }
+html[data-preview-pdf="1"],
+html[data-preview-pdf="1"] body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    display: block !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+}
+html[data-preview-pdf="1"] #quote-print-root.print-wrapper {
+    margin: 0 !important;
+    padding: 0 !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    width: auto !important;
+}
+html[data-preview-pdf="1"] #quote-preview {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet {
+    flex-shrink: 0 !important;
+}
+html[data-preview-pdf="1"] .quote-sheet-logo-row {
+    grid-row: 1 !important;
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
+    width: 100% !important;
+    text-align: right !important;
+    margin-bottom: ${EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM} !important;
+    box-sizing: border-box !important;
+}
+html[data-preview-pdf="1"] .quote-sheet-logo-row > div,
+html[data-preview-pdf="1"] .quote-continuation-header > div {
+    width: 100% !important;
+    text-align: right !important;
+    display: block !important;
+}
+html[data-preview-pdf="1"] .quote-sheet-logo-row img,
+html[data-preview-pdf="1"] .quote-continuation-header img {
+    max-height: 68px !important;
+    height: auto !important;
+    width: auto !important;
+    max-width: 212px !important;
+    display: inline-block !important;
+    margin-left: auto !important;
+    margin-right: 0 !important;
+    float: none !important;
+    object-fit: contain !important;
+    object-position: right top !important;
+}
+html[data-preview-pdf="1"] .quote-a4-sheet > .footer-section {
+    grid-row: 3 !important;
+    align-self: end !important;
+    flex-shrink: 0 !important;
+    margin-top: 0 !important;
+    padding-top: 3px !important;
+    min-height: ${EMS_QUOTE_PRINT_FOOTER_MIN_HEIGHT} !important;
+    box-sizing: border-box !important;
+}
+html[data-preview-pdf="1"] .footer-section {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+}
+html[data-preview-pdf="1"] .quote-print-page-indicator {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    text-align: right !important;
+    box-sizing: border-box !important;
+}
+html[data-preview-pdf="1"] .quote-print-footer-wrap {
+    display: block !important;
+    width: 50% !important;
+    max-width: 50% !important;
+    margin-left: auto !important;
+    margin-right: 0 !important;
+    box-sizing: border-box !important;
+}
+html[data-preview-pdf="1"] .quote-print-footer-company {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    text-align: right !important;
+    box-sizing: border-box !important;
+}
+html[data-preview-pdf="1"] .footer-section .quote-print-page-indicator {
+    padding-bottom: 3px !important;
+}
+html[data-preview-pdf="1"] .footer-section > hr.quote-section-rule {
+    border: 0 !important;
+    border-top: ${EMS_QUOTE_PRINT_FOOTER_RULE_WIDTH_PDF} solid #94a3b8 !important;
+    height: 0 !important;
+    box-sizing: border-box !important;
+}
+html[data-preview-pdf="1"] .footer-section .quote-print-footer-company > div {
+    margin: 0 !important;
+    line-height: 1.1 !important;
+}
+html[data-preview-pdf="1"] .no-print,
+html[data-preview-pdf="1"] .ems-browser-pdf-hint {
+    display: none !important;
 }
 `;
 
@@ -2450,6 +2565,23 @@ html[data-server-pdf="1"] .no-print { display: none !important; }
 
 /** Last in style block — clarity only (font stays Segoe UI from hoisted preview CSS). */
 const PDF_FINAL_OVERRIDES = `
+html[data-preview-pdf="1"] html,
+html[data-preview-pdf="1"] body {
+    display: block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+}
+html[data-preview-pdf="1"] #quote-print-root,
+html[data-preview-pdf="1"] #quote-print-root.print-wrapper {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+}
 html[data-preview-pdf="1"] .quote-preview-zoom-viewport,
 html[data-preview-pdf="1"] .quote-preview-zoom-shell {
     display: block !important;
@@ -2469,10 +2601,13 @@ html[data-preview-pdf="1"] #quote-preview {
     gap: 0 !important;
     display: flex !important;
     flex-direction: column !important;
+    /* align-items: stretch so each sheet fills its own @page width (portrait 210mm or landscape 297mm). */
     align-items: stretch !important;
-    width: 210mm !important;
-    max-width: 210mm !important;
-    margin: 0 auto !important;
+    /* No fixed width — portrait sheets are 210mm, landscape are 297mm via inline pinQuoteA4SheetGridInline. */
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    margin: 0 !important;
     font-family: ${QUOTE_PREVIEW_FONT_STACK} !important;
     -webkit-font-smoothing: antialiased !important;
     -moz-osx-font-smoothing: grayscale !important;
@@ -2586,23 +2721,31 @@ html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="grand"
     font-weight: 700 !important;
     border-top: 1px solid #94a3b8 !important;
 }
+html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="discount"] td,
+html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td {
+    background: ${EMS_QUOTE_PRICING_TABLE_DISCOUNT_BG} !important;
+    font-weight: 700 !important;
+    border-top: 1px solid #94a3b8 !important;
+}
 html[data-preview-pdf="1"] #ems-auto-price-summary-table th:nth-child(2),
 html[data-preview-pdf="1"] #ems-auto-price-summary-table td:nth-child(2),
 html[data-preview-pdf="1"] #ems-auto-price-summary-table td[data-ems-amount],
 html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="total"] td:first-child,
+html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="discount"] td:first-child,
+html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td:first-child,
 html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="vat"] td:first-child,
 html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="grand-vat"] td:first-child,
 html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="grand"] td:first-child {
     text-align: right !important;
 }
-/** Highest-specificity sheet pin — grid matches on-screen preview. */
-html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet {
+/** Highest-specificity sheet pin — portrait default; landscape overrides via .quote-a4-sheet--landscape. */
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet:not(.quote-a4-sheet--landscape):not([data-page-orientation="landscape"]) {
     box-sizing: border-box !important;
     width: 210mm !important;
     min-width: 210mm !important;
     max-width: 210mm !important;
     padding: 15mm !important;
-    margin: 0 auto !important;
+    margin: 0 !important;
     min-height: 297mm !important;
     height: 297mm !important;
     max-height: 297mm !important;
@@ -2611,6 +2754,42 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet {
     grid-template-rows: auto minmax(0, 1fr) auto !important;
     align-content: stretch !important;
     overflow: hidden !important;
+    page-break-after: auto !important;
+    break-after: auto !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .quote-sheet-main-flex,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .content-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .header-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .footer-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .quote-clause-block,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .clause-content,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .quote-sheet-main-flex,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .content-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .header-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .footer-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .quote-clause-block,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .clause-content {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] {
+    box-sizing: border-box !important;
+    width: 297mm !important;
+    min-width: 297mm !important;
+    max-width: 297mm !important;
+    padding: 15mm !important;
+    margin: 0 !important;
+    min-height: 210mm !important;
+    height: 210mm !important;
+    max-height: 210mm !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto minmax(0, 1fr) auto !important;
+    align-content: stretch !important;
+    overflow: hidden !important;
+    page: quote-landscape;
     page-break-after: auto !important;
     break-after: auto !important;
 }
@@ -2659,8 +2838,10 @@ export function buildQuotePrintDocumentHtml(printWithHeader, fragmentHtml, table
 
     let previewHoistedSheetCss = '';
     if (usePreviewMatchedPdf) {
+        fragmentForBody = stripSpellMarksFromHtml(fragmentForBody);
         const { html: bodyWithoutStyles } = stripAllStyleTags(fragmentForBody);
         fragmentForBody = fixInvalidSelfClosingTags(bodyWithoutStyles.trim());
+        fragmentForBody = stripSpellMarksFromHtml(fragmentForBody);
         fragmentForBody = pinQuoteA4SheetsInFragmentHtml(fragmentForBody);
     }
 
@@ -2684,6 +2865,8 @@ export function buildQuotePrintDocumentHtml(printWithHeader, fragmentHtml, table
         usePreviewMatchedPdf ? '' : googleFontLinks
     }<style>
         @page { size: A4 portrait; margin: 0; }
+        @page quote-landscape { size: A4 landscape; margin: 0; }
+        .quote-a4-sheet--landscape { page: quote-landscape; }
         html, body {
             margin: 0 !important; padding: 0 !important; background: white !important;
             font-family: ${docFontStack}; font-size: 14px; line-height: 1.6;
@@ -2694,7 +2877,8 @@ export function buildQuotePrintDocumentHtml(printWithHeader, fragmentHtml, table
             display: block !important;
             font-family: ${docFontStack} !important;
             font-size: 14px !important; line-height: 1.6 !important;
-            width: 210mm !important; margin: 0 !important; padding: 0 !important;
+            /* Do not constrain to 210mm here — landscape sheets are 297mm wide and must not be clipped. */
+            width: auto !important; margin: 0 !important; padding: 0 !important;
         }
         ${previewHoistedSheetCss}
         ${PREVIEW_PDF_SCREEN_OVERRIDES}

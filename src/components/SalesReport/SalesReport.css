@@ -1287,9 +1287,10 @@
 }
 
 .sr-pipeline-summary-row {
-    padding: 0.43rem 0.35rem;
-    font-size: 0.775rem;
-    line-height: 1.42;
+    /* +10% text; tighter padding/line-height keeps row height unchanged */
+    padding: 0.39rem 0.35rem;
+    font-size: 0.853rem;
+    line-height: 1.29;
 }
 
 .sr-pipeline-summary-row:not(:last-child) {
@@ -1307,17 +1308,19 @@
 
 .sr-pipeline-summary-pct {
     font-weight: 600;
-    color: #0f172a;
+    font-size: 0.615rem;
+    color: #6b7280;
     flex-shrink: 0;
-    width: 3.35rem;
-    min-width: 3.35rem;
+    width: 2.6rem;
+    min-width: 2.6rem;
     text-align: right;
+    white-space: nowrap;
 }
 
 .sr-pipeline-summary-legend {
-    font-size: 0.725rem;
+    font-size: 0.615rem;
     font-weight: 500;
-    color: #374151;
+    color: #6b7280;
     min-width: 0;
 }
 
@@ -1328,10 +1331,27 @@
 }
 
 .sr-pipeline-summary-value {
-    font-size: 0.775rem;
+    font-size: 0.657rem;
     font-weight: 600;
-    color: #4169e1;
+    color: #374151;
     font-variant-numeric: tabular-nums;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    line-height: 1.05;
+}
+
+.sr-pipeline-summary-gm {
+    font-weight: 500;
+    font-size: 0.593rem;
+    color: #4b5563;
+    margin-left: 0;
+    margin-top: 0.02rem;
+}
+
+.sr-pipeline-summary-gp-prefix {
+    color: #374151;
+    font-weight: 700;
 }
 
 /* Table block */
@@ -1402,26 +1422,20 @@
     border-color: #fff;
 }
 
-.sr-table-excel-btn {
-    width: 1.75rem;
-    height: 1.35rem;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    border-color: rgba(255, 255, 255, 0.45);
-    color: #dcfce7;
-}
-
 .sr-table-excel-btn:hover:not(:disabled) {
-    border-color: #fff;
-    color: #fff;
-    background: rgba(22, 163, 74, 0.35);
+    border-color: rgba(255, 255, 255, 0.85);
+    background: rgba(255, 255, 255, 0.14);
 }
 
 .sr-table-excel-btn:disabled {
     opacity: 0.45;
     cursor: not-allowed;
+}
+
+.sales-report-page .ems-excel-download-btn.sr-table-excel-btn {
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    border-radius: 0.25rem;
+    background: rgba(255, 255, 255, 0.08);
 }
 
 .sr-table-clear-filters-btn {

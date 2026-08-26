@@ -1,0 +1,13 @@
+const fs = require('fs');
+const path = require('path');
+const dir = path.join(process.env.TEMP || '/tmp', 'ems-quote-pdf');
+const files = fs.readdirSync(dir).filter((f) => f.endsWith('.html'));
+files.sort((a, b) => fs.statSync(path.join(dir, b)).mtimeMs - fs.statSync(path.join(dir, a)).mtimeMs);
+const html = fs.readFileSync(path.join(dir, files[0]), 'utf8');
+console.log('file:', files[0]);
+const idx = html.indexOf('data-page-orientation="landscape"');
+const chunk = html.slice(idx, idx + 12000);
+const tag = chunk.match(/^[^>]+>/)?.[0] || '';
+console.log('sheet tag:', tag.slice(0, 600));
+const widths = [...chunk.matchAll(/width:\s*[^;"']+/gi)].slice(0, 25);
+console.log('widths:', widths.map((m) => m[0]).join('\n'));

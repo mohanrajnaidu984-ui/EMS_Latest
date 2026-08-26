@@ -1,7 +1,7 @@
-# Run on the Windows Server (or from a PC that can reach :81).
+﻿# Run on the Windows Server (or from a PC that can reach :81).
 # Confirms backend PDF fix is live and whether Puppeteer/Chrome can launch.
 param(
-    [string]$BaseUrl = 'http://151.50.1.114:81'
+    [string]$BaseUrl = 'http://151.50.1.38'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,7 +32,7 @@ $spawnOk = $resp.chromeSpawnProbe.ok
 if ($launchOk -and $spawnOk) {
     Write-Host "OK  Puppeteer Chrome launch + spawn probe" -ForegroundColor Green
 } else {
-    Write-Host "FAIL Puppeteer/Chrome on server (PDF will fall back to browser html2pdf — footer/layout differ)" -ForegroundColor Red
+    Write-Host "FAIL Puppeteer/Chrome on server (PDF will fall back to browser html2pdf â€” footer/layout differ)" -ForegroundColor Red
     Write-Host "     launchProbe.ok = $launchOk"
     Write-Host "     chromeSpawnProbe.ok = $spawnOk"
     if ($resp.chromeSpawnProbe.message) { Write-Host "     $($resp.chromeSpawnProbe.message)" }
@@ -67,12 +67,12 @@ if (Test-Path $frontendRoot) {
                 if ($bundle -match 'margin-top:\s*auto\s*!important') {
                     Write-Host "OK  frontend bundle index-$hash.js includes footer pin CSS" -ForegroundColor Green
                 } else {
-                    Write-Host "FAIL frontend bundle is OLD — rebuild (npm run build) and copy dist\* to frontend\" -ForegroundColor Red
+                    Write-Host "FAIL frontend bundle is OLD â€” rebuild (npm run build) and copy dist\* to frontend\" -ForegroundColor Red
                 }
                 if ($bundle -match '_\$\{Date\.now\(\)\}\.pdf') {
                     Write-Host "OK  frontend email uses unique PDF attachment names" -ForegroundColor Green
                 } else {
-                    Write-Host "WARN frontend may use old email attachment naming — rebuild and redeploy dist\" -ForegroundColor Yellow
+                    Write-Host "WARN frontend may use old email attachment naming â€” rebuild and redeploy dist\" -ForegroundColor Yellow
                 }
             }
         }
@@ -83,3 +83,4 @@ Write-Host "`nIn browser DevTools (F12) when clicking Download PDF:" -Foreground
 Write-Host "  - Good: [QuotePerf] PDF Download complete (no 'server PDF failed, trying client html2pdf')"
 Write-Host "  - Bad:  [downloadPDF] server PDF failed -> html2pdf fallback (fix Chrome 109 on server first)"
 Write-Host "`nAfter frontend deploy: hard refresh Ctrl+Shift+R or clear site cache."
+

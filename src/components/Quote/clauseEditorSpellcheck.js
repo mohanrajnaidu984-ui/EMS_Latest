@@ -5,34 +5,56 @@
  */
 
 import Typo from 'typo-js';
-import { preserveClauseEditorSelectionDuring } from './clauseEditorListPresets';
+import { preserveClauseEditorSelectionDuring, withJoditHistoryBlocked } from './clauseEditorListPresets';
+/**
+ * Embed Hunspell dicts in the JS bundle (?raw).
+ * Avoids production IIS 404 for /dictionaries/*.aff|*.dic (unknown MIME / missing files).
+ */
+import enUsAffText from '../../assets/dictionaries/en_US/en_US.aff?raw';
+import enUsDicText from '../../assets/dictionaries/en_US/en_US.dic?raw';
 
-const DICT_BASE = `${import.meta.env.BASE_URL || '/'}dictionaries/en_US`;
 const SPELL_MARK_CLASS = 'ems-spell-mark';
 const WORD_RE = /[A-Za-z']+/g;
-const SCAN_DEBOUNCE_MS = 450;
+/** Full-document scan debounce (blur / idle). */
+const SCAN_DEBOUNCE_MS = 900;
+/** While focused, only re-check the caret block after the user pauses typing. */
+const SCAN_DEBOUNCE_FOCUSED_MS = 1400;
 
 let typoPromise = null;
 let typoInstance = null;
 const suggestionCache = new Map();
+/** Suggestions keyed by data-spell-id — never put JSON in HTML attributes (breaks innerHTML). */
+const markSuggestionsById = new Map();
 const SUGGESTION_CACHE_MAX = 400;
 let spellMarkSeq = 0;
 let activeSpellMenuJodit = null;
+const spellReadyListeners = new Set();
+
+/** Quote/BHD terms Hunspell flags as misspellings — skip so clause 4.1 sync never wraps them. */
+const DOMAIN_SPELL_IGNORE = new Set([
+    'bahrain',
+    'bahraini',
+    'dinars',
+    'dinar',
+    'fils',
+    'bhd',
+    'vat',
+    'ems',
+    'dahua',
+]);
 
 function loadTypo() {
     if (!typoPromise) {
-        typoPromise = Promise.all([
-            fetch(`${DICT_BASE}/en_US.aff`, { cache: 'force-cache' }).then((r) => {
-                if (!r.ok) throw new Error(`aff ${r.status}`);
-                return r.text();
-            }),
-            fetch(`${DICT_BASE}/en_US.dic`, { cache: 'force-cache' }).then((r) => {
-                if (!r.ok) throw new Error(`dic ${r.status}`);
-                return r.text();
-            }),
-        ])
-            .then(([aff, dic]) => {
-                typoInstance = new Typo('en_US', aff, dic);
+        typoPromise = Promise.resolve()
+            .then(() => {
+                typoInstance = new Typo('en_US', enUsAffText, enUsDicText);
+                spellReadyListeners.forEach((fn) => {
+                    try {
+                        fn();
+                    } catch {
+                        /* ignore */
+                    }
+                });
                 return typoInstance;
             })
             .catch((err) => {
@@ -54,6 +76,21 @@ function cacheSuggestions(lower, suggestions) {
     suggestionCache.set(lower, suggestions);
 }
 
+export function isSpellDictionaryReady() {
+    return Boolean(typoInstance);
+}
+
+export function subscribeSpellDictionaryReady(fn) {
+    if (typeof fn !== 'function') return () => {};
+    if (typoInstance) {
+        fn();
+        return () => {};
+    }
+    spellReadyListeners.add(fn);
+    void loadTypo();
+    return () => spellReadyListeners.delete(fn);
+}
+
 export function normalizeSpellToken(raw) {
     return String(raw || '')
         .replace(/^['\u2019]+|['\u2019]+$/g, '')
@@ -67,6 +104,7 @@ function isIgnorableToken(word) {
     if (/^https?:\/\//i.test(w)) return true;
     if (w.includes('@')) return true;
     if (w.length <= 4 && w === w.toUpperCase()) return true;
+    if (DOMAIN_SPELL_IGNORE.has(w.toLowerCase())) return true;
     return false;
 }
 
@@ -292,16 +330,9 @@ function rankSuggestions(typo, word) {
 }
 
 function readCachedSuggestions(loc, word) {
-    if (loc?.mark) {
-        const raw = loc.mark.getAttribute('data-suggestions');
-        if (raw) {
-            try {
-                const parsed = JSON.parse(raw);
-                if (Array.isArray(parsed)) return parsed;
-            } catch {
-                /* ignore malformed cache */
-            }
-        }
+    const id = loc?.mark?.getAttribute?.('data-spell-id') || loc?.spellMarkId;
+    if (id && markSuggestionsById.has(id)) {
+        return markSuggestionsById.get(id);
     }
     const lower = word.toLowerCase();
     if (suggestionCache.has(lower)) return suggestionCache.get(lower);
@@ -310,12 +341,16 @@ function readCachedSuggestions(loc, word) {
 
 function storeMarkSuggestions(mark, suggestions) {
     if (!mark || !Array.isArray(suggestions) || !suggestions.length) return;
-    mark.setAttribute('data-suggestions', JSON.stringify(suggestions));
+    const id = mark.getAttribute('data-spell-id');
+    if (!id) return;
+    markSuggestionsById.set(id, suggestions);
 }
 
 function prefillSpellMarkSuggestions(typo, root) {
     if (!typo || !root?.querySelectorAll) return;
-    const marks = [...root.querySelectorAll(`.${SPELL_MARK_CLASS}:not([data-suggestions])`)];
+    const marks = [...root.querySelectorAll(`.${SPELL_MARK_CLASS}`)].filter(
+        (mark) => !markSuggestionsById.has(mark.getAttribute('data-spell-id') || '')
+    );
     if (!marks.length) return;
 
     let index = 0;
@@ -344,6 +379,8 @@ function prefillSpellMarkSuggestions(typo, root) {
 function unwrapSpellMarks(root) {
     if (!root?.querySelectorAll) return;
     root.querySelectorAll(`.${SPELL_MARK_CLASS}`).forEach((span) => {
+        const id = span.getAttribute('data-spell-id');
+        if (id) markSuggestionsById.delete(id);
         const parent = span.parentNode;
         if (!parent) return;
         while (span.firstChild) parent.insertBefore(span.firstChild, span);
@@ -352,18 +389,66 @@ function unwrapSpellMarks(root) {
     root.normalize?.();
 }
 
+/** True when HTML may contain spell-check spans or broken span tails from export. */
+function htmlMayContainSpellExportArtifacts(raw) {
+    return (
+        /ems-spell-mark|data-spell-id|data-suggestions|background-repeat:repeat-x !important;background-position:0 100%/i.test(
+            raw
+        )
+    );
+}
+
+/**
+ * Remove spell-mark span tails that leaked into text when clause 4.1 regex matched the
+ * `)` inside `linear-gradient(...)` on spell-mark inline styles (or legacy data-suggestions JSON).
+ */
+function stripSpellMarkExportDebrisFromHtmlString(html) {
+    let s = String(html || '');
+    if (!s) return s;
+    if (!htmlMayContainSpellExportArtifacts(s) && !/data-suggestions=/i.test(s)) return s;
+
+    // Whole spell-mark spans (well-formed).
+    s = s.replace(/<span\b[^>]*\bclass="[^"]*\bems-spell-mark\b[^"]*"[^>]*>([\s\S]*?)<\/span>/gi, '$1');
+    s = s.replace(/<span\b[^>]*\bdata-spell-id\b[^>]*>([\s\S]*?)<\/span>/gi, '$1');
+
+    // Broken opening-tag tails (cut mid-style at linear-gradient's closing paren).
+    s = s.replace(
+        /!?important;background-repeat:repeat-x !important;background-position:0 100% !important;background-size:100% 2px !important;padding-bottom:1px !important;text-decoration:none !important;[\s"'=A-Za-z0-9\[\]\\;:\-/%#,()]*?(?:&gt;|>)/gi,
+        ''
+    );
+    s = s.replace(
+        /background-repeat:repeat-x !important;background-position:0 100% !important;background-size:100% 2px !important;padding-bottom:1px !important;text-decoration:none !important;[\s"'=A-Za-z0-9\[\]\\;:\-/%#,()]*?(?:&gt;|>)/gi,
+        ''
+    );
+
+    // Orphan attributes / partial spans.
+    s = s.replace(/<span\b[^>]*\bems-spell-mark\b[^>]*>/gi, '');
+    s = s.replace(/\s*data-suggestions=(?:"[^"]*"|\[[^\]]*\]|&quot;\[[^\]]*\]&quot;)\s*/gi, ' ');
+    s = s.replace(/\s*data-suggestions="\[[^\]]*$/gi, '');
+    s = s.replace(/\s*data-spell-id="[^"]*"\s*/gi, ' ');
+    s = s.replace(/\s*data-word="[^"]*"\s*/gi, ' ');
+
+    // Collapse duplicated lump-sum tails left after debris (same BD words clause repeated).
+    s = s.replace(
+        /(\(Bahraini Dinars[^)]{0,240}?only\.\))(?:\s*(?:\(?Bahraini Dinars[^)]{0,240}?only\.\)))+/gi,
+        '$1'
+    );
+
+    return s;
+}
+
 /** Remove spell-check decoration spans from persisted/export HTML. */
 export function stripSpellMarksFromHtml(html) {
     const raw = String(html || '');
-    if (!raw || !raw.includes(SPELL_MARK_CLASS)) return raw;
+    if (!raw || !htmlMayContainSpellExportArtifacts(raw)) return raw;
     try {
         const doc = new DOMParser().parseFromString(`<div id="__ems_spell_root">${raw}</div>`, 'text/html');
         const root = doc.getElementById('__ems_spell_root');
-        if (!root) return raw;
+        if (!root) return stripSpellMarkExportDebrisFromHtmlString(raw);
         unwrapSpellMarks(root);
-        return root.innerHTML.trim();
+        return stripSpellMarkExportDebrisFromHtmlString(root.innerHTML.trim());
     } catch {
-        return raw;
+        return stripSpellMarkExportDebrisFromHtmlString(raw);
     }
 }
 
@@ -377,7 +462,7 @@ function shouldScanNode(node) {
     return true;
 }
 
-function wrapMisspelling(textNode, start, end, word, typo) {
+function wrapMisspelling(textNode, start, end, word, typo, storeSuggestions = true) {
     const doc = textNode.ownerDocument;
     const range = doc.createRange();
     range.setStart(textNode, start);
@@ -387,9 +472,10 @@ function wrapMisspelling(textNode, start, end, word, typo) {
     span.setAttribute('data-word', word);
     span.setAttribute('data-spell-id', String(++spellMarkSeq));
     span.setAttribute('spellcheck', 'false');
+    // Underline via CSS class only — never inline style with linear-gradient(...) (`)` breaks clause 4.1 sync).
     try {
         range.surroundContents(span);
-        if (typo) {
+        if (storeSuggestions && typo) {
             storeMarkSuggestions(span, rankSuggestionsFast(typo, word));
         }
     } catch {
@@ -397,7 +483,7 @@ function wrapMisspelling(textNode, start, end, word, typo) {
     }
 }
 
-function scanTextNode(typo, textNode) {
+function scanTextNode(typo, textNode, storeSuggestions = true) {
     const text = textNode.textContent || '';
     if (!text.trim()) return;
     const misses = [];
@@ -410,37 +496,141 @@ function scanTextNode(typo, textNode) {
         }
     }
     for (let i = misses.length - 1; i >= 0; i--) {
-        wrapMisspelling(textNode, misses[i].start, misses[i].end, misses[i].word, typo);
+        wrapMisspelling(textNode, misses[i].start, misses[i].end, misses[i].word, typo, storeSuggestions);
     }
 }
 
-async function scanEditorSpellings(jodit, getEditorBody) {
+/** Prefer the block containing the caret so typing does not re-scan the whole clause. */
+function resolveSpellScanScope(root, { full = false } = {}) {
+    if (!root || full) return root;
+    try {
+        const sel = root.ownerDocument?.getSelection?.();
+        const anchor = sel?.anchorNode;
+        if (!anchor || !root.contains(anchor)) return root;
+        const el = anchor.nodeType === 3 ? anchor.parentElement : anchor;
+        const block = el?.closest?.('p, div, li, td, th, h1, h2, h3, h4, h5, h6');
+        if (block && root.contains(block) && block !== root) return block;
+    } catch {
+        /* fall through */
+    }
+    return root;
+}
+
+function scanRootForSpellMarks(root, typo, { storeSuggestions = true, scope = null } = {}) {
+    if (!root || !typo) return;
+    const target = scope && root.contains(scope) ? scope : root;
+    unwrapSpellMarks(target);
+    const walker = root.ownerDocument.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) {
+        if (shouldScanNode(walker.currentNode)) nodes.push(walker.currentNode);
+    }
+    nodes.forEach((node) => scanTextNode(typo, node, storeSuggestions));
+}
+
+const decorateHtmlCache = new Map();
+const DECORATE_HTML_CACHE_MAX = 40;
+
+/** Preview HTML — wrap misspellings so underlines show outside the editor. */
+export function decorateHtmlWithSpellMarks(html) {
+    const raw = String(html || '');
+    if (!raw || !typoInstance) {
+        void loadTypo();
+        return raw;
+    }
+    const cached = decorateHtmlCache.get(raw);
+    if (cached != null) return cached;
+    try {
+        const doc = new DOMParser().parseFromString(`<div id="__ems_spell_root">${raw}</div>`, 'text/html');
+        const root = doc.getElementById('__ems_spell_root');
+        if (!root) return raw;
+        scanRootForSpellMarks(root, typoInstance, { storeSuggestions: false });
+        const out = root.innerHTML;
+        if (decorateHtmlCache.size >= DECORATE_HTML_CACHE_MAX) {
+            const first = decorateHtmlCache.keys().next().value;
+            decorateHtmlCache.delete(first);
+        }
+        decorateHtmlCache.set(raw, out);
+        return out;
+    } catch {
+        return raw;
+    }
+}
+
+/** Remove spell-check decoration from a live DOM subtree (PDF/print clone). */
+export function stripSpellMarksFromDom(root) {
+    if (!root) return;
+    unwrapSpellMarks(root);
+    root.querySelectorAll?.(`.${SPELL_MARK_CLASS}, [data-spell-id]`).forEach((span) => {
+        const id = span.getAttribute?.('data-spell-id');
+        if (id) markSuggestionsById.delete(id);
+        const parent = span.parentNode;
+        if (!parent) return;
+        while (span.firstChild) parent.insertBefore(span.firstChild, span);
+        parent.removeChild(span);
+    });
+    const targets = new Set();
+    if (typeof root.innerHTML === 'string') targets.add(root);
+    root.querySelectorAll?.('.clause-content, .jodit-wysiwyg, .clause-editor-wrapper').forEach((el) => {
+        targets.add(el);
+    });
+    targets.forEach((el) => {
+        const cleaned = stripSpellMarkExportDebrisFromHtmlString(el.innerHTML || '');
+        if (cleaned !== el.innerHTML) el.innerHTML = cleaned;
+    });
+}
+
+async function scanEditorSpellings(jodit, getEditorBody, { force = false, full = false } = {}) {
     if (!jodit || jodit.__emsSpellScanSuspended) return;
     if (jodit.__emsSpellMenuOpen) return;
     if (jodit.__emsApplyingClauseHistory) return;
-    if (jodit.__emsListApplyLock || jodit.__emsDeleteKeyLock || jodit.__emsTypingLock) return;
-    const root = (typeof getEditorBody === 'function' && getEditorBody()) || jodit.editor;
+    /* Never rewrite the DOM mid-keystroke — even force scans must wait (caret jumps to start otherwise). */
+    if (jodit.__emsTypingLock || jodit.__emsDeleteKeyLock || jodit.__emsListApplyLock) {
+        scheduleSpellScan(jodit, getEditorBody, { force: false, full });
+        return;
+    }
+    if (!force && jodit.__emsSpellScanRunning) return;
+    const root = (typeof getEditorBody === 'function' && getEditorBody())
+        || jodit.editor
+        || jodit.container?.querySelector?.('.jodit-wysiwyg')
+        || null;
     if (!root) return;
-    if (isSpellEditorFocused(jodit, getEditorBody)) return;
     const typo = await loadTypo();
     if (!typo || !root.isConnected) return;
     if (jodit.__emsSpellScanSuspended || jodit.__emsSpellMenuOpen) return;
+    if (jodit.__emsTypingLock || jodit.__emsDeleteKeyLock || jodit.__emsListApplyLock) {
+        scheduleSpellScan(jodit, getEditorBody, { force: false, full });
+        return;
+    }
+
+    const focused = isSpellEditorFocused(jodit, getEditorBody);
+    const runFull = Boolean(full || force || !focused);
+    const scope = resolveSpellScanScope(root, { full: runFull });
+    /* Live typing: skip suggestion prefill (Hunspell suggest is expensive). */
+    const storeSuggestions = runFull;
 
     jodit.__emsSpellScanRunning = true;
     try {
         preserveClauseEditorSelectionDuring(jodit, () => {
-            unwrapSpellMarks(root);
-            const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-            const nodes = [];
-            while (walker.nextNode()) {
-                if (shouldScanNode(walker.currentNode)) nodes.push(walker.currentNode);
-            }
-            nodes.forEach((node) => scanTextNode(typo, node));
+            withJoditHistoryBlocked(jodit, () => {
+                scanRootForSpellMarks(root, typo, { storeSuggestions, scope });
+            });
         });
-        prefillSpellMarkSuggestions(typo, root);
+        if (storeSuggestions) {
+            prefillSpellMarkSuggestions(typo, scope === root ? root : scope);
+        }
     } finally {
         jodit.__emsSpellScanRunning = false;
     }
+}
+
+/** Re-run spell check after clause HTML is loaded into the editor. */
+export function rescanClauseEditorSpellcheck(jodit, getEditorBody) {
+    scheduleSpellScan(jodit, getEditorBody || jodit?.__emsClauseEditorBody, {
+        immediate: true,
+        force: true,
+        full: true,
+    });
 }
 
 function isSpellEditorFocused(jodit, getEditorBody) {
@@ -464,19 +654,33 @@ function shouldDeferSpellScan(jodit) {
 function unwrapSpellMarksInEditor(jodit, getEditorBody) {
     const root = (typeof getEditorBody === 'function' && getEditorBody()) || jodit?.editor;
     if (!root?.querySelector?.(`.${SPELL_MARK_CLASS}`)) return;
-    preserveClauseEditorSelectionDuring(jodit, () => unwrapSpellMarks(root));
+    try {
+        preserveClauseEditorSelectionDuring(jodit, () => unwrapSpellMarks(root));
+    } catch {
+        unwrapSpellMarks(root);
+    }
 }
 
 function scheduleSpellScan(jodit, getEditorBody, options = {}) {
-    if (!jodit || shouldDeferSpellScan(jodit)) return;
-    if (!options.force && isSpellEditorFocused(jodit, getEditorBody)) return;
+    if (!jodit) return;
     if (jodit.__emsSpellScanTimer) clearTimeout(jodit.__emsSpellScanTimer);
-    const delay = options.immediate ? 48 : SCAN_DEBOUNCE_MS;
+    const focused = isSpellEditorFocused(jodit, getEditorBody);
+    const delay = options.immediate
+        ? 80
+        : focused
+          ? SCAN_DEBOUNCE_FOCUSED_MS
+          : SCAN_DEBOUNCE_MS;
     jodit.__emsSpellScanTimer = setTimeout(() => {
         jodit.__emsSpellScanTimer = null;
-        if (shouldDeferSpellScan(jodit)) return;
-        if (!options.force && isSpellEditorFocused(jodit, getEditorBody)) return;
-        void scanEditorSpellings(jodit, getEditorBody);
+        if (!options.force && shouldDeferSpellScan(jodit)) {
+            /* Typing / locks still active — retry after another debounce instead of dropping the scan. */
+            scheduleSpellScan(jodit, getEditorBody, { force: false, full: options.full });
+            return;
+        }
+        void scanEditorSpellings(jodit, getEditorBody, {
+            force: options.force,
+            full: options.full,
+        });
     }, delay);
 }
 
@@ -746,82 +950,128 @@ export function registerClauseEditorSpellcheck(jodit, getEditorBody) {
     if (!jodit || jodit.__emsSpellcheckBound) return;
     jodit.__emsSpellcheckBound = true;
 
-    void loadTypo().then(() => {
-        if (!isSpellEditorFocused(jodit, getEditorBody)) {
-            scheduleSpellScan(jodit, getEditorBody, { immediate: true, force: true });
-        }
-    });
+    const SPELL_STYLE_ID = 'ems-spell-check-style';
+    if (typeof document !== 'undefined' && !document.getElementById(SPELL_STYLE_ID)) {
+        const style = document.createElement('style');
+        style.id = SPELL_STYLE_ID;
+        style.textContent = `
+            #quote-preview span.ems-spell-mark,
+            .clause-editor-wrapper span.ems-spell-mark,
+            .jodit-wysiwyg span.ems-spell-mark {
+                border-bottom: 2px wavy #0078d4 !important;
+                background-image: linear-gradient(#0078d4, #0078d4) !important;
+                background-repeat: repeat-x !important;
+                background-position: 0 100% !important;
+                background-size: 100% 2px !important;
+                padding-bottom: 1px !important;
+                text-decoration: none !important;
+            }
+        `;
+        document.head.appendChild(style);
+    }
 
-    const enableNativeSpellcheck = () => {
-        const root = (typeof getEditorBody === 'function' && getEditorBody()) || jodit.editor;
-        if (!root) return;
-        root.setAttribute('spellcheck', 'false');
-        root.setAttribute('lang', 'en-US');
+    const resolveRoot = () =>
+        (typeof getEditorBody === 'function' && getEditorBody()) ||
+        jodit.editor ||
+        jodit.container?.querySelector?.('.jodit-wysiwyg') ||
+        null;
+
+    const requestScan = (immediate = false) => {
+        if (jodit.__emsSpellScanRunning || jodit.__emsSpellScanSuspended) return;
+        if (jodit.__emsTypingLock || jodit.__emsDeleteKeyLock) {
+            scheduleSpellScan(jodit, getEditorBody, { immediate: false, force: false });
+            return;
+        }
+        scheduleSpellScan(jodit, getEditorBody, { immediate, force: true, full: true });
     };
 
-    enableNativeSpellcheck();
-    jodit.e.on('afterInit afterAddPlace prepareWYSIWYGEditor', enableNativeSpellcheck);
+    void loadTypo().then(() => requestScan(true));
 
-    jodit.e.on('focus.emsSpellUnwrap', () => {
-        if (jodit.__emsSpellScanTimer) {
-            clearTimeout(jodit.__emsSpellScanTimer);
-            jodit.__emsSpellScanTimer = null;
-        }
-        unwrapSpellMarksInEditor(jodit, getEditorBody);
+    jodit.e.on('afterSetValue.emsSpell afterInit.emsSpell afterAddPlace.emsSpell', () => {
+        requestScan(true);
     });
 
-    jodit.e.on('blur.emsSpellScan', () => {
-        scheduleSpellScan(jodit, getEditorBody, { immediate: true, force: true });
-    });
+    const host = jodit.container || jodit.editor;
+    if (host && !host.__emsSpellDelegateBound) {
+        host.__emsSpellDelegateBound = true;
+        let nativeTimer = null;
+        const onNative = (delay) => {
+            if (nativeTimer) clearTimeout(nativeTimer);
+            nativeTimer = setTimeout(() => {
+                nativeTimer = null;
+                /* force:false — respect typing lock; scanEditorSpellings also preserves caret */
+                void scanEditorSpellings(jodit, getEditorBody, { force: false });
+            }, delay);
+        };
+        host.addEventListener('input', () => onNative(SCAN_DEBOUNCE_FOCUSED_MS), true);
+        host.addEventListener('focusout', () => {
+            /* Leaving the editor — full document scan so underlines catch up. */
+            if (nativeTimer) clearTimeout(nativeTimer);
+            nativeTimer = setTimeout(() => {
+                nativeTimer = null;
+                void scanEditorSpellings(jodit, getEditorBody, { force: true, full: true });
+            }, 220);
+        }, true);
+        host.addEventListener('contextmenu', (e) => {
+            if (e.defaultPrevented) return;
+            const root = resolveRoot();
+            if (!root || !root.contains(e.target)) return;
+            if (isInsideTable(e.target, root)) return;
+            const loc = getWordAtPoint(root, e.clientX, e.clientY);
+            if (!loc?.word) return;
+            if (!loc.mark && typoInstance && isWordCorrect(typoInstance, loc.word)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            openSpellContextMenu(jodit, loc, e.clientX, e.clientY, getEditorBody, {
+                validate: !loc.mark,
+            });
+        }, true);
+        jodit.__emsSpellNativeTimerClear = () => {
+            if (nativeTimer) {
+                clearTimeout(nativeTimer);
+                nativeTimer = null;
+            }
+        };
+    }
 
-    const onContextMenu = (e) => {
-        if (e.defaultPrevented) return;
-
-        const root = (typeof getEditorBody === 'function' && getEditorBody()) || jodit.editor;
-        if (!root || !root.contains(e.target)) return;
-        if (isInsideTable(e.target, root)) return;
-
-        const loc = getWordAtPoint(root, e.clientX, e.clientY);
-        if (!loc?.word) return;
-
-        if (!loc.mark && typoInstance && isWordCorrect(typoInstance, loc.word)) return;
-
-        e.preventDefault();
-        e.stopPropagation();
-        openSpellContextMenu(jodit, loc, e.clientX, e.clientY, getEditorBody, {
-            validate: !loc.mark,
-        });
+    let kickAttempts = 0;
+    const kickUntilContent = () => {
+        if (!isJoditAliveSafe(jodit) || kickAttempts > 4) return;
+        kickAttempts += 1;
+        requestScan(true);
+        const root = resolveRoot();
+        const hasText = Boolean(root?.textContent?.trim());
+        if (hasText && kickAttempts >= 1) return;
+        jodit.__emsSpellKickTimer = setTimeout(kickUntilContent, 400);
     };
-
-    const attach = () => {
-        const root = (typeof getEditorBody === 'function' && getEditorBody()) || jodit.editor;
-        if (!root || root.__emsSpellCtxHandler === onContextMenu) return;
-
-        if (root.__emsSpellCtxHandler) {
-            root.removeEventListener('contextmenu', root.__emsSpellCtxHandler);
-        }
-        root.__emsSpellCtxHandler = onContextMenu;
-        root.addEventListener('contextmenu', onContextMenu);
-    };
-
-    attach();
-    jodit.e.on('afterInit afterAddPlace prepareWYSIWYGEditor', attach);
+    kickUntilContent();
 
     jodit.e.on('beforeDestruct', () => {
+        if (jodit.__emsSpellKickTimer) {
+            clearTimeout(jodit.__emsSpellKickTimer);
+            jodit.__emsSpellKickTimer = null;
+        }
+        if (jodit.__emsSpellBlurTimer) {
+            clearTimeout(jodit.__emsSpellBlurTimer);
+            jodit.__emsSpellBlurTimer = null;
+        }
         if (jodit.__emsSpellScanTimer) {
             clearTimeout(jodit.__emsSpellScanTimer);
             jodit.__emsSpellScanTimer = null;
         }
+        jodit.__emsSpellNativeTimerClear?.();
         closeSpellContextMenu();
-        const root = (typeof getEditorBody === 'function' && getEditorBody()) || jodit.editor;
-        if (root) {
-            unwrapSpellMarks(root);
-            if (root.__emsSpellCtxHandler) {
-                root.removeEventListener('contextmenu', root.__emsSpellCtxHandler);
-                root.__emsSpellCtxHandler = null;
-            }
-        }
+        const root = resolveRoot();
+        if (root) unwrapSpellMarks(root);
     });
+}
+
+function isJoditAliveSafe(jodit) {
+    try {
+        return Boolean(jodit && !jodit.isInDestruct && jodit.editor);
+    } catch {
+        return false;
+    }
 }
 
 if (typeof window !== 'undefined') {

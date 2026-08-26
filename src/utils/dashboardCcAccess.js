@@ -321,12 +321,15 @@ export function getDashboardDivisionOptions(currentUser, enqItems, enquiryFor, m
 }
 
 /**
- * Division string used for SE list + CC coordinator lookup (matches DashboardFilters behaviour).
- * Coordinator + "All" divisions → ''. CC user + empty division → first CC-linked department from master.
+ * Division string used for single-division SE / CC coordinator lookup.
+ * Explicit "All" → '' (caller should use allowed-division union helpers instead).
+ * CC user + empty division → first CC-linked department (legacy fallback).
  */
 export function getEffectiveDivisionForDashboardSe(filtersDivision, currentUser, enqItems) {
     const fd = String(filtersDivision || '').trim();
     if (fd && fd.toLowerCase() !== 'all') return fd;
+
+    if (fd.toLowerCase() === 'all') return '';
 
     if (isAdminRole(currentUser) || isManagementDepartmentUser(currentUser)) {
         return '';
@@ -341,25 +344,63 @@ export function getEffectiveDivisionForDashboardSe(filtersDivision, currentUser,
 
 /**
  * Full names from Master_ConcernedSE (`masters.users`) whose Department equals the selected division.
- * When division is empty or All → every distinct FullName (coordinator “all divisions”, or before a pick).
+ * Empty / All → [] (use {@link getMasterConcernedSeNamesForDivisions} with allowed departments).
  */
 export function getMasterConcernedSeNamesForDivision(division, masterUsers) {
-    const rows = masterUsers || [];
-    const allNames = Array.from(
-        new Set(rows.map((u) => String(u.FullName ?? u.fullName ?? '').trim()).filter(Boolean))
-    );
     if (!division || String(division).trim() === '' || String(division).trim().toLowerCase() === 'all') {
-        return allNames;
+        return [];
     }
     const d = String(division).trim().toLowerCase();
     return Array.from(
         new Set(
-            rows
+            (masterUsers || [])
                 .filter((u) => String(u.Department ?? '').trim().toLowerCase() === d)
                 .map((u) => String(u.FullName ?? u.fullName ?? '').trim())
                 .filter(Boolean)
         )
     );
+}
+
+/** Union of Master_ConcernedSE FullNames across multiple department labels. */
+export function getMasterConcernedSeNamesForDivisions(divisions, masterUsers) {
+    const names = new Set();
+    for (const div of divisions || []) {
+        for (const n of getMasterConcernedSeNamesForDivision(div, masterUsers)) {
+            names.add(n);
+        }
+    }
+    return [...names];
+}
+
+/**
+ * SE dropdown names for the current dashboard division filter.
+ * "All Divisions" → SEs in the user's allowed departments only (not company-wide).
+ */
+export function getDashboardSeNamesForFilter(filtersDivision, currentUser, enqItems, masterUsers, enquiryFor = []) {
+    const fd = String(filtersDivision || '').trim();
+    const allowedDivisions = getDashboardDivisionOptions(
+        currentUser,
+        enqItems,
+        enquiryFor,
+        masterUsers
+    ).filter((d) => d && String(d).trim().toLowerCase() !== 'all');
+
+    if (!fd || fd.toLowerCase() === 'all') {
+        return getMasterConcernedSeNamesForDivisions(allowedDivisions, masterUsers);
+    }
+
+    return getMasterConcernedSeNamesForDivision(fd, masterUsers);
+}
+
+/** CC coordinator FullNames across one or more departments. */
+export function getCcCoordinatorNamesForDivisions(divisions, enqItems, users) {
+    const names = new Set();
+    for (const div of divisions || []) {
+        for (const n of getCcCoordinatorNamesForDivision(div, enqItems, users)) {
+            names.add(n);
+        }
+    }
+    return [...names];
 }
 
 /**
@@ -394,28 +435,29 @@ export function getCcCoordinatorNamesForDivision(division, enqItems, users) {
     return [...names];
 }
 
-export function isCcCoordinatorNameSelection(selectedName, division, enqItems, users) {
+export function isCcCoordinatorNameSelection(selectedName, division, enqItems, users, allowedDivisions = null) {
     if (!selectedName || selectedName === 'All') return false;
-    const coordinators = getCcCoordinatorNamesForDivision(division, enqItems, users);
     const sel = String(selectedName).trim().toLowerCase();
-    return coordinators.some((n) => n.trim().toLowerCase() === sel);
+    const div = String(division || '').trim();
+    const divisions =
+        !div || div.toLowerCase() === 'all'
+            ? (allowedDivisions || []).filter((d) => d && String(d).trim().toLowerCase() !== 'all')
+            : [div];
+    if (divisions.length === 0) {
+        const coordinators = getCcCoordinatorNamesForDivision(div, enqItems, users);
+        return coordinators.some((n) => n.trim().toLowerCase() === sel);
+    }
+    return getCcCoordinatorNamesForDivisions(divisions, enqItems, users).some(
+        (n) => n.trim().toLowerCase() === sel
+    );
 }
 
 /**
- * Returns API salesEngineer param: 'All' when a CC coordinator display name is chosen, else the raw selection.
+ * API salesEngineer param — always the selected name (or All).
+ * Do not remap CC-mail names to All: many SEs are also on CCMailIds; selecting them must filter to that SE only.
  */
 export function resolveEffectiveSalesEngineerFilter({
     salesEngineer,
-    division,
-    enqItems,
-    users,
-    currentUserEmail,
-    currentUser,
 }) {
-    const user = currentUser || { email: currentUserEmail, EmailId: currentUserEmail };
-    const effectiveDiv = getEffectiveDivisionForDashboardSe(division, user, enqItems);
-    if (isCcCoordinatorNameSelection(salesEngineer, effectiveDiv, enqItems, users)) {
-        return 'All';
-    }
     return salesEngineer;
 }

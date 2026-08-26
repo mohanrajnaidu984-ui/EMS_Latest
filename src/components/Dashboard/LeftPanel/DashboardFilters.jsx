@@ -2,9 +2,9 @@ import React from 'react';
 import { useAuth } from '../../../context/AuthContext';
 import {
     getCcCoordinatorNamesForDivision,
+    getCcCoordinatorNamesForDivisions,
     getDashboardDivisionOptions,
-    getEffectiveDivisionForDashboardSe,
-    getMasterConcernedSeNamesForDivision,
+    getDashboardSeNamesForFilter,
     getRegularUserDashboardSeName,
     isDashboardCoordinatorUser,
 } from '../../../utils/dashboardCcAccess';
@@ -23,35 +23,30 @@ const DashboardFilters = ({ filters, setFilters, masters, viewMode = 'all' }) =>
     const isCoordinator = isDashboardCoordinatorUser(currentUser, masters.enqItems);
     const showAllDivisionsOption = isCoordinator;
 
-    /** Division key for Master_ConcernedSE.Department + CC coordinator names (aligned with dashboard API). */
-    const effectiveDivisionForSeList = getEffectiveDivisionForDashboardSe(
+    const regularUserDivisionOptions = sortStringsAsc(
+        getDashboardDivisionOptions(currentUser, masters.enqItems, masters.enquiryFor, masters.users)
+    );
+
+    /** SEs for selected division, or union of allowed divisions when "All Divisions". */
+    const masterSeNamesForDivision = getDashboardSeNamesForFilter(
         filters.division,
         currentUser,
-        masters.enqItems
+        masters.enqItems,
+        masters.users,
+        masters.enquiryFor
     );
 
-    /** Master_ConcernedSE.FullName where Department matches selected division (`masters.users` = that table). */
-    const masterSeNamesForDivision = getMasterConcernedSeNamesForDivision(
-        effectiveDivisionForSeList,
-        masters.users
-    );
-
-    /** CC mail contacts for this department — selecting one shows all SEs for the division on calendars */
-    const ccCoordinatorNamesForDivision = effectiveDivisionForSeList
-        ? getCcCoordinatorNamesForDivision(
-            effectiveDivisionForSeList,
-            masters.enqItems,
-            masters.users
-        )
-        : [];
+    /** Include CC-mail contacts for the division(s); selecting any name filters calendar to that person. */
+    const fd = String(filters.division || '').trim();
+    const isAllDivisions = !fd || fd.toLowerCase() === 'all';
+    const ccCoordinatorNamesForDivision = isAllDivisions
+        ? getCcCoordinatorNamesForDivisions(regularUserDivisionOptions, masters.enqItems, masters.users)
+        : getCcCoordinatorNamesForDivision(fd, masters.enqItems, masters.users);
 
     const dashboardSeOptions = sortStringsAsc(
         Array.from(new Set([...masterSeNamesForDivision, ...ccCoordinatorNamesForDivision]))
     );
 
-    const regularUserDivisionOptions = sortStringsAsc(
-        getDashboardDivisionOptions(currentUser, masters.enqItems, masters.enquiryFor, masters.users)
-    );
     const regularUserSeOptions = sortStringsAsc(
         (() => {
             const name = getRegularUserDashboardSeName(currentUser, masters.users);

@@ -212,6 +212,217 @@ const fontNormalize = (v) =>
 
 const fontSizeNormalize = (v) => String(v).replace(/(px|pt)$/i, '');
 
+/**
+ * Jodit normalizeSize('10.5', 'pt') returns bare "10.5" (no unit) — invalid CSS,
+ * so the size is ignored and text keeps inherited ~9pt. Always finish with a unit.
+ */
+function ensureFontSizeCssValue(size, defaultUnit = 'pt') {
+    const s = String(size ?? '').trim();
+    if (!s) return s;
+    if (/(-?[\d.]+)(px|pt|em|rem|%)$/i.test(s)) return s;
+    if (/^-?[\d.]+$/i.test(s)) {
+        const unit = String(defaultUnit || 'pt').replace(/[^a-z%]/gi, '') || 'pt';
+        return `${s}${unit}`;
+    }
+    return s;
+}
+
+const TYPO_REINFORCE_SELECTOR =
+    'span, font, p, div, li, td, th, b, i, u, strong, em, a, h1, h2, h3, h4, h5, h6, label, sub, sup';
+
+function rangesIntersect(a, b) {
+    try {
+        return (
+            a.compareBoundaryPoints(Range.END_TO_START, b) < 0 &&
+            a.compareBoundaryPoints(Range.START_TO_END, b) > 0
+        );
+    } catch {
+        return false;
+    }
+}
+
+function elementIntersectsRange(el, range, doc) {
+    if (!el || !range) return false;
+    try {
+        if (typeof range.intersectsNode === 'function') {
+            return range.intersectsNode(el);
+        }
+    } catch {
+        /* falls through */
+    }
+    try {
+        const probe = doc.createRange();
+        probe.selectNodeContents(el);
+        return rangesIntersect(range, probe);
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Force font-size / font-family onto elements in the selection.
+ * commitStyle alone often wraps a parent span while nested Word/paste spans keep
+ * their own font-size — so only part of the selection appears to change.
+ * @param {object} editor
+ * @param {string} cssProp
+ * @param {string} cssValue
+ * @param {Range|null} [lockedRange] — capture before commitStyle; selection often collapses after.
+ */
+function reinforceTypographyInSelection(editor, cssProp, cssValue, lockedRange = null) {
+    const root = editor?.editor;
+    if (!root || !cssProp || cssValue == null || cssValue === '') return false;
+    const doc = root.ownerDocument;
+    let range = lockedRange;
+    if (!range) {
+        const sel = doc?.getSelection?.();
+        if (!sel?.rangeCount) return false;
+        range = sel.getRangeAt(0);
+    }
+    if (!range || range.collapsed) return false;
+
+    let workingRange;
+    try {
+        workingRange = range.cloneRange();
+    } catch {
+        workingRange = range;
+    }
+
+    const ancestorNode = workingRange.commonAncestorContainer;
+    const ancestorEl =
+        ancestorNode?.nodeType === 3 ? ancestorNode.parentElement : ancestorNode;
+    if (!ancestorEl || !root.contains(ancestorEl)) return false;
+
+    const elementFullyInRange = (el) => {
+        try {
+            const probe = doc.createRange();
+            probe.selectNode(el);
+            return (
+                workingRange.compareBoundaryPoints(Range.START_TO_START, probe) <= 0 &&
+                workingRange.compareBoundaryPoints(Range.END_TO_END, probe) >= 0
+            );
+        } catch {
+            try {
+                const probe = doc.createRange();
+                probe.selectNodeContents(el);
+                return (
+                    workingRange.compareBoundaryPoints(Range.START_TO_START, probe) <= 0 &&
+                    workingRange.compareBoundaryPoints(Range.END_TO_END, probe) >= 0
+                );
+            } catch {
+                return false;
+            }
+        }
+    };
+
+    const hasOwnTypo = (el) => {
+        if (!el?.style && el?.tagName !== 'FONT') return false;
+        if (cssProp === 'font-size') {
+            if (el.style?.fontSize || el.style?.getPropertyValue?.('font-size')) return true;
+            if (el.tagName === 'FONT' && el.getAttribute('size')) return true;
+            const styleAttr = el.getAttribute?.('style') || '';
+            if (/font-size\s*:/i.test(styleAttr)) return true;
+            return false;
+        }
+        if (el.style?.fontFamily || el.style?.getPropertyValue?.('font-family')) return true;
+        if (el.tagName === 'FONT' && el.getAttribute('face')) return true;
+        return false;
+    };
+
+    const seen = new Set();
+    const targets = [];
+    const consider = (el) => {
+        if (!el || seen.has(el) || !root.contains(el) || el === root) return;
+        if (!elementIntersectsRange(el, workingRange, doc)) return;
+        /*
+         * Font-size: force onto every intersecting carrier. Nested Word/paste spans
+         * (often 9pt / 12px) must not keep a different size inside the selection.
+         * Font-family: keep the narrower rule to avoid restyling unselected siblings.
+         */
+        if (cssProp === 'font-size') {
+            seen.add(el);
+            targets.push(el);
+            return;
+        }
+        if (!elementFullyInRange(el) && !hasOwnTypo(el)) return;
+        seen.add(el);
+        targets.push(el);
+    };
+
+    if (ancestorEl !== root && ancestorEl.nodeType === 1) {
+        consider(ancestorEl);
+    }
+    const scope = ancestorEl.nodeType === 1 ? ancestorEl : root;
+    scope.querySelectorAll?.(TYPO_REINFORCE_SELECTOR).forEach(consider);
+    if (cssProp === 'font-size') {
+        scope.querySelectorAll?.('[style*="font-size"], font[size]').forEach(consider);
+    }
+    /* Ctrl+A: common ancestor is often the editor root — still walk all typography nodes. */
+    if (scope === root || !targets.length) {
+        root.querySelectorAll?.(TYPO_REINFORCE_SELECTOR).forEach(consider);
+        if (cssProp === 'font-size') {
+            root.querySelectorAll?.('[style*="font-size"], font[size]').forEach(consider);
+        }
+    }
+
+    /* Text nodes in the selection whose parents were missed — climb and force size. */
+    if (cssProp === 'font-size') {
+        try {
+            const walker = doc.createTreeWalker(
+                workingRange.commonAncestorContainer,
+                NodeFilter.SHOW_TEXT,
+                {
+                    acceptNode(node) {
+                        if (!node?.nodeValue || !String(node.nodeValue).replace(/\u00a0/g, ' ').trim()) {
+                            return NodeFilter.FILTER_REJECT;
+                        }
+                        try {
+                            return workingRange.intersectsNode(node)
+                                ? NodeFilter.FILTER_ACCEPT
+                                : NodeFilter.FILTER_REJECT;
+                        } catch {
+                            return NodeFilter.FILTER_REJECT;
+                        }
+                    },
+                }
+            );
+            let textNode = walker.nextNode();
+            while (textNode) {
+                let el = textNode.parentElement;
+                while (el && el !== root) {
+                    if (el.nodeType === 1) consider(el);
+                    el = el.parentElement;
+                }
+                textNode = walker.nextNode();
+            }
+        } catch {
+            /* ignore walker failures */
+        }
+    }
+
+    if (!targets.length) {
+        return applyFontStyleWithSpanFallback(
+            editor,
+            cssProp === 'font-size' ? 'fontSize' : 'fontFamily',
+            cssValue
+        );
+    }
+
+    targets.forEach((el) => {
+        try {
+            el.style?.setProperty(cssProp, cssValue, 'important');
+            if (cssProp === 'font-size' && el.tagName === 'FONT') {
+                el.removeAttribute('size');
+            }
+            if (cssProp === 'font-family' && el.tagName === 'FONT') {
+                el.removeAttribute('face');
+            }
+        } catch {
+            /* ignore */
+        }
+    });
+    return true;
+}
+
 const applyFontStyleWithSpanFallback = (editor, styleKey, styleValue) => {
     const root = editor?.editor;
     if (!root) return false;
@@ -304,12 +515,33 @@ const applyFontCommand = (editor, command, rawValue) => {
 
     const value =
         command === 'fontsize'
-            ? normalizeSize(rawValue, editor?.o?.defaultFontSizePoints || 'pt')
+            ? ensureFontSizeCssValue(
+                  normalizeSize(rawValue, editor?.o?.defaultFontSizePoints || 'pt'),
+                  editor?.o?.defaultFontSizePoints || 'pt'
+              )
             : rawValue;
 
     const style =
         command === 'fontsize' ? { fontSize: value } : { fontFamily: value };
     const styleKey = command === 'fontsize' ? 'fontSize' : 'fontFamily';
+    const cssProp = command === 'fontsize' ? 'font-size' : 'font-family';
+
+    /* Capture selection before commitStyle — it often collapses the live selection. */
+    let lockedRange = null;
+    try {
+        const live = editor.s?.range;
+        if (live && !live.collapsed) {
+            lockedRange = live.cloneRange();
+        } else {
+            const sel = editor.editor?.ownerDocument?.getSelection?.();
+            if (sel?.rangeCount) {
+                const r = sel.getRangeAt(0);
+                if (r && !r.collapsed) lockedRange = r.cloneRange();
+            }
+        }
+    } catch {
+        lockedRange = null;
+    }
 
     let applied = false;
     try {
@@ -328,6 +560,11 @@ const applyFontCommand = (editor, command, rawValue) => {
         if (applyFontStyleWithSpanFallback(editor, styleKey, value)) {
             applied = true;
         }
+    }
+
+    /* Always reinforce nested spans/fonts so Word/paste inline sizes cannot win. */
+    if (reinforceTypographyInSelection(editor, cssProp, value, lockedRange)) {
+        applied = true;
     }
 
     if (!applied) return false;

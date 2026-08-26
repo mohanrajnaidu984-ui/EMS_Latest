@@ -63,6 +63,16 @@
     font-size: 0.78rem !important;
 }
 
+/* Total-row metric labels (Booking Job Value / GP %) — match body 9px so the text fits the cell */
+.sales-target-grid-table tfoot .sales-target-col-metric {
+    font-size: 9px !important;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    line-height: 1.15;
+    white-space: nowrap;
+    padding: 6px 6px !important;
+}
+
 /* Rounded outer shell for the targets grid (clips header/footer corners) */
 .sales-target-grid-wrap {
     border-radius: 12px;

@@ -218,10 +218,9 @@ SMTP_ENCRYPTION=STARTTLS
 SMTP_IPV4=1
 
 # --- File attachments ---
-# Prefer UNC if PM2 account has Modify. Else local fallback under data\\ems-attachments.
+# Strict UNC only — never write to backend data\\ems-attachments
 ENQUIRY_ATTACHMENTS_ROOT=\\\\151.50.20.129\\ems app
-# Optional local override:
-# ENQUIRY_ATTACHMENTS_ROOT=${SITE_ROOT}\\data\\ems-attachments
+EMS_ATTACHMENTS_DISABLE_LOCAL_FALLBACK=1
 
 # --- Enquiry email (Outlook COM fails under PM2/service) ---
 EMS_ENQUIRY_NOTIFY_VIA_SMTP=1

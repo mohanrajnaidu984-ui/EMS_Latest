@@ -13,9 +13,11 @@
   "dependencies": {
     "@fontsource/inter": "^5.2.8",
     "date-fns": "^4.1.0",
+    "docx": "^9.7.1",
     "exceljs": "^4.4.0",
     "html2pdf.js": "^0.14.0",
     "jodit-react": "^5.3.21",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.554.0",
     "pptxgenjs": "^4.0.1",
     "qrcode": "^1.5.4",

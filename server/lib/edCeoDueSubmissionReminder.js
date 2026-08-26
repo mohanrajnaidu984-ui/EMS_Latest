@@ -101,6 +101,7 @@ function buildEdCeoEnquiryListTableHtml(rows) {
         'Consultant Name',
         'Due Date',
         'Enquiry Details',
+        'Enquiry Created By',
     ];
 
     const headRow = headers.map((h) => `<th style="${thStyle}">${escapeHtml(h)}</th>`).join('');
@@ -117,6 +118,7 @@ function buildEdCeoEnquiryListTableHtml(rows) {
                 row.consultantName,
                 row.dueDate,
                 row.enquiryDetails,
+                row.enquiryCreatedBy,
             ];
             return `<tr>${cells
                 .map((c) => `<td style="${tdStyle}">${escapeHtml(c).replace(/\n/g, '<br>')}</td>`)
@@ -257,6 +259,7 @@ function mapRowToListEntry(row, divisionName) {
         consultantName: displayConsultantName(row),
         dueDate: formatShortDate(row.DueDate),
         enquiryDetails: String(row.EnquiryDetails || '').trim(),
+        enquiryCreatedBy: String(row.CreatedBy || '').trim(),
     };
 }
 

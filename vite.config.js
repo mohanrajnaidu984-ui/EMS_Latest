@@ -10,6 +10,8 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    /** Allow importing Hunspell dicts as Vite assets (production-safe hashed URLs). */
+    assetsInclude: ['**/*.aff', '**/*.dic'],
     optimizeDeps: {
       include: ['exceljs']
     },
@@ -37,6 +39,11 @@ export default defineConfig(({ mode }) => {
           proxyTimeout: 600000,
         },
         '/uploads': {
+          target: apiTarget,
+          changeOrigin: true,
+          secure: false,
+        },
+        '/dictionaries': {
           target: apiTarget,
           changeOrigin: true,
           secure: false,

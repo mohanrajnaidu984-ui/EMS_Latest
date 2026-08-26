@@ -1,0 +1,14 @@
+const fs = require('fs');
+const path = require('path');
+const dir = path.join(process.env.TEMP || require('os').tmpdir(), 'ems-quote-pdf');
+const files = fs.readdirSync(dir).filter((f) => f.endsWith('.html') && !f.startsWith('diag'));
+files.sort((a, b) => fs.statSync(path.join(dir, b)).mtimeMs - fs.statSync(path.join(dir, a)).mtimeMs);
+const html = fs.readFileSync(path.join(dir, files[0]), 'utf8');
+const start = html.indexOf('id="ems-pdf-sharp-text"');
+const end = html.indexOf('</style></head>', start);
+const block = html.slice(start, end);
+console.log('inject length', block.length);
+console.log('has landscape 297', block.includes('297mm'));
+console.log('has landscape class rule', block.includes('quote-a4-sheet--landscape'));
+const last2k = block.slice(-2000);
+console.log('last 2000 chars:\n', last2k);

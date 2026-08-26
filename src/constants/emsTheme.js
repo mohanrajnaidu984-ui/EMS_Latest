@@ -121,6 +121,8 @@ export const EMS_QUOTE_PRICING_TABLE_MARGIN_TOP = '12px';
 export const EMS_QUOTE_PRICING_TABLE_HEADER_BG = EMS_QUOTE_NAVY;
 export const EMS_QUOTE_PRICING_TABLE_HEADER_COLOR = '#ffffff';
 export const EMS_QUOTE_PRICING_TABLE_TOTAL_BG = '#f8fafc';
+/** Slightly darker than TOTAL_BG — Discount / Final Discounted Price rows. */
+export const EMS_QUOTE_PRICING_TABLE_DISCOUNT_BG = '#e2e8f0';
 /** Overall table width — 20% narrower than full clause width. */
 export const EMS_QUOTE_PRICING_TABLE_WIDTH = '80%';
 /** Tight vertical padding so single-line rows fit the 24px row model. */

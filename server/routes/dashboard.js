@@ -378,8 +378,8 @@ function bindDashboardCalendarFilters(request, query, resolved) {
 }
 
 /** Daily grid + monthly totals in one DB round-trip (two result sets). */
-function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter) {
-    const dueNoQuoteSql = buildDashboardNoQuoteSql('fe', '@division');
+function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, division = '') {
+    const dueNoQuoteSql = buildDashboardNoQuoteSql('fe', division);
     const dailyPart = `
             WITH FilteredEnquiries AS (
                 SELECT RequestNo, EnquiryDate, DueDate, SiteVisitDate, Status 
@@ -495,7 +495,9 @@ async function runDashboardCalendarMonthQuery(reqQuery, month, year) {
     const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(request, reqQuery, resolved);
     request.input('month', sql.Int, parseInt(month, 10));
     request.input('year', sql.Int, parseInt(year, 10));
-    const result = await request.query(buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter));
+    const result = await request.query(
+        buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, reqQuery.division)
+    );
     return splitDashboardCalendarBatchResult(result);
 }
 
@@ -806,7 +808,9 @@ router.get('/calendars-history', async (req, res) => {
             const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(request, req.query, resolved);
             request.input('month', sql.Int, parseInt(m, 10));
             request.input('year', sql.Int, parseInt(y, 10));
-            const result = await request.query(buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter));
+            const result = await request.query(
+                buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, req.query.division)
+            );
             return splitDashboardCalendarBatchResult(result);
         };
 
@@ -870,7 +874,9 @@ router.get('/calendars-pair', async (req, res) => {
             const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(request, req.query, resolved);
             request.input('month', sql.Int, parseInt(m, 10));
             request.input('year', sql.Int, parseInt(y, 10));
-            const result = await request.query(buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter));
+            const result = await request.query(
+                buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, req.query.division)
+            );
             return splitDashboardCalendarBatchResult(result);
         };
 

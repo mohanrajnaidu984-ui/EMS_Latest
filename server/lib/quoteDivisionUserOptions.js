@@ -83,6 +83,7 @@ function userToOption(u, type = 'Division', { allowExcluded = false } = {}) {
         value: fullName,
         label: fullName,
         designation: String(u.Designation || '').trim(),
+        email: String(u.EmailId || u.email || '').trim(),
         mobileNumber: u.MobileNumber != null ? String(u.MobileNumber).trim() : '',
         type,
     };

@@ -112,12 +112,20 @@ function findSystemChromeCandidates(candidates, seen) {
                 path.join(root, 'Google', 'Chrome', 'Application', 'chrome.exe'),
                 { source: 'system-chrome' }
             );
-            pushCandidate(
-                candidates,
-                seen,
-                path.join(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-                { source: 'system-edge' }
-            );
+            /**
+             * Edge often fails Puppeteer launch on Windows Server (Code 1002) while still
+             * passing PE/size checks — that forces html2pdf fallback and lost overlays.
+             * Opt in with PUPPETEER_ALLOW_EDGE=1 only when Edge is known to work.
+             */
+            const allowEdge = /^(1|true|yes)$/i.test(String(process.env.PUPPETEER_ALLOW_EDGE || '').trim());
+            if (allowEdge) {
+                pushCandidate(
+                    candidates,
+                    seen,
+                    path.join(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+                    { source: 'system-edge' }
+                );
+            }
         }
         return;
     }

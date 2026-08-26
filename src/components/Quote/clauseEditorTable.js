@@ -965,6 +965,11 @@ function tryApplyFormatToMultiSelectedCells(jodit, getEditorBody, command, value
                 if (size && !/px|pt|em|rem|%$/i.test(size)) {
                     size = normalizeSize(size, jodit.o?.defaultFontSizePoints || 'pt');
                 }
+                /* Jodit leaves decimals unitless ("10.5") — invalid CSS; force pt/px. */
+                if (size && !/px|pt|em|rem|%$/i.test(size) && /^-?[\d.]+$/i.test(size)) {
+                    const unit = String(jodit.o?.defaultFontSizePoints || 'pt').replace(/[^a-z%]/gi, '') || 'pt';
+                    size = `${size}${unit}`;
+                }
                 applyFastStyleToTableCells(cells, 'font-size', size);
                 clearEditorTextSelection(jodit);
                 restoreTableCellSelection(jodit, cells);
@@ -1181,11 +1186,26 @@ function registerTableTextSelectionGuard(jodit, getEditorBody) {
         root.__emsTableTextSelGuardBound = true;
         const doc = root.ownerDocument || document;
         const onTextEditKeyDown = (e) => {
-            if (e.key !== 'Backspace' && e.key !== 'Delete') return;
-            if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
-            /* Multi-cell clear is handled by registerTableCellClearOnDelete. */
+            if (e.ctrlKey || e.metaKey || e.altKey) return;
             if (e.defaultPrevented) return;
-            clearTableCellBlockSelectionForTextEdit(jodit, getEditorBody);
+            const key = e.key || '';
+            const isPrintable =
+                key.length === 1 ||
+                key === 'Backspace' ||
+                key === 'Delete' ||
+                key === 'Enter' ||
+                key === 'Tab';
+            if (!isPrintable) return;
+            /* Multi-cell / selecting lock blocks caret typing — clear on any text edit. */
+            const staged = getStagedTableFormatCells(jodit);
+            const selected = getSelectedTableCells(jodit);
+            if (staged.length >= 2 || selected.length >= 2) {
+                jodit.__emsFormatTableCells = null;
+                jodit.__emsToolbarCellFormat = false;
+                clearAllTableCellSelection(jodit);
+            } else {
+                clearTableCellBlockSelectionForTextEdit(jodit, getEditorBody);
+            }
         };
         doc.addEventListener('selectionchange', onSelectionChange);
         root.addEventListener('keydown', onTextEditKeyDown, true);
@@ -1484,6 +1504,12 @@ export function buildEmsOfficePasteTablePresentationCss(scope) {
         overflow-wrap: anywhere !important;
         padding: 0 3px !important;
     }
+    ${officeTable} td[colspan],
+    ${officeTable} th[colspan] {
+        overflow: visible !important;
+        word-wrap: normal !important;
+        overflow-wrap: normal !important;
+    }
     ${officeTable} td[data-ems-cell-fill],
     ${officeTable} th[data-ems-cell-fill],
     ${officeTable} td[data-ems-cell-color],
@@ -1524,6 +1550,15 @@ export function buildEmsOfficePasteTablePresentationCss(scope) {
     ${officeTable} td > * + *,
     ${officeTable} th > * + * {
         margin-top: 0 !important;
+    }
+    ${officeTable} td img,
+    ${officeTable} th img,
+    ${officeTable} img[data-ems-office-paste-img] {
+        max-width: 100% !important;
+        height: auto !important;
+        display: inline-block !important;
+        vertical-align: middle !important;
+        object-fit: contain !important;
     }`;
 }
 
@@ -1773,29 +1808,187 @@ function readOfficeTableColumnWidthsPx(table, rows, colCount) {
     return widths;
 }
 
+function parseStoredOfficeTableColumnWidths(table) {
+    const stored = String(table?.getAttribute?.('data-ems-col-widths') || '').trim();
+    if (!stored) return [];
+    return stored.split(',').map((part) => {
+        const n = parseFloat(String(part).trim());
+        return n > 0 ? Math.max(MIN_TABLE_COLUMN_WIDTH, Math.round(n)) : 0;
+    });
+}
+
+/** Re-apply the saved px column model exactly — never re-measure from page-local rows. */
+export function syncOfficePasteTableColumnLayout(table) {
+    if (!table || !isOfficePasteTableEl(table)) return;
+    if (isTableStructureResizeActiveForTable(table)) return;
+    const widths = parseStoredOfficeTableColumnWidths(table).filter((w) => w > 0);
+    if (!widths.length) return;
+    const rows = getTableRows(table);
+    if (!rows.length) return;
+    applyColumnWidths(table, rows, widths);
+}
+
+function buildLeadCellFromHtml(doc, html) {
+    const wrap = doc.createElement('div');
+    wrap.innerHTML = String(html || '').trim();
+    const cell = wrap.querySelector('td, th');
+    if (!cell) return createPaginationPadCell(doc);
+    const next = clonePaddedTableCell(cell);
+    next.removeAttribute('rowspan');
+    next.removeAttribute('colspan');
+    next.rowSpan = 1;
+    next.colSpan = 1;
+    return next;
+}
+
+function rebuildRowWithLeadingCells(tr, leadCells, colCount, doc) {
+    const newTr = /** @type {HTMLTableRowElement} */ (doc.createElement('tr'));
+    if (tr.getAttribute('style')) newTr.setAttribute('style', tr.getAttribute('style'));
+    [...tr.attributes].forEach((attr) => {
+        if (attr.name === 'style' || attr.name === 'data-ems-rowspan-leads') return;
+        newTr.setAttribute(attr.name, attr.value);
+    });
+    leadCells.forEach((cell) => newTr.appendChild(cell));
+    [...tr.cells].forEach((cell) => newTr.appendChild(cell.cloneNode(true)));
+    while (newTr.cells.length < colCount) {
+        newTr.appendChild(createPaginationPadCell(doc));
+    }
+    return newTr;
+}
+
+/** Stamp rowspan anchor cell HTML on split rows so page breaks can restore SL/LOCATION columns. */
+export function annotateOfficePasteSplitRowRowspanLeads(tr, rowIndex, grid) {
+    if (!tr || !grid || rowIndex < 0) return tr;
+    if (rowHasMergedSpans(tr)) return tr;
+    if (!isRowspanContinuationRow(rowIndex, grid)) return tr;
+
+    const ownedStart = getRowFirstOwnedLogicalColumn(rowIndex, grid, tr);
+    if (ownedStart <= 0) return tr;
+
+    /** @type {string[]} */
+    const leadHtmls = [];
+    for (let c = 0; c < ownedStart; c += 1) {
+        const anchor = grid[rowIndex]?.[c];
+        if (!anchor) continue;
+        const pos = findCellGridPosition(grid, anchor);
+        if (pos && pos.row < rowIndex) leadHtmls.push(anchor.outerHTML);
+    }
+    if (leadHtmls.length) {
+        tr.setAttribute('data-ems-rowspan-leads', encodeURIComponent(JSON.stringify(leadHtmls)));
+    }
+    return tr;
+}
+
+/** Restore SL/LOCATION (or other rowspan anchors) when a page starts mid-item group. */
+function repairOrphanedRowspanLeadCells(table) {
+    if (!table || !isOfficePasteTableEl(table)) return;
+
+    const doc = table.ownerDocument || (typeof document !== 'undefined' ? document : null);
+    if (!doc) return;
+
+    const theadRows = new Set([...table.querySelectorAll('thead tr')]);
+    const { rows, grid, colCount } = getOfficePasteTablePaginationGrid(table);
+
+    let lastLeadsKey = '';
+
+    rows.forEach((tr, rowIndex) => {
+        if (theadRows.has(tr)) return;
+
+        if (isRowspanContinuationRow(rowIndex, grid)) {
+            lastLeadsKey = '';
+            return;
+        }
+
+        const leadsRaw = tr.getAttribute('data-ems-rowspan-leads');
+        if (!leadsRaw) return;
+
+        tr.removeAttribute('data-ems-rowspan-leads');
+
+        /** @type {string[]} */
+        let leadHtmls = [];
+        try {
+            leadHtmls = JSON.parse(decodeURIComponent(leadsRaw));
+        } catch {
+            return;
+        }
+        if (!Array.isArray(leadHtmls) || !leadHtmls.length) return;
+
+        const useEmptyPad = leadsRaw === lastLeadsKey;
+        lastLeadsKey = leadsRaw;
+
+        const leadCells = leadHtmls.map((html) =>
+            useEmptyPad ? createPaginationPadCell(doc) : buildLeadCellFromHtml(doc, html)
+        );
+        const rebuilt = rebuildRowWithLeadingCells(tr, leadCells, colCount, doc);
+        tr.replaceWith(rebuilt);
+    });
+}
+
+function padSingleRowIsolatedOfficePasteTable(table) {
+    if (!table || !isOfficePasteTableEl(table)) return;
+
+    const theadRows = new Set([...table.querySelectorAll('thead tr')]);
+    const bodyRows = getTableRows(table).filter((tr) => !theadRows.has(tr));
+    if (bodyRows.length !== 1) return;
+
+    const row = bodyRows[0];
+    if (rowHasMergedSpans(row)) return;
+
+    const { rows, grid, colCount } = getOfficePasteTablePaginationGrid(table);
+    const rowIndex = rows.indexOf(row);
+    const padded = padIsolatedOfficePasteTableRow(
+        row,
+        rowIndex >= 0 ? rowIndex : 0,
+        grid,
+        colCount
+    );
+    if (padded !== row) row.replaceWith(padded);
+}
+
+/** Apply stored office-paste column widths to every table in an HTML fragment (pagination rejoin). */
+export function syncOfficePasteTableColumnsInHtmlString(html) {
+    const raw = String(html || '').trim();
+    if (!raw || !/<table/i.test(raw) || typeof DOMParser === 'undefined') return raw;
+    try {
+        const doc = new DOMParser().parseFromString(
+            `<div id="__ems_office_col_sync">${raw}</div>`,
+            'text/html'
+        );
+        const root = doc.getElementById('__ems_office_col_sync');
+        if (!root) return raw;
+        root.querySelectorAll(EMS_OFFICE_PASTE_TABLE_SELECTOR).forEach((table) => {
+            repairOrphanedRowspanLeadCells(table);
+            padSingleRowIsolatedOfficePasteTable(table);
+            syncOfficePasteTableColumnLayout(table);
+        });
+        return root.innerHTML.trim() || raw;
+    } catch {
+        return raw;
+    }
+}
+
 /** Enable EMS column drag-resize on Excel/Word pasted tables without stripping their colors. */
 export function initializeOfficePastedTableColumns(table) {
-    if (!table || !isOfficePasteTable(table)) return;
+    if (!table || !isOfficePasteTableEl(table)) return;
     if (isTableStructureResizeActiveForTable(table)) return;
 
     const rows = getTableRows(table);
     if (!rows.length) return;
-    const colCount = getLogicalColumnCount(rows) || getColumnCount(rows);
-    if (!colCount) return;
 
     if (table.getAttribute('data-ems-col-widths')) {
-        const widths = readColumnWidthsPx(table, rows, colCount);
-        applyColumnWidths(table, rows, widths);
+        syncOfficePasteTableColumnLayout(table);
         return;
     }
 
+    const colCount = getLogicalColumnCount(rows) || getColumnCount(rows);
+    if (!colCount) return;
     const widths = readOfficeTableColumnWidthsPx(table, rows, colCount);
     applyColumnWidths(table, rows, widths);
 }
 
 export function initializeAllOfficePastedTableColumns(root) {
     if (!root?.querySelectorAll) return;
-    root.querySelectorAll('table[data-ems-paste-source="office"], table.ems-office-paste-table').forEach((table) => {
+    root.querySelectorAll(EMS_OFFICE_PASTE_TABLE_SELECTOR).forEach((table) => {
         initializeOfficePastedTableColumns(table);
     });
 }
@@ -2551,6 +2744,198 @@ function findCellGridPosition(grid, cell) {
     return null;
 }
 
+function createPaginationPadCell(doc, tagName = 'td') {
+    const cell = doc.createElement(tagName);
+    cell.innerHTML = '<p>\u00a0</p>';
+    cell.setAttribute('data-ems-pagination-pad', '1');
+    return cell;
+}
+
+function clonePaddedTableCell(cell) {
+    const doc = cell.ownerDocument || document;
+    const tag = cell.tagName.toLowerCase() === 'th' ? 'th' : 'td';
+    const next = doc.createElement(tag);
+    next.innerHTML = cell.innerHTML;
+    if (cell.getAttribute('style')) next.setAttribute('style', cell.getAttribute('style'));
+    ['data-ems-valign', 'data-ems-cell-fill', 'data-ems-cell-border', 'data-ems-cell-color', 'class'].forEach(
+        (attr) => {
+            if (cell.hasAttribute(attr)) next.setAttribute(attr, cell.getAttribute(attr));
+        }
+    );
+    if (cell.hasAttribute('colspan')) next.setAttribute('colspan', cell.getAttribute('colspan'));
+    if (cell.hasAttribute('rowspan')) next.setAttribute('rowspan', cell.getAttribute('rowspan'));
+    return next;
+}
+
+function inferLeadingPadCellsForShortRow(tr, colCount) {
+    const physical = tr?.cells?.length || 0;
+    if (physical <= 0 || physical >= colCount) return 0;
+
+    const first = String(tr.cells[0]?.textContent || '')
+        .replace(/\u00a0/g, ' ')
+        .trim();
+    if (/^\d+$/.test(first)) return 0;
+
+    // Excel omits leading blank cells on accessory/continuation lines (typically SL + LOCATION).
+    return Math.max(0, colCount - physical);
+}
+
+function rowHasMergedSpans(tr) {
+    return [...(tr?.cells || [])].some((cell) => {
+        const rowSpan = Math.max(1, Number(cell.rowSpan) || 1);
+        const colSpan = Math.max(1, Number(cell.colSpan) || 1);
+        return rowSpan > 1 || colSpan > 1;
+    });
+}
+
+function getRowFirstOwnedLogicalColumn(rowIndex, grid, tr) {
+    const rowGrid = grid[rowIndex] || [];
+    for (let c = 0; c < rowGrid.length; c += 1) {
+        const cell = rowGrid[c];
+        if (!cell || !tr.contains(cell)) continue;
+        const pos = findCellGridPosition(grid, cell);
+        if (pos && pos.row === rowIndex) return pos.col;
+    }
+    return 0;
+}
+
+function isRowspanContinuationRow(rowIndex, grid) {
+    const rowGrid = grid[rowIndex] || [];
+    for (let c = 0; c < rowGrid.length; c += 1) {
+        const cell = rowGrid[c];
+        if (!cell) continue;
+        const pos = findCellGridPosition(grid, cell);
+        if (pos && pos.row < rowIndex) return true;
+    }
+    return false;
+}
+
+function getIsolatedRowLeadingPad(tr, rowIndex, grid, colCount) {
+    if (rowHasMergedSpans(tr)) return 0;
+    const physical = tr?.cells?.length || 0;
+    if (physical <= 0 || physical >= colCount) return 0;
+
+    const ownedStart = getRowFirstOwnedLogicalColumn(rowIndex, grid, tr);
+    if (ownedStart > 0) return ownedStart;
+
+    return inferLeadingPadCellsForShortRow(tr, colCount);
+}
+
+/** Pad a single-row pagination fragment when Excel omitted leading blank cells. */
+export function padIsolatedOfficePasteTableRow(tr, rowIndex, grid, colCount) {
+    if (!tr || !grid || colCount <= 0) return tr;
+    if (rowHasMergedSpans(tr)) return tr;
+
+    const doc = tr.ownerDocument || (typeof document !== 'undefined' ? document : null);
+    if (!doc) return tr;
+
+    const physicalCells = [...tr.cells];
+    if (physicalCells.length >= colCount) return tr;
+
+    const leadingPad = getIsolatedRowLeadingPad(tr, rowIndex, grid, colCount);
+    if (leadingPad <= 0 && physicalCells.length >= colCount) return tr;
+
+    const newTr = /** @type {HTMLTableRowElement} */ (doc.createElement('tr'));
+    if (tr.getAttribute('style')) newTr.setAttribute('style', tr.getAttribute('style'));
+    [...tr.attributes].forEach((attr) => {
+        if (attr.name === 'style') return;
+        newTr.setAttribute(attr.name, attr.value);
+    });
+
+    for (let c = 0; c < colCount; c += 1) {
+        if (c < leadingPad) {
+            newTr.appendChild(createPaginationPadCell(doc));
+            continue;
+        }
+        const physicalIdx = c - leadingPad;
+        if (physicalIdx < physicalCells.length) {
+            newTr.appendChild(clonePaddedTableCell(physicalCells[physicalIdx]));
+        } else {
+            newTr.appendChild(createPaginationPadCell(doc));
+        }
+    }
+
+    return newTr;
+}
+
+/** Grid + column count snapshot before pagination splits (do not mutate table first). */
+export function getOfficePasteTablePaginationGrid(table) {
+    const { rows, grid } = buildTableCellGrid(table);
+    const storedCount = parseStoredOfficeTableColumnWidths(table).filter((w) => w > 0).length;
+    const colCount = Math.max(
+        storedCount,
+        getLogicalColumnCount(rows),
+        getColumnCount(rows)
+    );
+    return { rows, grid, colCount };
+}
+
+export function officePasteTableRowHasMergedSpans(tr) {
+    return rowHasMergedSpans(tr);
+}
+
+export function officePasteTableRowIsSpanContinuation(rowIndex, grid) {
+    return isRowspanContinuationRow(rowIndex, grid);
+}
+
+/**
+ * @deprecated Use padIsolatedOfficePasteTableRow at pagination split time only.
+ * Full-table padding breaks rowspan continuation rows (shifts accessory lines right).
+ */
+export function materializeOfficePasteTableRowsForPagination(table) {
+    if (!table || !isOfficePasteTableEl(table)) return;
+
+    const doc = table.ownerDocument || (typeof document !== 'undefined' ? document : null);
+    if (!doc) return;
+
+    const { rows, grid } = buildTableCellGrid(table);
+    if (!rows.length) return;
+
+    const storedCount = parseStoredOfficeTableColumnWidths(table).filter((w) => w > 0).length;
+    const colCount = Math.max(
+        storedCount,
+        getLogicalColumnCount(rows),
+        getColumnCount(rows)
+    );
+    if (colCount <= 0) return;
+
+    const theadRows = new Set([...table.querySelectorAll('thead tr')]);
+
+    rows.forEach((tr, rowIndex) => {
+        if (theadRows.has(tr)) return;
+        if (rowHasMergedSpans(tr)) return;
+        if (isRowspanContinuationRow(rowIndex, grid)) return;
+
+        const physicalCells = [...tr.cells];
+        if (physicalCells.length >= colCount) return;
+
+        const leadingPad = inferLeadingPadCellsForShortRow(tr, colCount);
+        if (leadingPad <= 0) return;
+
+        const newTr = /** @type {HTMLTableRowElement} */ (doc.createElement('tr'));
+        if (tr.getAttribute('style')) newTr.setAttribute('style', tr.getAttribute('style'));
+        [...tr.attributes].forEach((attr) => {
+            if (attr.name === 'style') return;
+            newTr.setAttribute(attr.name, attr.value);
+        });
+
+        for (let c = 0; c < colCount; c += 1) {
+            if (c < leadingPad) {
+                newTr.appendChild(createPaginationPadCell(doc));
+                continue;
+            }
+            const physicalIdx = c - leadingPad;
+            if (physicalIdx < physicalCells.length) {
+                newTr.appendChild(clonePaddedTableCell(physicalCells[physicalIdx]));
+            } else {
+                newTr.appendChild(createPaginationPadCell(doc));
+            }
+        }
+
+        tr.replaceWith(newTr);
+    });
+}
+
 /** Find a cell whose right edge aligns with logical column `colIndex` (handles merged Excel headers). */
 function findCellAtColumnRightEdge(table, colIndex) {
     const { grid } = buildTableCellGrid(table);
@@ -2852,6 +3237,8 @@ const EMS_TABLE_DELETE_ROW_COL_CONTROL = {
 
 /** Right-click table menu items — plain text list (not Jodit icon toolbar). */
 const EMS_TABLE_CELLS_MENU_ITEMS = [
+    { label: 'Copy', command: 'emsCopySelection' },
+    { type: 'separator' },
     { label: 'Insert row above', command: 'tableaddrowbefore' },
     { label: 'Insert row below', command: 'tableaddrowafter' },
     { label: 'Insert column before', command: 'tableaddcolumnbefore' },
@@ -4263,6 +4650,176 @@ function getTableSelectionBounds(jodit, getEditorBody) {
     };
 }
 
+function cloneTableShellForClipboard(srcTable, doc) {
+    const out = doc.createElement('table');
+    ['style', 'border', 'cellpadding', 'cellspacing', 'width', 'data-ems-paste-source', 'data-ems-pricing-cols'].forEach(
+        (attr) => {
+            const val = srcTable.getAttribute(attr);
+            if (val != null) out.setAttribute(attr, val);
+        }
+    );
+    const colgroup = srcTable.querySelector(':scope > colgroup');
+    if (colgroup) out.appendChild(colgroup.cloneNode(true));
+    return out;
+}
+
+function buildTableFragmentFromSelection(ctx) {
+    const { table, bound, grid } = ctx;
+    const [rowStart, colStart] = bound[0];
+    const [rowEnd, colEnd] = bound[1];
+    if (rowStart > rowEnd || colStart > colEnd) return null;
+
+    const doc = table.ownerDocument || document;
+    const outTable = cloneTableShellForClipboard(table, doc);
+
+    for (let r = rowStart; r <= rowEnd; r += 1) {
+        const srcRow = grid[r]?.[colStart]?.closest?.('tr') || grid[r]?.[0]?.closest?.('tr');
+        const tr = doc.createElement('tr');
+        if (srcRow) {
+            [...srcRow.attributes].forEach((attr) => {
+                if (attr.name === 'class' && /jodit/i.test(attr.value)) return;
+                tr.setAttribute(attr.name, attr.value);
+            });
+        }
+
+        for (let c = colStart; c <= colEnd; c += 1) {
+            const cell = grid[r]?.[c];
+            if (!cell) continue;
+            const pos = findCellGridPosition(grid, cell);
+            if (!pos) continue;
+
+            const emitRow = Math.max(pos.row, rowStart);
+            const emitCol = Math.max(pos.col, colStart);
+            if (r !== emitRow || c !== emitCol) continue;
+
+            const clone = sanitizeClonedTableCell(cell);
+            const rowSpan = Math.max(1, Number(cell.rowSpan) || 1);
+            const colSpan = Math.max(1, Number(cell.colSpan) || 1);
+            const effRowSpan = Math.min(rowEnd - emitRow + 1, pos.row + rowSpan - emitRow);
+            const effColSpan = Math.min(colEnd - emitCol + 1, pos.col + colSpan - emitCol);
+
+            if (effRowSpan > 1) clone.setAttribute('rowspan', String(effRowSpan));
+            else clone.removeAttribute('rowspan');
+            if (effColSpan > 1) clone.setAttribute('colspan', String(effColSpan));
+            else clone.removeAttribute('colspan');
+
+            tr.appendChild(clone);
+        }
+
+        if (tr.cells.length) outTable.appendChild(tr);
+    }
+
+    if (!outTable.querySelector('tr')) return null;
+    applyDefaultManualTableBordersIfEmpty(outTable);
+    return outTable;
+}
+
+function escapeTsvCell(text) {
+    const t = String(text ?? '');
+    if (/[\t\n\r"]/.test(t)) return `"${t.replace(/"/g, '""')}"`;
+    return t;
+}
+
+function buildTableSelectionTsv(ctx) {
+    const { bound, grid } = ctx;
+    const [rowStart, colStart] = bound[0];
+    const [rowEnd, colEnd] = bound[1];
+    const lines = [];
+    for (let r = rowStart; r <= rowEnd; r += 1) {
+        const cols = [];
+        for (let c = colStart; c <= colEnd; c += 1) {
+            const cell = grid[r]?.[c];
+            if (!cell) {
+                cols.push('');
+                continue;
+            }
+            const pos = findCellGridPosition(grid, cell);
+            if (pos && pos.row === r && pos.col === c) {
+                cols.push(
+                    escapeTsvCell(String(cell.textContent || '').replace(/\u00a0/g, ' ').trim())
+                );
+            } else {
+                cols.push('');
+            }
+        }
+        lines.push(cols.join('\t'));
+    }
+    return lines.join('\n');
+}
+
+function wrapClipboardHtml(tableHtml) {
+    return `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"></head><body><!--StartFragment-->${tableHtml}<!--EndFragment--></body></html>`;
+}
+
+function buildTableClipboardPayload(ctx, win) {
+    const fragment = buildTableFragmentFromSelection(ctx);
+    if (!fragment) return null;
+
+    const wrapper = fragment.ownerDocument.createElement('div');
+    wrapper.appendChild(fragment);
+    stabilizeClauseEditorTablesForExport(wrapper);
+    finalizeAllOfficePasteTablesFormatting(wrapper, win || window);
+
+    const tableHtml = fragment.outerHTML;
+    return {
+        html: wrapClipboardHtml(tableHtml),
+        plain: buildTableSelectionTsv(ctx),
+    };
+}
+
+function shouldUseNativeTextCopy(jodit, getEditorBody, ctx) {
+    if (!ctx || ctx.cells.length !== 1) return false;
+    const root =
+        (typeof getEditorBody === 'function' && getEditorBody()) || jodit?.editor || null;
+    const win = root?.ownerDocument?.defaultView || window;
+    const sel = win.getSelection?.();
+    if (!sel || sel.isCollapsed || !String(sel.toString() || '').length) return false;
+    const range = sel.rangeCount ? sel.getRangeAt(0) : null;
+    const cell = ctx.cells[0];
+    if (!range || !cell) return false;
+    return cell.contains(range.commonAncestorContainer);
+}
+
+function writeTableClipboardPayload(payload, clipboardData) {
+    if (!payload) return false;
+    if (clipboardData) {
+        clipboardData.setData('text/html', payload.html);
+        clipboardData.setData('text/plain', payload.plain);
+        return true;
+    }
+    if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+        navigator.clipboard
+            .write([
+                new ClipboardItem({
+                    'text/html': new Blob([payload.html], { type: 'text/html' }),
+                    'text/plain': new Blob([payload.plain], { type: 'text/plain' }),
+                }),
+            ])
+            .catch((err) => {
+                console.warn('[EMS] Table clipboard write failed:', err);
+            });
+        return true;
+    }
+    return false;
+}
+
+function copyTableSelectionToOsClipboard(jodit, getEditorBody, clipboardData) {
+    const root =
+        (typeof getEditorBody === 'function' && getEditorBody()) || jodit?.editor || null;
+    const ctx = getTableSelectionBounds(jodit, getEditorBody);
+    if (!ctx || !root) return false;
+    if (shouldUseNativeTextCopy(jodit, getEditorBody, ctx)) return false;
+
+    const win = root.ownerDocument?.defaultView || window;
+    const payload = buildTableClipboardPayload(ctx, win);
+    if (!payload) return false;
+
+    if (clipboardData) {
+        return writeTableClipboardPayload(payload, clipboardData);
+    }
+    return writeTableClipboardPayload(payload, null);
+}
+
 function extractRowsForClipboard(table, rowStart, rowEnd) {
     const rows = getTableRows(table);
     const out = [];
@@ -4529,6 +5086,10 @@ function registerTableRowColumnClipboard(jodit, getEditorBody) {
             jodit.o.controls[name] = control;
         }
     });
+    jodit.registerCommand('emsCopySelection', () => {
+        copyTableSelectionToOsClipboard(jodit, getEditorBody);
+        return false;
+    });
     jodit.registerCommand('emsCopyRow', () => {
         runTableClipboardCommand(jodit, getEditorBody, 'copyRow');
         return false;
@@ -4586,10 +5147,28 @@ function registerTableRowColumnClipboard(jodit, getEditorBody) {
             e.preventDefault();
             e.stopImmediatePropagation();
             copyTableRows(jodit, getEditorBody, cut);
+            copyTableSelectionToOsClipboard(jodit, getEditorBody);
         } else if (ctx.fullColumns) {
             e.preventDefault();
             e.stopImmediatePropagation();
             copyTableColumns(jodit, getEditorBody, cut);
+            copyTableSelectionToOsClipboard(jodit, getEditorBody);
+        }
+    };
+
+    const onCopy = (e) => {
+        const root =
+            (typeof getEditorBody === 'function' && getEditorBody()) ||
+            jodit.editor ||
+            null;
+        if (!root) return;
+
+        const cell = getActiveTableCell(jodit, getEditorBody);
+        if (!cell || !root.contains(cell)) return;
+
+        if (copyTableSelectionToOsClipboard(jodit, getEditorBody, e.clipboardData)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
         }
     };
 
@@ -4601,8 +5180,10 @@ function registerTableRowColumnClipboard(jodit, getEditorBody) {
         if (!root || root.__emsTableRowColClipBound) return;
         root.__emsTableRowColClipBound = true;
         root.addEventListener('keydown', onKeyDown, true);
+        root.addEventListener('copy', onCopy, true);
         jodit.e.on('beforeDestruct', () => {
             root.removeEventListener('keydown', onKeyDown, true);
+            root.removeEventListener('copy', onCopy, true);
         });
     };
 

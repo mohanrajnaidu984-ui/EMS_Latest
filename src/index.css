@@ -1274,36 +1274,49 @@ input[type="date"]:focus::-webkit-datetime-edit {
 }
 
 .prob-probability-page .prob-probability-list-table tbody td.prob-td .prob-detail-controls.prob-detail-followup-layout {
-  grid-template-columns: 320px 180px 130px 250px;
+  grid-template-columns: 320px 180px 130px 110px 250px;
 }
 
-/* Follow Up thead: same column widths as body so Probability / Expected Date sit above their fields */
-.prob-probability-page .prob-probability-list-table thead .prob-followup-header-grid {
+/* Follow Up / Won / Lost thead: same column widths as body detail grids */
+.prob-probability-page .prob-probability-list-table thead .prob-followup-header-grid,
+.prob-probability-page .prob-probability-list-table thead .prob-won-header-grid,
+.prob-probability-page .prob-probability-list-table thead .prob-lost-header-grid {
   display: grid;
-  grid-template-columns: 320px 180px 130px 250px;
   column-gap: 0.4rem;
   align-items: end;
   width: max-content;
   max-width: 100%;
 }
 
-.prob-probability-page .prob-probability-list-table thead .prob-followup-header-grid > .prob-detail-col-1 { grid-column: 1; }
-.prob-probability-page .prob-probability-list-table thead .prob-followup-header-grid > .prob-detail-col-2 { grid-column: 2; }
-.prob-probability-page .prob-probability-list-table thead .prob-followup-header-grid > .prob-detail-col-3 { grid-column: 3; }
-.prob-probability-page .prob-probability-list-table thead .prob-followup-header-grid > .prob-detail-col-4 { grid-column: 4; }
-
-/* Row field labels are in the Follow Up thead; keep a11y text without taking layout space */
-.prob-probability-page .prob-probability-list-table tbody td.prob-td .prob-detail-controls.prob-detail-followup-layout > .d-flex.flex-column > .prob-detail-field-label.visually-hidden {
-  position: absolute !important;
-  width: 1px !important;
-  height: 1px !important;
-  padding: 0 !important;
-  margin: -1px !important;
-  overflow: hidden !important;
-  clip: rect(0, 0, 0, 0) !important;
-  white-space: nowrap !important;
-  border: 0 !important;
+.prob-probability-page .prob-probability-list-table thead .prob-followup-header-grid {
+  grid-template-columns: 320px 180px 130px 110px 250px;
 }
+
+.prob-probability-page .prob-probability-list-table thead .prob-won-header-grid {
+  grid-template-columns: 320px 130px 140px 110px 130px 250px;
+}
+
+.prob-probability-page .prob-probability-list-table thead .prob-lost-header-grid {
+  grid-template-columns: 320px 260px 180px 120px 130px 200px;
+}
+
+.prob-probability-page .prob-probability-list-table thead .prob-followup-header-grid > .prob-detail-col-1,
+.prob-probability-page .prob-probability-list-table thead .prob-won-header-grid > .prob-detail-col-1,
+.prob-probability-page .prob-probability-list-table thead .prob-lost-header-grid > .prob-detail-col-1 { grid-column: 1; }
+.prob-probability-page .prob-probability-list-table thead .prob-followup-header-grid > .prob-detail-col-2,
+.prob-probability-page .prob-probability-list-table thead .prob-won-header-grid > .prob-detail-col-2,
+.prob-probability-page .prob-probability-list-table thead .prob-lost-header-grid > .prob-detail-col-2 { grid-column: 2; }
+.prob-probability-page .prob-probability-list-table thead .prob-followup-header-grid > .prob-detail-col-3,
+.prob-probability-page .prob-probability-list-table thead .prob-won-header-grid > .prob-detail-col-3,
+.prob-probability-page .prob-probability-list-table thead .prob-lost-header-grid > .prob-detail-col-3 { grid-column: 3; }
+.prob-probability-page .prob-probability-list-table thead .prob-followup-header-grid > .prob-detail-col-4,
+.prob-probability-page .prob-probability-list-table thead .prob-won-header-grid > .prob-detail-col-4,
+.prob-probability-page .prob-probability-list-table thead .prob-lost-header-grid > .prob-detail-col-4 { grid-column: 4; }
+.prob-probability-page .prob-probability-list-table thead .prob-followup-header-grid > .prob-detail-col-5,
+.prob-probability-page .prob-probability-list-table thead .prob-won-header-grid > .prob-detail-col-5,
+.prob-probability-page .prob-probability-list-table thead .prob-lost-header-grid > .prob-detail-col-5 { grid-column: 5; }
+.prob-probability-page .prob-probability-list-table thead .prob-won-header-grid > .prob-detail-col-6,
+.prob-probability-page .prob-probability-list-table thead .prob-lost-header-grid > .prob-detail-col-6 { grid-column: 6; }
 
 .prob-probability-page .prob-probability-list-table tbody td.prob-td .prob-detail-controls > .d-flex.flex-column,
 .prob-probability-page .prob-probability-list-table tbody td.prob-td .prob-detail-controls > .d-flex.flex-column.prob-detail-field-num {

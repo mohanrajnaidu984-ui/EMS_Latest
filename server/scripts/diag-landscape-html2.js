@@ -1,0 +1,10 @@
+const fs = require('fs');
+const path = require('path');
+const dir = path.join(process.env.TEMP || '/tmp', 'ems-quote-pdf');
+const files = fs.readdirSync(dir).filter((f) => f.endsWith('.html'));
+files.sort((a, b) => fs.statSync(path.join(dir, b)).mtimeMs - fs.statSync(path.join(dir, a)).mtimeMs);
+const html = fs.readFileSync(path.join(dir, files[0]), 'utf8');
+const previewMatch = html.match(/id="quote-preview"[^>]*>/);
+console.log('quote-preview tag:', previewMatch?.[0]?.slice(0, 400));
+const printRootMatch = html.match(/id="quote-print-root"[^>]*>/);
+console.log('print-root tag:', printRootMatch?.[0]?.slice(0, 300));

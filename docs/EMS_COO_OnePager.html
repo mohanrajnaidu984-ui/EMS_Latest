@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EMS — Development Cost Brief for COO</title>
+  <style>
+    @page { size: A4; margin: 12mm 14mm; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", Calibri, Arial, sans-serif;
+      font-size: 9.5pt;
+      line-height: 1.38;
+      color: #1a1a2e;
+      max-width: 210mm;
+      margin: 0 auto;
+      padding: 12mm 14mm;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      border-bottom: 3px solid #20396D;
+      padding-bottom: 6px;
+      margin-bottom: 8px;
+    }
+    .header h1 {
+      font-size: 15pt;
+      color: #20396D;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+    .header .sub {
+      font-size: 8.5pt;
+      color: #555;
+      margin-top: 2px;
+    }
+    .header .badge {
+      text-align: right;
+      font-size: 8pt;
+      color: #20396D;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    h2 {
+      font-size: 9.5pt;
+      color: #20396D;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin: 9px 0 4px;
+      border-bottom: 1px solid #d0d7e5;
+      padding-bottom: 2px;
+    }
+    p { margin-bottom: 5px; }
+    .ask-box {
+      background: #20396D;
+      color: #fff;
+      padding: 8px 12px;
+      margin: 8px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .ask-box .label { font-size: 8.5pt; opacity: 0.9; }
+    .ask-box .amount {
+      font-size: 16pt;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+    .ask-box .note { font-size: 8pt; opacity: 0.85; text-align: right; max-width: 45%; }
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      margin: 6px 0 4px;
+    }
+    .card {
+      border: 1px solid #c5cddc;
+      padding: 7px 8px;
+      background: #f7f9fc;
+    }
+    .card .t { font-size: 8pt; color: #555; text-transform: uppercase; letter-spacing: 0.3px; }
+    .card .v { font-size: 13pt; font-weight: 700; color: #20396D; margin: 2px 0; }
+    .card .d { font-size: 8pt; color: #444; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 8.5pt;
+      margin: 4px 0 2px;
+    }
+    th, td {
+      border: 1px solid #c5cddc;
+      padding: 3px 6px;
+      text-align: left;
+    }
+    th { background: #20396D; color: #fff; font-weight: 600; }
+    td.num, th.num { text-align: right; white-space: nowrap; }
+    tr:nth-child(even) { background: #f5f7fa; }
+    tr.total td { font-weight: 700; background: #e8eef8; }
+    ul {
+      margin: 2px 0 0 16px;
+      font-size: 8.5pt;
+    }
+    li { margin-bottom: 2px; }
+    .two {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 10px;
+    }
+    .footer {
+      margin-top: 8px;
+      font-size: 7.5pt;
+      color: #666;
+      border-top: 1px solid #ccc;
+      padding-top: 4px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    @media print {
+      body { padding: 0; }
+      .ask-box { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .card, tr:nth-child(even), tr.total td {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div>
+      <h1>EMS Development Cost Brief</h1>
+      <div class="sub">Enquiry Management System — Almoayyed Contracting Group</div>
+    </div>
+    <div class="badge">
+      For: Chief Operating Officer<br />
+      From: Mohan Naidu · August 2026
+    </div>
+  </div>
+
+  <p>
+    EMS is a company-specific sales platform covering the full opportunity lifecycle —
+    <strong>Enquiry → Pricing → Quote → Approval → Pipeline → Sales Reporting</strong>.
+    It was designed, developed, and deployed <strong>in-house by a single developer</strong>,
+    avoiding a multi-month external vendor engagement.
+  </p>
+
+  <div class="ask-box">
+    <div>
+      <div class="label">Recognition requested</div>
+      <div class="amount">BHD 12,000</div>
+    </div>
+    <div class="note">
+      One-time development recognition bonus<br />
+      + EMS Lead designation<br />
+      (vs. BHD 45,000–60,000 external rebuild cost)
+    </div>
+  </div>
+
+  <h2>Why this number is fair</h2>
+  <div class="compare">
+    <div class="card">
+      <div class="t">External rebuild</div>
+      <div class="v">45k–60k</div>
+      <div class="d">Bahrain / GCC vendor estimate for equivalent platform (12–24 months)</div>
+    </div>
+    <div class="card">
+      <div class="t">In-house delivery</div>
+      <div class="v">1 person</div>
+      <div class="d">Full design, development, database, integrations &amp; deployment completed solo</div>
+    </div>
+    <div class="card">
+      <div class="t">Recognition ask</div>
+      <div class="v">12,000</div>
+      <div class="d">~20–25% of external replacement value — not a system sale</div>
+    </div>
+  </div>
+
+  <h2>Module replacement value</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Business module</th>
+        <th>What it delivers</th>
+        <th class="num">Market value (BHD)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Enquiry Management</td>
+        <td>Registration, hierarchy, attachments, SE assignment, notifications</td>
+        <td class="num">8,000 – 12,000</td>
+      </tr>
+      <tr>
+        <td>Pricing</td>
+        <td>Commercial evaluation, job hierarchy, division access control</td>
+        <td class="num">6,000 – 9,000</td>
+      </tr>
+      <tr>
+        <td>Quoting &amp; PDF</td>
+        <td>Clause editor, revisions, protected PDF, Outlook delivery</td>
+        <td class="num">12,000 – 18,000</td>
+      </tr>
+      <tr>
+        <td>Approval Workflow</td>
+        <td>Multi-step routing, digital signatures, audit trail</td>
+        <td class="num">6,000 – 10,000</td>
+      </tr>
+      <tr>
+        <td>Probability / Pipeline</td>
+        <td>Won / Lost / Follow-up status with ownership discipline</td>
+        <td class="num">3,000 – 5,000</td>
+      </tr>
+      <tr>
+        <td>Dashboard &amp; Reports</td>
+        <td>KPIs, sales report, targets vs. actual, Excel export</td>
+        <td class="num">12,000 – 18,000</td>
+      </tr>
+      <tr>
+        <td>Integrations &amp; Deploy</td>
+        <td>Email/Outlook, OCR, MSSQL, production deployment</td>
+        <td class="num">5,000 – 8,000</td>
+      </tr>
+      <tr class="total">
+        <td colspan="2">Estimated external rebuild cost (total)</td>
+        <td class="num">52,000 – 80,000</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="two">
+    <div>
+      <h2>Business impact</h2>
+      <ul>
+        <li>One system replaces scattered spreadsheets and manual quote documents</li>
+        <li>Enforces controlled process: enquiry → pricing → quote → approval</li>
+        <li>Gives management live visibility of pipeline, due dates, and sales performance</li>
+        <li>Embeds ACG division rules and approval hierarchies — not generic software</li>
+        <li>Avoids 12–24 month delay and BHD 45k–60k+ vendor spend to rebuild</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Delivery evidence</h2>
+      <table>
+        <tr><th>Scale indicator</th><th class="num">Value</th></tr>
+        <tr><td>Source files</td><td class="num">3,574</td></tr>
+        <tr><td>Lines of code</td><td class="num">~427,000</td></tr>
+        <tr><td>API endpoints</td><td class="num">60+</td></tr>
+        <tr><td>Database scripts</td><td class="num">39</td></tr>
+        <tr><td>Core business modules</td><td class="num">7</td></tr>
+        <tr><td>Est. rebuild effort</td><td class="num">18–24 months</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h2>Request for approval</h2>
+  <p>
+    Approval is requested for a <strong>one-time recognition of BHD 12,000</strong> for the design,
+    development, and deployment of EMS, together with formal designation as <strong>EMS Lead</strong>
+    for continuity of support and future enhancements.
+  </p>
+
+  <div class="footer">
+    <div>
+      Figures based on codebase analysis and Bahrain/GCC custom-software market rates (approx. BHD 15–40/hr).
+      This is an employee recognition request, not an IP sale. Subject to company policy review.
+    </div>
+    <div style="white-space:nowrap; text-align:right; font-weight:600; color:#20396D;">
+      Mohan Naidu<br />Almoayyed Contracting Group
+    </div>
+  </div>
+
+</body>
+</html>

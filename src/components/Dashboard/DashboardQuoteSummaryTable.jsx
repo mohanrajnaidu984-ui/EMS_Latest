@@ -293,6 +293,7 @@ export default function DashboardQuoteSummaryTable({
     calendarAlignedQuoteTotal = null,
     onRegisterClearColumnFilters,
     onFilterStateChange,
+    onDisplayRowsChange,
     defaultSortConfig = null,
     resetSortOnRowsChange = false,
     hideRequestNoStatus = false,
@@ -375,6 +376,10 @@ export default function DashboardQuoteSummaryTable({
     useEffect(() => {
         onFilterStateChange?.({ hasColumnFilters: colFilters.hasColumnFilters });
     }, [colFilters.hasColumnFilters, onFilterStateChange]);
+
+    useEffect(() => {
+        onDisplayRowsChange?.(displayRows);
+    }, [displayRows, onDisplayRowsChange]);
 
     const headerStats = useMemo(() => {
         const list = Array.isArray(displayRows) ? displayRows : [];

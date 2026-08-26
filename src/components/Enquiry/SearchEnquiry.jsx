@@ -1,21 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
-import excelIcon from '../../assets/excel_icon.png';
 import DateInput from './DateInput';
 import { EMS_LIST_SEARCH_ENABLED_STYLE, EMS_LIST_CLEAR_STYLE } from '../../constants/emsSearchButtons';
-import { getLeadJobDisplayLines, formatLeadJobLinesPlain } from '../../utils/leadJobDisplayLines';
 import { sortEnquiryRows } from '../../utils/enquiryResultsSort';
-import {
-    formatEnquiryResultDate,
-    formatEnquiryCreatedDateTime,
-    getCustomerDisplayLines,
-    getConsultantDisplayLines,
-    getEnquiryTypeDisplay,
-    getEnquiryDetailsDisplay,
-    getCreatedByDivision,
-} from '../../utils/enquiryResultsHelpers';
+import { getCreatedByDivision } from '../../utils/enquiryResultsHelpers';
 import EnquiryResultsTable from './EnquiryResultsTable';
+import { downloadSearchEnquiryXlsx } from './searchEnquiryExcel';
+import ExcelDownloadButton from '../shared/ExcelDownloadButton';
 
 const SearchEnquiry = ({ onOpen }) => {
     const { enquiries, masters, refreshEnquiries, enquiriesRefreshing } = useData();
@@ -230,50 +222,25 @@ const SearchEnquiry = ({ onOpen }) => {
 
     const rowsForExport = displayRows.length > 0 ? displayRows : sortedResults;
 
-    const handleExport = () => {
+    const handleExport = async () => {
         const exportList = rowsForExport;
         if (exportList.length === 0) {
-            alert("No data to export");
+            window.alert('No data to export');
             return;
         }
-
-        const headers = ["Enquiry No.", "Enquiry Date", "Project", "Divisions & SE/EE/TE/QS Involved", "Enquiry Details", "Customer Name / Contractor Name", "Due Date", "Site Visit Date", "Client", "Consultant Name", "Enquiry Type", "Source", "Status", "Created By", "Created division", "Created Datetime"];
-
-        const csvContent = [
-            headers.join(","),
-            ...exportList.map(r => {
-                const row = [
-                    r.RequestNo,
-                    formatEnquiryResultDate(r.EnquiryDate),
-                    (r.ProjectName || ''),
-                    formatLeadJobLinesPlain(getLeadJobDisplayLines(r, { users: masters.users })),
-                    getEnquiryDetailsDisplay(r),
-                    getCustomerDisplayLines(r).join('\n'),
-                    formatEnquiryResultDate(r.DueOn ?? r.DueDate),
-                    formatEnquiryResultDate(r.SiteVisitDate),
-                    (r.ClientName || ''),
-                    getConsultantDisplayLines(r).join('\n'),
-                    getEnquiryTypeDisplay(r),
-                    (r.SourceOfInfo || ''),
-                    r.Status || 'Enquiry',
-                    r.CreatedBy || '-',
-                    getCreatedByDivision(r, masters?.users),
-                    formatEnquiryCreatedDateTime(r.CreatedAt)
-                ];
-                return row.map(field => `"${String(field).replace(/"/g, '""')}"`).join(",");
-            })
-        ].join("\n");
-
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        if (link.download !== undefined) {
-            const url = URL.createObjectURL(blob);
-            link.setAttribute("href", url);
-            link.setAttribute("download", `Enquiry_Export_${new Date().toISOString().slice(0, 10)}.csv`);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+        try {
+            await downloadSearchEnquiryXlsx({
+                rows: exportList,
+                users: masters?.users,
+                meta: {
+                    dateFrom: dateFrom || '',
+                    dateTo: dateTo || '',
+                    searchQuery: String(searchQuery || '').trim()
+                }
+            });
+        } catch (err) {
+            console.error('Search Enquiry Excel export failed', err);
+            window.alert(err?.message || 'Failed to export Excel workbook');
         }
     };
 
@@ -426,24 +393,15 @@ const SearchEnquiry = ({ onOpen }) => {
                 >
                     Clear
                 </button>
-                <button
-                    type="button"
-                    className="btn p-0 ms-2"
+                <ExcelDownloadButton
                     onClick={handleExport}
-                    title="Export to Excel"
+                    disabled={rowsForExport.length === 0}
                     style={{
-                        border: 'none',
-                        background: 'transparent',
-                        color: '#198754', // Bootstrap success color
                         zIndex: 1001,
                         pointerEvents: 'auto',
-                        transition: 'transform 0.2s'
+                        marginLeft: '8px',
                     }}
-                    onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
-                    onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
-                >
-                    <img src={excelIcon} alt="Export to Excel" style={{ height: '20px', width: 'auto' }} />
-                </button>
+                />
             </div>
             </div>
 

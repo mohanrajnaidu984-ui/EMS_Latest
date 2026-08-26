@@ -1,15 +1,15 @@
-# EMS - IT Infrastructure Support & Security Policy Validation Request
+﻿# EMS - IT Infrastructure Support & Security Policy Validation Request
 
 > [!IMPORTANT]
 > **Action Required**: IT Infrastructure, Security Operations (SecOps), and Windows/Active Directory Administrators are requested to validate the environment configurations, Group Policies (GPOs), folder permissions, and endpoint security rules outlined below to ensure the stability of the **Enquiry Management System (EMS)** production deployment.
 > 
-> **Deployment Target**: Production Application Server (`151.50.1.114`)
+> **Deployment Target**: Production Application Server (`151.50.1.38`)
 > **Hosting Architecture**: IIS (Frontend SPA Reverse Proxy) + PM2/Node.js (Backend Services on port `5002`)
 
 ---
 
 ## 1. Executive Summary & Core Objectives
-The development team has optimized and packaged the Enquiry Management System (EMS). However, key system integrations—specifically **automated PDF generation**, **Outlook EML draft compilation**, and **headless Chromium execution**—depend heavily on the operating system session context, folder permissions, and private network routing. 
+The development team has optimized and packaged the Enquiry Management System (EMS). However, key system integrationsâ€”specifically **automated PDF generation**, **Outlook EML draft compilation**, and **headless Chromium execution**â€”depend heavily on the operating system session context, folder permissions, and private network routing. 
 
 We require the IT team to review, validate, and verify infrastructure and security policies that may impact stable background operation in production.
 
@@ -17,13 +17,13 @@ We require the IT team to review, validate, and verify infrastructure and securi
 
 ## 2. Infrastructure & IIS Reverse Proxy Verification
 
-To allow users to access the app via a single domain/IP context (`http://151.50.1.114:5173` or a production DNS), IIS must successfully proxy backend requests to the Node.js service running on port `5002` locally.
+To allow users to access the app via a single domain/IP context (`http://151.50.1.38:5173` or a production DNS), IIS must successfully proxy backend requests to the Node.js service running on port `5002` locally.
 
 | IIS Component | Requirement | IT Verification Task | Status |
 | :--- | :--- | :--- | :--- |
 | **IIS ARR** | Application Request Routing must be **Enabled** | Open IIS Manager -> Application Request Routing -> Server Settings -> Verify **"Enable proxy"** is checked. | `[ ] Pending` |
 | **URL Rewrite** | IIS URL Rewrite Module 2.1+ must be installed | Verify rewrite rules inside `web.config` are active and not throwing HTTP 500 errors. | `[ ] Pending` |
-| **Reverse Proxy Rule** | Route all `/api/*` traffic to `http://localhost:5002/api/*` | Verify that requests to `http://151.50.1.114:5173/api/quote-pdf/health` successfully reach port 5002 and do not return 504 Gateway Timeout. | `[ ] Pending` |
+| **Reverse Proxy Rule** | Route all `/api/*` traffic to `http://localhost:5002/api/*` | Verify that requests to `http://151.50.1.38:5173/api/quote-pdf/health` successfully reach port 5002 and do not return 504 Gateway Timeout. | `[ ] Pending` |
 
 ---
 
@@ -44,7 +44,7 @@ Enterprise active directory and network GPOs can actively block the local integr
 ```mermaid
 flowchart TD
     Client["Client Browser\n(Network IP: 151.50.x.x)"] -- "1. CORS PNA Rule Blocks direct loopback" --> LocalLoopback["Local Host\n(127.0.0.1:5002)"]
-    Client -- "2. Success: Routed via Server URL" --> ServerAPI["Server Reverse Proxy\n(151.50.1.114:5002)"]
+    Client -- "2. Success: Routed via Server URL" --> ServerAPI["Server Reverse Proxy\n(151.50.1.38:5002)"]
     ServerAPI -- "3. Starts Headless Browser" --> ChromeProc["chrome.exe / msedge.exe\n(Launched under Service Acc)"]
     ChromeProc -- "4. Blocked if GPO restricts Temp write" --> TempFolder["server/temp/ OR %TEMP%\n(Required for PDF Profile)"]
 ```
@@ -53,7 +53,7 @@ flowchart TD
 > **Active GPO Checks Required**:
 > 
 > *   **Localhost / Loopback Access Restrictions**: Verify that loopback boundary rules or local host name resolution policies are not blocking internal loopback requests on `localhost:5002`.
-> *   **Private Network Access (PNA) Policy**: Chrome's PNA security blocks insecure contexts (HTTP) from calling more-private networks (loopback). All client-to-server calls must go strictly through the server IP/domain (`151.50.1.114`), never using `127.0.0.1` locally in client code.
+> *   **Private Network Access (PNA) Policy**: Chrome's PNA security blocks insecure contexts (HTTP) from calling more-private networks (loopback). All client-to-server calls must go strictly through the server IP/domain (`151.50.1.38`), never using `127.0.0.1` locally in client code.
 > *   **EML File MIME Associations**: Outlook EML email drafts are generated on the server and downloaded by the client browser. Ensure client browser GPOs permit downloading and opening `.eml` MIME types inside Outlook.
 > *   **Temporary Directory Execution**: Verify that GPOs or AppLocker policies do not enforce **no-execute** (`NO_EXECUTE`) rules on Windows temporary folders or subfolders of the application root. Chrome must be allowed to write and initialize cache files in `server/temp/`.
 
@@ -87,10 +87,10 @@ The Node.js backend must run under a dedicated, low-privilege service account. I
 
 ```
 [Application Root]
- ├── server/
- │    ├── temp/        <-- CRITICAL: Full Read/Write/Delete (Chrome User Profile & PDF Cache)
- │    ├── uploads/     <-- CRITICAL: Full Read/Write/Delete (User Enquiries & Attachments)
- │    └── logs/        <-- CRITICAL: Full Read/Write (PM2 System & Application Logs)
+ â”œâ”€â”€ server/
+ â”‚    â”œâ”€â”€ temp/        <-- CRITICAL: Full Read/Write/Delete (Chrome User Profile & PDF Cache)
+ â”‚    â”œâ”€â”€ uploads/     <-- CRITICAL: Full Read/Write/Delete (User Enquiries & Attachments)
+ â”‚    â””â”€â”€ logs/        <-- CRITICAL: Full Read/Write (PM2 System & Application Logs)
 ```
 
 ---
@@ -100,7 +100,7 @@ The Node.js backend must run under a dedicated, low-privilege service account. I
 | Connection Path | Port | Protocol | Purpose | IT Verification Task |
 | :--- | :--- | :--- | :--- | :--- |
 | **Client -> Server** | `5173` | HTTP | Frontend application interface | Ensure port 5173 is open on the host firewall for client browser access. |
-| **Client -> Server API** | `5002` | HTTP | Express Backend endpoints | Open port 5002 on the local Windows Defender firewall on server `151.50.1.114`. |
+| **Client -> Server API** | `5002` | HTTP | Express Backend endpoints | Open port 5002 on the local Windows Defender firewall on server `151.50.1.38`. |
 | **Server -> Database** | `1433` (or custom) | TCP | MSSQL Database (`151.50.1.116`) | Verify connection to SQL Server database `EMS_DB` is open from the server host. |
 | **Server -> Mail Gateway**| `25` (or `587`) | SMTP | Notification Mail Relay (`almoayyedcg-com...`) | Ensure outbound SMTP traffic is allowed from the server host to the SMTP server. |
 
@@ -120,12 +120,13 @@ Puppeteer requires a stable, modern Chromium engine to render vector PDFs.
 
 ## 9. Sign-Off & IT Validation Checklist
 
-Before marking the infrastructure transition complete, the IT team should verify the following endpoints directly on the server `151.50.1.114`:
+Before marking the infrastructure transition complete, the IT team should verify the following endpoints directly on the server `151.50.1.38`:
 
 *   [ ] **Health Endpoint Probe**: Open `http://localhost:5002/api/quote-pdf/health?launch=1` and ensure it returns `launchProbe: { ok: true }` instantly.
 *   [ ] **Database Connection Check**: Verify the Express backend console log prints `Connected to MSSQL Database` on startup.
 *   [ ] **Outbound Mail Check**: Verify SMTP mail logs show successful delivery of test emails.
-*   [ ] **Reverse Proxy Verification**: Open `http://151.50.1.114:5173/api/quote-pdf/health` from a remote computer on the network and verify it returns a valid JSON response (proving URL rewrite is fully functional).
+*   [ ] **Reverse Proxy Verification**: Open `http://151.50.1.38:5173/api/quote-pdf/health` from a remote computer on the network and verify it returns a valid JSON response (proving URL rewrite is fully functional).
 
 ---
 *Prepared by EMS Application Development Team*
+

@@ -54,6 +54,13 @@ console.log('SMTP_USER:', process.env.SMTP_USER);
 console.log('SMTP_FROM:', getSmtpFromEmail());
 console.log('SMTP_PORT:', process.env.SMTP_PORT);
 console.log('SMTP_ENCRYPTION:', process.env.SMTP_ENCRYPTION || '(not set)');
+console.log('--- Attachment Storage ---');
+console.log('ENQUIRY_ATTACHMENTS_ROOT:', process.env.ENQUIRY_ATTACHMENTS_ROOT || '(not set)');
+console.log('Resolved base:', resolveEnquiryAttachmentsBase());
+console.log('Local backend fallback: DISABLED (UNC only)');
+console.log(
+    'UNC identity tip: if process runs as SYSTEM, grant share+NTFS Modify to this machine account (ACG-WEBSVR02$ on 151.50.1.38).'
+);
 
 const transporter = buildSmtpTransport({ logger: true, debug: true });
 
@@ -403,7 +410,7 @@ function runEnquiryAttachmentUpload(req, res, next) {
                     ? 'File exceeds the 100 MB upload limit.'
                     : err.message || 'File upload failed',
             code: err.code || 'UPLOAD_ERROR',
-            hint: 'Verify ENQUIRY_ATTACHMENTS_ROOT or use local storage under EMS/data/ems-attachments.',
+            hint: 'Verify ENQUIRY_ATTACHMENTS_ROOT (\\\\151.50.20.129\\ems app) and that the Windows account running Node can write to that UNC share.',
         });
     });
 }
@@ -459,6 +466,16 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads'))); // Serve uploaded files from server/uploads
 app.use('/fonts', express.static(path.join(__dirname, '../public/fonts'))); // Inter etc. for quote PDF (Puppeteer)
+app.use(
+    '/dictionaries',
+    express.static(path.join(__dirname, '../public/dictionaries'), {
+        setHeaders(res, filePath) {
+            if (/\.(aff|dic)$/i.test(filePath)) {
+                res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            }
+        },
+    })
+); // Quote spell-check Hunspell dictionaries
 
 // Request Logger
 app.use((req, res, next) => {
@@ -502,12 +519,13 @@ app.get('/api/system/attachment-storage-probe', (req, res) => {
             ok: false,
             processUser: userInfo.username,
             enquiryAttachmentsRoot: resolveEnquiryAttachmentsBase(),
+            localFallbackEnabled: false,
             localFallbackRoot: resolveLocalEnquiryAttachmentsRoot(),
             publicBase: resolveEnquiryAttachmentVisibilityBase('Public'),
             privateBase: resolveEnquiryAttachmentVisibilityBase('Private'),
             resolvedDestination: dest,
-            usedLocalFallback: resolved.usedFallback,
-            primaryAttempted: resolved.primaryAttempted || null,
+            usedLocalFallback: false,
+            primaryAttempted: null,
             probeFile,
             steps: [],
         };
@@ -551,16 +569,25 @@ app.get('/api/system/attachment-storage-probe', (req, res) => {
         return res.json(result);
     } catch (err) {
         console.error('[attachment-storage-probe]', err);
+        const userInfo = (() => {
+            try {
+                return os.userInfo().username;
+            } catch {
+                return process.env.USERNAME || process.env.USER || 'unknown';
+            }
+        })();
         return res.status(500).json({
             ok: false,
             message: err.message || 'Probe failed',
-            processUser: (() => {
-                try {
-                    return os.userInfo().username;
-                } catch {
-                    return process.env.USERNAME || 'unknown';
-                }
-            })(),
+            code: err.code || null,
+            writeDetail: err.writeDetail || null,
+            attemptedPath: err.attemptedPath || null,
+            processUser: userInfo,
+            enquiryAttachmentsRoot: resolveEnquiryAttachmentsBase(),
+            expectedUncIdentity:
+                'When processUser is SYSTEM, grant share+NTFS Modify to this server computer account (ACG-WEBSVR02$ on 151.50.1.38).',
+            hint:
+                'NTFS Full Control alone is not enough — also set Sharing → Permissions for ACG-WEBSVR02$. Then pm2 restart EMS-API --update-env and re-run this probe.',
         });
     }
 });
@@ -2800,7 +2827,7 @@ app.post('/api/attachments/upload', (req, res, next) => {
         return res.status(500).json({
             message: 'Attachment storage is not available.',
             detail: err.message,
-            hint: 'Set ENQUIRY_ATTACHMENTS_ROOT to a local path, e.g. C:\\inetpub\\wwwroot\\EMS\\data\\ems-attachments',
+            hint: 'Set ENQUIRY_ATTACHMENTS_ROOT=\\\\151.50.20.129\\ems app and ensure the PM2/IIS account has Modify on that share. Local backend fallback is disabled.',
         });
     }
     next();
@@ -2860,7 +2887,16 @@ app.post('/api/attachments/upload', (req, res, next) => {
             }
         }
 
-        res.status(201).json({ message: 'Success', files: uploadedFiles });
+        res.status(201).json({
+            message: 'Success',
+            files: uploadedFiles,
+            storage: {
+                path: req._attachmentUploadDest || (files && files[0] && files[0].path) || null,
+                usedLocalFallback: Boolean(req._attachmentUsedLocalFallback),
+                primaryUncAttempted: req._attachmentPrimaryAttempted || null,
+                configuredRoot: resolveEnquiryAttachmentsBase(),
+            },
+        });
     } catch (err) {
         const formatted = formatRouteError(err);
         console.error('[attachments/upload] error:', err);

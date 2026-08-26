@@ -1,6 +1,7 @@
 /**
  * Single source of truth for quote PDF / html2pdf / Puppeteer sheet layout.
  * Must match on-screen #quote-preview .quote-a4-sheet grid (logo / body / footer).
+ * Keep in sync with src/components/Quote/quotePrintExportCss.js
  */
 const EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM = '10px';
 const EMS_QUOTE_PRINT_FOOTER_MIN_HEIGHT = '72px';
@@ -12,6 +13,8 @@ const QUOTE_A4_INNER_HEIGHT_MM = 297 - 15 * 2;
  * Unified export overrides — hoisted preview layout CSS is stripped; sheets use grid like QuoteForm.
  */
 const QUOTE_UNIFIED_SHEET_EXPORT_CSS = `
+@page { size: A4 portrait; margin: 0; }
+@page quote-landscape { size: A4 landscape; margin: 0; }
 html[data-preview-pdf="1"] #quote-preview,
 [data-ems-pdf-export="1"] #quote-preview {
     display: flex !important;
@@ -19,20 +22,21 @@ html[data-preview-pdf="1"] #quote-preview,
     align-items: stretch !important;
     gap: 0 !important;
     padding: 0 !important;
-    margin: 0 auto !important;
+    margin: 0 !important;
     background: #fff !important;
-    width: 210mm !important;
-    max-width: 210mm !important;
+    width: auto !important;
+    max-width: none !important;
+    min-width: 0 !important;
     box-shadow: none !important;
 }
-html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet,
-[data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet {
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet:not(.quote-a4-sheet--landscape):not([data-page-orientation="landscape"]),
+[data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet:not(.quote-a4-sheet--landscape):not([data-page-orientation="landscape"]) {
     box-sizing: border-box !important;
     width: 210mm !important;
     min-width: 210mm !important;
     max-width: 210mm !important;
     padding: 15mm !important;
-    margin: 0 auto !important;
+    margin: 0 !important;
     background: #fff !important;
     min-height: 297mm !important;
     height: 297mm !important;
@@ -50,6 +54,45 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet,
     overflow: hidden !important;
     box-shadow: none !important;
     border: none !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"],
+[data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet--landscape,
+[data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] {
+    box-sizing: border-box !important;
+    width: 297mm !important;
+    min-width: 297mm !important;
+    max-width: 297mm !important;
+    padding: 15mm !important;
+    margin: 0 !important;
+    background: #fff !important;
+    min-height: 210mm !important;
+    height: 210mm !important;
+    max-height: 210mm !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto minmax(0, 1fr) auto !important;
+    align-content: stretch !important;
+    overflow: hidden !important;
+    box-shadow: none !important;
+    border: none !important;
+    page: quote-landscape;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .quote-sheet-main-flex,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .content-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .header-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .footer-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .quote-clause-block,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .clause-content,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .quote-sheet-main-flex,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .content-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .header-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .footer-section,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .quote-clause-block,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] .clause-content {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
 }
 html[data-preview-pdf="1"] #quote-preview .quote-sheet-logo-row,
 [data-ems-pdf-export="1"] .quote-sheet-logo-row {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Select from 'react-select';
-import AsyncSelect from 'react-select/async'; // START_OF_FILE_MODIFICATION
+import AsyncCreatableSelect from 'react-select/async-creatable';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import { format } from 'date-fns';
@@ -11,8 +11,84 @@ import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
 import { EMS_TABLE_HEADER_GRADIENT } from '../../constants/emsTheme';
 import { flip } from '@floating-ui/react';
+import ExcelDownloadButton from '../shared/ExcelDownloadButton';
+import {
+    downloadProbabilityListXlsx,
+    PROBABILITY_VIEW_MODE_LABELS,
+} from './probabilityListExcel';
+import '../../styles/emsTableColumnFilters.css';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
+
+const PROB_DATE_MONTH_NAMES = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+function parseProbDateFilterKey(key) {
+    if (!key || key === '—') return null;
+    const raw = String(key).trim();
+    const d = new Date(`${raw}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return null;
+    return {
+        year: d.getFullYear(),
+        monthName: PROB_DATE_MONTH_NAMES[d.getMonth()],
+        raw,
+    };
+}
+
+function buildProbDateGroupsFromKeys(allKeys) {
+    const dateGroups = {};
+    const otherKeys = [];
+    for (const key of allKeys || []) {
+        const parsed = parseProbDateFilterKey(key);
+        if (!parsed) {
+            otherKeys.push(key);
+            continue;
+        }
+        if (!dateGroups[parsed.year]) dateGroups[parsed.year] = {};
+        if (!dateGroups[parsed.year][parsed.monthName]) dateGroups[parsed.year][parsed.monthName] = [];
+        dateGroups[parsed.year][parsed.monthName].push(parsed.raw);
+    }
+    return { dateGroups, otherKeys };
+}
+
+function probDateKeyMatchesSearch(key, q, formatLabel) {
+    if (!q) return true;
+    const lo = q.toLowerCase();
+    if (String(key).toLowerCase().includes(lo)) return true;
+    const parsed = parseProbDateFilterKey(key);
+    if (parsed) {
+        if (String(parsed.year).includes(lo)) return true;
+        if (parsed.monthName.toLowerCase().includes(lo)) return true;
+    }
+    const label = formatLabel(key);
+    if (label && String(label).toLowerCase().includes(lo)) return true;
+    return false;
+}
+
+/** Probability status colors for row dropdown and history. */
+function getProbStatusColor(status) {
+    const s = String(status || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+    if (s === 'won') return '#198754';
+    if (s === 'lost') return '#dc3545';
+    if (s === 'pending') return '#6f42c1';
+    if (s === 'followup') return '#4169e1';
+    if (s === 'onhold' || s === 'hold') return '#800000';
+    if (s === 'cancelled') return '#800000';
+    if (s === 'retendered') return '#800000';
+    return '#212529';
+}
+
+const probStatusSelectStyle = (status) => ({
+    fontWeight: 700,
+    color: getProbStatusColor(status),
+});
+
+const probStatusOptionStyle = (status) => ({
+    fontWeight: 700,
+    color: getProbStatusColor(status),
+});
 
 /** Prefer opening below the input; restrict flip fallbacks so the calendar rarely moves above the field. */
 const PROB_LIST_DATE_PICKER_POPPER_MODIFIERS = [
@@ -32,7 +108,7 @@ const PROB_DATE_PICKER_POPPER_COMMON = {
     popperModifiers: PROB_LIST_DATE_PICKER_POPPER_MODIFIERS,
 };
 
-/** Lost To — search Master directory (contractors + clients) only after this many characters. */
+/** Lost To — directory search (contractors + clients) after this many characters; free text always allowed. */
 const LOST_TO_MIN_SEARCH_CHARS = 3;
 
 /** Fields whose change should enable the per-row Update button. Mirrors the persistUpdate payload. */
@@ -40,7 +116,7 @@ const PROB_TRACKED_FIELDS = [
     'Status', 'WonQuoteRef', 'WonCustomerName', 'LeadJobName', 'WonQuoteRefDate',
     'WonOrderValue', 'WonJobNo', 'WonOption', 'WonGrossProfit',
     'LostCompetitor', 'LostReason', 'LostCompetitorPrice', 'LostDate',
-    'ProbabilityOption', 'ExpectedOrderDate', 'ProbabilityRemarks',
+    'ProbabilityOption', 'ExpectedOrderDate', 'GrossMargin', 'ProbabilityRemarks',
     'SelectedTotalQuotedValue', 'SelectedNetQuotedValue', 'QuotePreparedBy',
 ];
 
@@ -151,6 +227,17 @@ const ProbabilityForm = () => {
     const [colFQuoteType, setColFQuoteType] = useState(null);
     const [colFProbability, setColFProbability] = useState(null);
     const [colFExpectedDate, setColFExpectedDate] = useState(null);
+    const [colFDetailQuoteRef, setColFDetailQuoteRef] = useState(null);
+    const [colFWonJobNo, setColFWonJobNo] = useState(null);
+    const [colFWonBookedDate, setColFWonBookedDate] = useState(null);
+    const [colFDetailRemarks, setColFDetailRemarks] = useState(null);
+    const [colFLostTo, setColFLostTo] = useState(null);
+    const [colFLostReason, setColFLostReason] = useState(null);
+    const [colFLostDate, setColFLostDate] = useState(null);
+    const [colFWonJobValue, setColFWonJobValue] = useState({ mode: 'all', v1: '', v2: '' });
+    const [colFWonGpPct, setColFWonGpPct] = useState({ mode: 'all', v1: '', v2: '' });
+    const [colFGrossMargin, setColFGrossMargin] = useState({ mode: 'all', v1: '', v2: '' });
+    const [colFLostCompetitorPrice, setColFLostCompetitorPrice] = useState({ mode: 'all', v1: '', v2: '' });
     const [colFNet, setColFNet] = useState({ mode: 'all', v1: '', v2: '' });
     const [sortCol, setSortCol] = useState(null);
     const [sortAsc, setSortAsc] = useState(true);
@@ -167,6 +254,17 @@ const ProbabilityForm = () => {
         quoteType: null,
         probability: null,
         expectedDate: null,
+        detailQuoteRef: null,
+        wonJobNo: null,
+        wonBookedDate: null,
+        detailRemarks: null,
+        lostTo: null,
+        lostReason: null,
+        lostDate: null,
+        wonJobValue: null,
+        wonGpPct: null,
+        grossMargin: null,
+        lostCompetitorPrice: null,
     });
     const [draftMulti, setDraftMulti] = useState(() => new Set());
     const [draftNet, setDraftNet] = useState({ mode: 'all', v1: '', v2: '' });
@@ -363,6 +461,11 @@ const ProbabilityForm = () => {
                     item.TotalQuotedValue = item.TotalQuotedValue || item.totalquotedvalue;
                     item.NetQuotedValue = item.NetQuotedValue || item.netquotedvalue;
 
+                    // Follow Up Gross Margin shares Probability.GrossMargin with Won GP %
+                    if (item.GrossMargin == null || item.GrossMargin === '') {
+                        item.GrossMargin = item.WonGrossProfit ?? '';
+                    }
+
                     // Align net quoted with EnquiryQuotes.TotalAmount for the saved quote ref
                     const savedRef = String(item.WonQuoteRef || '').trim();
                     if (savedRef) {
@@ -463,14 +566,6 @@ const ProbabilityForm = () => {
             }
         })();
         return d ? `${r} (${d})` : r;
-    };
-
-    const statusSelectStyle = (status) => {
-        const s = String(status || '').trim().toLowerCase();
-        return {
-            fontWeight: 700,
-            color: s === 'won' ? '#198754' : '#dc3545',
-        };
     };
 
     const buildQuoteRefOptions = (item) =>
@@ -620,16 +715,20 @@ const ProbabilityForm = () => {
                 return;
             }
 
-            // specific validation for High probabilities
-            const prob = String(item.ProbabilityOption || '');
-            const isHigh = prob.includes('90%') || prob.includes('99%');
+            const gmRaw = String(item.GrossMargin ?? '').replace(/,/g, '').trim();
+            if (gmRaw === '' || Number.isNaN(Number(gmRaw))) {
+                alert('Gross Margin is mandatory for Follow Up.');
+                return;
+            }
+            if (Number(gmRaw) < 0 || Number(gmRaw) > 100) {
+                alert('Gross Margin must be between 0 and 100.');
+                return;
+            }
 
-            if (isHigh) {
-                const dateVal = item.ExpectedOrderDate;
-                if (!dateVal || String(dateVal).trim() === '' || String(dateVal) === 'null' || String(dateVal) === 'undefined' || String(dateVal) === '0000-00-00') {
-                    alert('Expected Order Date is mandatory for ' + prob);
-                    return;
-                }
+            const dateVal = item.ExpectedOrderDate;
+            if (!dateVal || String(dateVal).trim() === '' || String(dateVal) === 'null' || String(dateVal) === 'undefined' || String(dateVal) === '0000-00-00') {
+                alert('Expected Date is mandatory for Follow Up.');
+                return;
             }
         }
 
@@ -663,6 +762,12 @@ const ProbabilityForm = () => {
                 },
                 customerPreferredPrice: customerPreferredPrice,
                 expectedDate: item.ExpectedOrderDate,
+                grossMargin: (() => {
+                    if (!(item.Status === 'FollowUp' || item.Status === 'Follow-up')) return null;
+                    const raw = String(item.GrossMargin ?? '').replace(/,/g, '').trim();
+                    if (raw === '' || Number.isNaN(Number(raw))) return null;
+                    return parseFloat(raw);
+                })(),
                 lostDetails: {
                     customer: item.LostCompetitor,
                     reason: item.LostReason,
@@ -890,6 +995,89 @@ const ProbabilityForm = () => {
         const m = String(s).match(/(\d+)\s*%/);
         return m ? Number(m[1]) : -1;
     };
+    const detailQuoteRefKey = (item) => {
+        const s = String(item.WonQuoteRef || '').trim();
+        return s || '—';
+    };
+    const wonJobNoKey = (item) => {
+        const s = String(item.WonJobNo || '').trim();
+        return s || '—';
+    };
+    const wonBookedDateKey = (item) => expectedDateKey(item);
+    const detailRemarksKey = (item) => {
+        const s = String(item.ProbabilityRemarks || '').trim();
+        return s || '—';
+    };
+    const lostToKey = (item) => {
+        const s = String(item.LostCompetitor || '').trim();
+        return s || '—';
+    };
+    const lostReasonKey = (item) => {
+        const s = String(item.LostReason || '').trim();
+        return s || '—';
+    };
+    const lostDateKey = (item) => {
+        const raw = item.LostDate;
+        if (!raw) return '—';
+        try {
+            const d = raw instanceof Date ? raw : new Date(raw);
+            if (Number.isNaN(d.getTime())) return '—';
+            return format(d, 'yyyy-MM-dd');
+        } catch {
+            return '—';
+        }
+    };
+    const wonJobValueNum = (item) => {
+        const raw = String(item.WonOrderValue ?? '').replace(/,/g, '').replace(/BD/gi, '').trim();
+        const n = parseFloat(raw);
+        return Number.isFinite(n) ? n : null;
+    };
+    const wonGpPctNum = (item) => {
+        const n = Number(item.WonGrossProfit);
+        return Number.isFinite(n) ? n : null;
+    };
+    const grossMarginNum = (item) => {
+        const n = Number(item.GrossMargin);
+        return Number.isFinite(n) ? n : null;
+    };
+    const lostCompetitorPriceNum = (item) => {
+        const raw = String(item.LostCompetitorPrice ?? '').replace(/,/g, '').replace(/BD/gi, '').trim();
+        const n = parseFloat(raw);
+        return Number.isFinite(n) ? n : null;
+    };
+    const lostDateSortValue = (item) => {
+        const raw = item.LostDate;
+        if (!raw) return null;
+        const d = raw instanceof Date ? raw : new Date(raw);
+        const t = d.getTime();
+        return Number.isNaN(t) ? null : t;
+    };
+    const applyNumericColumnFilter = (rows, filterState, getValue) => {
+        if (!filterState || filterState.mode === 'all') return rows;
+        const v1 = parseFloat(String(filterState.v1 ?? '').replace(/,/g, '').trim());
+        const v2 = parseFloat(String(filterState.v2 ?? '').replace(/,/g, '').trim());
+        return rows.filter((r) => {
+            const n = getValue(r);
+            if (n === null || Number.isNaN(n)) return false;
+            switch (filterState.mode) {
+                case 'gt':
+                    return !Number.isNaN(v1) && n > v1;
+                case 'lt':
+                    return !Number.isNaN(v1) && n < v1;
+                case 'eq':
+                    return !Number.isNaN(v1) && Math.abs(n - v1) < 1e-6;
+                case 'gte':
+                    return !Number.isNaN(v1) && n >= v1;
+                case 'lte':
+                    return !Number.isNaN(v1) && n <= v1;
+                case 'between':
+                    if (Number.isNaN(v1) || Number.isNaN(v2)) return false;
+                    return n >= Math.min(v1, v2) && n <= Math.max(v1, v2);
+                default:
+                    return true;
+            }
+        });
+    };
 
     const columnUniques = useMemo(() => {
         const enquiry = new Set();
@@ -899,6 +1087,13 @@ const ProbabilityForm = () => {
         const quoteType = new Set();
         const probability = new Set();
         const expectedDate = new Set();
+        const detailQuoteRef = new Set();
+        const wonJobNo = new Set();
+        const wonBookedDate = new Set();
+        const detailRemarks = new Set();
+        const lostTo = new Set();
+        const lostReason = new Set();
+        const lostDate = new Set();
         for (const item of enquiriesList) {
             enquiry.add(String(item.RequestNo ?? ''));
             project.add(projectKey(item));
@@ -907,6 +1102,13 @@ const ProbabilityForm = () => {
             quoteType.add(quoteTypeKey(item));
             probability.add(probabilityKey(item));
             expectedDate.add(expectedDateKey(item));
+            detailQuoteRef.add(detailQuoteRefKey(item));
+            wonJobNo.add(wonJobNoKey(item));
+            wonBookedDate.add(wonBookedDateKey(item));
+            detailRemarks.add(detailRemarksKey(item));
+            lostTo.add(lostToKey(item));
+            lostReason.add(lostReasonKey(item));
+            lostDate.add(lostDateKey(item));
         }
         const probOrder = [
             'Low Chance (25%)',
@@ -930,6 +1132,21 @@ const ProbabilityForm = () => {
                 return a.localeCompare(b, undefined, { sensitivity: 'base' });
             }),
             expectedDate: [...expectedDate].sort((a, b) => {
+                if (a === '—') return 1;
+                if (b === '—') return -1;
+                return a.localeCompare(b);
+            }),
+            detailQuoteRef: [...detailQuoteRef].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+            wonJobNo: [...wonJobNo].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+            wonBookedDate: [...wonBookedDate].sort((a, b) => {
+                if (a === '—') return 1;
+                if (b === '—') return -1;
+                return a.localeCompare(b);
+            }),
+            detailRemarks: [...detailRemarks].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+            lostTo: [...lostTo].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+            lostReason: [...lostReason].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+            lostDate: [...lostDate].sort((a, b) => {
                 if (a === '—') return 1;
                 if (b === '—') return -1;
                 return a.localeCompare(b);
@@ -969,6 +1186,31 @@ const ProbabilityForm = () => {
         if (colFExpectedDate !== null) {
             rows = rows.filter((r) => colFExpectedDate.has(expectedDateKey(r)));
         }
+        if (colFDetailQuoteRef !== null) {
+            rows = rows.filter((r) => colFDetailQuoteRef.has(detailQuoteRefKey(r)));
+        }
+        if (colFWonJobNo !== null) {
+            rows = rows.filter((r) => colFWonJobNo.has(wonJobNoKey(r)));
+        }
+        if (colFWonBookedDate !== null) {
+            rows = rows.filter((r) => colFWonBookedDate.has(wonBookedDateKey(r)));
+        }
+        if (colFDetailRemarks !== null) {
+            rows = rows.filter((r) => colFDetailRemarks.has(detailRemarksKey(r)));
+        }
+        if (colFLostTo !== null) {
+            rows = rows.filter((r) => colFLostTo.has(lostToKey(r)));
+        }
+        if (colFLostReason !== null) {
+            rows = rows.filter((r) => colFLostReason.has(lostReasonKey(r)));
+        }
+        if (colFLostDate !== null) {
+            rows = rows.filter((r) => colFLostDate.has(lostDateKey(r)));
+        }
+        rows = applyNumericColumnFilter(rows, colFWonJobValue, wonJobValueNum);
+        rows = applyNumericColumnFilter(rows, colFWonGpPct, wonGpPctNum);
+        rows = applyNumericColumnFilter(rows, colFGrossMargin, grossMarginNum);
+        rows = applyNumericColumnFilter(rows, colFLostCompetitorPrice, lostCompetitorPriceNum);
         if (colFNet && colFNet.mode !== 'all') {
             const v1 = parseFloat(String(colFNet.v1 ?? '').replace(/,/g, '').trim());
             const v2 = parseFloat(String(colFNet.v2 ?? '').replace(/,/g, '').trim());
@@ -1036,6 +1278,69 @@ const ProbabilityForm = () => {
                         c = fa === fb ? 0 : fa < fb ? -1 : 1;
                         break;
                     }
+                    case 'detailQuoteRef':
+                        c = detailQuoteRefKey(a).localeCompare(detailQuoteRefKey(b), undefined, { sensitivity: 'base' });
+                        break;
+                    case 'wonJobNo':
+                        c = wonJobNoKey(a).localeCompare(wonJobNoKey(b), undefined, { sensitivity: 'base' });
+                        break;
+                    case 'wonBookedDate': {
+                        const da = expectedDateSortValue(a);
+                        const db = expectedDateSortValue(b);
+                        const fa = da == null ? Number.POSITIVE_INFINITY : da;
+                        const fb = db == null ? Number.POSITIVE_INFINITY : db;
+                        c = fa === fb ? 0 : fa < fb ? -1 : 1;
+                        break;
+                    }
+                    case 'detailRemarks':
+                        c = detailRemarksKey(a).localeCompare(detailRemarksKey(b), undefined, { sensitivity: 'base' });
+                        break;
+                    case 'wonJobValue': {
+                        const na = wonJobValueNum(a);
+                        const nb = wonJobValueNum(b);
+                        const fa = na == null ? -Infinity : na;
+                        const fb = nb == null ? -Infinity : nb;
+                        c = fa === fb ? 0 : fa < fb ? -1 : 1;
+                        break;
+                    }
+                    case 'wonGpPct': {
+                        const na = wonGpPctNum(a);
+                        const nb = wonGpPctNum(b);
+                        const fa = na == null ? -Infinity : na;
+                        const fb = nb == null ? -Infinity : nb;
+                        c = fa === fb ? 0 : fa < fb ? -1 : 1;
+                        break;
+                    }
+                    case 'grossMargin': {
+                        const na = grossMarginNum(a);
+                        const nb = grossMarginNum(b);
+                        const fa = na == null ? -Infinity : na;
+                        const fb = nb == null ? -Infinity : nb;
+                        c = fa === fb ? 0 : fa < fb ? -1 : 1;
+                        break;
+                    }
+                    case 'lostTo':
+                        c = lostToKey(a).localeCompare(lostToKey(b), undefined, { sensitivity: 'base' });
+                        break;
+                    case 'lostReason':
+                        c = lostReasonKey(a).localeCompare(lostReasonKey(b), undefined, { sensitivity: 'base' });
+                        break;
+                    case 'lostCompetitorPrice': {
+                        const na = lostCompetitorPriceNum(a);
+                        const nb = lostCompetitorPriceNum(b);
+                        const fa = na == null ? -Infinity : na;
+                        const fb = nb == null ? -Infinity : nb;
+                        c = fa === fb ? 0 : fa < fb ? -1 : 1;
+                        break;
+                    }
+                    case 'lostDate': {
+                        const da = lostDateSortValue(a);
+                        const db = lostDateSortValue(b);
+                        const fa = da == null ? Number.POSITIVE_INFINITY : da;
+                        const fb = db == null ? Number.POSITIVE_INFINITY : db;
+                        c = fa === fb ? 0 : fa < fb ? -1 : 1;
+                        break;
+                    }
                     default:
                         c = 0;
                 }
@@ -1053,10 +1358,76 @@ const ProbabilityForm = () => {
         colFQuoteType,
         colFProbability,
         colFExpectedDate,
+        colFDetailQuoteRef,
+        colFWonJobNo,
+        colFWonBookedDate,
+        colFDetailRemarks,
+        colFLostTo,
+        colFLostReason,
+        colFLostDate,
+        colFWonJobValue,
+        colFWonGpPct,
+        colFGrossMargin,
+        colFLostCompetitorPrice,
         colFNet,
         sortCol,
         sortAsc,
         currentUser,
+    ]);
+
+    const handleProbabilityExcelDownload = useCallback(async () => {
+        if (!filteredSortedRows.length) {
+            window.alert('No data to export');
+            return;
+        }
+        const viewModeLabel = PROBABILITY_VIEW_MODE_LABELS[listMode] || listMode || 'Probability';
+        try {
+            await downloadProbabilityListXlsx({
+                rows: filteredSortedRows,
+                viewModeLabel,
+                meta: {
+                    division: selectedDivision || '',
+                    viewMode: viewModeLabel,
+                    searchQuery: String(viewSearchText || '').trim(),
+                    dateFrom: fromDate || '',
+                    dateTo: toDate || '',
+                    probabilityFilter: filterProbability || ''
+                },
+                enrichRow: (item) => {
+                    const userDept = (currentUser?.Department || currentUser?.Division || '').trim().toLowerCase();
+                    const isSubUser =
+                        userDept &&
+                        userDept !== 'civil' &&
+                        userDept !== 'admin' &&
+                        currentUser?.Roles !== 'Admin' &&
+                        currentUser?.role !== 'Admin';
+                    const netRestricted = !!(isSubUser && (!item.QuoteRefs || item.QuoteRefs.length === 0));
+                    const sel = quoteRefSelectValue(item);
+                    return {
+                        customerName: customerNameForQuoteRef(item),
+                        quoteType: quoteTypeForQuoteRef(item),
+                        netQuoted: getRowNetQuotedNumber(item, currentUser),
+                        netRestricted,
+                        quoteRef: sel?.label || ''
+                    };
+                }
+            });
+        } catch (err) {
+            console.error('Probability Excel export failed', err);
+            window.alert(err?.message || 'Failed to export Excel workbook');
+        }
+    }, [
+        filteredSortedRows,
+        listMode,
+        selectedDivision,
+        viewSearchText,
+        fromDate,
+        toDate,
+        filterProbability,
+        currentUser,
+        customerNameForQuoteRef,
+        quoteTypeForQuoteRef,
+        quoteRefSelectValue
     ]);
 
     const listAggregates = useMemo(() => {
@@ -1130,22 +1501,34 @@ const ProbabilityForm = () => {
         }
         const rect = el.getBoundingClientRect();
         const isNet = openColFilter === 'net';
+        const isNumericDetail =
+            openColFilter === 'wonJobValue' ||
+            openColFilter === 'wonGpPct' ||
+            openColFilter === 'grossMargin' ||
+            openColFilter === 'lostCompetitorPrice';
         const baseMinW =
             openColFilter === 'status' ||
             openColFilter === 'quoteType' ||
             openColFilter === 'probability' ||
-            openColFilter === 'expectedDate'
+            openColFilter === 'expectedDate' ||
+            openColFilter === 'detailQuoteRef' ||
+            openColFilter === 'wonJobNo' ||
+            openColFilter === 'wonBookedDate' ||
+            openColFilter === 'detailRemarks' ||
+            openColFilter === 'lostTo' ||
+            openColFilter === 'lostReason' ||
+            openColFilter === 'lostDate'
                 ? 220
-                : isNet
+                : isNet || isNumericDetail
                   ? 240
                   : 260;
         const vw = window.innerWidth;
         const vh = window.innerHeight;
-        let left = isNet ? rect.right - Math.max(baseMinW, rect.width) : rect.left;
+        let left = isNet || isNumericDetail ? rect.right - Math.max(baseMinW, rect.width) : rect.left;
         left = Math.max(8, Math.min(left, vw - baseMinW - 8));
         const top = rect.bottom + 4;
         const capMax =
-            openColFilter === 'status' || openColFilter === 'quoteType' ? 280 : openColFilter === 'net' ? 360 : 320;
+            openColFilter === 'status' || openColFilter === 'quoteType' ? 280 : isNet || isNumericDetail ? 360 : 320;
         const maxH = Math.min(capMax, Math.max(120, vh - top - 16));
         setFilterPanelPos({
             top,
@@ -1191,6 +1574,13 @@ const ProbabilityForm = () => {
         if (kind === 'quoteType') return columnUniques.quoteType;
         if (kind === 'probability') return columnUniques.probability;
         if (kind === 'expectedDate') return columnUniques.expectedDate;
+        if (kind === 'detailQuoteRef') return columnUniques.detailQuoteRef;
+        if (kind === 'wonJobNo') return columnUniques.wonJobNo;
+        if (kind === 'wonBookedDate') return columnUniques.wonBookedDate;
+        if (kind === 'detailRemarks') return columnUniques.detailRemarks;
+        if (kind === 'lostTo') return columnUniques.lostTo;
+        if (kind === 'lostReason') return columnUniques.lostReason;
+        if (kind === 'lostDate') return columnUniques.lostDate;
         return [];
     };
 
@@ -1202,6 +1592,13 @@ const ProbabilityForm = () => {
         if (kind === 'quoteType') return colFQuoteType;
         if (kind === 'probability') return colFProbability;
         if (kind === 'expectedDate') return colFExpectedDate;
+        if (kind === 'detailQuoteRef') return colFDetailQuoteRef;
+        if (kind === 'wonJobNo') return colFWonJobNo;
+        if (kind === 'wonBookedDate') return colFWonBookedDate;
+        if (kind === 'detailRemarks') return colFDetailRemarks;
+        if (kind === 'lostTo') return colFLostTo;
+        if (kind === 'lostReason') return colFLostReason;
+        if (kind === 'lostDate') return colFLostDate;
         return null;
     };
 
@@ -1213,7 +1610,31 @@ const ProbabilityForm = () => {
         if (kind === 'quoteType') return setColFQuoteType;
         if (kind === 'probability') return setColFProbability;
         if (kind === 'expectedDate') return setColFExpectedDate;
+        if (kind === 'detailQuoteRef') return setColFDetailQuoteRef;
+        if (kind === 'wonJobNo') return setColFWonJobNo;
+        if (kind === 'wonBookedDate') return setColFWonBookedDate;
+        if (kind === 'detailRemarks') return setColFDetailRemarks;
+        if (kind === 'lostTo') return setColFLostTo;
+        if (kind === 'lostReason') return setColFLostReason;
+        if (kind === 'lostDate') return setColFLostDate;
         return null;
+    };
+
+    const getNumericFilterState = (kind) => {
+        if (kind === 'net') return colFNet;
+        if (kind === 'wonJobValue') return colFWonJobValue;
+        if (kind === 'wonGpPct') return colFWonGpPct;
+        if (kind === 'grossMargin') return colFGrossMargin;
+        if (kind === 'lostCompetitorPrice') return colFLostCompetitorPrice;
+        return { mode: 'all', v1: '', v2: '' };
+    };
+
+    const setNumericFilterState = (kind, val) => {
+        if (kind === 'net') setColFNet(val);
+        else if (kind === 'wonJobValue') setColFWonJobValue(val);
+        else if (kind === 'wonGpPct') setColFWonGpPct(val);
+        else if (kind === 'grossMargin') setColFGrossMargin(val);
+        else if (kind === 'lostCompetitorPrice') setColFLostCompetitorPrice(val);
     };
 
     const openMultiDraft = (kind) => {
@@ -1243,9 +1664,37 @@ const ProbabilityForm = () => {
         setOpenColFilter(null);
     };
 
+    const openNumericDraft = (kind) => {
+        setDraftNet({ ...getNumericFilterState(kind) });
+        setOpenColFilter(kind);
+    };
+
+    const toggleDetailNumericFilter = (kind, e) => {
+        if (e.target.closest('.prob-filter-panel')) return;
+        if (e.target.closest('[data-sort-only="true"]')) return;
+        if (openColFilter === kind) {
+            setOpenColFilter(null);
+        } else {
+            openNumericDraft(kind);
+        }
+    };
+
+    const applyNumericDraft = (kind) => {
+        if (draftNet.mode === 'all') {
+            setNumericFilterState(kind, { mode: 'all', v1: '', v2: '' });
+        } else {
+            setNumericFilterState(kind, { ...draftNet });
+        }
+        setOpenColFilter(null);
+    };
+
+    const clearNumericFilter = (kind) => {
+        setNumericFilterState(kind, { mode: 'all', v1: '', v2: '' });
+        setOpenColFilter(null);
+    };
+
     const openNetDraft = () => {
-        setDraftNet({ ...colFNet });
-        setOpenColFilter('net');
+        openNumericDraft('net');
     };
 
     const toggleMultiColumnFilter = (kind, e) => {
@@ -1269,17 +1718,11 @@ const ProbabilityForm = () => {
     };
 
     const applyNetDraft = () => {
-        if (draftNet.mode === 'all') {
-            setColFNet({ mode: 'all', v1: '', v2: '' });
-        } else {
-            setColFNet({ ...draftNet });
-        }
-        setOpenColFilter(null);
+        applyNumericDraft('net');
     };
 
     const clearNetFilter = () => {
-        setColFNet({ mode: 'all', v1: '', v2: '' });
-        setOpenColFilter(null);
+        clearNumericFilter('net');
     };
 
     const handleSortClick = (key) => {
@@ -1297,8 +1740,9 @@ const ProbabilityForm = () => {
     };
 
     const filterActiveClass = (kind) => {
-        if (kind === 'net') {
-            return colFNet && colFNet.mode !== 'all' ? 'text-primary' : 'text-secondary';
+        if (kind === 'net' || kind === 'wonJobValue' || kind === 'wonGpPct' || kind === 'grossMargin' || kind === 'lostCompetitorPrice') {
+            const s = getNumericFilterState(kind);
+            return s && s.mode !== 'all' ? 'text-primary' : 'text-secondary';
         }
         const s = getMultiFilterActive(kind);
         return s !== null ? 'text-primary' : 'text-secondary';
@@ -1312,16 +1756,311 @@ const ProbabilityForm = () => {
         setColFQuoteType(null);
         setColFProbability(null);
         setColFExpectedDate(null);
+        setColFDetailQuoteRef(null);
+        setColFWonJobNo(null);
+        setColFWonBookedDate(null);
+        setColFDetailRemarks(null);
+        setColFLostTo(null);
+        setColFLostReason(null);
+        setColFLostDate(null);
+        setColFWonJobValue({ mode: 'all', v1: '', v2: '' });
+        setColFWonGpPct({ mode: 'all', v1: '', v2: '' });
+        setColFGrossMargin({ mode: 'all', v1: '', v2: '' });
+        setColFLostCompetitorPrice({ mode: 'all', v1: '', v2: '' });
         setColFNet({ mode: 'all', v1: '', v2: '' });
         setSortCol(null);
         setSortAsc(true);
     };
+
+    const renderDetailFilterHeader = (label, kind, colClass, { numeric = false } = {}) => (
+        <div
+            ref={(el) => {
+                filterHeaderRefs.current[kind] = el;
+            }}
+            className={`${colClass} prob-table-filter-header position-relative`}
+            style={{ cursor: 'pointer' }}
+            onClick={(e) => (numeric ? toggleDetailNumericFilter(kind, e) : toggleMultiColumnFilter(kind, e))}
+        >
+            <div className="d-flex align-items-end justify-content-between gap-1 w-100">
+                <span className="fw-normal">{label}</span>
+                <span className="d-flex align-items-center gap-1 flex-shrink-0">
+                    <span
+                        className={`user-select-none ${filterActiveClass(kind)}`}
+                        style={{ fontSize: '10px', lineHeight: 1 }}
+                        title="Filter"
+                    >
+                        ▼
+                    </span>
+                    <button
+                        type="button"
+                        data-sort-only="true"
+                        className="btn btn-link p-0 text-decoration-none user-select-none"
+                        style={{ fontSize: '11px', lineHeight: 1 }}
+                        title="Sort"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            handleSortClick(kind);
+                        }}
+                    >
+                        {sortIndicator(kind)}
+                    </button>
+                </span>
+            </div>
+        </div>
+    );
+
+    const renderProbDateHierarchyFilterPanel = (kind) => {
+        const all = getMultiFilterAll(kind);
+        const formatLabel = (val) => {
+            if (val !== '—') return formatExpectedDateLabel(val);
+            return '—';
+        };
+        const { dateGroups, otherKeys } = buildProbDateGroupsFromKeys(all);
+        const q = String(filterSearch || '').trim();
+        const visibleOther = otherKeys.filter((k) => probDateKeyMatchesSearch(k, q, formatLabel));
+        const visibleYears = Object.keys(dateGroups)
+            .sort((a, b) => Number(b) - Number(a))
+            .filter((y) => {
+                const yearValues = Object.values(dateGroups[y]).flat();
+                if (!q) return true;
+                if (String(y).includes(q)) return true;
+                return yearValues.some((v) => probDateKeyMatchesSearch(v, q, formatLabel));
+            });
+
+        const toggleKeys = (keys, checked) => {
+            setDraftMulti((prev) => {
+                const n = new Set(prev);
+                keys.forEach((k) => {
+                    if (checked) n.add(k);
+                    else n.delete(k);
+                });
+                return n;
+            });
+        };
+
+        return (
+            <div className="ems-cf-scope">
+                <input
+                    className="ert-th-filter-search"
+                    placeholder="Search..."
+                    value={filterSearch}
+                    onChange={(e) => setFilterSearch(e.target.value)}
+                />
+                <div className="ert-th-filter-actions">
+                    <button type="button" onClick={() => setDraftMulti(new Set(all))}>
+                        Select All
+                    </button>
+                    <button type="button" onClick={() => setDraftMulti(new Set())}>
+                        Unselect All
+                    </button>
+                </div>
+                <div className="ert-th-filter-options">
+                    {visibleYears.map((y) => {
+                        const yearValues = Object.values(dateGroups[y]).flat();
+                        const yearChecked = yearValues.length > 0 && yearValues.every((v) => draftMulti.has(v));
+                        const visibleMonths = Object.keys(dateGroups[y])
+                            .sort((a, b) => PROB_DATE_MONTH_NAMES.indexOf(a) - PROB_DATE_MONTH_NAMES.indexOf(b))
+                            .filter((mn) => {
+                                const monthValues = dateGroups[y][mn];
+                                if (!q) return true;
+                                if (mn.toLowerCase().includes(q.toLowerCase())) return true;
+                                return monthValues.some((v) => probDateKeyMatchesSearch(v, q, formatLabel));
+                            });
+                        return (
+                            <div key={y}>
+                                <label className="ert-th-filter-option">
+                                    <input
+                                        type="checkbox"
+                                        checked={yearChecked}
+                                        onChange={(e) => toggleKeys(yearValues, e.target.checked)}
+                                    />
+                                    <span>{y}</span>
+                                </label>
+                                {visibleMonths.map((mn) => {
+                                    const monthValues = dateGroups[y][mn];
+                                    const monthChecked =
+                                        monthValues.length > 0 && monthValues.every((v) => draftMulti.has(v));
+                                    return (
+                                        <label key={`${y}-${mn}`} className="ert-th-filter-option ert-th-filter-option--month">
+                                            <input
+                                                type="checkbox"
+                                                checked={monthChecked}
+                                                onChange={(e) => toggleKeys(monthValues, e.target.checked)}
+                                            />
+                                            <span>{mn}</span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                        );
+                    })}
+                    {visibleOther.map((opt) => (
+                        <label key={String(opt)} className="ert-th-filter-option">
+                            <input
+                                type="checkbox"
+                                checked={draftMulti.has(opt)}
+                                onChange={(e) => toggleKeys([opt], e.target.checked)}
+                            />
+                            <span>{opt || '—'}</span>
+                        </label>
+                    ))}
+                </div>
+                <div className="ert-th-filter-footer">
+                    <button type="button" onClick={() => clearMultiFilter(kind)}>
+                        Clear
+                    </button>
+                    <button type="button" className="ert-th-filter-apply" onClick={() => applyMultiDraft(kind)}>
+                        Apply
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
+    const renderMultiFilterPanel = (kind) => {
+        const all = getMultiFilterAll(kind);
+        const formatLabel = (val) => {
+            if ((kind === 'wonBookedDate' || kind === 'lostDate' || kind === 'expectedDate') && val !== '—') {
+                return formatExpectedDateLabel(val);
+            }
+            return val;
+        };
+        return (
+            <>
+                <input
+                    className="form-control form-control-sm mb-2"
+                    placeholder="Search..."
+                    value={filterSearch}
+                    onChange={(e) => setFilterSearch(e.target.value)}
+                />
+                <div className="d-flex gap-1 mb-2">
+                    <button type="button" className="btn btn-sm btn-outline-secondary py-0" onClick={() => setDraftMulti(new Set(all))}>
+                        All
+                    </button>
+                    <button type="button" className="btn btn-sm btn-outline-secondary py-0" onClick={() => setDraftMulti(new Set())}>
+                        None
+                    </button>
+                </div>
+                <div style={{ maxHeight: 160, overflowY: 'auto' }}>
+                    {all
+                        .filter((v) => {
+                            if (!filterSearch) return true;
+                            const q = filterSearch.toLowerCase();
+                            return String(v).toLowerCase().includes(q) || String(formatLabel(v)).toLowerCase().includes(q);
+                        })
+                        .map((val) => (
+                            <label key={String(val)} className="d-flex align-items-center gap-2 mb-1 text-truncate" style={{ cursor: 'pointer' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={draftMulti.has(val)}
+                                    onChange={() => {
+                                        setDraftMulti((prev) => {
+                                            const n = new Set(prev);
+                                            if (n.has(val)) n.delete(val);
+                                            else n.add(val);
+                                            return n;
+                                        });
+                                    }}
+                                />
+                                <span className="text-truncate">{formatLabel(val)}</span>
+                            </label>
+                        ))}
+                </div>
+                <div className="d-flex gap-1 mt-2 justify-content-end">
+                    <button type="button" className="btn btn-sm btn-outline-secondary py-0" onClick={() => clearMultiFilter(kind)}>
+                        Clear
+                    </button>
+                    <button type="button" className="btn btn-sm btn-primary py-0" onClick={() => applyMultiDraft(kind)}>
+                        Apply
+                    </button>
+                </div>
+            </>
+        );
+    };
+
+    const renderNumericFilterPanel = (kind, valueLabel) => (
+        <>
+            <label className="form-label small mb-1">Condition</label>
+            <select
+                className="form-select form-select-sm mb-2"
+                value={draftNet.mode}
+                onChange={(e) => setDraftNet((d) => ({ ...d, mode: e.target.value }))}
+            >
+                <option value="all">All</option>
+                <option value="gt">Greater than</option>
+                <option value="lt">Less than</option>
+                <option value="eq">Equal to</option>
+                <option value="gte">Greater or equal</option>
+                <option value="lte">Less or equal</option>
+                <option value="between">Between</option>
+            </select>
+            <label className="form-label small mb-1">{valueLabel}</label>
+            <input
+                type="text"
+                className="form-control form-control-sm mb-2"
+                placeholder="e.g. 100"
+                value={draftNet.v1}
+                onChange={(e) => setDraftNet((d) => ({ ...d, v1: e.target.value }))}
+            />
+            {draftNet.mode === 'between' && (
+                <>
+                    <label className="form-label small mb-1">And</label>
+                    <input
+                        type="text"
+                        className="form-control form-control-sm mb-2"
+                        placeholder="e.g. 200"
+                        value={draftNet.v2}
+                        onChange={(e) => setDraftNet((d) => ({ ...d, v2: e.target.value }))}
+                    />
+                </>
+            )}
+            <div className="d-flex gap-1 mt-2 justify-content-end">
+                <button type="button" className="btn btn-sm btn-outline-secondary py-0" onClick={() => clearNumericFilter(kind)}>
+                    Clear
+                </button>
+                <button type="button" className="btn btn-sm btn-primary py-0" onClick={() => applyNumericDraft(kind)}>
+                    Apply
+                </button>
+            </div>
+        </>
+    );
 
     useEffect(() => {
         if (listMode !== 'FollowUp') {
             setColFProbability(null);
             setColFExpectedDate(null);
             if (openColFilter === 'probability' || openColFilter === 'expectedDate') {
+                setOpenColFilter(null);
+            }
+        }
+        if (listMode !== 'Won') {
+            setColFWonJobNo(null);
+            setColFWonBookedDate(null);
+            setColFWonJobValue({ mode: 'all', v1: '', v2: '' });
+            setColFWonGpPct({ mode: 'all', v1: '', v2: '' });
+            if (['wonJobNo', 'wonBookedDate', 'wonJobValue', 'wonGpPct'].includes(openColFilter)) {
+                setOpenColFilter(null);
+            }
+        }
+        if (listMode !== 'FollowUp') {
+            setColFGrossMargin({ mode: 'all', v1: '', v2: '' });
+            if (openColFilter === 'grossMargin') {
+                setOpenColFilter(null);
+            }
+        }
+        if (listMode !== 'Lost') {
+            setColFLostTo(null);
+            setColFLostReason(null);
+            setColFLostDate(null);
+            setColFLostCompetitorPrice({ mode: 'all', v1: '', v2: '' });
+            if (['lostTo', 'lostReason', 'lostDate', 'lostCompetitorPrice'].includes(openColFilter)) {
+                setOpenColFilter(null);
+            }
+        }
+        if (listMode !== 'Won' && listMode !== 'Lost' && listMode !== 'FollowUp') {
+            setColFDetailQuoteRef(null);
+            setColFDetailRemarks(null);
+            if (openColFilter === 'detailQuoteRef' || openColFilter === 'detailRemarks') {
                 setOpenColFilter(null);
             }
         }
@@ -1531,8 +2270,12 @@ const ProbabilityForm = () => {
                                     </div>
                                 )}
 
-                                {/* Refresh & table column filters */}
-                                <div className="ms-auto align-self-end d-flex gap-1" style={{ flex: '0 0 auto' }}>
+                                {/* Excel download, clear filters & refresh */}
+                                <div className="ms-auto align-self-end d-flex gap-1 align-items-center" style={{ flex: '0 0 auto' }}>
+                                    <ExcelDownloadButton
+                                        onClick={handleProbabilityExcelDownload}
+                                        disabled={loadingList || filteredSortedRows.length === 0}
+                                    />
                                     <button
                                         type="button"
                                         className="btn btn-outline-secondary btn-sm d-flex align-items-center justify-content-center"
@@ -1762,76 +2505,29 @@ const ProbabilityForm = () => {
                                             >
                                                 {listMode === 'FollowUp' ? (
                                                     <div className="prob-followup-header-grid">
-                                                        <div className="prob-detail-col-1 fw-normal">Quote Reference</div>
-                                                        <div
-                                                            ref={(el) => {
-                                                                filterHeaderRefs.current.probability = el;
-                                                            }}
-                                                            className="prob-detail-col-2 prob-table-filter-header position-relative"
-                                                            style={{ cursor: 'pointer' }}
-                                                            onClick={(e) => toggleMultiColumnFilter('probability', e)}
-                                                        >
-                                                            <div className="d-flex align-items-end justify-content-between gap-1 w-100">
-                                                                <span className="fw-normal">Probability</span>
-                                                                <span className="d-flex align-items-center gap-1 flex-shrink-0">
-                                                                    <span
-                                                                        className={`user-select-none ${filterActiveClass('probability')}`}
-                                                                        style={{ fontSize: '10px', lineHeight: 1 }}
-                                                                        title="Filter"
-                                                                    >
-                                                                        ▼
-                                                                    </span>
-                                                                    <button
-                                                                        type="button"
-                                                                        data-sort-only="true"
-                                                                        className="btn btn-link p-0 text-decoration-none user-select-none"
-                                                                        style={{ fontSize: '11px', lineHeight: 1 }}
-                                                                        title="Sort"
-                                                                        onClick={(e) => {
-                                                                            e.stopPropagation();
-                                                                            handleSortClick('probability');
-                                                                        }}
-                                                                    >
-                                                                        {sortIndicator('probability')}
-                                                                    </button>
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                        <div
-                                                            ref={(el) => {
-                                                                filterHeaderRefs.current.expectedDate = el;
-                                                            }}
-                                                            className="prob-detail-col-3 prob-table-filter-header position-relative"
-                                                            style={{ cursor: 'pointer' }}
-                                                            onClick={(e) => toggleMultiColumnFilter('expectedDate', e)}
-                                                        >
-                                                            <div className="d-flex align-items-end justify-content-between gap-1 w-100">
-                                                                <span className="fw-normal">Expected Date</span>
-                                                                <span className="d-flex align-items-center gap-1 flex-shrink-0">
-                                                                    <span
-                                                                        className={`user-select-none ${filterActiveClass('expectedDate')}`}
-                                                                        style={{ fontSize: '10px', lineHeight: 1 }}
-                                                                        title="Filter"
-                                                                    >
-                                                                        ▼
-                                                                    </span>
-                                                                    <button
-                                                                        type="button"
-                                                                        data-sort-only="true"
-                                                                        className="btn btn-link p-0 text-decoration-none user-select-none"
-                                                                        style={{ fontSize: '11px', lineHeight: 1 }}
-                                                                        title="Sort"
-                                                                        onClick={(e) => {
-                                                                            e.stopPropagation();
-                                                                            handleSortClick('expectedDate');
-                                                                        }}
-                                                                    >
-                                                                        {sortIndicator('expectedDate')}
-                                                                    </button>
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                        <div className="prob-detail-col-4 fw-normal">Remarks</div>
+                                                        {renderDetailFilterHeader('Quote Reference', 'detailQuoteRef', 'prob-detail-col-1')}
+                                                        {renderDetailFilterHeader('Chances %', 'probability', 'prob-detail-col-2')}
+                                                        {renderDetailFilterHeader('Expected Date', 'expectedDate', 'prob-detail-col-3')}
+                                                        {renderDetailFilterHeader('GP %', 'grossMargin', 'prob-detail-col-4', { numeric: true })}
+                                                        {renderDetailFilterHeader('Remarks', 'detailRemarks', 'prob-detail-col-5')}
+                                                    </div>
+                                                ) : listMode === 'Won' ? (
+                                                    <div className="prob-won-header-grid">
+                                                        {renderDetailFilterHeader('Quote Reference', 'detailQuoteRef', 'prob-detail-col-1')}
+                                                        {renderDetailFilterHeader('ERP Job No.', 'wonJobNo', 'prob-detail-col-2')}
+                                                        {renderDetailFilterHeader('Job Value', 'wonJobValue', 'prob-detail-col-3', { numeric: true })}
+                                                        {renderDetailFilterHeader('GP %', 'wonGpPct', 'prob-detail-col-4', { numeric: true })}
+                                                        {renderDetailFilterHeader('Booked Date', 'wonBookedDate', 'prob-detail-col-5')}
+                                                        {renderDetailFilterHeader('Remarks', 'detailRemarks', 'prob-detail-col-6')}
+                                                    </div>
+                                                ) : listMode === 'Lost' ? (
+                                                    <div className="prob-lost-header-grid">
+                                                        {renderDetailFilterHeader('Quote Reference', 'detailQuoteRef', 'prob-detail-col-1')}
+                                                        {renderDetailFilterHeader('Lost To', 'lostTo', 'prob-detail-col-2')}
+                                                        {renderDetailFilterHeader('Reason for losing', 'lostReason', 'prob-detail-col-3')}
+                                                        {renderDetailFilterHeader("Competitor's price", 'lostCompetitorPrice', 'prob-detail-col-4', { numeric: true })}
+                                                        {renderDetailFilterHeader('Lost Date', 'lostDate', 'prob-detail-col-5')}
+                                                        {renderDetailFilterHeader('Remarks', 'detailRemarks', 'prob-detail-col-6')}
                                                     </div>
                                                 ) : (
                                                     'Details'
@@ -1949,27 +2645,27 @@ const ProbabilityForm = () => {
                                                     <td className="px-2 py-1 prob-td">
                                                         <select
                                                             className="form-select form-select-sm"
-                                                            style={statusSelectStyle(item.Status)}
+                                                            style={probStatusSelectStyle(item.Status)}
                                                             value={item.Status}
                                                             onChange={(e) => handleStatusChange(item, e.target.value)}
                                                             onClick={(e) => e.stopPropagation()}
                                                         >
                                                             {enquiryHasGeneratedQuotes(item) ? (
-                                                                <option value="Pending">Pending</option>
+                                                                <option value="Pending" style={probStatusOptionStyle('Pending')}>Pending</option>
                                                             ) : null}
-                                                            <option value="FollowUp">Follow Up</option>
-                                                            <option value="Won">Won</option>
-                                                            <option value="Lost">Lost</option>
-                                                            <option value="OnHold">On Hold</option>
-                                                            <option value="Cancelled">Cancelled</option>
-                                                            <option value="Retendered">Retendered</option>
+                                                            <option value="FollowUp" style={probStatusOptionStyle('FollowUp')}>Follow Up</option>
+                                                            <option value="Won" style={probStatusOptionStyle('Won')}>Won</option>
+                                                            <option value="Lost" style={probStatusOptionStyle('Lost')}>Lost</option>
+                                                            <option value="OnHold" style={probStatusOptionStyle('OnHold')}>On Hold</option>
+                                                            <option value="Cancelled" style={probStatusOptionStyle('Cancelled')}>Cancelled</option>
+                                                            <option value="Retendered" style={probStatusOptionStyle('Retendered')}>Retendered</option>
                                                         </select>
                                                     </td>
                                                     <td className="px-2 pt-1 pb-2 text-gray-700 prob-td" style={{ fontSize: '12px' }}>
                                                         {quoteTypeForQuoteRef(item)}
                                                     </td>
                                                     <td className="px-2 py-1 prob-td">
-                                                        <div className={`d-flex align-items-end gap-2 flex-wrap prob-detail-controls ${item.Status === 'Lost' ? 'prob-detail-lost-layout' : ''} ${item.Status === 'Won' ? 'prob-detail-won-layout' : ''} ${item.Status === 'FollowUp' ? 'prob-detail-followup-layout' : ''}`}>
+                                                        <div className={`d-flex align-items-end gap-2 flex-wrap prob-detail-controls ${item.Status === 'Lost' ? 'prob-detail-lost-layout' : ''} ${item.Status === 'Won' ? 'prob-detail-won-layout' : ''} ${(item.Status === 'FollowUp' || item.Status === 'Follow-up') ? 'prob-detail-followup-layout' : ''}`}>
                                                             {item.Status === 'Lost' && (
                                                                 <>
                                                                     <div className="d-flex flex-column prob-detail-col-1">
@@ -2042,18 +2738,22 @@ const ProbabilityForm = () => {
                                                                     <div className="d-flex flex-column prob-detail-col-2">
                                                                         <span style={{ fontSize: '10px', color: '#666', marginBottom: '2px' }}>Lost To</span>
                                                                         <div style={{ width: '320px', minWidth: '320px', maxWidth: '320px' }}>
-                                                                            <AsyncSelect
+                                                                            <AsyncCreatableSelect
                                                                                 className="basic-single"
                                                                                 classNamePrefix="select"
-                                                                                placeholder="Quoted below — type 3+ letters to search contractors & clients"
+                                                                                placeholder="Pick from list or type free text…"
                                                                                 isSearchable={true}
                                                                                 isClearable={true}
                                                                                 backspaceRemovesValue={true}
                                                                                 escapeClearsValue={true}
+                                                                                allowCreateWhileLoading={true}
                                                                                 menuPortalTarget={document.body}
                                                                                 cacheOptions
                                                                                 value={item.LostCompetitor ? { value: item.LostCompetitor, label: item.LostCompetitor } : null}
                                                                                 onChange={(option) => handleInlineUpdate(item, 'LostCompetitor', option ? option.value : '')}
+                                                                                formatCreateLabel={(inputValue) => `Use "${String(inputValue || '').trim()}"`}
+                                                                                isValidNewOption={(inputValue) => String(inputValue || '').trim().length > 0}
+                                                                                createOptionPosition="first"
                                                                                 defaultOptions={(Array.isArray(item.QuoteRefs) ? item.QuoteRefs : [])
                                                                                     .map(q => ({
                                                                                         value: q.ToName || 'N/A',
@@ -2061,22 +2761,27 @@ const ProbabilityForm = () => {
                                                                                         type: 'Quoted'
                                                                                     }))
                                                                                     .filter((v, i, a) => a.findIndex(t => t.value === v.value) === i)}
-                                                                                formatOptionLabel={(opt) => (
-                                                                                    <span className="d-flex justify-content-between gap-2 align-items-baseline">
-                                                                                        <span className="text-truncate">{opt.label}</span>
-                                                                                        {opt.type && (
-                                                                                            <span className="text-muted flex-shrink-0" style={{ fontSize: '10px' }}>
-                                                                                                {opt.type === 'Quoted' ? 'Quote' : opt.type}
-                                                                                            </span>
-                                                                                        )}
-                                                                                    </span>
+                                                                                formatOptionLabel={(opt, { context }) => (
+                                                                                    context === 'menu' && opt.__isNew__ ? (
+                                                                                        <span style={{ fontStyle: 'italic' }}>{opt.label}</span>
+                                                                                    ) : (
+                                                                                        <span className="d-flex justify-content-between gap-2 align-items-baseline">
+                                                                                            <span className="text-truncate">{opt.label}</span>
+                                                                                            {opt.type && !opt.__isNew__ && (
+                                                                                                <span className="text-muted flex-shrink-0" style={{ fontSize: '10px' }}>
+                                                                                                    {opt.type === 'Quoted' ? 'Quote' : opt.type}
+                                                                                                </span>
+                                                                                            )}
+                                                                                        </span>
+                                                                                    )
                                                                                 )}
                                                                                 noOptionsMessage={({ inputValue }) => {
                                                                                     const t = String(inputValue || '').trim();
+                                                                                    if (!t) return 'Type to search or enter a free-text name';
                                                                                     if (t.length > 0 && t.length < LOST_TO_MIN_SEARCH_CHARS) {
-                                                                                        return `Type at least ${LOST_TO_MIN_SEARCH_CHARS} letters to search contractors & clients`;
+                                                                                        return `Use free text, or type ${LOST_TO_MIN_SEARCH_CHARS}+ letters to search directory`;
                                                                                     }
-                                                                                    return 'No matches';
+                                                                                    return 'No directory matches — press Enter to use free text';
                                                                                 }}
                                                                                 loadOptions={(inputValue, callback) => {
                                                                                     const normalize = (str) => (str || '').toLowerCase();
@@ -2220,10 +2925,10 @@ const ProbabilityForm = () => {
                                                                 </>
                                                             )}
                                                             {/* Follow Up UI in 7th Column */}
-                                                            {item.Status === 'FollowUp' && (
+                                                            {(item.Status === 'FollowUp' || item.Status === 'Follow-up') && (
                                                                 <>
                                                                     <div className="d-flex flex-column prob-detail-col-1">
-                                                                        <span className="prob-detail-field-label visually-hidden">Quote Reference</span>
+                                                                        <span style={{ fontSize: '10px', color: '#666', marginBottom: '2px' }}>Quote Reference</span>
                                                                         <div style={{ width: '320px', minWidth: '320px', maxWidth: '320px' }}>
                                                                             <Select
                                                                                 className="basic-single"
@@ -2289,7 +2994,7 @@ const ProbabilityForm = () => {
                                                                         </div>
                                                                     </div>
                                                                     <div className="d-flex flex-column prob-detail-col-2">
-                                                                        <span className="prob-detail-field-label visually-hidden">Probability</span>
+                                                                        <span style={{ fontSize: '10px', color: '#666', marginBottom: '2px' }}>Chances %</span>
                                                                         <div style={{ width: '180px' }}>
                                                                             <select
                                                                                 className="form-select form-select-sm"
@@ -2308,35 +3013,46 @@ const ProbabilityForm = () => {
                                                                             </select>
                                                                         </div>
                                                                     </div>
-                                                                    {item.ProbabilityOption && (item.ProbabilityOption.includes('90%') || item.ProbabilityOption.includes('99%')) && (
-                                                                        <div className="d-flex flex-column prob-detail-col-3">
-                                                                            <span className="prob-detail-field-label visually-hidden">Expected Date</span>
-                                                                            <div style={{ width: '130px' }}>
-                                                                                <DatePicker
-                                                                                    selected={item.ExpectedOrderDate ? new Date(item.ExpectedOrderDate) : null}
-                                                                                    onChange={(date) => {
-                                                                                        const dateStr = date ? format(date, 'yyyy-MM-dd') : '';
-                                                                                        handleInlineUpdate(item, 'ExpectedOrderDate', dateStr);
-                                                                                    }}
-                                                                                    dateFormat="dd-MMM-yyyy"
-                                                                                    className="form-control form-control-sm"
-                                                                                    placeholderText="dd-MMM-yyyy"
-                                                                                    {...PROB_DATE_PICKER_POPPER_COMMON}
-                                                                                    onClick={(e) => e.stopPropagation()}
-                                                                                    onKeyDown={(e) => e.stopPropagation()}
-                                                                                    wrapperClassName="w-100"
-                                                                                />
-                                                                            </div>
+                                                                    <div className="d-flex flex-column prob-detail-col-3">
+                                                                        <span style={{ fontSize: '10px', color: '#666', marginBottom: '2px' }}>Expected Date</span>
+                                                                        <div style={{ width: '130px' }}>
+                                                                            <DatePicker
+                                                                                selected={item.ExpectedOrderDate ? new Date(item.ExpectedOrderDate) : null}
+                                                                                onChange={(date) => {
+                                                                                    const dateStr = date ? format(date, 'yyyy-MM-dd') : '';
+                                                                                    handleInlineUpdate(item, 'ExpectedOrderDate', dateStr);
+                                                                                }}
+                                                                                dateFormat="dd-MMM-yyyy"
+                                                                                className="form-control form-control-sm"
+                                                                                placeholderText="dd-MMM-yyyy"
+                                                                                {...PROB_DATE_PICKER_POPPER_COMMON}
+                                                                                onClick={(e) => e.stopPropagation()}
+                                                                                onKeyDown={(e) => e.stopPropagation()}
+                                                                                wrapperClassName="w-100"
+                                                                            />
                                                                         </div>
-                                                                    )}
-                                                                    {(!item.ProbabilityOption || (!item.ProbabilityOption.includes('90%') && !item.ProbabilityOption.includes('99%'))) && (
-                                                                        <div className="d-flex flex-column prob-detail-col-3" aria-hidden="true">
-                                                                            <span className="prob-detail-field-label visually-hidden">Expected Date</span>
-                                                                            <div style={{ width: '130px', minHeight: '1.35rem' }} />
+                                                                    </div>
+                                                                    <div className="d-flex flex-column prob-detail-field-num prob-detail-col-4">
+                                                                        <span style={{ fontSize: '10px', color: '#666', marginBottom: '2px' }}>GP % <span className="text-danger">*</span></span>
+                                                                        <div className="input-group input-group-sm" style={{ width: '110px' }}>
+                                                                            <input
+                                                                                type="number"
+                                                                                className="form-control form-control-sm"
+                                                                                placeholder="0.00"
+                                                                                min="0"
+                                                                                max="100"
+                                                                                step="0.01"
+                                                                                value={item.GrossMargin ?? ''}
+                                                                                onChange={(e) => handleInlineUpdate(item, 'GrossMargin', e.target.value)}
+                                                                                onClick={(e) => e.stopPropagation()}
+                                                                                aria-label="Gross Margin"
+                                                                                required
+                                                                            />
+                                                                            <span className="input-group-text px-1 text-muted" style={{ fontSize: '10px' }}>%</span>
                                                                         </div>
-                                                                    )}
-                                                                    <div className="d-flex flex-column prob-detail-col-4">
-                                                                        <span className="prob-detail-field-label visually-hidden">Remarks</span>
+                                                                    </div>
+                                                                    <div className="d-flex flex-column prob-detail-col-5">
+                                                                        <span style={{ fontSize: '10px', color: '#666', marginBottom: '2px' }}>Remarks</span>
                                                                         <div style={{ width: '250px' }}>
                                                                             <textarea
                                                                                 className="form-control form-control-sm"
@@ -2890,6 +3606,19 @@ const ProbabilityForm = () => {
                                   </div>
                               </>
                           )}
+                          {openColFilter === 'wonBookedDate' && renderProbDateHierarchyFilterPanel('wonBookedDate')}
+                          {openColFilter === 'lostDate' && renderProbDateHierarchyFilterPanel('lostDate')}
+                          {[
+                              'detailQuoteRef',
+                              'wonJobNo',
+                              'detailRemarks',
+                              'lostTo',
+                              'lostReason',
+                          ].includes(openColFilter) && renderMultiFilterPanel(openColFilter)}
+                          {openColFilter === 'wonJobValue' && renderNumericFilterPanel('wonJobValue', 'Value (BD)')}
+                          {openColFilter === 'wonGpPct' && renderNumericFilterPanel('wonGpPct', 'Value (%)')}
+                          {openColFilter === 'grossMargin' && renderNumericFilterPanel('grossMargin', 'Value (%)')}
+                          {openColFilter === 'lostCompetitorPrice' && renderNumericFilterPanel('lostCompetitorPrice', 'Value (BD)')}
                       </div>,
                       document.body,
                   )
@@ -2958,10 +3687,7 @@ const ProbabilityForm = () => {
                                             <td
                                                 style={{
                                                     fontWeight: 700,
-                                                    color:
-                                                        String(r.Status || '').trim().toLowerCase() === 'won'
-                                                            ? '#198754'
-                                                            : '#dc3545',
+                                                    color: getProbStatusColor(r.Status),
                                                 }}
                                             >
                                                 {r.Status || ''}

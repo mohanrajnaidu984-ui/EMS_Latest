@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { EMS_TABLE_HEADER_GRADIENT } from '../../constants/emsTheme';
+import ExcelDownloadButton from '../shared/ExcelDownloadButton';
+import { downloadSalesTargetXlsx } from './salesTargetExcel';
 import './SalesTarget.css';
 
 // ── Formatted Revenue Input (shows ###,###,### when not focused) ──
@@ -538,13 +540,42 @@ const SalesTarget = () => {
                     <i className="bi bi-bullseye me-2 text-primary"></i>
                     Sales Target Settings
                 </h4>
-                <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={handleSave}
-                >
-                    <i className="bi bi-save me-2"></i> Save Changes
-                </button>
+                <div className="d-flex align-items-center gap-2">
+                    <ExcelDownloadButton
+                        onClick={async () => {
+                            if (!selectedEngineer || displayRowKeys.length === 0) {
+                                window.alert('No data to export');
+                                return;
+                            }
+                            try {
+                                await downloadSalesTargetXlsx({
+                                    rowKeys: displayRowKeys,
+                                    targetData,
+                                    nameHeader: isAllEngineersView ? 'Sales Engineer' : 'Item Name',
+                                    meta: {
+                                        year: selectedYear,
+                                        division: selectedDivision,
+                                        engineer: isAllEngineersView
+                                            ? 'ALL'
+                                            : selectedEngineer
+                                    }
+                                });
+                            } catch (err) {
+                                console.error('Sales Target Excel export failed', err);
+                                window.alert(err?.message || 'Failed to export Excel workbook');
+                            }
+                        }}
+                        disabled={!selectedEngineer || displayRowKeys.length === 0}
+                        title="Download Sales Target as Excel (.xlsx)"
+                    />
+                    <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={handleSave}
+                    >
+                        <i className="bi bi-save me-2"></i> Save Changes
+                    </button>
+                </div>
             </div>
 
             {/* Filters */}

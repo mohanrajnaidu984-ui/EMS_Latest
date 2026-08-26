@@ -9,7 +9,7 @@ BEGIN
         [RevisionNo] INT NOT NULL DEFAULT 0,
         [QuoteDate] DATE NULL,
         [ValidityDays] INT NULL DEFAULT 30,
-        [PreparedBy] NVARCHAR(100) NULL,
+        [PreparedBy] NVARCHAR(255) NULL,
         [PreparedByEmail] NVARCHAR(255) NULL,
         [ShowScopeOfWork] BIT NULL DEFAULT 1,
         [ShowBasisOfOffer] BIT NULL DEFAULT 1,

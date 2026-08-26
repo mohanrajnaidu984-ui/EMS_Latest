@@ -78,7 +78,7 @@ function resolveEnquiryUploadDestinationWithRoot(root, requestNo, visibility, di
 }
 
 function canWriteToDirectory(dest) {
-    if (!dest) return false;
+    if (!dest) return { ok: false, error: 'empty destination' };
     try {
         if (!fs.existsSync(dest)) {
             fs.mkdirSync(dest, { recursive: true });
@@ -86,41 +86,39 @@ function canWriteToDirectory(dest) {
         const probe = path.join(dest, `.ems-write-probe-${process.pid}-${Date.now()}`);
         fs.writeFileSync(probe, 'ok');
         fs.unlinkSync(probe);
-        return true;
-    } catch {
-        return false;
+        return { ok: true };
+    } catch (err) {
+        return {
+            ok: false,
+            error: `${err.code || 'ERR'}: ${err.message}`,
+        };
     }
 }
 
 /**
- * Pick the first writable folder: configured path (often UNC), else local data/ems-attachments.
- * EPERM on UNC is common when PM2 runs as SYSTEM — local fallback avoids IT share ACL changes.
+ * Resolve upload destination under ENQUIRY_ATTACHMENTS_ROOT only.
+ * Never writes to backend data/ems-attachments — if UNC is not writable, upload fails.
+ *
+ * On Windows, Node/PM2 running as SYSTEM accesses UNC as the machine account
+ * (e.g. ACG-WEBSVR02$ on 151.50.1.38). That account must have Modify on the share + NTFS.
  */
 function resolveWritableEnquiryUploadDestination(requestNo, visibility, division) {
     const primary = resolveEnquiryUploadDestinationByVisibility(requestNo, visibility, division);
-    if (canWriteToDirectory(primary)) {
+    const writeCheck = canWriteToDirectory(primary);
+    if (writeCheck.ok) {
         return { dest: primary, usedFallback: false };
     }
 
-    const disableFallback = String(process.env.EMS_ATTACHMENTS_DISABLE_LOCAL_FALLBACK || '').trim() === '1';
-    if (!disableFallback) {
-        const localRoot = resolveLocalEnquiryAttachmentsRoot();
-        const fallback = resolveEnquiryUploadDestinationWithRoot(
-            localRoot,
-            requestNo,
-            visibility,
-            division
-        );
-        if (canWriteToDirectory(fallback)) {
-            console.warn(
-                `[attachments] Primary folder not writable (${primary}); using local fallback: ${fallback}`
-            );
-            return { dest: fallback, usedFallback: true, primaryAttempted: primary };
-        }
-    }
-
-    const err = new Error(`Attachment folder is not writable: ${primary}`);
+    const err = new Error(
+        `Attachment folder is not writable: ${primary}. ` +
+            `(${writeCheck.error || 'unknown'}). ` +
+            'Files must be saved under ENQUIRY_ATTACHMENTS_ROOT only (backend local storage is disabled). ' +
+            'Grant Modify on the UNC share + NTFS to the machine account of the EMS web server ' +
+            '(PM2 as SYSTEM → ACG-WEBSVR02$ on 151.50.1.38).'
+    );
     err.code = 'ATTACHMENT_STORAGE_EPERM';
+    err.writeDetail = writeCheck.error;
+    err.attemptedPath = primary;
     throw err;
 }
 

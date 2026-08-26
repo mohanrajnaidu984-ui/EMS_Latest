@@ -256,7 +256,8 @@ const insertProbabilityHistory = async ({
     cancelledReason,
     retenderedReason,
     remarks,
-    updatedBy
+    updatedBy,
+    grossMargin
 }) => {
     await ensureProbabilityTable();
     const qRow = quoteRef ? await fetchQuoteRowByQuoteNumber(quoteRef) : null;
@@ -319,13 +320,17 @@ const insertProbabilityHistory = async ({
         sql.DateTime,
         wonBookedOk && expectedDate ? new Date(expectedDate) : null
     );
-    req.input(
-        'GrossMargin',
-        sql.Decimal(10, 2),
-        wonBookedOk && wonDetails?.grossProfit != null && wonDetails?.grossProfit !== ''
-            ? parseFloat(wonDetails.grossProfit)
-            : null
-    );
+    const statusNorm = statusStr.toLowerCase().replace(/[\s_-]+/g, '');
+    const isFollowUp = statusNorm === 'followup';
+    let grossMarginVal = null;
+    if (wonBookedOk && wonDetails?.grossProfit != null && wonDetails?.grossProfit !== '') {
+        const n = parseFloat(wonDetails.grossProfit);
+        if (Number.isFinite(n)) grossMarginVal = n;
+    } else if (isFollowUp && grossMargin != null && grossMargin !== '') {
+        const n = parseFloat(grossMargin);
+        if (Number.isFinite(n)) grossMarginVal = n;
+    }
+    req.input('GrossMargin', sql.Decimal(10, 2), grossMarginVal);
     req.input('ReasonForLoosing', sql.NVarChar, lostDetails?.reason ? String(lostDetails.reason).trim() : null);
     req.input('CompetitorPrice', sql.NVarChar, lostDetails?.competitorPrice ? String(lostDetails.competitorPrice).replace(/,/g, '').trim() : null);
     req.input('LostDate', sql.DateTime, lostDetails?.lostDate ? new Date(lostDetails.lostDate) : null);
@@ -542,6 +547,7 @@ router.get('/list', async (req, res) => {
                 NULLIF(LTRIM(RTRIM(ISNULL(wonQ.QuoteType, ''))), '') as WonQuoteType,
                 E.WonOption,
                 P.GrossMargin as WonGrossProfit,
+                P.GrossMargin as GrossMargin,
                 NULLIF(LTRIM(RTRIM(ISNULL(P.LostTo, ''))), '') as LostCompetitor,
                 NULLIF(LTRIM(RTRIM(ISNULL(P.ReasonForLoosing, ''))), '') as LostReason,
                 NULLIF(LTRIM(RTRIM(ISNULL(P.CompetitorPrice, ''))), '') as LostCompetitorPrice,
@@ -1021,7 +1027,8 @@ router.post('/update', async (req, res) => {
             expectedDate,
             remarks,
             wonDetails,
-            lostDetails
+            lostDetails,
+            grossMargin
         } = req.body;
 
         const scope = await resolveProbabilityDivisionScope(userEmail, requestedDivision);
@@ -1088,6 +1095,26 @@ router.post('/update', async (req, res) => {
             }
         }
 
+        const statusNorm = String(status || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+        if (statusNorm === 'followup') {
+            if (!wonDetails?.wonQuoteRef || !String(wonDetails.wonQuoteRef).trim()) {
+                return res.status(400).json({ error: 'Quote Reference is mandatory for Follow Up' });
+            }
+            if (!probabilityOption || !String(probabilityOption).trim()) {
+                return res.status(400).json({ error: 'Probability is mandatory for Follow Up' });
+            }
+            const gmRaw = String(grossMargin ?? '').replace(/,/g, '').trim();
+            if (gmRaw === '' || Number.isNaN(Number(gmRaw))) {
+                return res.status(400).json({ error: 'Gross Margin is mandatory for Follow Up' });
+            }
+            if (Number(gmRaw) < 0 || Number(gmRaw) > 100) {
+                return res.status(400).json({ error: 'Gross Margin must be between 0 and 100' });
+            }
+            if (!expectedDate) {
+                return res.status(400).json({ error: 'Expected Date is mandatory for Follow Up' });
+            }
+        }
+
         // Calculate probability int from option string if not provided (e.g. "High Chance (90%)" -> 90)
         let probability = probInput;
         if (probability === undefined || probability === null) {
@@ -1116,6 +1143,7 @@ router.post('/update', async (req, res) => {
             retenderedReason: status === 'Retendered' ? (lostDetails?.reason || '') : '',
             remarks,
             updatedBy: normalizeUserEmail(userEmail),
+            grossMargin,
         });
         res.json({ success: true, message: 'Probability updated successfully' });
 

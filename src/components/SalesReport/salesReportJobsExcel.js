@@ -1,25 +1,15 @@
-import ExcelJSModule from 'exceljs';
-
-const ExcelJS = ExcelJSModule?.Workbook ? ExcelJSModule : ExcelJSModule?.default || ExcelJSModule;
+import {
+    ExcelJS,
+    CELL_FONT,
+    THIN_BORDER,
+    TOTAL_FILL,
+    setupEmsExcelReportHeader,
+    downloadExcelBlob,
+    safeExcelFilePart,
+} from '../../utils/emsExcelWorkbook';
 
 const TOP_JOB_QUOTE_TYPE_STATUSES = new Set(['Quoted', 'Won', 'Lost', 'Follow Up']);
 const TOP_JOB_PROB_QUOTE_REF_DATE_STATUSES = new Set(['Won', 'Lost', 'Follow Up']);
-
-const HEADER_FILL = {
-    type: 'pattern',
-    pattern: 'solid',
-    fgColor: { argb: 'FF20396D' }
-};
-const HEADER_FONT = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10, name: 'Calibri' };
-const TITLE_FONT = { bold: true, size: 13, name: 'Calibri', color: { argb: 'FF20396D' } };
-const META_FONT = { size: 9, name: 'Calibri', color: { argb: 'FF4B5563' } };
-const CELL_FONT = { size: 10, name: 'Calibri' };
-const THIN_BORDER = {
-    top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
-    left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
-    bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
-    right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
-};
 
 function dash(v) {
     if (v == null) return '—';
@@ -42,9 +32,9 @@ function formatExactAmount(num) {
 
 function formatWonGrossProfitText(row) {
     const jv = Number(row.JobValue) || 0;
-    const gpPctRaw = row.WonGrossProfit;
+    const gpPctRaw = row.GrossMargin ?? row.WonGrossProfit;
     if (gpPctRaw === null || gpPctRaw === undefined || gpPctRaw === '') return '—';
-    const gpPct = Number(gpPctRaw);
+    const gpPct = Number(String(gpPctRaw).replace(/%/g, '').trim());
     if (Number.isNaN(gpPct)) return '—';
     const gpVal = jv * (gpPct / 100);
     return `${gpVal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${Math.round(gpPct)}%)`;
@@ -88,6 +78,7 @@ export function getJobsExportColumns(topJobStatus, tableConfig) {
         );
     } else if (topJobStatus === 'Follow Up') {
         cols.push(
+            { key: 'grossMargin', header: 'Gross Margin', width: 18, type: 'text' },
             { key: 'metric', header: cfg.metricHeader || 'Chance %', width: 12, type: 'text' },
             { key: 'expectedDate', header: 'Expected Date', width: 12, type: 'date' }
         );
@@ -152,6 +143,8 @@ function cellValueForRow(col, row, idx, topJobStatus, headingLabel) {
             return toExcelDate(row.LostDate);
         case 'expectedDate':
             return toExcelDate(row.ExpectedDate);
+        case 'grossMargin':
+            return formatWonGrossProfitText(row);
         case 'clientName':
             return dash(row.ClientName);
         case 'consultantName':
@@ -175,10 +168,7 @@ function cellValueForRow(col, row, idx, topJobStatus, headingLabel) {
 }
 
 function safeFilePart(s) {
-    return String(s || 'Jobs')
-        .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '')
-        .replace(/\s+/g, '_')
-        .slice(0, 80);
+    return safeExcelFilePart(s || 'Jobs');
 }
 
 /**
@@ -202,19 +192,10 @@ export async function downloadJobsTableXlsx({
     workbook.created = new Date();
 
     const sheetName = safeFilePart(`Jobs_${headingLabel || topJobStatus}`).slice(0, 31) || 'Jobs';
-    const sheet = workbook.addWorksheet(sheetName, {
-        views: [{ state: 'frozen', ySplit: 3 }]
-    });
+    const sheet = workbook.addWorksheet(sheetName);
 
     const lastCol = columns.length;
-    const title = `Jobs (${headingLabel || topJobStatus})`;
-    sheet.mergeCells(1, 1, 1, lastCol);
-    const titleCell = sheet.getCell(1, 1);
-    titleCell.value = title;
-    titleCell.font = TITLE_FONT;
-    titleCell.alignment = { vertical: 'middle', horizontal: 'left' };
-    sheet.getRow(1).height = 22;
-
+    const title = `Sales Report Module | Jobs (${headingLabel || topJobStatus})`;
     const metaParts = [
         meta.year ? `Year: ${meta.year}` : null,
         meta.company ? `Company: ${meta.company}` : null,
@@ -223,30 +204,15 @@ export async function downloadJobsTableXlsx({
         `Rows: ${list.length}`,
         `Exported: ${new Date().toLocaleString('en-GB')}`
     ].filter(Boolean);
-    sheet.mergeCells(2, 1, 2, lastCol);
-    const metaCell = sheet.getCell(2, 1);
-    metaCell.value = metaParts.join('  |  ');
-    metaCell.font = META_FONT;
-    metaCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
-    sheet.getRow(2).height = 18;
-
-    const headerRow = sheet.getRow(3);
-    columns.forEach((col, i) => {
-        const cell = headerRow.getCell(i + 1);
-        cell.value = col.header;
-        cell.fill = HEADER_FILL;
-        cell.font = HEADER_FONT;
-        cell.border = THIN_BORDER;
-        cell.alignment = {
-            vertical: 'middle',
-            horizontal: col.type === 'number' ? 'right' : 'left',
-            wrapText: true
-        };
+    const { dataStartRow } = await setupEmsExcelReportHeader(workbook, sheet, {
+        lastCol,
+        title,
+        metaText: metaParts.join('  |  '),
+        columns
     });
-    headerRow.height = 20;
 
     list.forEach((row, idx) => {
-        const excelRow = sheet.getRow(4 + idx);
+        const excelRow = sheet.getRow(dataStartRow + idx);
         columns.forEach((col, i) => {
             const cell = excelRow.getCell(i + 1);
             const raw = cellValueForRow(col, row, idx, topJobStatus, headingLabel);
@@ -277,18 +243,14 @@ export async function downloadJobsTableXlsx({
     });
 
     // Totals row
-    const totalRowIdx = 4 + list.length;
+    const totalRowIdx = dataStartRow + list.length;
     const totalRow = sheet.getRow(totalRowIdx);
     const valueColIdx = columns.findIndex((c) => c.key === 'jobValue') + 1;
     columns.forEach((col, i) => {
         const cell = totalRow.getCell(i + 1);
         cell.font = { ...CELL_FONT, bold: true };
         cell.border = THIN_BORDER;
-        cell.fill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: { argb: 'FFE8EEF7' }
-        };
+        cell.fill = TOTAL_FILL;
         if (col.key === 'projectName') {
             const distinct = new Set(
                 list.map((r) => String(r.RequestNo || r.EnquiryNo || '').trim()).filter(Boolean)
@@ -297,7 +259,7 @@ export async function downloadJobsTableXlsx({
         } else if (col.key === 'customerName') {
             cell.value = 'Total';
         } else if (col.key === 'jobValue' && valueColIdx > 0) {
-            cell.value = { formula: `SUM(${sheet.getColumn(valueColIdx).letter}4:${sheet.getColumn(valueColIdx).letter}${totalRowIdx - 1})` };
+            cell.value = { formula: `SUM(${sheet.getColumn(valueColIdx).letter}${dataStartRow}:${sheet.getColumn(valueColIdx).letter}${totalRowIdx - 1})` };
             cell.numFmt = '#,##0.00';
             cell.alignment = { horizontal: 'right', vertical: 'middle' };
         } else {
@@ -310,20 +272,9 @@ export async function downloadJobsTableXlsx({
     });
 
     const buffer = await workbook.xlsx.writeBuffer();
-    const blob = new Blob([buffer], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    });
     const stamp = new Date().toISOString().slice(0, 10);
     const fileName = `${safeFilePart(`Jobs_${headingLabel || topJobStatus}`)}_${stamp}.xlsx`;
-
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    downloadExcelBlob(buffer, fileName);
 
     return fileName;
 }

@@ -1,7 +1,10 @@
 /**
- * PM2 production config — run from site root:
+ * PM2 production config — run from site root on ACG-WEBSVR02 (151.50.1.38):
  *   pm2 start ecosystem.config.cjs
  *   pm2 save
+ *
+ * Attachments: process runs as SYSTEM → UNC identity is ACG-WEBSVR02$
+ * (must have Modify on \\151.50.20.129\ems app share + NTFS). No app-level user mapping.
  */
 module.exports = {
     apps: [

@@ -4,6 +4,15 @@
  * Large tables may be split one <tr> per segment for height packing only; segments are rejoined on render.
  */
 
+import {
+    annotateOfficePasteSplitRowRowspanLeads,
+    getOfficePasteTablePaginationGrid,
+    officePasteTableRowHasMergedSpans,
+    officePasteTableRowIsSpanContinuation,
+    syncOfficePasteTableColumnLayout,
+    syncOfficePasteTableColumnsInHtmlString,
+} from './clauseEditorTable.js';
+
 /** @typedef {{ clauseIdx: number, clause: object, html: string, showHeading: boolean, displayMajor: number, key: string }} ClauseSegment */
 
 const EMS_AUTO_PRICE_SUMMARY_TABLE_ID = 'ems-auto-price-summary-table';
@@ -84,13 +93,60 @@ function resolvePackFillSlackPx(options) {
     return options?.tightFit ? 36 : PACK_SUM_HEIGHT_FILL_SLACK_PX;
 }
 
+/** 15mm padding on each side of every A4 sheet (portrait or landscape). */
+export const QUOTE_A4_SHEET_PADDING_MM = 15;
+
+/** Inner content box inside one sheet after 15mm padding (mm). */
+export function quoteA4InnerContentMm(isLandscape = false) {
+    const pageW = isLandscape ? 297 : 210;
+    const pageH = isLandscape ? 210 : 297;
+    return {
+        innerWidthMm: pageW - QUOTE_A4_SHEET_PADDING_MM * 2,
+        innerHeightMm: pageH - QUOTE_A4_SHEET_PADDING_MM * 2,
+    };
+}
+
+function resolvePackLimitForContinuationPage(continuationPageIdx, fallbackUsablePx, options = {}) {
+    if (typeof options?.usablePxForContinuationPage === 'function') {
+        const raw = options.usablePxForContinuationPage(continuationPageIdx);
+        return resolvePackFillLimitPx(raw, options);
+    }
+    return resolvePackFillLimitPx(fallbackUsablePx, options);
+}
+
+function resolvePackSlackLimitForContinuationPage(continuationPageIdx, fallbackUsablePx, options = {}) {
+    if (typeof options?.usablePxForContinuationPage === 'function') {
+        const raw = options.usablePxForContinuationPage(continuationPageIdx);
+        return resolvePackSlackFillLimitPx(raw, options);
+    }
+    return resolvePackSlackFillLimitPx(fallbackUsablePx, options);
+}
+
 /** Authoritative fit check — overflowTest mirrors continuation sheet overflow:hidden. */
-function groupFitsPackLimit(group, measureMergedGroupPx, limit, segmentHeightsPx, options = {}) {
+function groupFitsPackLimit(
+    group,
+    measureMergedGroupPx,
+    limit,
+    segmentHeightsPx,
+    options = {},
+    continuationPageIdx = null
+) {
     if (!group?.length) return false;
-    if (typeof options.overflowTest === 'function') {
+    const pageIdx =
+        continuationPageIdx != null ? continuationPageIdx : options._continuationPageIdx ?? null;
+    if (typeof options.overflowTestForPage === 'function' && pageIdx != null) {
+        return !options.overflowTestForPage(pageIdx, group);
+    }
+    if (typeof options.overflowTest === 'function' && pageIdx == null) {
         return !options.overflowTest(group);
     }
-    const merged = measureMergedGroupPx(group);
+    if (pageIdx != null) {
+        limit = resolvePackLimitForContinuationPage(pageIdx, limit, options);
+    }
+    const merged =
+        pageIdx != null && measureMergedGroupPx.length >= 2
+            ? measureMergedGroupPx(group, pageIdx)
+            : measureMergedGroupPx(group);
     if (merged <= limit) return true;
     if (!segmentHeightsPx?.length) return false;
     const sumSlack = resolvePackFillSlackPx(options);
@@ -189,8 +245,17 @@ export function segmentHtmlContainsTable(html) {
  * @param {HTMLTableRowElement} row
  * @returns {HTMLTableRowElement[]}
  */
-function expandTableRowForPagination(row) {
+function expandTableRowForPagination(row, rowIndex, grid) {
     if (!row?.cells?.length) return [row];
+    if (officePasteTableRowHasMergedSpans(row)) return [row];
+    if (
+        Number.isInteger(rowIndex) &&
+        rowIndex >= 0 &&
+        grid &&
+        officePasteTableRowIsSpanContinuation(rowIndex, grid)
+    ) {
+        return [row];
+    }
     const cells = [...row.cells];
     let targetIdx = -1;
     let maxBlocks = 0;
@@ -226,7 +291,10 @@ function expandTableRowForPagination(row) {
         if (blockIdx > 0) {
             for (let i = 0; i < targetIdx; i += 1) {
                 const c = clonedCells[i];
-                if (String(c.textContent || '').trim()) c.textContent = '';
+                if (!c) continue;
+                if (String(c.textContent || '').replace(/\u00a0/g, ' ').trim()) {
+                    c.innerHTML = '<p>\u00a0</p>';
+                }
             }
         }
         out.push(tr);
@@ -235,11 +303,37 @@ function expandTableRowForPagination(row) {
 }
 
 /**
+ * Preserve fixed column widths when splitting a table into row segments.
+ * @param {HTMLTableElement} table
+ * @returns {string}
+ */
+function getTableColgroupHtml(table) {
+    const colgroup = table.querySelector('colgroup');
+    if (colgroup) return colgroup.outerHTML;
+
+    const stored = String(table.getAttribute('data-ems-col-widths') || '').trim();
+    if (!stored) return '';
+
+    const widths = stored
+        .split(',')
+        .map((part) => Math.max(24, Math.round(parseFloat(part) || 0)))
+        .filter((px) => px > 0);
+    if (!widths.length) return '';
+
+    const cols = widths
+        .map((px) => `<col style="width:${px}px" width="${px}">`)
+        .join('');
+    return `<colgroup>${cols}</colgroup>`;
+}
+
+/**
  * Split one HTML table into one segment per body row (never recurses — safe for fallback passes).
  * @param {HTMLTableElement} table
  * @returns {string[]}
  */
 function splitTableToRowSegmentHtml(table) {
+    const { rows: gridRows, grid } = getOfficePasteTablePaginationGrid(table);
+
     const tableAttrs = [...table.attributes]
         .map((a) => `${a.name}="${String(a.value).replace(/"/g, '&quot;')}"`)
         .join(' ');
@@ -281,12 +375,17 @@ function splitTableToRowSegmentHtml(table) {
     const splitOpen = tableAttrs
         ? `<table ${tableAttrs} data-ems-table-split="1" data-ems-split-id="${splitId}">`
         : `<table data-ems-table-split="1" data-ems-split-id="${splitId}">`;
+    const colgroupHtml = getTableColgroupHtml(table);
 
     /** @type {string[]} */
     const out = [];
     for (const row of allRows) {
-        for (const rowPart of expandTableRowForPagination(row)) {
-            out.push(`${splitOpen}${theadHtml}<tbody>${rowPart.outerHTML}</tbody></table>`);
+        const rowIndex = gridRows.indexOf(row);
+        for (const rowPart of expandTableRowForPagination(row, rowIndex, grid)) {
+            annotateOfficePasteSplitRowRowspanLeads(rowPart, rowIndex, grid);
+            out.push(
+                `${splitOpen}${colgroupHtml}${theadHtml}<tbody>${rowPart.outerHTML}</tbody></table>`
+            );
         }
     }
     return out.length ? out : [table.outerHTML];
@@ -557,16 +656,21 @@ function expandParagraphListSegments(htmlParts) {
 
 function packIndicesByHeightSum(indices, heights, usablePx, options = {}) {
     if (!indices?.length) return [];
-    const usable = resolvePackFillLimitPx(usablePx, options);
+    const perPage = typeof options?.usablePxForContinuationPage === 'function';
     const fudge = options?.tightFit ? 28 : 24;
     /** @type {number[][]} */
     const pages = [];
     let cur = [];
     let sum = 0;
+    let pageIdx = 0;
     for (const i of indices) {
         const h = Math.max(heights[i] || 0, 1);
+        const usable = perPage
+            ? resolvePackLimitForContinuationPage(pageIdx, usablePx, options)
+            : resolvePackFillLimitPx(usablePx, options);
         if (cur.length > 0 && sum + h > usable + fudge) {
             pages.push(cur);
+            pageIdx += 1;
             cur = [i];
             sum = h;
         } else {
@@ -623,6 +727,7 @@ function buildRejoinedTableOuterHtml(doc, template, rows) {
     const thead = table.querySelector('thead');
     if (thead) thead.after(tbody);
     else table.appendChild(tbody);
+    syncOfficePasteTableColumnLayout(table);
     return table.outerHTML;
 }
 
@@ -766,7 +871,7 @@ export function mergeSegmentsIntoSheetBlocks(segmentIndices, segments) {
         const joined = String(acc || '').trim();
         blocks.push({
             clause: head.clause,
-            bodyHtml: rejoinSplitTableHtml(joined),
+            bodyHtml: syncOfficePasteTableColumnsInHtmlString(rejoinSplitTableHtml(joined)),
             showHeading: Boolean(head.showHeading),
             displayMajor: head.displayMajor,
             listKey: head.clause.listKey ?? head.clause.key ?? head.clause.id,
@@ -806,21 +911,27 @@ export function packSegmentIndicesByMergedHeight(
     segmentHeightsPx = null
 ) {
     if (!indices?.length) return [];
-    const usable = resolvePackFillLimitPx(usablePx, options);
+    const perPage = typeof options?.usablePxForContinuationPage === 'function';
     const pages = [];
     let cur = [];
+    let pageIdx = 0;
 
     for (const i of indices) {
         const tryGroup = [...cur, i];
+        const usable = perPage
+            ? resolvePackLimitForContinuationPage(pageIdx, usablePx, options)
+            : resolvePackFillLimitPx(usablePx, options);
         const fits = groupFitsPackLimit(
             tryGroup,
             measureMergedGroupPx,
             usable,
             segmentHeightsPx,
-            options
+            options,
+            pageIdx
         );
         if (cur.length > 0 && !fits) {
             pages.push(cur);
+            pageIdx += 1;
             cur = [i];
         } else {
             cur = tryGroup;
@@ -878,24 +989,32 @@ function splitSegmentGroupByMergedHeight(
     measureMergedGroupPx,
     usable,
     segmentHeightsPx = null,
-    options = {}
+    options = {},
+    startPageIdx = 0
 ) {
     if (!group?.length) return [];
     if (group.length <= 1) return [group];
+    const perPage = typeof options?.usablePxForContinuationPage === 'function';
     /** @type {number[][]} */
     const pages = [];
     let cur = [];
+    let pageIdx = startPageIdx;
     for (const idx of group) {
         const tryGroup = [...cur, idx];
+        const limit = perPage
+            ? resolvePackLimitForContinuationPage(pageIdx, usable, options)
+            : usable;
         const fits = groupFitsPackLimit(
             tryGroup,
             measureMergedGroupPx,
-            usable,
+            limit,
             segmentHeightsPx,
-            options
+            options,
+            pageIdx
         );
         if (cur.length > 0 && !fits) {
             pages.push(cur);
+            pageIdx += 1;
             cur = [idx];
         } else {
             cur = tryGroup;
@@ -919,21 +1038,26 @@ export function rebalanceSegmentPageGroups(
     segmentHeightsPx = null
 ) {
     if (!groups?.length) return groups;
-    const usable = resolvePackFillLimitPx(usablePx, options);
+    const perPage = typeof options?.usablePxForContinuationPage === 'function';
     let pending = groups.map((g) => [...g]);
     for (let pass = 0; pass < 48; pass += 1) {
         /** @type {number[][]} */
         const next = [];
         let splitAny = false;
-        for (const group of pending) {
+        for (let gi = 0; gi < pending.length; gi += 1) {
+            const group = pending[gi];
             if (!group?.length) continue;
+            const usable = perPage
+                ? resolvePackLimitForContinuationPage(gi, usablePx, options)
+                : resolvePackFillLimitPx(usablePx, options);
             if (
                 groupFitsPackLimit(
                     group,
                     measureMergedGroupPx,
                     usable,
                     segmentHeightsPx,
-                    options
+                    options,
+                    gi
                 )
             ) {
                 next.push(group);
@@ -948,7 +1072,8 @@ export function rebalanceSegmentPageGroups(
                 measureMergedGroupPx,
                 usable,
                 segmentHeightsPx,
-                options
+                options,
+                gi
             );
             if (parts.length <= 1 && parts[0]?.length === group.length) {
                 const mid = Math.ceil(group.length / 2);
@@ -979,7 +1104,7 @@ export function enforcePackedSegmentGroups(
     options = {},
     segmentHeightsPx = null
 ) {
-    const usable = resolvePackFillLimitPx(usablePx, options);
+    const perPage = typeof options?.usablePxForContinuationPage === 'function';
     const want = indices?.length ? [...indices] : [];
     const seen = new Set();
     /** @type {number[][]} */
@@ -1000,8 +1125,12 @@ export function enforcePackedSegmentGroups(
         /** @type {number[][]} */
         const next = [];
         let changed = false;
-        for (const group of result) {
+        for (let gi = 0; gi < result.length; gi += 1) {
+            const group = result[gi];
             if (!group?.length) continue;
+            const usable = perPage
+                ? resolvePackLimitForContinuationPage(gi, usablePx, options)
+                : resolvePackFillLimitPx(usablePx, options);
             if (
                 group.length <= 1 ||
                 groupFitsPackLimit(
@@ -1009,7 +1138,8 @@ export function enforcePackedSegmentGroups(
                     measureMergedGroupPx,
                     usable,
                     segmentHeightsPx,
-                    options
+                    options,
+                    gi
                 )
             ) {
                 next.push(group);
@@ -1020,7 +1150,8 @@ export function enforcePackedSegmentGroups(
                 measureMergedGroupPx,
                 usable,
                 segmentHeightsPx,
-                options
+                options,
+                gi
             );
             if (parts.length > 1) {
                 parts.forEach((p) => next.push(p));
@@ -1057,7 +1188,7 @@ export function fillSegmentPageGroupsSlack(
     segmentHeightsPx = null
 ) {
     if (!groups?.length || groups.length < 2) return groups || [];
-    const limit = resolvePackFillLimitPxForFillPass(usablePx, options);
+    const perPage = typeof options?.usablePxForContinuationPage === 'function';
     /** @type {number[][]} */
     const result = groups.map((g) => [...g]);
     let changed = true;
@@ -1070,6 +1201,9 @@ export function fillSegmentPageGroupsSlack(
             const next = result[i + 1];
             if (!next?.length) continue;
 
+            const limit = perPage
+                ? resolvePackSlackLimitForContinuationPage(i, usablePx, options)
+                : resolvePackFillLimitPxForFillPass(usablePx, options);
             const mergedAll = [...result[i], ...next];
             if (
                 groupFitsPackLimit(
@@ -1077,7 +1211,8 @@ export function fillSegmentPageGroupsSlack(
                     measureMergedGroupPx,
                     limit,
                     segmentHeightsPx,
-                    options
+                    options,
+                    i
                 )
             ) {
                 result[i] = mergedAll;
@@ -1095,7 +1230,8 @@ export function fillSegmentPageGroupsSlack(
                         measureMergedGroupPx,
                         limit,
                         segmentHeightsPx,
-                        options
+                        options,
+                        i
                     )
                 ) {
                     result[i].push(next.shift());
@@ -1129,19 +1265,24 @@ export function packClauseSegmentsForContinuationPages(
     segmentHeightsPx = null
 ) {
     if (!indices?.length) return [];
+    const perPage = typeof options?.usablePxForContinuationPage === 'function';
     const limit = resolvePackFillLimitPx(usablePx, options);
     let groups;
     if (segmentHeightsPx?.length) {
         groups = packIndicesByHeightSum(indices, segmentHeightsPx, usablePx, options);
-        groups = groups.flatMap((group) => {
+        groups = groups.flatMap((group, pageIdx) => {
             if (!group?.length) return [];
+            const pageLimit = perPage
+                ? resolvePackLimitForContinuationPage(pageIdx, usablePx, options)
+                : limit;
             if (
                 groupFitsPackLimit(
                     group,
                     measureMergedGroupPx,
-                    limit,
+                    pageLimit,
                     segmentHeightsPx,
-                    options
+                    options,
+                    pageIdx
                 )
             ) {
                 return [group];
@@ -1150,9 +1291,10 @@ export function packClauseSegmentsForContinuationPages(
             return splitSegmentGroupByMergedHeight(
                 group,
                 measureMergedGroupPx,
-                limit,
+                pageLimit,
                 segmentHeightsPx,
-                options
+                options,
+                pageIdx
             );
         });
     } else {
@@ -1226,6 +1368,16 @@ export function packClauseSegmentsForContinuationPages(
 /** Continuation body height when DOM measure is not ready yet (~A4 inner minus logo/footer). */
 export const EMS_QUOTE_CONT_USABLE_PX_FALLBACK = 772;
 
+/** Portrait inner grid minus typical logo/footer band — reused for landscape height math. */
+const EMS_QUOTE_CONT_LOGO_FOOTER_BAND_PX =
+    Math.round(((297 - QUOTE_A4_SHEET_PADDING_MM * 2) / 25.4) * 96) - EMS_QUOTE_CONT_USABLE_PX_FALLBACK;
+
+/** Landscape continuation usable height when DOM measure is not ready (~210mm − padding − logo/footer). */
+export const EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK = Math.max(
+    200,
+    Math.round(((210 - QUOTE_A4_SHEET_PADDING_MM * 2) / 25.4) * 96) - EMS_QUOTE_CONT_LOGO_FOOTER_BAND_PX
+);
+
 /** @deprecated Reserved in pack safety only — do not subtract from usable height (causes blank pages). */
 export const EMS_QUOTE_PRINT_CONTENT_FOOTER_GAP_PX = 0;
 
@@ -1281,6 +1433,40 @@ export function packSegmentsOntoPagesByEstimatedHeight(segments, usablePx = EMS_
         const h = Math.max(heights[i] || 0, 1);
         if (cur.length > 0 && sum + h > usable + packFudgePx) {
             pages.push(cur);
+            cur = [];
+            sum = 0;
+        }
+        cur.push(i);
+        sum += h;
+    }
+    if (cur.length) pages.push(cur);
+    return pages.filter((g) => g.length > 0);
+}
+
+/**
+ * Estimated pack with per-continuation-page usable height (portrait vs landscape).
+ * @param {ClauseSegment[]} segments
+ * @param {(continuationPageIdx: number) => number} usablePxForPage
+ */
+export function packSegmentsOntoPagesByEstimatedHeightPerPage(
+    segments,
+    usablePxForPage
+) {
+    if (!segments?.length || typeof usablePxForPage !== 'function') {
+        return packSegmentsOntoPagesByEstimatedHeight(segments);
+    }
+    const heights = estimateSegmentBlockHeightsPx(segments);
+    const pages = [];
+    let cur = [];
+    let sum = 0;
+    let pageIdx = 0;
+    for (let i = 0; i < segments.length; i++) {
+        const h = Math.max(heights[i] || 0, 1);
+        const usable = Math.max(usablePxForPage(pageIdx) || EMS_QUOTE_CONT_USABLE_PX_FALLBACK, 240);
+        const packFudgePx = Math.min(22, Math.round(usable * 0.02));
+        if (cur.length > 0 && sum + h > usable + packFudgePx) {
+            pages.push(cur);
+            pageIdx += 1;
             cur = [];
             sum = 0;
         }

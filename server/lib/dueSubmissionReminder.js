@@ -78,6 +78,7 @@ function buildDueEnquiryListTableHtml(rows) {
         'Consultant Name',
         'Due Date',
         'Enquiry Details',
+        'Enquiry Created By',
     ];
 
     const headRow = headers.map((h) => `<th style="${thStyle}">${escapeHtml(h)}</th>`).join('');
@@ -93,6 +94,7 @@ function buildDueEnquiryListTableHtml(rows) {
                 row.consultantName,
                 row.dueDate,
                 row.enquiryDetails,
+                row.enquiryCreatedBy,
             ];
             return `<tr>${cells
                 .map((c) => `<td style="${tdStyle}">${escapeHtml(c)}</td>`)
@@ -172,6 +174,7 @@ function mapRowToListEntry(row) {
         consultantName: displayConsultantName(row),
         dueDate: formatShortDate(row.DueDate),
         enquiryDetails: String(row.EnquiryDetails || '').trim(),
+        enquiryCreatedBy: String(row.CreatedBy || '').trim(),
     };
 }
 
@@ -312,4 +315,21 @@ module.exports = {
     buildDueSubmissionReminderSubject,
     buildDueSubmissionReminderEmailHtml,
     buildDueEnquiryListTableHtml,
+    /** Build drafts without sending — for review / Outlook paste. */
+    previewDueSubmissionReminderDrafts: async (options = {}) => {
+        const dueYmd = String(options.dueYmd || tomorrowYmdInSchedulerTz()).trim();
+        const bundles = await buildRecipientBundles(dueYmd);
+        return {
+            dueYmd,
+            subject: buildDueSubmissionReminderSubject(dueYmd),
+            from: dueSubmissionReminderFromEmail(),
+            drafts: [...bundles.values()].map((b) => ({
+                to: b.toEmail,
+                enquiryCount: b.enquiries.length,
+                enquiries: b.enquiries,
+                subject: buildDueSubmissionReminderSubject(dueYmd),
+                html: buildDueSubmissionReminderEmailHtml(dueYmd, b.enquiries),
+            })),
+        };
+    },
 };

@@ -1,7 +1,7 @@
-# EMS Enterprise IIS Deployment Guide
+﻿# EMS Enterprise IIS Deployment Guide
 
-**Target server:** `151.50.1.114`  
-**User access URL:** `http://151.50.1.114:81`  
+**Target server:** `151.50.1.38`  
+**User access URL:** `http://151.50.1.38`  
 **Architecture:** IIS (static + reverse proxy) + PM2 (Node.js API) + SQL Server + UNC file shares
 
 This guide is the permanent reference for first-time setup and all future redeployments.
@@ -13,25 +13,25 @@ This guide is the permanent reference for first-time setup and all future redepl
 EMS is **not** a single IIS application. It is a **two-tier Windows deployment**:
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Windows Server 151.50.1.114                                            │
-│                                                                         │
-│  ┌──────────────────┐         ┌─────────────────────────────────────┐ │
-│  │  IIS Site :81    │  proxy  │  PM2 process "EMS-API"              │ │
-│  │  EMS-Web pool    │ ──────► │  Node.js 22 + Express :5002         │ │
-│  │  frontend/       │  /api   │  backend/                           │ │
-│  │  (React SPA)     │  /uploads│  Puppeteer Chrome (PDF)           │ │
-│  └────────┬─────────┘         └──────────┬──────────────────────────┘ │
-│           │                               │                             │
-└───────────┼───────────────────────────────┼─────────────────────────────┘
-            │                               │
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚  Windows Server 151.50.1.38                                            â”‚
+â”‚                                                                         â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”         â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”‚
+â”‚  â”‚  IIS Site :81    â”‚  proxy  â”‚  PM2 process "EMS-API"              â”‚ â”‚
+â”‚  â”‚  EMS-Web pool    â”‚ â”€â”€â”€â”€â”€â”€â–º â”‚  Node.js 22 + Express :5002         â”‚ â”‚
+â”‚  â”‚  frontend/       â”‚  /api   â”‚  backend/                           â”‚ â”‚
+â”‚  â”‚  (React SPA)     â”‚  /uploadsâ”‚  Puppeteer Chrome (PDF)           â”‚ â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜         â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â”‚
+â”‚           â”‚                               â”‚                             â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+            â”‚                               â”‚
      User browser                    SQL Server 151.50.1.116
-     http://151.50.1.114:81         UNC \\151.50.20.129\ems app
+     http://151.50.1.38         UNC \\151.50.20.129\ems app
 
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Each estimator PC (separate from server)                               │
-│  Outlook local helper :39281  →  Classic Outlook COM (draft + PDF)      │
-└─────────────────────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚  Each estimator PC (separate from server)                               â”‚
+â”‚  Outlook local helper :39281  â†’  Classic Outlook COM (draft + PDF)      â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 | Component | Role | Why separate |
@@ -52,16 +52,16 @@ EMS is **not** a single IIS application. It is a **two-tier Windows deployment**
 
 ## 2. Server prerequisites (one-time)
 
-Run on **151.50.1.114** as Administrator.
+Run on **151.50.1.38** as Administrator.
 
 ### 2.1 Install software
 
 | Software | Version | Verify |
 |----------|---------|--------|
-| **Node.js** | **22.x LTS** (64-bit) | `node -v` → `v22.x.x` |
+| **Node.js** | **22.x LTS** (64-bit) | `node -v` â†’ `v22.x.x` |
 | **PM2** | 5.x | `pm2 -v` |
 | **Google Chrome** | Latest 64-bit | For PDF; do **not** rely on Edge |
-| **IIS** | Windows Server feature | Server Manager → Web Server (IIS) |
+| **IIS** | Windows Server feature | Server Manager â†’ Web Server (IIS) |
 | **URL Rewrite** | 2.1 | [Download](https://www.iis.net/downloads/microsoft/url-rewrite) |
 | **ARR** | 3.0 | Application Request Routing |
 
@@ -75,11 +75,11 @@ npm install -g pm2
 1. Open **IIS Manager**
 2. Click the **server node** (not a site)
 3. Open **Application Request Routing Cache**
-4. Click **Server Proxy Settings** → check **Enable proxy** → Apply
+4. Click **Server Proxy Settings** â†’ check **Enable proxy** â†’ Apply
 
 ### 2.3 ARR proxy timeout (critical for PDF)
 
-Large quote PDFs can take 60–180 seconds. Default ARR timeout (~120s) causes 502 errors.
+Large quote PDFs can take 60â€“180 seconds. Default ARR timeout (~120s) causes 502 errors.
 
 ```powershell
 # Run in elevated PowerShell on the server
@@ -104,29 +104,29 @@ All deployments use this structure on the server:
 
 ```
 C:\inetpub\wwwroot\EMS\
-├── frontend\              ← IIS physical path (React build + web.config)
-│   ├── index.html
-│   ├── assets\
-│   └── web.config         ← proxies /api and /uploads to :5002
-├── backend\               ← Node.js Express API
-│   ├── index.js
-│   ├── .env               ← production secrets (NEVER in deploy zip)
-│   ├── package.json
-│   ├── uploads\           ← logos for PDF/UI
-│   └── temp\              ← Puppeteer temp (created at runtime)
-├── helpers\               ← batch files + Outlook helper
-├── logs\                  ← PM2 stdout/stderr
-├── ecosystem.config.cjs   ← PM2 definition
-├── DEPLOYMENT_GUIDE.md
-├── IIS_ENTERPRISE_DEPLOYMENT_GUIDE.md
-└── PACKAGE_MANIFEST.json
+â”œâ”€â”€ frontend\              â† IIS physical path (React build + web.config)
+â”‚   â”œâ”€â”€ index.html
+â”‚   â”œâ”€â”€ assets\
+â”‚   â””â”€â”€ web.config         â† proxies /api and /uploads to :5002
+â”œâ”€â”€ backend\               â† Node.js Express API
+â”‚   â”œâ”€â”€ index.js
+â”‚   â”œâ”€â”€ .env               â† production secrets (NEVER in deploy zip)
+â”‚   â”œâ”€â”€ package.json
+â”‚   â”œâ”€â”€ uploads\           â† logos for PDF/UI
+â”‚   â””â”€â”€ temp\              â† Puppeteer temp (created at runtime)
+â”œâ”€â”€ helpers\               â† batch files + Outlook helper
+â”œâ”€â”€ logs\                  â† PM2 stdout/stderr
+â”œâ”€â”€ ecosystem.config.cjs   â† PM2 definition
+â”œâ”€â”€ DEPLOYMENT_GUIDE.md
+â”œâ”€â”€ IIS_ENTERPRISE_DEPLOYMENT_GUIDE.md
+â””â”€â”€ PACKAGE_MANIFEST.json
 ```
 
 **Rule:** IIS serves `frontend\` only. PM2 runs from site root `C:\inetpub\wwwroot\EMS\`.
 
 ---
 
-## 4. Phase 1 — Deploy package to server
+## 4. Phase 1 â€” Deploy package to server
 
 ### 4.1 Build package (development machine)
 
@@ -156,7 +156,7 @@ Or run `helpers\redeploy.bat` after copying.
 
 ---
 
-## 5. Phase 2 — Backend configuration
+## 5. Phase 2 â€” Backend configuration
 
 ### 5.1 Create production `.env`
 
@@ -166,7 +166,7 @@ copy .env.production.example .env
 notepad .env
 ```
 
-### 5.2 Required values for 151.50.1.114
+### 5.2 Required values for 151.50.1.38
 
 ```env
 # Database
@@ -192,7 +192,7 @@ ENQUIRY_ATTACHMENTS_ROOT=\\151.50.20.129\ems app
 EMS_ENQUIRY_NOTIFY_VIA_SMTP=1
 EMS_ENQUIRY_NOTIFY_SMTP_FALLBACK=1
 
-# Quote PDF — MUST be enabled for server PDF = local behavior
+# Quote PDF â€” MUST be enabled for server PDF = local behavior
 EMS_QUOTE_PDF_SERVER_ENABLED=1
 QUOTE_PDF_ASSET_ORIGIN=http://127.0.0.1:5002
 QUOTE_PDF_USE_FILE_LOAD=1
@@ -208,7 +208,7 @@ QUOTE_PDF_PAGE_TIMEOUT_MS=180000
 EMS_QUOTE_PDF_PERF_LOG=1
 ```
 
-**Do not set** `PUPPETEER_EXECUTABLE_PATH` to Edge (`msedge.exe`) — pagination will differ from local.
+**Do not set** `PUPPETEER_EXECUTABLE_PATH` to Edge (`msedge.exe`) â€” pagination will differ from local.
 
 ### 5.3 Install Node dependencies (on server)
 
@@ -221,7 +221,7 @@ npx puppeteer browsers install chrome
 
 Or double-click `helpers\install_dependencies.bat`.
 
-**Never copy `node_modules` from another PC** — native modules (`muhammara`, `puppeteer`) must compile on the server.
+**Never copy `node_modules` from another PC** â€” native modules (`muhammara`, `puppeteer`) must compile on the server.
 
 ### 5.4 Permissions
 
@@ -239,7 +239,7 @@ Grant **IIS_IUSRS** / **IUSR**: Read on `frontend\` only.
 
 ---
 
-## 6. Phase 3 — PM2 API service
+## 6. Phase 3 â€” PM2 API service
 
 ### 6.1 Start API
 
@@ -281,7 +281,7 @@ For Puppeteer stability, run PM2 under a **dedicated local/domain service accoun
 
 ---
 
-## 7. Phase 4 — IIS site configuration
+## 7. Phase 4 â€” IIS site configuration
 
 ### 7.1 Create application pool
 
@@ -299,7 +299,7 @@ For Puppeteer stability, run PM2 under a **dedicated local/domain service accoun
 |---------|-------|
 | Site name | `EMS` |
 | Physical path | `C:\inetpub\wwwroot\EMS\frontend` |
-| Binding | `http`, IP `151.50.1.114` (or All Unassigned), Port **81** |
+| Binding | `http`, IP `151.50.1.38` (or All Unassigned), Port **81** |
 | Application pool | `EMS-Web` |
 
 Or run: `helpers\setup_iis_site_port81.ps1`
@@ -308,23 +308,23 @@ Or run: `helpers\setup_iis_site_port81.ps1`
 
 `frontend\web.config` must contain three rewrite rules:
 
-1. **API Proxy** — `^api/(.*)` → `http://localhost:5002/api/{R:1}`
-2. **Uploads Proxy** — `^uploads/(.*)` → `http://localhost:5002/uploads/{R:1}` (required for logos)
-3. **React Routes** — SPA fallback to `index.html`
+1. **API Proxy** â€” `^api/(.*)` â†’ `http://localhost:5002/api/{R:1}`
+2. **Uploads Proxy** â€” `^uploads/(.*)` â†’ `http://localhost:5002/uploads/{R:1}` (required for logos)
+3. **React Routes** â€” SPA fallback to `index.html`
 
 ### 7.4 Test from server
 
 ```powershell
 curl http://localhost:81/
 curl http://localhost:81/api/quote-pdf/health
-curl http://151.50.1.114:81/
+curl http://151.50.1.38/
 ```
 
 ---
 
-## 8. Phase 5 — Outlook on user PCs
+## 8. Phase 5 â€” Outlook on user PCs
 
-**Server-side `/api/quotes/outlook-draft` will not work on IIS.** This is by design — Outlook COM requires an interactive desktop session.
+**Server-side `/api/quotes/outlook-draft` will not work on IIS.** This is by design â€” Outlook COM requires an interactive desktop session.
 
 ### 8.1 Per-user setup (required for Quote Email)
 
@@ -334,19 +334,19 @@ Each estimator needs on their **Windows PC**:
 2. **Classic Outlook** (not "New Outlook")
 3. EMS Outlook helper running at login
 
-**Option A — Network share (recommended for enterprise)**
+**Option A â€” Network share (recommended for enterprise)**
 
-Map or access `\\151.50.1.114\EMS$` (or copy `helpers\` + `backend\lib\` subset locally).
+Map or access `\\151.50.1.38\EMS$` (or copy `helpers\` + `backend\lib\` subset locally).
 
 Create a desktop shortcut or GPO logon script:
 
 ```batch
 @echo off
-cd /d "\\151.50.1.114\EMS\helpers"
+cd /d "\\151.50.1.38\EMS\helpers"
 start /min node quote-outlook-local-helper.cjs
 ```
 
-**Option B — Local copy**
+**Option B â€” Local copy**
 
 Copy `helpers\` folder to `C:\EMS\helpers\` on each PC. Ensure `C:\EMS\backend\` exists (full backend or at minimum `lib\` + `dbConfig.js` + `.env` for enquiry drafts).
 
@@ -364,22 +364,22 @@ Expected: `{"ok":true,"service":"ems-outlook-local-helper"}`
 
 ### 8.3 User workflow
 
-1. User opens `http://151.50.1.114:81`
-2. Opens a quote → clicks **Email**
+1. User opens `http://151.50.1.38`
+2. Opens a quote â†’ clicks **Email**
 3. Browser calls `http://127.0.0.1:39281/outlook-draft` on the user's PC
 4. Helper generates PDF attachment and opens Outlook draft via COM
 
 ---
 
-## 9. Phase 6 — Smoke tests
+## 9. Phase 6 â€” Smoke tests
 
 | # | Test | URL / Action | Expected |
 |---|------|--------------|----------|
-| 1 | UI loads | `http://151.50.1.114:81` | Login page / dashboard |
-| 2 | API via IIS | `http://151.50.1.114:81/api/quote-pdf/health` | JSON with `ok: true` |
+| 1 | UI loads | `http://151.50.1.38` | Login page / dashboard |
+| 2 | API via IIS | `http://151.50.1.38/api/quote-pdf/health` | JSON with `ok: true` |
 | 3 | Logos | Open any quote with division logo | Logo visible |
 | 4 | Enquiry list | Navigate to enquiries | Data loads from SQL |
-| 5 | PDF download | Quote → Download PDF | PDF downloads, correct page count |
+| 5 | PDF download | Quote â†’ Download PDF | PDF downloads, correct page count |
 | 6 | PDF via IIS | Same test through `:81` (not direct `:5002`) | Same result |
 | 7 | Quote email | With helper running on PC | Outlook draft opens with PDF |
 | 8 | PM2 logs | `pm2 logs EMS-API --lines 50` | `[quote-pdf][perf]` on PDF download |
@@ -402,7 +402,7 @@ cd C:\inetpub\wwwroot\EMS
 helpers\redeploy.bat
 ```
 
-`redeploy.bat` runs: `npm ci` → Puppeteer Chrome check → `pm2 restart EMS-API --update-env`
+`redeploy.bat` runs: `npm ci` â†’ Puppeteer Chrome check â†’ `pm2 restart EMS-API --update-env`
 
 ### Frontend-only redeploy
 
@@ -443,22 +443,23 @@ Keep dated backups: `C:\inetpub\wwwroot\EMS_backup_YYYY-MM-DD\`
 ## 12. Enterprise checklist (printable)
 
 ```
-□ Node.js 22 LTS on server
-□ PM2 installed globally
-□ IIS + URL Rewrite + ARR installed
-□ ARR proxy enabled, timeout 180s
-□ Package copied to C:\inetpub\wwwroot\EMS\
-□ backend\.env configured (DB, SMTP, PDF flags)
-□ npm ci --omit=dev + puppeteer chrome install
-□ PM2 running EMS-API, pm2 save + startup
-□ PDF health check passes (chromeEngine: chrome)
-□ IIS site EMS on port 81 → frontend\
-□ Firewall allows TCP 81
-□ PM2 user has Modify on uploads, temp, UNC
-□ Outlook helper deployed to each user PC
-□ Smoke tests 1–8 pass
+â–¡ Node.js 22 LTS on server
+â–¡ PM2 installed globally
+â–¡ IIS + URL Rewrite + ARR installed
+â–¡ ARR proxy enabled, timeout 180s
+â–¡ Package copied to C:\inetpub\wwwroot\EMS\
+â–¡ backend\.env configured (DB, SMTP, PDF flags)
+â–¡ npm ci --omit=dev + puppeteer chrome install
+â–¡ PM2 running EMS-API, pm2 save + startup
+â–¡ PDF health check passes (chromeEngine: chrome)
+â–¡ IIS site EMS on port 81 â†’ frontend\
+â–¡ Firewall allows TCP 81
+â–¡ PM2 user has Modify on uploads, temp, UNC
+â–¡ Outlook helper deployed to each user PC
+â–¡ Smoke tests 1â€“8 pass
 ```
 
 ---
 
 *Package baseline: see `PACKAGE_MANIFEST.json` and `PRODUCTION_DEPLOYMENT_BASELINE.md`.*
+

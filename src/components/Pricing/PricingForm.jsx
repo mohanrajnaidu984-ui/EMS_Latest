@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Plus, Trash2, Save, FileText, ChevronDown, ChevronUp, ChevronLeft, FileSpreadsheet, X, FilterX } from 'lucide-react';
+import { Search, Plus, Trash2, Save, FileText, ChevronDown, ChevronUp, ChevronLeft, X, FilterX } from 'lucide-react';
 import {
     useTableColumnHeaderFilters,
     TableColumnFilterHeader,
 } from '../shared/tableColumnHeaderFilters';
+import ExcelDownloadButton from '../shared/ExcelDownloadButton';
 import '../../styles/emsTableColumnFilters.css';
 import { format } from 'date-fns';
 import { useAuth } from '../../context/AuthContext';
@@ -15,6 +16,7 @@ import {
 } from '../../constants/emsSearchButtons';
 import { EMS_TABLE_HEADER_GRADIENT } from '../../constants/emsTheme';
 import { quoteBlocksDeclineToQuote } from '../../utils/pricingQuoteTupleMatch';
+import { downloadPricingListXlsx } from './pricingListExcel';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
 
@@ -199,6 +201,34 @@ function epvRowPassesLeadSubtreeOrLabel(valueScopeLeadId, allJobs, valueRow, lea
         valueScopeLeadId,
         allJobs
     );
+}
+
+/** First external customer from enquiry master CSV / extra customers / selected tab. */
+function firstEnquiryCustomerName(pricingData, selectedCustomer) {
+    const selected = String(selectedCustomer || '').trim();
+    if (selected) return selected;
+    const extras = Array.isArray(pricingData?.extraCustomers) ? pricingData.extraCustomers : [];
+    for (const row of extras) {
+        const n = String(row?.CustomerName || row?.customerName || row || '')
+            .split(',')
+            .map((s) => s.trim())
+            .find(Boolean);
+        if (n) return n;
+    }
+    return (
+        String(pricingData?.enquiry?.customerName || '')
+            .split(',')
+            .map((s) => s.trim())
+            .find(Boolean) || ''
+    );
+}
+
+function resolvePricingSaveCustomerName(...candidates) {
+    for (const c of candidates) {
+        const t = String(c || '').trim();
+        if (t) return t;
+    }
+    return '';
 }
 
 /** Tab / EPV customer label (NBSP, multiple spaces, trim) — must match UI tabs vs DB text. */
@@ -2609,15 +2639,9 @@ const PricingForm = ({ openContext = null }) => {
             }
         }
 
-        // Final fallback for lead-jobs: if still blank, use main enquiry customer
+        // Final fallback for lead-jobs: never leave CustomerName blank
         if (!custName || !custName.trim()) {
-            const masterList = (pricingData.enquiry.customerName || '')
-                .split(',')
-                .map(s => s.trim())
-                .filter(Boolean);
-            if (masterList.length > 0) {
-                custName = masterList[0];
-            }
+            custName = firstEnquiryCustomerName(pricingData, selectedCustomer);
         }
 
         const leadJobName = currentActiveLeadJob ? currentActiveLeadJob.itemName : null;
@@ -3129,11 +3153,7 @@ const PricingForm = ({ openContext = null }) => {
                     if (parent) custName = String(parent.itemName || '').trim();
                 }
                 if (!custName || !String(custName).trim()) {
-                    const masterList = (pricingData.enquiry.customerName || '')
-                        .split(',')
-                        .map((s) => s.trim())
-                        .filter(Boolean);
-                    if (masterList.length > 0) custName = masterList[0];
+                    custName = firstEnquiryCustomerName(pricingData, selectedCustomer);
                 }
 
                 try {
@@ -3246,6 +3266,9 @@ const PricingForm = ({ openContext = null }) => {
                 if (job.parentId && job.parentId !== '0' && job.parentId !== 0) {
                     const parent = pricingData.jobs.find(p => p.id === job.parentId);
                     if (parent) custName = String(parent.itemName || '').trim();
+                }
+                if (!custName || !String(custName).trim()) {
+                    custName = firstEnquiryCustomerName(pricingData, selectedCustomer);
                 }
 
                 const res = await fetch(`${API_BASE}/api/pricing/option`, {
@@ -3457,10 +3480,12 @@ const PricingForm = ({ openContext = null }) => {
             }
             // -------------------------------------------------------------
 
-            const rowCustomerForDb =
-                effectiveCustomerName ||
-                opt.customerName ||
-                selectedCustomer;
+            const rowCustomerForDb = resolvePricingSaveCustomerName(
+                effectiveCustomerName,
+                opt.customerName,
+                selectedCustomer,
+                firstEnquiryCustomerName(pricingData, selectedCustomer)
+            );
             const custDbValues = customerValuesBucket(
                 pricingData.allValues,
                 pricingData.values,
@@ -3784,7 +3809,7 @@ const PricingForm = ({ openContext = null }) => {
                 enquiryForItem: job.itemName, // Send Name for legacy compat/logging
                 enquiryForId: job.id,         // Send ID for strict linking
                 price: priceToSave,           // SAVE NET SELF PRICE
-                customerName: effectiveCustomerName, // Use Hierarchical Resolved Customer
+                customerName: rowCustomerForDb,
                 leadJobName: opt.leadJobName,    // Include Lead Job Name (Step 1078 - from Option)
                 priceOption: opt.name === 'Base Price' ? 'Base Price' : opt.name,
                 allowOptionalZero: allowCascadeZero,
@@ -4359,6 +4384,31 @@ const PricingForm = ({ openContext = null }) => {
     const sortedSearchResultsForTable = pricingSearchColFilters.filteredRows;
     const sortedPendingForTable = pricingPendingColFilters.filteredRows;
 
+    const handlePricingListExcelDownload = async () => {
+        const isSearch = pricingListCategory === PRICING_LIST_CATEGORY.SEARCH;
+        const rows = isSearch ? sortedSearchResultsForTable : sortedPendingForTable;
+        if (!rows.length) {
+            window.alert('No data to export');
+            return;
+        }
+        try {
+            await downloadPricingListXlsx({
+                rows,
+                mode: isSearch ? 'search' : 'pending',
+                meta: {
+                    division: pricingListDivision || '',
+                    category: isSearch ? 'Search Price' : 'Pending Pricing',
+                    searchQuery: String(pricingListSearchCriteria || '').trim(),
+                    dateFrom: pricingListDateFrom || '',
+                    dateTo: pricingListDateTo || ''
+                }
+            });
+        } catch (err) {
+            console.error('Pricing Excel export failed', err);
+            window.alert(err?.message || 'Failed to export Excel workbook');
+        }
+    };
+
     const handlePricingSearchListSort = (field, initialDirection = 'asc') => {
         setSearchSortConfig((prev) =>
             prev.field === field
@@ -4781,6 +4831,16 @@ const PricingForm = ({ openContext = null }) => {
                                 >
                                     Clear
                                 </button>
+                                <ExcelDownloadButton
+                                    onClick={handlePricingListExcelDownload}
+                                    disabled={
+                                        (pricingListCategory === PRICING_LIST_CATEGORY.SEARCH
+                                            ? sortedSearchResultsForTable.length === 0
+                                            : sortedPendingForTable.length === 0) ||
+                                        searching ||
+                                        pendingListLoading
+                                    }
+                                />
                                 <button
                                     type="button"
                                     className="ems-cf-clear-filters-btn"

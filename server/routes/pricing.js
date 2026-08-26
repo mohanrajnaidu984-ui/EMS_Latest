@@ -12,6 +12,149 @@ function logToFile(message) {
     fs.appendFileSync(debugLogPath, `[${timestamp}] ${message}\n`);
 }
 
+function firstCustomerNameFromCsv(raw) {
+    return (
+        String(raw || '')
+            .split(',')
+            .map((s) => s.trim())
+            .find(Boolean) || ''
+    );
+}
+
+/**
+ * CustomerName must never be blank on option create / price update.
+ * Prefer the client value, then option row, then existing EPV, then EnquiryCustomer, then EnquiryMaster.
+ */
+async function resolveRequiredPricingCustomerName({
+    requestNo,
+    optionId,
+    enquiryForId,
+    provided,
+}) {
+    const fromProvided = String(provided || '').trim();
+    if (fromProvided) return fromProvided;
+
+    if (optionId) {
+        try {
+            const epo = await sql.query`
+                SELECT TOP 1 CustomerName FROM EnquiryPricingOptions WHERE ID = ${optionId}
+            `;
+            const fromEpo = String(epo.recordset?.[0]?.CustomerName || '').trim();
+            if (fromEpo) return fromEpo;
+        } catch {
+            /* ignore */
+        }
+        try {
+            const epv = enquiryForId
+                ? await sql.query`
+                    SELECT TOP 1 CustomerName
+                    FROM EnquiryPricingValues
+                    WHERE OptionID = ${optionId}
+                      AND RequestNo = ${requestNo}
+                      AND EnquiryForID = ${enquiryForId}
+                      AND LTRIM(RTRIM(ISNULL(CustomerName, N''))) <> N''
+                    ORDER BY UpdatedAt DESC
+                `
+                : await sql.query`
+                    SELECT TOP 1 CustomerName
+                    FROM EnquiryPricingValues
+                    WHERE OptionID = ${optionId}
+                      AND RequestNo = ${requestNo}
+                      AND LTRIM(RTRIM(ISNULL(CustomerName, N''))) <> N''
+                    ORDER BY UpdatedAt DESC
+                `;
+            const fromEpv = String(epv.recordset?.[0]?.CustomerName || '').trim();
+            if (fromEpv) return fromEpv;
+        } catch {
+            /* ignore */
+        }
+    }
+
+    try {
+        const extra = await sql.query`
+            SELECT TOP 1 CustomerName
+            FROM EnquiryCustomer
+            WHERE RequestNo = ${requestNo}
+              AND LTRIM(RTRIM(ISNULL(CustomerName, N''))) <> N''
+            ORDER BY ID
+        `;
+        const fromExtra = String(extra.recordset?.[0]?.CustomerName || '').trim();
+        if (fromExtra) return fromExtra;
+    } catch {
+        /* EnquiryCustomer may be missing on some DBs */
+    }
+
+    const em = await sql.query`
+        SELECT TOP 1 CustomerName FROM EnquiryMaster WHERE RequestNo = ${requestNo}
+    `;
+    return firstCustomerNameFromCsv(em.recordset?.[0]?.CustomerName);
+}
+
+/** Backfill legacy duplicate rows that share the same job cell but have blank CustomerName. */
+async function backfillBlankPricingCustomerNames({
+    requestNo,
+    enquiryForId,
+    resolvedItemName,
+    resolvedLeadJobName,
+    resolvedCustomerName,
+    priceOption,
+}) {
+    const cust = String(resolvedCustomerName || '').trim();
+    if (!cust) return;
+
+    const itemTrim = String(resolvedItemName || '').trim();
+    const leadTrim = String(resolvedLeadJobName || '').trim();
+    const poTrim = String(priceOption || 'Base Price').trim();
+
+    if (enquiryForId) {
+        await sql.query`
+            UPDATE EnquiryPricingValues
+            SET CustomerName = ${cust},
+                LeadJobName = CASE
+                    WHEN LTRIM(RTRIM(ISNULL(LeadJobName, N''))) = N'' THEN ${leadTrim || null}
+                    ELSE LeadJobName
+                END,
+                EnquiryForItem = CASE
+                    WHEN LTRIM(RTRIM(ISNULL(EnquiryForItem, N''))) = N'' THEN ${itemTrim || null}
+                    ELSE EnquiryForItem
+                END
+            WHERE RequestNo = ${requestNo}
+              AND EnquiryForID = ${enquiryForId}
+              AND LTRIM(RTRIM(ISNULL(CustomerName, N''))) = N''
+        `;
+    } else if (itemTrim) {
+        await sql.query`
+            UPDATE EnquiryPricingValues
+            SET CustomerName = ${cust},
+                LeadJobName = CASE
+                    WHEN LTRIM(RTRIM(ISNULL(LeadJobName, N''))) = N'' THEN ${leadTrim || null}
+                    ELSE LeadJobName
+                END
+            WHERE RequestNo = ${requestNo}
+              AND LTRIM(RTRIM(ISNULL(EnquiryForItem, N''))) = ${itemTrim}
+              AND LTRIM(RTRIM(ISNULL(CustomerName, N''))) = N''
+        `;
+    }
+
+    if (itemTrim) {
+        await sql.query`
+            UPDATE EnquiryPricingOptions
+            SET CustomerName = ${cust}
+            WHERE RequestNo = ${requestNo}
+              AND LTRIM(RTRIM(ISNULL(CustomerName, N''))) = N''
+              AND LTRIM(RTRIM(ISNULL(ItemName, N''))) = ${itemTrim}
+              AND (
+                    LTRIM(RTRIM(ISNULL(LeadJobName, N''))) = ${leadTrim}
+                    OR (${leadTrim} = N'' AND LTRIM(RTRIM(ISNULL(LeadJobName, N''))) = N'')
+                  )
+              AND (
+                    LTRIM(RTRIM(ISNULL(OptionName, N''))) = ${poTrim}
+                    OR LTRIM(RTRIM(ISNULL(OptionName, N''))) = N'Base Price'
+                  )
+        `;
+    }
+}
+
 const { removeExcludedFromEmailSet } = require('../lib/notificationEmailExclusions');
 
 function parseMailCsv(raw) {
@@ -3981,20 +4124,23 @@ router.post('/option', async (req, res) => {
         // Atomic Insert with LeadJob scoped uniqueness
         const resolvedOptionName = optionName.trim();
         resolvedItemName = itemName ? itemName.trim() : (resolvedItemName ? resolvedItemName.trim() : null);
-        resolvedCustomerName = resolvedCustomerName ? resolvedCustomerName.trim() : null;
+        resolvedCustomerName = resolvedCustomerName ? String(resolvedCustomerName).trim() : '';
+        if (!resolvedCustomerName) {
+            resolvedCustomerName = await resolveRequiredPricingCustomerName({
+                requestNo,
+                enquiryForId,
+                provided: customerName,
+            });
+        }
+        if (!resolvedCustomerName) {
+            return res.status(400).json({
+                error: 'CustomerName is required when creating a pricing option.',
+            });
+        }
         const resolvedLeadJobName =
             (leadJobNameFromWalk && String(leadJobNameFromWalk).trim()) ||
             (leadJobName && String(leadJobName).trim()) ||
             null;
-
-        // DEBUG: capture cases where CustomerName ends up NULL unexpectedly
-        if (!resolvedCustomerName) {
-            logToFile(
-                `POST /api/pricing/option CustomerName NULL. ` +
-                `body=${JSON.stringify({ requestNo, optionName, itemName, customerName, leadJobName, enquiryForId })} ` +
-                `resolved=${JSON.stringify({ resolvedItemName, resolvedCustomerName, resolvedLeadJobName })}`
-            );
-        }
 
         const result = await sql.query`
             BEGIN TRAN;
@@ -4053,6 +4199,19 @@ router.post('/option', async (req, res) => {
 
             COMMIT;
         `;
+
+        try {
+            await backfillBlankPricingCustomerNames({
+                requestNo,
+                enquiryForId,
+                resolvedItemName,
+                resolvedLeadJobName,
+                resolvedCustomerName,
+                priceOption: resolvedOptionName,
+            });
+        } catch (backfillErr) {
+            console.warn('[pricing] CustomerName backfill after option create:', backfillErr.message);
+        }
 
         res.json({
             success: true,
@@ -4173,6 +4332,21 @@ router.put('/value', async (req, res) => {
         } catch (resolveErr) {
             console.error('Pricing Metadata Resolution Error:', resolveErr);
             // Fallback to provided values
+        }
+
+        resolvedCustomerName = String(resolvedCustomerName || '').trim();
+        if (!resolvedCustomerName) {
+            resolvedCustomerName = await resolveRequiredPricingCustomerName({
+                requestNo,
+                optionId,
+                enquiryForId,
+                provided: customerName,
+            });
+        }
+        if (!resolvedCustomerName) {
+            return res.status(400).json({
+                error: 'CustomerName is required when updating a price.',
+            });
         }
 
         if (quotingProvided && quotingValue === 'Yes') {
@@ -4322,6 +4496,19 @@ router.put('/value', async (req, res) => {
                     `optionId=${optionId} enquiryForId=${enquiryForId || null} price=${priceValue} resolvedCustomer=${resolvedCustomerName} resolvedLead=${resolvedLeadJobName} priceOption=${priceOption}`
                 );
             }
+        }
+
+        try {
+            await backfillBlankPricingCustomerNames({
+                requestNo,
+                enquiryForId,
+                resolvedItemName,
+                resolvedLeadJobName,
+                resolvedCustomerName,
+                priceOption,
+            });
+        } catch (backfillErr) {
+            console.warn('[pricing] CustomerName backfill after save:', backfillErr.message);
         }
 
         await notifyParentJobPricingUpdate({

@@ -196,7 +196,8 @@ export function getWysiwygEditor(jodit) {
         if (wys) root = wys;
     }
     if (!root?.querySelectorAll) {
-        let node = jodit.s?.range?.startContainer;
+        let node = null;
+        try { node = jodit.s?.range?.startContainer; } catch { /* jodit.s.range can throw when selection is uninitialized */ }
         if (node?.nodeType === 3) node = node.parentElement;
         while (node) {
             if (node.classList?.contains('jodit-wysiwyg')) return node;
@@ -570,12 +571,8 @@ function syncListApplyToJodit(jodit, root) {
     if (!root) return;
     stripClauseEditorSpuriousBlankRows(root);
     if (jodit.__emsListApplyLock) return;
-    const cleaned = root.innerHTML;
-    // Mutate DOM in place only — reassigning innerHTML destroys the live selection/caret.
-    if (cleaned !== jodit.value) {
-        jodit.value = cleaned;
-    }
-    /* synchronizeValues() re-inserts <p><br></p> after <ol> when the caret sits past the list. */
+    /* Never assign jodit.value during live edits — it resets the typing caret. */
+    syncEditorFromDom(jodit);
 }
 
 function scheduleDeferredListBlankRowCleanup(jodit) {
@@ -1117,14 +1114,16 @@ export function preserveClauseEditorSelectionDuring(jodit, fn) {
             jodit.__emsForceCaretRestore = true;
             try {
                 restoreCollapsedCaretOffset(jodit, offset);
-            } finally {
+            } catch { /* ignore — editor may have been destroyed */ } finally {
                 jodit.__emsForceCaretRestore = false;
             }
         };
         const restoreSoft = () => {
-            if (!isRestoreStillCurrent()) return;
-            /* Without force: skip if caret already moved to a new offset (next Backspace/key). */
-            restoreCollapsedCaretOffset(jodit, offset);
+            try {
+                if (!isRestoreStillCurrent()) return;
+                /* Without force: skip if caret already moved to a new offset (next Backspace/key). */
+                restoreCollapsedCaretOffset(jodit, offset);
+            } catch { /* ignore — editor may have been destroyed */ }
         };
         restoreForced();
         requestAnimationFrame(() => {
@@ -1162,7 +1161,7 @@ export function bindClauseEditorTypingCaretGuard(jodit, getEditorBody, onTypingI
             releaseTimer = null;
             jodit.__emsTypingLock = false;
             if (typeof onTypingIdle === 'function') onTypingIdle();
-        }, 120);
+        }, 320);
     };
 
     root.addEventListener('keydown', arm, true);

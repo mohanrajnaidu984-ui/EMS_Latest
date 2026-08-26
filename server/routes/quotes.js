@@ -2534,7 +2534,7 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
         let preparedByOptions = [];
         try {
             const seResult = await sql.query`
-                SELECT cs.SEName, m.MobileNumber
+                SELECT cs.SEName, m.MobileNumber, m.EmailId
                 FROM ConcernedSE cs
                 LEFT JOIN Master_ConcernedSE m ON UPPER(LTRIM(RTRIM(ISNULL(m.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(cs.SEName, N''))))
                 WHERE cs.RequestNo = ${requestNo}
@@ -2542,7 +2542,8 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
             seResult.recordset.forEach(row => {
                 if (row.SEName) {
                     const mobileNumber = row.MobileNumber != null ? String(row.MobileNumber).trim() : '';
-                    preparedByOptions.push({ value: row.SEName, label: row.SEName, type: 'SE', mobileNumber });
+                    const email = row.EmailId != null ? String(row.EmailId).trim() : '';
+                    preparedByOptions.push({ value: row.SEName, label: row.SEName, type: 'SE', mobileNumber, email });
                 }
             });
 
@@ -3552,9 +3553,9 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
         const sessionDivision = String(
             body.sessionDivision || body.divisionScope || body.ownJob || ''
         ).trim();
-        const userEmail = normalizeQuoteFormDraftUserEmail(fields.preparedByEmail || body.userEmail || '');
+        const userEmail = normalizeQuoteFormDraftUserEmail(body.userEmail || fields.preparedByEmail || '');
         if (!userEmail) {
-            return res.status(400).json({ error: 'preparedByEmail (session user) is required' });
+            return res.status(400).json({ error: 'userEmail (session user) is required' });
         }
 
         const identity = await resolveQuoteDraftIdentity(body);
@@ -3611,6 +3612,7 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
                     QuoteNumber = ${identity.quoteNumber},
                     ValidityDays = ${fields.validityDays},
                     PreparedBy = ${fields.preparedBy},
+                    PreparedByEmail = ${fields.preparedByEmail},
                     ShowScopeOfWork = ${fields.showScopeOfWork ? 1 : 0},
                     ShowBasisOfOffer = ${fields.showBasisOfOffer ? 1 : 0},
                     ShowExclusions = ${fields.showExclusions ? 1 : 0},
@@ -3706,6 +3708,69 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
             });
         }
         console.error('[quote-drafts] POST:', err);
+        const truncation =
+            err?.number === 8152 || /String or binary data would be truncated/i.test(msg);
+        if (truncation) {
+            try {
+                const body = req.body || {};
+                const fields = parseQuoteDraftBody(body);
+                const identity = await resolveQuoteDraftIdentity(body).catch(() => ({}));
+                const candidates = {
+                    RequestNo: fields.requestNo,
+                    QuoteNumber: identity?.quoteNumber,
+                    PreparedBy: fields.preparedBy,
+                    PreparedByEmail: fields.preparedByEmail,
+                    CustomerReference: fields.customerReference,
+                    YourRef: fields.customerReference,
+                    QuoteType: fields.quoteType,
+                    Subject: fields.subject,
+                    Signatory: fields.signatory,
+                    SignatoryDesignation: fields.signatoryDesignation,
+                    CoSignatory: fields.coSignatory,
+                    CoSignatoryDesignation: fields.coSignatoryDesignation,
+                    ToName: fields.toName,
+                    ToPhone: fields.toPhone,
+                    ToEmail: fields.toEmail,
+                    ToFax: fields.toFax,
+                    ToAttention: fields.toAttention,
+                    LeadJob: fields.leadJob,
+                    OwnJob: identity?.effectiveOwnJob,
+                    ReasonForRevision: fields.reasonForRevision,
+                    Status: 'Draft',
+                };
+                const colMeta = await new sql.Request().query(`
+                    SELECT c.name AS ColName, t.name AS TypeName, c.max_length
+                    FROM sys.columns c
+                    JOIN sys.types t ON c.user_type_id = t.user_type_id
+                    WHERE c.object_id = OBJECT_ID('dbo.EnquiryQuotesDraft')
+                `);
+                const limits = new Map();
+                for (const r of colMeta.recordset || []) {
+                    if (!/char/i.test(r.TypeName) || r.max_length === -1) continue;
+                    const max = r.TypeName.startsWith('n') ? r.max_length / 2 : r.max_length;
+                    limits.set(String(r.ColName), max);
+                }
+                const overflows = [];
+                for (const [col, val] of Object.entries(candidates)) {
+                    const max = limits.get(col);
+                    if (max == null) continue;
+                    const len = String(val ?? '').length;
+                    if (len > max) overflows.push({ column: col, length: len, maxLength: max });
+                }
+                console.error('[quote-drafts] truncation overflows:', overflows);
+                return res.status(500).json({
+                    error: 'Failed to save quote draft',
+                    details: msg,
+                    overflows,
+                    hint:
+                        overflows.length > 0
+                            ? `Value too long for: ${overflows.map((o) => `${o.column} (${o.length}/${o.maxLength})`).join(', ')}`
+                            : 'A text field exceeds its database column size. Run migrations/widen_enquiry_quotes_draft_columns.cjs',
+                });
+            } catch (diagErr) {
+                console.error('[quote-drafts] truncation diagnose failed:', diagErr);
+            }
+        }
         res.status(500).json({ error: 'Failed to save quote draft', details: msg });
     }
 });

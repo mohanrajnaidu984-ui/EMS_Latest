@@ -5,8 +5,9 @@ import {
     BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer,
     PieChart, Pie, Cell, CartesianGrid
 } from 'recharts';
-import { Printer, Mail, Maximize2, Minimize2, FilterX, FileSpreadsheet } from 'lucide-react';
+import { Printer, Mail, Maximize2, Minimize2, FilterX } from 'lucide-react';
 import { downloadJobsTableXlsx } from './salesReportJobsExcel';
+import ExcelDownloadButton from '../shared/ExcelDownloadButton';
 import './SalesReport.css';
 
 /** A4 landscape printable area (mm margins each side). */
@@ -275,21 +276,22 @@ function readSrTableFilters(email, topJobStatus) {
         : `reports_table_filters_${topJobStatus}`;
     try {
         const raw = localStorage.getItem(key);
-        if (!raw) return { columnFilters: {}, valueFilter: null };
+        if (!raw) return { columnFilters: {}, valueFilter: null, grossMarginFilter: null };
         const parsed = JSON.parse(raw);
         return {
             columnFilters:
                 parsed?.columnFilters && typeof parsed.columnFilters === 'object'
                     ? parsed.columnFilters
                     : {},
-            valueFilter: parsed?.valueFilter ?? null
+            valueFilter: parsed?.valueFilter ?? null,
+            grossMarginFilter: parsed?.grossMarginFilter ?? null
         };
     } catch {
-        return { columnFilters: {}, valueFilter: null };
+        return { columnFilters: {}, valueFilter: null, grossMarginFilter: null };
     }
 }
 
-function writeSrTableFilters(email, topJobStatus, columnFilters, valueFilter) {
+function writeSrTableFilters(email, topJobStatus, columnFilters, valueFilter, grossMarginFilter) {
     const key = email
         ? `reports_table_filters_${email}_${topJobStatus}`
         : `reports_table_filters_${topJobStatus}`;
@@ -297,9 +299,40 @@ function writeSrTableFilters(email, topJobStatus, columnFilters, valueFilter) {
         key,
         JSON.stringify({
             columnFilters: columnFilters || {},
-            valueFilter: valueFilter ?? null
+            valueFilter: valueFilter ?? null,
+            grossMarginFilter: grossMarginFilter ?? null
         })
     );
+}
+
+function passesNumericCompareFilter(rawValue, filter) {
+    if (!filter) return true;
+    const raw1 = String(filter.v1 ?? '').trim();
+    const raw2 = String(filter.v2 ?? '').trim();
+    if (raw1 === '') return true;
+    const n1 = Number(raw1);
+    const n2 = Number(raw2);
+    if (!Number.isFinite(n1)) return true;
+    const value = Number(rawValue);
+    if (!Number.isFinite(value)) return false;
+    if (filter.mode === 'gt') return value > n1;
+    if (filter.mode === 'lt') return value < n1;
+    if (filter.mode === 'eq') return value === n1;
+    if (filter.mode === 'between') {
+        if (raw2 === '' || !Number.isFinite(n2)) return true;
+        const min = Math.min(n1, n2);
+        const max = Math.max(n1, n2);
+        return value >= min && value <= max;
+    }
+    return true;
+}
+
+/** Gross Margin % from Probability.GrossMargin (API may alias as WonGrossProfit). */
+function parseRowGrossMarginPct(row) {
+    const raw = row?.GrossMargin ?? row?.WonGrossProfit;
+    if (raw === null || raw === undefined || raw === '') return null;
+    const n = typeof raw === 'number' ? raw : Number(String(raw).replace(/%/g, '').trim());
+    return Number.isFinite(n) ? n : null;
 }
 
 const FUNNEL_STAGE_DEFS = [
@@ -423,6 +456,7 @@ const DEFAULT_TOP_JOB_COL_WIDTHS = {
     customerName: 250,
     jobValue: 120,
     chart: 150,
+    grossMargin: 120,
     metric: 110,
     quoteDate: 95,
     bookedDate: 95,
@@ -472,7 +506,7 @@ function writeTopJobColWidths(widths) {
 }
 
 /** Custom inverted funnel; numeric values are shown in the summary block below. */
-function SalesPipelineFunnelVisual({ rows, formatFullNumber }) {
+function SalesPipelineFunnelVisual({ rows, formatFullNumber, formatGmParts }) {
     const funnelWrapRef = useRef(null);
     const [svgPx, setSvgPx] = useState(null);
 
@@ -511,6 +545,9 @@ function SalesPipelineFunnelVisual({ rows, formatFullNumber }) {
 
     const vbW = vb.w + 2 * vbPadX;
     const vbH = vb.h + 2 * vbPadY;
+    const getGmParts = formatGmParts || (() => null);
+    /** Highlight color for GP line (prefix + value + %) on dark funnel bands */
+    const gpLineFill = '#FDE047';
 
     return (
         <div className="sales-pipeline-funnel-visual d-flex flex-column flex-grow-1 min-h-0 w-100">
@@ -549,9 +586,11 @@ function SalesPipelineFunnelVisual({ rows, formatFullNumber }) {
                         const xRB = vb.w / 2 + hwAt(y1);
                         const pts = `${xLT},${y0} ${xRT},${y0} ${xRB},${y1} ${xLB},${y1}`;
                         const val = Number(row.value) || 0;
+                        const stage = FUNNEL_STAGES[i];
+                        const gmParts = stage?.probability === 10 ? null : getGmParts(row);
                         return (
                             <g key={row.name || i}>
-                                <title>{`${row.name}: ${formatFullNumber(val)}`}</title>
+                                <title>{`${row.name}: ${formatFullNumber(val)}${gmParts ? ` ${gmParts.full}` : ''}`}</title>
                                 <polygon
                                     points={pts}
                                     fill={`url(#srFunnelGrad-${i})`}
@@ -581,7 +620,7 @@ function SalesPipelineFunnelVisual({ rows, formatFullNumber }) {
                                 key={`lbl-${stage.probability}`}
                                 x={labelX}
                                 y={cy}
-                                fontSize={3.55}
+                                fontSize={4.97}
                                 textAnchor="end"
                                 dominantBaseline="middle"
                                 className="sr-funnel-label-text-svg"
@@ -593,22 +632,39 @@ function SalesPipelineFunnelVisual({ rows, formatFullNumber }) {
                     {rows.map((row, i) => {
                         const val = Number(row.value) || 0;
                         if (val <= 0) return null;
+                        const stage = FUNNEL_STAGES[i];
                         const y0 = i * bandH + (i === 1 ? topBandGap / 2 : 0);
                         const y1 = (i + 1) * bandH - (i === 0 ? topBandGap / 2 : 0);
-                        const cyVal = y0 + (y1 - y0) * 0.62;
+                        // Pending (10%): quoted value only — no gross margin suffix
+                        const gmParts = stage?.probability === 10 ? null : getGmParts(row);
+                        const bandMid = (y0 + y1) / 2;
+                        const cyVal = gmParts ? bandMid - (y1 - y0) * 0.12 : y0 + (y1 - y0) * 0.62;
                         return (
                             <text
                                 key={`fval-${row.name || i}`}
                                 x={vb.w / 2}
                                 y={cyVal}
-                                fontSize={4}
+                                fontSize={gmParts ? 4.41 : 5.6}
                                 fontWeight="600"
                                 textAnchor="middle"
                                 dominantBaseline="middle"
                                 className="sr-funnel-block-value-svg"
                                 fill="#ffffff"
                             >
-                                {formatSalesAmountString(val)}
+                                <tspan x={vb.w / 2} dy="0">
+                                    {formatSalesAmountString(val)}
+                                </tspan>
+                                {gmParts ? (
+                                    <tspan
+                                        x={vb.w / 2}
+                                        dy="4.2"
+                                        fontSize={3.57}
+                                        fontWeight="600"
+                                        fill={gpLineFill}
+                                    >
+                                        {`${gmParts.prefix} ${gmParts.detail}`}
+                                    </tspan>
+                                ) : null}
                             </text>
                         );
                     })}
@@ -652,12 +708,15 @@ const SalesReport = () => {
 
     const [summaryLoading, setSummaryLoading] = useState(false);
     const [topJobsLoading, setTopJobsLoading] = useState(false);
+    const [pipelinePending, setPipelinePending] = useState({ totalValue: 0, count: 0 });
     const [tableExpanded, setTableExpanded] = useState(
         () => readSrPref('', 'tableExpanded', '') === '1'
     );
     const [topJobColumnFilters, setTopJobColumnFilters] = useState({});
     const [topJobValueFilter, setTopJobValueFilter] = useState(null);
     const [topJobValueFilterDraft, setTopJobValueFilterDraft] = useState({ mode: 'gt', v1: '', v2: '' });
+    const [topJobGrossMarginFilter, setTopJobGrossMarginFilter] = useState(null);
+    const [topJobGrossMarginFilterDraft, setTopJobGrossMarginFilterDraft] = useState({ mode: 'gt', v1: '', v2: '' });
     const [topJobColWidths, setTopJobColWidths] = useState(() => readTopJobColWidths());
     const topJobColWidthsRef = useRef(topJobColWidths);
     topJobColWidthsRef.current = topJobColWidths;
@@ -713,9 +772,10 @@ const SalesReport = () => {
                         return prev || companies[0];
                     });
                     setDivision((prev) => {
+                        if (prev === 'All') return 'All';
                         if (!divisions.length) return prev;
                         if (prev && divisions.includes(prev)) return prev;
-                        return prev || divisions[0];
+                        return 'All';
                     });
                 }
             } catch (error) {
@@ -763,17 +823,31 @@ const SalesReport = () => {
         if (tableFiltersHydratedKey.current === token) return;
         tableFiltersHydratedKey.current = token;
         setTableFiltersReady(false);
-        const { columnFilters, valueFilter } = readSrTableFilters(userEmailNorm, topJobStatus);
+        const { columnFilters, valueFilter, grossMarginFilter } = readSrTableFilters(userEmailNorm, topJobStatus);
         setTopJobColumnFilters(columnFilters);
         setTopJobValueFilter(valueFilter);
+        setTopJobGrossMarginFilter(grossMarginFilter);
         setActiveHeaderFilter(null);
         setTableFiltersReady(true);
     }, [userEmailNorm, topJobStatus]);
 
     useEffect(() => {
         if (!tableFiltersReady) return;
-        writeSrTableFilters(userEmailNorm, topJobStatus, topJobColumnFilters, topJobValueFilter);
-    }, [tableFiltersReady, userEmailNorm, topJobStatus, topJobColumnFilters, topJobValueFilter]);
+        writeSrTableFilters(
+            userEmailNorm,
+            topJobStatus,
+            topJobColumnFilters,
+            topJobValueFilter,
+            topJobGrossMarginFilter
+        );
+    }, [
+        tableFiltersReady,
+        userEmailNorm,
+        topJobStatus,
+        topJobColumnFilters,
+        topJobValueFilter,
+        topJobGrossMarginFilter
+    ]);
 
     useEffect(() => {
         if (filterLocks.role || !filterOptions.roles.length) return;
@@ -829,6 +903,32 @@ const SalesReport = () => {
         }
     }, [year, company, division, role, filterLocks.company, currentUser, storedLoginEmail]);
 
+    /** Heavy Pending/10% pipeline bucket — does not block chart loading. */
+    const fetchPipelinePending = useCallback(async (signal) => {
+        setPipelinePending({ totalValue: 0, count: 0 });
+        try {
+            const params = new URLSearchParams();
+            params.append('year', year);
+            if (company) params.append('company', company);
+            if (division) params.append('division', division);
+            if (role && role !== 'All') params.append('role', role);
+            const email = (currentUser?.EmailId || currentUser?.email || storedLoginEmail || '').trim();
+            if (email) params.append('email', email);
+
+            const res = await fetch(`/api/sales-report/pipeline-pending?${params.toString()}`, { signal });
+            if (!res.ok || signal.aborted) return;
+            const data = await res.json();
+            if (signal.aborted) return;
+            setPipelinePending({
+                totalValue: Number(data.totalValue) || 0,
+                count: Number(data.count) || 0
+            });
+        } catch (e) {
+            if (e?.name === 'AbortError') return;
+            console.error('Failed to fetch pipeline pending', e);
+        }
+    }, [year, company, division, role, filterLocks.company, currentUser, storedLoginEmail]);
+
     const fetchTopJobBooked = useCallback(async (signal) => {
         setTopJobsLoading(true);
         try {
@@ -859,7 +959,7 @@ const SalesReport = () => {
 
     useEffect(() => {
         if (!year) return;
-        if (!filterLocks.company && (!company || !division)) return;
+        if (!filterLocks.company && !company) return;
         const ac = new AbortController();
         fetchSummary(ac.signal);
         return () => ac.abort();
@@ -867,7 +967,15 @@ const SalesReport = () => {
 
     useEffect(() => {
         if (!year) return;
-        if (!filterLocks.company && (!company || !division)) return;
+        if (!filterLocks.company && !company) return;
+        const ac = new AbortController();
+        fetchPipelinePending(ac.signal);
+        return () => ac.abort();
+    }, [fetchPipelinePending]);
+
+    useEffect(() => {
+        if (!year) return;
+        if (!filterLocks.company && !company) return;
         const ac = new AbortController();
         fetchTopJobBooked(ac.signal);
         return () => ac.abort();
@@ -917,7 +1025,7 @@ const SalesReport = () => {
     const handleCompanyChange = (e) => {
         const val = e.target.value;
         setCompany(val);
-        setDivision('');
+        setDivision('All');
         setRole('All');
     };
 
@@ -985,13 +1093,11 @@ const SalesReport = () => {
         );
     };
 
-    /** WonGrossProfit is GP %; JobValue is full units — GP amount = JobValue × GP% / 100. */
+    /** WonGrossProfit / GrossMargin is GP %; JobValue is full units — GP amount = JobValue × GP% / 100. */
     const formatJobBookedGrossMargin = (row) => {
         const jv = Number(row.JobValue) || 0;
-        const gpPctRaw = row.WonGrossProfit;
-        if (gpPctRaw === null || gpPctRaw === undefined || gpPctRaw === '') return '—';
-        const gpPct = Number(gpPctRaw);
-        if (Number.isNaN(gpPct)) return '—';
+        const gpPct = parseRowGrossMarginPct(row);
+        if (gpPct == null) return '—';
         const gpVal = jv * (gpPct / 100);
         const pctRounded = Math.round(gpPct);
         return (
@@ -1020,14 +1126,14 @@ const SalesReport = () => {
         apiAvgGp != null && Number.isFinite(Number(apiAvgGp)) ? Number(apiAvgGp) : blendedActualGpPct;
 
     const wl = reportData.winLoss || defaultReport().winLoss;
-    /** Winning/Losing % always project-count based: won/lost projects over quoted enquiries. */
-    const quotedDenom = Number(wl.quoted) || 0;
-    const winNumerator = Number(wl.won) || 0;
-    const lossNumerator = Number(wl.lost) || 0;
+    /** Winning/Losing % = Won/Lost value over Quoted value (floor — no round-up). */
+    const quotedDenom = Number(wl.quotedValue) || 0;
+    const winNumerator = Number(wl.wonValue) || 0;
+    const lossNumerator = Number(wl.lostValue) || 0;
     const winningRate =
-        quotedDenom > 0 ? Math.round((winNumerator / quotedDenom) * 100) : 0;
+        quotedDenom > 0 ? Math.floor((winNumerator / quotedDenom) * 100) : 0;
     const losingRate =
-        quotedDenom > 0 ? Math.round((lossNumerator / quotedDenom) * 100) : 0;
+        quotedDenom > 0 ? Math.floor((lossNumerator / quotedDenom) * 100) : 0;
 
     /** Donut: Won / Lost / Follow up only (Quoted stays in KPI row, not in chart). */
     const pieSlices = useMemo(() => {
@@ -1040,17 +1146,74 @@ const SalesReport = () => {
     }, [wl]);
 
     const funnelData = useMemo(() => {
-        const rows = reportData.probabilityFunnel || [];
+        const rows = [...(reportData.probabilityFunnel || [])];
+        const pendingVal = Number(pipelinePending.totalValue) || 0;
+        const pendingCnt = Number(pipelinePending.count) || 0;
+        if (pendingVal > 0 || pendingCnt > 0) {
+            const tenIdx = rows.findIndex((r) => Number(r.ProbabilityPercentage) === 10);
+            if (tenIdx >= 0) {
+                const cur = rows[tenIdx];
+                rows[tenIdx] = {
+                    ...cur,
+                    TotalValue: (Number(cur.TotalValue) || 0) + pendingVal,
+                    Count: (Number(cur.Count) || 0) + pendingCnt,
+                    GrossMarginValue: cur.GrossMarginValue == null ? 0 : cur.GrossMarginValue,
+                    GrossMarginPct: cur.GrossMarginPct == null ? 0 : cur.GrossMarginPct,
+                    ProbabilityName:
+                        !cur.ProbabilityName || String(cur.ProbabilityName).trim() === ''
+                            ? 'Quoted'
+                            : cur.ProbabilityName
+                };
+            } else {
+                rows.push({
+                    ProbabilityName: 'Quoted',
+                    ProbabilityPercentage: 10,
+                    TotalValue: pendingVal,
+                    GrossMarginValue: 0,
+                    GrossMarginPct: 0,
+                    Count: pendingCnt
+                });
+            }
+        }
         return FUNNEL_STAGES.map((stage) => {
             const matched = rows.filter((item) => probabilityFunnelRowMatchesStage(item, stage));
             const value = matched.reduce((sum, item) => sum + (Number(item.TotalValue) || 0), 0);
+            const grossMarginValue = matched.reduce(
+                (sum, item) => sum + (Number(item.GrossMarginValue) || 0),
+                0
+            );
+            const gmPctWeighted = matched.reduce((acc, item) => {
+                const tv = Number(item.TotalValue) || 0;
+                const pct = Number(item.GrossMarginPct);
+                if (!(tv > 0) || !Number.isFinite(pct)) return acc;
+                return { sum: acc.sum + tv * pct, w: acc.w + tv };
+            }, { sum: 0, w: 0 });
+            const grossMarginPct =
+                gmPctWeighted.w > 0
+                    ? gmPctWeighted.sum / gmPctWeighted.w
+                    : matched.reduce((sum, item) => sum + (Number(item.GrossMarginPct) || 0), 0) /
+                      (matched.length || 1);
             return {
                 value,
+                grossMarginValue,
+                grossMarginPct: Number.isFinite(grossMarginPct) ? grossMarginPct : 0,
                 name: `${stage.name} (${stage.pctLabel || `${stage.probability}%`})`,
                 fill: stage.color
             };
         });
-    }, [reportData.probabilityFunnel]);
+    }, [reportData.probabilityFunnel, pipelinePending]);
+
+    const formatFunnelGrossMarginParts = useCallback((row) => {
+        const gmVal = Number(row?.grossMarginValue) || 0;
+        const gmPct = Number(row?.grossMarginPct);
+        const pctRounded = Number.isFinite(gmPct) ? Math.round(gmPct) : 0;
+        const detail = `${formatSalesAmountString(gmVal)} ${pctRounded}%`;
+        return {
+            prefix: 'GP:',
+            detail,
+            full: `GP: ${detail}`
+        };
+    }, []);
 
     const topRows = useMemo(
         () => sortTopJobRowsWithEnquiryGroups(reportData.topJobBooked || [], topJobStatus),
@@ -1149,22 +1312,6 @@ const SalesReport = () => {
     }, [topRows, filterableTopJobColumns]);
 
     const topRowsFiltered = useMemo(() => {
-        const passesValueFilter = (jobValue) => {
-            if (!topJobValueFilter) return true;
-            const value = Number(jobValue) || 0;
-            const n1 = Number(topJobValueFilter.v1);
-            const n2 = Number(topJobValueFilter.v2);
-            if (topJobValueFilter.mode === 'gt') return Number.isFinite(n1) ? value > n1 : true;
-            if (topJobValueFilter.mode === 'lt') return Number.isFinite(n1) ? value < n1 : true;
-            if (topJobValueFilter.mode === 'eq') return Number.isFinite(n1) ? value === n1 : true;
-            if (topJobValueFilter.mode === 'between') {
-                if (!Number.isFinite(n1) || !Number.isFinite(n2)) return true;
-                const min = Math.min(n1, n2);
-                const max = Math.max(n1, n2);
-                return value >= min && value <= max;
-            }
-            return true;
-        };
         return topRows.filter((row) => {
             const columnOk = filterableTopJobColumns.every((col) => {
                 const selected = topJobColumnFilters[col.key];
@@ -1172,9 +1319,23 @@ const SalesReport = () => {
                 const value = getTopJobFilterValue(row, col.key);
                 return selected.includes(value);
             });
-            return columnOk && passesValueFilter(row.JobValue);
+            if (!columnOk) return false;
+            if (!passesNumericCompareFilter(row.JobValue, topJobValueFilter)) return false;
+            if (topJobGrossMarginFilter) {
+                const gmPct = parseRowGrossMarginPct(row);
+                // Active GM filter: rows without a Gross Margin value are excluded
+                if (gmPct == null) return false;
+                if (!passesNumericCompareFilter(gmPct, topJobGrossMarginFilter)) return false;
+            }
+            return true;
         });
-    }, [topRows, topJobColumnFilters, filterableTopJobColumns, topJobValueFilter]);
+    }, [
+        topRows,
+        topJobColumnFilters,
+        filterableTopJobColumns,
+        topJobValueFilter,
+        topJobGrossMarginFilter
+    ]);
 
     const topJobEnquiryGroupMeta = useMemo(
         () => buildTopJobEnquiryGroupMeta(topRowsFiltered),
@@ -1212,7 +1373,7 @@ const SalesReport = () => {
             return;
         }
         const rect = el.getBoundingClientRect();
-        const isValue = activeHeaderFilter === 'jobValue';
+        const isValue = activeHeaderFilter === 'jobValue' || activeHeaderFilter === 'grossMargin';
         const baseMinW = isValue ? 190 : 220;
         const vw = window.innerWidth;
         const vh = window.innerHeight;
@@ -1305,6 +1466,16 @@ const SalesReport = () => {
             setActiveHeaderFilter((prev) => (prev === key ? null : key));
             return;
         }
+        if (key === 'grossMargin') {
+            setHeaderFilterSearch('');
+            setTopJobGrossMarginFilterDraft(
+                topJobGrossMarginFilter
+                    ? { ...topJobGrossMarginFilter }
+                    : { mode: 'gt', v1: '', v2: '' }
+            );
+            setActiveHeaderFilter((prev) => (prev === key ? null : key));
+            return;
+        }
         const options = topJobFilterOptions[key] || [];
         const applied = topJobColumnFilters[key];
         setHeaderFilterDraft(Array.isArray(applied) ? [...applied] : [...options]);
@@ -1362,23 +1533,26 @@ const SalesReport = () => {
         () =>
             topRowsFiltered.reduce((acc, row) => {
                 const jv = Number(row.JobValue) || 0;
-                const gpPct = Number(row.WonGrossProfit);
-                if (!Number.isFinite(gpPct)) return acc;
+                const gpPct = parseRowGrossMarginPct(row);
+                if (gpPct == null) return acc;
                 return acc + (jv * gpPct) / 100;
             }, 0),
         [topRowsFiltered]
     );
     const topRowsFilteredWonAvgGpPct = useMemo(() => {
         const gpRows = topRowsFiltered
-            .map((row) => Number(row.WonGrossProfit))
-            .filter((v) => Number.isFinite(v));
+            .map((row) => parseRowGrossMarginPct(row))
+            .filter((v) => v != null);
         if (!gpRows.length) return 0;
         const sum = gpRows.reduce((acc, v) => acc + v, 0);
         return Math.round(sum / gpRows.length);
     }, [topRowsFiltered]);
     const hasAnyTopJobFilters = useMemo(
-        () => Object.keys(topJobColumnFilters).length > 0 || !!topJobValueFilter,
-        [topJobColumnFilters, topJobValueFilter]
+        () =>
+            Object.keys(topJobColumnFilters).length > 0 ||
+            !!topJobValueFilter ||
+            !!topJobGrossMarginFilter,
+        [topJobColumnFilters, topJobValueFilter, topJobGrossMarginFilter]
     );
 
     const topJobsHeadingWord = useMemo(() => {
@@ -1791,6 +1965,31 @@ const SalesReport = () => {
         );
     };
 
+    const renderGrossMarginFilterHeader = () => {
+        const isFiltered = !!topJobGrossMarginFilter;
+        return (
+            <th className="sr-filterable-th sr-resizable-th text-end text-nowrap" style={getTopJobColStyle('grossMargin')}>
+                <button
+                    type="button"
+                    className="sr-th-filter-btn"
+                    ref={(el) => {
+                        if (el) headerFilterBtnRefs.current.grossMargin = el;
+                    }}
+                    onClick={() => openHeaderFilter('grossMargin')}
+                    title="Filter by Gross Margin % from Probability"
+                >
+                    <span>Gross Margin</span>
+                    <span className={`sr-th-filter-caret${isFiltered ? ' sr-th-filter-caret--active' : ''}`}>▼</span>
+                </button>
+                <span
+                    className="sr-col-resize-handle"
+                    title="Drag to resize column"
+                    onMouseDown={(e) => startTopJobColResize(e, 'grossMargin')}
+                />
+            </th>
+        );
+    };
+
     const renderPlainHeader = (key, label, className = '', title) => (
         <th
             className={`sr-resizable-th ${className}`.trim()}
@@ -1808,7 +2007,34 @@ const SalesReport = () => {
 
     const renderHeaderFilterPortal = () => {
         if (!activeHeaderFilter || !filterPanelPos) return null;
-        const isValue = activeHeaderFilter === 'jobValue';
+        const isJobValue = activeHeaderFilter === 'jobValue';
+        const isGrossMargin = activeHeaderFilter === 'grossMargin';
+        const isValue = isJobValue || isGrossMargin;
+        const draft = isGrossMargin ? topJobGrossMarginFilterDraft : topJobValueFilterDraft;
+        const setDraft = isGrossMargin ? setTopJobGrossMarginFilterDraft : setTopJobValueFilterDraft;
+        const clearFilter = () => {
+            if (isGrossMargin) setTopJobGrossMarginFilter(null);
+            else setTopJobValueFilter(null);
+            setActiveHeaderFilter(null);
+        };
+        const applyFilter = () => {
+            const mode = String(draft.mode || 'gt');
+            const v1 = String(draft.v1 ?? '').trim();
+            const v2 = String(draft.v2 ?? '').trim();
+            const n1 = Number(v1);
+            const n2 = Number(v2);
+            const valid =
+                mode === 'between'
+                    ? v1 !== '' && v2 !== '' && Number.isFinite(n1) && Number.isFinite(n2)
+                    : v1 !== '' && Number.isFinite(n1);
+            const next = valid ? { mode, v1, v2 } : null;
+            if (isGrossMargin) {
+                setTopJobGrossMarginFilter(next);
+            } else {
+                setTopJobValueFilter(next);
+            }
+            setActiveHeaderFilter(null);
+        };
         return createPortal(
             <div
                 className={`sr-th-filter-popover sr-th-filter-popover--portal${isValue ? ' sr-th-filter-popover--value' : ''}`}
@@ -1825,8 +2051,8 @@ const SalesReport = () => {
                     <>
                         <select
                             className="sr-th-value-op-select"
-                            value={topJobValueFilterDraft.mode}
-                            onChange={(e) => setTopJobValueFilterDraft((p) => ({ ...p, mode: e.target.value }))}
+                            value={draft.mode}
+                            onChange={(e) => setDraft((p) => ({ ...p, mode: e.target.value }))}
                         >
                             <option value="gt">Greater than</option>
                             <option value="lt">Less than</option>
@@ -1835,45 +2061,30 @@ const SalesReport = () => {
                         </select>
                         <input
                             className="sr-th-filter-search"
-                            placeholder="Value"
-                            value={topJobValueFilterDraft.v1}
-                            onChange={(e) => setTopJobValueFilterDraft((p) => ({ ...p, v1: e.target.value }))}
+                            type="number"
+                            inputMode="decimal"
+                            placeholder={isGrossMargin ? 'Gross Margin %' : 'Value'}
+                            value={draft.v1}
+                            onChange={(e) => setDraft((p) => ({ ...p, v1: e.target.value }))}
                         />
-                        {topJobValueFilterDraft.mode === 'between' ? (
+                        {draft.mode === 'between' ? (
                             <input
                                 className="sr-th-filter-search"
-                                placeholder="And value"
-                                value={topJobValueFilterDraft.v2}
-                                onChange={(e) => setTopJobValueFilterDraft((p) => ({ ...p, v2: e.target.value }))}
+                                type="number"
+                                inputMode="decimal"
+                                placeholder={isGrossMargin ? 'And Gross Margin %' : 'And value'}
+                                value={draft.v2}
+                                onChange={(e) => setDraft((p) => ({ ...p, v2: e.target.value }))}
                             />
                         ) : null}
                         <div className="sr-th-filter-footer">
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setTopJobValueFilter(null);
-                                    setActiveHeaderFilter(null);
-                                }}
-                            >
+                            <button type="button" onClick={clearFilter}>
                                 Clear
                             </button>
                             <button
                                 type="button"
                                 className="sr-th-filter-apply"
-                                onClick={() => {
-                                    const n1 = Number(topJobValueFilterDraft.v1);
-                                    const n2 = Number(topJobValueFilterDraft.v2);
-                                    const valid =
-                                        topJobValueFilterDraft.mode === 'between'
-                                            ? Number.isFinite(n1) && Number.isFinite(n2)
-                                            : Number.isFinite(n1);
-                                    if (!valid) {
-                                        setTopJobValueFilter(null);
-                                    } else {
-                                        setTopJobValueFilter({ ...topJobValueFilterDraft });
-                                    }
-                                    setActiveHeaderFilter(null);
-                                }}
+                                onClick={applyFilter}
                             >
                                 Apply
                             </button>
@@ -1935,10 +2146,13 @@ const SalesReport = () => {
                                 className="form-select form-select-sm"
                                 aria-label="Division Name"
                                 style={{ minWidth: 160 }}
-                                value={division}
+                                value={division || 'All'}
                                 onChange={handleDivisionChange}
                                 disabled={filterLocks.division || filterOptions.divisions.length === 0}
                             >
+                                {!filterLocks.division && (
+                                    <option value="All">All</option>
+                                )}
                                 {filterOptions.divisions.map((d) => (
                                     <option key={d} value={d}>{d}</option>
                                 ))}
@@ -2327,12 +2541,20 @@ const SalesReport = () => {
                         <div className="sr-pipeline-body d-flex flex-column flex-grow-1 min-h-0">
                             <div className="sr-pipeline-top d-flex flex-column min-h-0 flex-grow-1 p-2">
                                 <div className="sr-chart-funnel flex-grow-1 min-h-0">
-                                    <SalesPipelineFunnelVisual rows={funnelData} formatFullNumber={formatFullNumber} />
+                                    <SalesPipelineFunnelVisual
+                                        rows={funnelData}
+                                        formatFullNumber={formatFullNumber}
+                                        formatGmParts={formatFunnelGrossMarginParts}
+                                    />
                                 </div>
                             </div>
                             <div className="sr-pipeline-summary flex-shrink-0">
                                 {FUNNEL_STAGES.map((stage, i) => {
                                     const v = Number(funnelData[i]?.value) || 0;
+                                    const showGm = stage.probability !== 10;
+                                    const gmParts = showGm
+                                        ? formatFunnelGrossMarginParts(funnelData[i] || {})
+                                        : null;
                                     return (
                                         <div
                                             key={stage.probability}
@@ -2343,7 +2565,17 @@ const SalesReport = () => {
                                                 <span className="sr-pipeline-swatch" style={{ backgroundColor: stage.color }} title={stage.name} aria-hidden />
                                                 <span className="sr-pipeline-summary-legend text-truncate">{stage.name}</span>
                                             </div>
-                                            <span className="sr-pipeline-summary-value text-end">{formatFunnelSummaryValue(v)}</span>
+                                            <span className="sr-pipeline-summary-value text-end">
+                                                <span className="sr-pipeline-summary-value-main text-nowrap">
+                                                    {formatFunnelSummaryValue(v)}
+                                                </span>
+                                                {gmParts ? (
+                                                    <span className="sr-pipeline-summary-gm d-block text-nowrap">
+                                                        <span className="sr-pipeline-summary-gp-prefix">{gmParts.prefix}</span>
+                                                        {` ${gmParts.detail}`}
+                                                    </span>
+                                                ) : null}
+                                            </span>
                                         </div>
                                     );
                                 })}
@@ -2368,6 +2600,7 @@ const SalesReport = () => {
                                     onClick={() => {
                                         setTopJobColumnFilters({});
                                         setTopJobValueFilter(null);
+                                        setTopJobGrossMarginFilter(null);
                                         setActiveHeaderFilter(null);
                                     }}
                                     title={hasAnyTopJobFilters ? 'Clear all table filters (filters active)' : 'Clear all table filters'}
@@ -2386,16 +2619,11 @@ const SalesReport = () => {
                                 >
                                     {tableExpanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
                                 </button>
-                                <button
-                                    type="button"
-                                    className="btn btn-sm btn-outline-light sr-table-excel-btn me-2"
+                                <ExcelDownloadButton
                                     onClick={handleDownloadJobsExcel}
-                                    title="Download table as Excel (.xlsx)"
-                                    aria-label="Download Jobs table as Excel workbook"
                                     disabled={topJobsLoading || topRowsFiltered.length === 0}
-                                >
-                                    <FileSpreadsheet size={13} />
-                                </button>
+                                    className="sr-table-excel-btn me-2"
+                                />
                                 <label className="visually-hidden" htmlFor="sr-top-jobs-status">
                                     Filter top jobs by status
                                 </label>
@@ -2429,6 +2657,9 @@ const SalesReport = () => {
                                             'sr-job-bar-th',
                                             'Each row: % of the table Total (same as the blue Total row in the value column); bar length matches that %.'
                                         )}
+                                        {topJobStatus === 'Follow Up'
+                                            ? renderGrossMarginFilterHeader()
+                                            : null}
                                         {topJobStatus === 'Quoted' ? (
                                             <>
                                                 {renderFilterableHeader('metric', topJobsTableConfig.metricHeader, 'text-end text-nowrap')}
@@ -2485,6 +2716,7 @@ const SalesReport = () => {
                                                     9 +
                                                     (topJobStatus === 'Quoted' ? 2 : 0) +
                                                     (topJobStatus === 'Won' || topJobStatus === 'Lost' || topJobStatus === 'Follow Up' ? 1 : 0) +
+                                                    (topJobStatus === 'Follow Up' ? 1 : 0) +
                                                     (topJobStatus === 'Pending' ? 2 : 0) +
                                                     (TOP_JOB_PROB_QUOTE_REF_DATE_STATUSES.has(topJobStatus) ? 2 : 0) +
                                                     (TOP_JOB_QUOTE_TYPE_STATUSES.has(topJobStatus) ? 1 : 0) +
@@ -2524,6 +2756,12 @@ const SalesReport = () => {
                                                 )}
                                             </td>
                                             <td style={getTopJobColStyle('chart')} />
+                                            {topJobStatus === 'Follow Up' ? (
+                                                <td className="text-end fw-semibold" style={getTopJobColStyle('grossMargin')}>
+                                                    {formatK(topRowsFilteredWonGpTotal)} ({topRowsFilteredWonAvgGpPct}
+                                                    <span className="sr-pct-sym">%</span>)
+                                                </td>
+                                            ) : null}
                                             {topJobStatus === 'Quoted' ? (
                                                 <>
                                                     <td />
@@ -2673,6 +2911,11 @@ const SalesReport = () => {
                                                             </div>
                                                         </td>
                                                     )}
+                                                    {topJobStatus === 'Follow Up' ? (
+                                                        <td className="text-end small text-nowrap" style={getTopJobColStyle('grossMargin')}>
+                                                            {formatJobBookedGrossMargin(row)}
+                                                        </td>
+                                                    ) : null}
                                                     {topJobStatus === 'Quoted' ? (
                                                         <>
                                                             <td

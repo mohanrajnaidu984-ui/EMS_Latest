@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EMS Development Value Justification</title>
+  <style>
+    @page { size: A4; margin: 14mm 16mm; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", Calibri, Arial, sans-serif;
+      font-size: 9.5pt;
+      line-height: 1.35;
+      color: #1a1a2e;
+      max-width: 210mm;
+      margin: 0 auto;
+      padding: 14mm 16mm;
+    }
+    h1 {
+      font-size: 16pt;
+      color: #20396D;
+      border-bottom: 2px solid #20396D;
+      padding-bottom: 4px;
+      margin-bottom: 6px;
+    }
+    .meta { font-size: 8.5pt; color: #555; margin-bottom: 10px; }
+    .meta span { margin-right: 16px; }
+    h2 {
+      font-size: 10pt;
+      color: #20396D;
+      margin: 10px 0 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    p { margin-bottom: 6px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 4px 0 8px;
+      font-size: 8.5pt;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 3px 6px;
+      text-align: left;
+    }
+    th { background: #20396D; color: #fff; font-weight: 600; }
+    td.num, th.num { text-align: right; }
+    tr:nth-child(even) { background: #f5f7fa; }
+    .highlight {
+      background: #eef2f8;
+      border-left: 3px solid #20396D;
+      padding: 6px 10px;
+      margin: 6px 0;
+      font-size: 9pt;
+    }
+    .highlight strong { color: #20396D; }
+    ul { margin: 2px 0 6px 18px; font-size: 8.5pt; }
+    li { margin-bottom: 2px; }
+    .footer {
+      margin-top: 8px;
+      font-size: 7.5pt;
+      color: #777;
+      border-top: 1px solid #ddd;
+      padding-top: 4px;
+    }
+    .two-col { display: flex; gap: 12px; }
+    .two-col > div { flex: 1; }
+    @media print {
+      body { padding: 0; }
+    }
+  </style>
+</head>
+<body>
+
+<h1>EMS Development Value Justification</h1>
+<div class="meta">
+  <span><strong>Prepared for:</strong> Almoayyed Contracting Group</span>
+  <span><strong>Prepared by:</strong> Mohan Naidu</span>
+  <span><strong>Date:</strong> August 2026</span>
+</div>
+
+<h2>Executive Summary</h2>
+<p>
+  EMS (Enquiry Management System) is a custom full-stack enterprise platform managing the complete sales lifecycle —
+  enquiry, pricing, quotation, approval, pipeline, and reporting. Built in-house by a single developer,
+  it replaces a typical <strong>12–24 month vendor project</strong>.
+</p>
+<div class="highlight">
+  <strong>Recommended (employee):</strong> BHD 10,000–12,000 bonus + EMS Lead role &nbsp;|&nbsp;
+  <strong>External replacement value:</strong> BHD 45,000–60,000
+</div>
+
+<div class="two-col">
+  <div>
+    <h2>System Scale</h2>
+    <table>
+      <tr><th>Metric</th><th class="num">Value</th></tr>
+      <tr><td>Source files</td><td class="num">3,574</td></tr>
+      <tr><td>Lines of code (JS/JSX)</td><td class="num">~427,000</td></tr>
+      <tr><td>API endpoints</td><td class="num">60+</td></tr>
+      <tr><td>SQL migrations</td><td class="num">39</td></tr>
+      <tr><td>Business modules</td><td class="num">7</td></tr>
+      <tr><td>Stack</td><td class="num">React, Node, MSSQL</td></tr>
+    </table>
+  </div>
+  <div>
+    <h2>Business Value</h2>
+    <ul>
+      <li>Replaces spreadsheets &amp; manual quote workflows</li>
+      <li>Enforces enquiry → pricing → quote → approval process</li>
+      <li>Real-time dashboard &amp; management reporting</li>
+      <li>Avoids BHD 45k–85k+ external development cost</li>
+      <li>Embeds division rules &amp; approval hierarchies</li>
+      <li>Sole developer retains full domain knowledge</li>
+    </ul>
+  </div>
+</div>
+
+<h2>Module Breakdown</h2>
+<table>
+  <tr>
+    <th>Module</th>
+    <th class="num">Effort</th>
+    <th class="num">Value (BHD)</th>
+  </tr>
+  <tr><td>Enquiry Management (hierarchy, attachments, SE assignment)</td><td class="num">3–4 mo</td><td class="num">8,000–12,000</td></tr>
+  <tr><td>Pricing Engine (job hierarchy, division access)</td><td class="num">2–3 mo</td><td class="num">6,000–9,000</td></tr>
+  <tr><td>Quoting (clause editor, PDF, revisions)</td><td class="num">4–6 mo</td><td class="num">12,000–18,000</td></tr>
+  <tr><td>Approval Workflow (multi-step, digital signatures)</td><td class="num">2–3 mo</td><td class="num">6,000–10,000</td></tr>
+  <tr><td>Probability / Pipeline</td><td class="num">1–2 mo</td><td class="num">3,000–5,000</td></tr>
+  <tr><td>Dashboard &amp; Analytics</td><td class="num">2–3 mo</td><td class="num">6,000–9,000</td></tr>
+  <tr><td>Sales Report &amp; Targets</td><td class="num">2–3 mo</td><td class="num">6,000–9,000</td></tr>
+  <tr><td>Integrations (Outlook, SMTP, OCR, deployment)</td><td class="num">2–3 mo</td><td class="num">5,000–8,000</td></tr>
+  <tr><th>TOTAL</th><th class="num">18–24 mo</th><th class="num">52,000–80,000</th></tr>
+</table>
+
+<h2>Proposed Terms</h2>
+<table>
+  <tr><th>Option</th><th>Description</th><th class="num">Amount (BHD)</th></tr>
+  <tr>
+    <td><strong>A — Employee</strong></td>
+    <td>Bonus + EMS Lead role (+ optional maintenance)</td>
+    <td class="num">10,000–12,000 (+ 4–6k/yr)</td>
+  </tr>
+  <tr>
+    <td><strong>B — Vendor / IP</strong></td>
+    <td>One-time handover + annual support</td>
+    <td class="num">45,000–55,000 (+ 5–8k/yr)</td>
+  </tr>
+  <tr>
+    <td><strong>C — Hybrid</strong></td>
+    <td>Reduced fee + continued employment + maintenance</td>
+    <td class="num">25,000–35,000 (+ 4–6k/yr)</td>
+  </tr>
+</table>
+
+<div class="footer">
+  Prepared for internal discussion. Figures based on codebase analysis (427k LOC, 3,574 files), Bahrain market rates (BHD 15–40/hr),
+  and GCC enterprise platform benchmarks. Final terms subject to employment contract &amp; IP policy review.
+  <strong>Contact: Mohan Naidu | Almoayyed Contracting Group</strong>
+</div>
+
+</body>
+</html>
