@@ -109,7 +109,11 @@ async function resolveDashboardAccessMode(userEmail, userRole) {
             SELECT TOP 1 1 AS ok
             FROM Master_ConcernedSE
             WHERE LOWER(LTRIM(RTRIM(ISNULL(EmailId, '')))) = ${email}
-              AND LOWER(LTRIM(RTRIM(ISNULL(Department, N'')))) = N'management'
+              AND (
+                LOWER(LTRIM(RTRIM(ISNULL(Department, N'')))) = N'management'
+                OR N',' + REPLACE(LOWER(LTRIM(RTRIM(ISNULL(Department, N'')))), N' ', N'') + N','
+                   LIKE N'%,management,%'
+              )
         `
     ]);
 

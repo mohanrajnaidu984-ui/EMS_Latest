@@ -20,6 +20,12 @@ const {
     fetchEnquiryForJobsForAccess,
 } = require('../lib/quotePricingAccess');
 const {
+    parseUserDepartments,
+    userHasDepartment,
+    userDepartmentMatchesAny,
+    anyDepartmentTokenMatchesJobName,
+} = require('../lib/userDepartments');
+const {
     normalizeUserEmail,
     parseUserSignatureMaster,
     serializeUserSignatureMaster,
@@ -31,6 +37,10 @@ const {
     normalizeApprovalEmail,
     parseApprovalWorkflowJson,
     serializeApprovalWorkflowJson,
+    isFinalApproverApproved,
+    assertFinalApproverRules,
+    getFinalApproverStep,
+    coerceFinalApproverFlags,
 } = require('../lib/approvalWorkflowJson');
 const {
     isMissingQuoteApprovalStepsTableError,
@@ -44,10 +54,12 @@ const {
     fetchPendingApprovalsForUser,
     fetchApprovedApprovalsByUser,
     fetchRejectedApprovalsByUser,
+    fetchCorrectionsRequestedByUser,
     fetchApprovalWorkflowSearch,
     enrichQuoteListRowsWithApprovalStatus,
     userHasActionableDraftApprovalStep,
     userHasActionableQuoteApprovalStep,
+    resolveLinkedQuoteIdFromDraft,
     normalizeQuoteMeta,
     fetchApprovalCompletionRecipients,
     fetchExistingCreatedByEmail,
@@ -55,14 +67,19 @@ const {
     getCurrentPendingStep,
     resolveApprovalPersistContext,
     fetchApprovalStepsApiPayload,
+    recordQuoteCorrectionRequired,
+    fetchQuoteCorrectionHistory,
+    isMissingQuoteApprovalCorrectionsTableError,
 } = require('../lib/quoteApprovalSteps');
 const {
     sendQuoteApprovalRequestEmail,
     sendQuoteApprovedForSubmissionEmails,
+    sendQuoteCorrectionRequiredEmails,
 } = require('../lib/quoteApprovalNotify');
 const {
     notifyQuoteAssignedForApprovalInApp,
     notifyQuoteApprovedForSubmissionInApp,
+    notifyQuoteCorrectionRequiredInApp,
 } = require('../lib/quoteApprovalInAppNotify');
 const {
     isMissingQuoteApprovalHierarchyTableError,
@@ -72,6 +89,15 @@ const {
 } = require('../lib/quoteApprovalHierarchy');
 const { removeExcludedFromEmailSet } = require('../lib/notificationEmailExclusions');
 const { fetchQuoteDivisionUserOptions } = require('../lib/quoteDivisionUserOptions');
+const { resolveCompanyLogoPath } = require('../lib/resolveCompanyLogoPath');
+
+/** Normalize stored logo paths and resolve stale filenames to files on disk. */
+function normQuoteLogoPath(logo) {
+    if (logo == null) return null;
+    const s = String(logo).trim();
+    if (!s) return null;
+    return resolveCompanyLogoPath(s.replace(/\\/g, '/'));
+}
 
 async function resolveProjectNameForApproval(requestNo, projectName = '') {
     let resolved = String(projectName || '').trim();
@@ -91,6 +117,7 @@ async function resolveProjectNameForApproval(requestNo, projectName = '') {
 async function notifyAfterApprovalAction({
     nextSteps,
     action,
+    stepSequence = null,
     requestNo,
     projectName = '',
     customerName = '',
@@ -102,11 +129,23 @@ async function notifyAfterApprovalAction({
     const actionNorm = String(action || '').trim().toLowerCase();
     if (actionNorm !== 'approved') return { notified: false };
 
-    const pendingNext = getCurrentPendingStep(nextSteps);
-    const allApproved =
-        Array.isArray(nextSteps) &&
-        nextSteps.length > 0 &&
-        nextSteps.every((s) => String(s.status || '').toLowerCase() === 'approved');
+    const actedSeq = Number(stepSequence);
+    const finalStep = getFinalApproverStep(nextSteps);
+    const finalApproved =
+        !!finalStep && String(finalStep.status || '').toLowerCase() === 'approved';
+    const actedIsFinal =
+        Number.isFinite(actedSeq) &&
+        !!finalStep &&
+        Number(finalStep.sequence) === actedSeq;
+
+    /* Only the final approver's Approve action sends "approved for submission".
+       Intermediate approvers must never trigger this email. */
+    if (!finalApproved || !actedIsFinal) {
+        return {
+            notified: false,
+            type: !finalApproved ? 'parallel-pending-final' : 'skipped-non-final-actor',
+        };
+    }
 
     const resolvedProjectName = await resolveProjectNameForApproval(requestNo, projectName);
     const mailCtxBase = {
@@ -117,53 +156,59 @@ async function notifyAfterApprovalAction({
         projectNameOverride: resolvedProjectName,
     };
 
-    if (pendingNext && !allApproved) {
-        // Parallel approval: all approvers were notified when the workflow was sent.
-        return { notified: false, type: 'parallel-pending-others' };
-    }
-
-    if (allApproved) {
-        const createdByEmail = await fetchExistingCreatedByEmail({
-            quoteId: quoteId || null,
-            draftQuoteId: draftQuoteId || null,
-            meta: {
-                requestNo,
-                customerName,
-                leadJobName: '',
-                ownJob,
-            },
-        });
-        const recipientEmails = await fetchApprovalCompletionRecipients(nextSteps, {
-            createdByEmail,
+    const createdByEmail = await fetchExistingCreatedByEmail({
+        quoteId: quoteId || null,
+        draftQuoteId: draftQuoteId || null,
+        meta: {
             requestNo,
-        });
-        const mailContext = await fetchApprovalMailContext(mailCtxBase);
-        const mailResult = await sendQuoteApprovedForSubmissionEmails({
-            toEmails: recipientEmails,
-            mailContext,
-        });
-        let inAppResult = { inserted: 0 };
-        try {
-            inAppResult = await notifyQuoteApprovedForSubmissionInApp({
-                recipientEmails,
-                requestNo,
-                projectName: resolvedProjectName,
-                quoteNumber: mailContext?.quoteNumber || mailContext?.quoteRef || '',
-                quoteId: quoteId || null,
-                triggerUserName: actorNameFromSteps(nextSteps),
-            });
-        } catch (inAppErr) {
-            console.warn('[approval-action] in-app notification:', inAppErr.message);
-        }
-        return {
-            notified: mailResult.success,
-            type: 'approved-for-submission',
-            mailResult,
-            inApp: inAppResult,
-        };
+            customerName,
+            leadJobName: '',
+            ownJob,
+        },
+    });
+    const recipientEmails = await fetchApprovalCompletionRecipients(nextSteps, {
+        createdByEmail,
+        requestNo,
+    });
+    if (!recipientEmails.length) {
+        console.warn(
+            '[approval-action] approved-for-submission skipped — no seeker/approver emails'
+        );
+        return { notified: false, type: 'no-recipients' };
     }
+    const mailContext = await fetchApprovalMailContext(mailCtxBase);
+    const mailResult = await sendQuoteApprovedForSubmissionEmails({
+        toEmails: recipientEmails,
+        mailContext,
+    });
+    let inAppResult = { inserted: 0 };
+    try {
+        inAppResult = await notifyQuoteApprovedForSubmissionInApp({
+            recipientEmails,
+            requestNo,
+            projectName: resolvedProjectName,
+            quoteNumber: mailContext?.quoteNumber || mailContext?.quoteRef || '',
+            quoteId: quoteId || null,
+            triggerUserName: actorNameFromSteps(nextSteps),
+        });
+    } catch (inAppErr) {
+        console.warn('[approval-action] in-app notification:', inAppErr.message);
+    }
+    return {
+        notified: mailResult.success,
+        type: 'approved-for-submission',
+        mailResult,
+        inApp: inAppResult,
+    };
+}
 
-    return { notified: false };
+/** Do not block the HTTP response on SMTP — UI status updates wait on this otherwise. */
+function notifyAfterApprovalActionInBackground(args) {
+    setImmediate(() => {
+        void notifyAfterApprovalAction(args).catch((err) => {
+            console.warn('[approval-action] background notify:', err?.message || err);
+        });
+    });
 }
 
 function actorNameFromSteps(steps) {
@@ -326,12 +371,18 @@ const runPendingQuoteListQuery = require('../lib/pendingQuoteListQuery');
 const runQuotedQuoteListQuery = require('../lib/quotedQuoteListQuery');
 const { runApprovalWorkflowQuoteListQuery } = require('../lib/approvalWorkflowQuoteListQuery');
 const buildQuoteListSearchExtraWhere = require('../lib/buildQuoteListSearchExtraWhere');
+const mergeQuoteListSearchRawRows = buildQuoteListSearchExtraWhere.mergeQuoteListSearchRawRows;
+const { clearPricingRevisionRequiredForQuoteTuple } = require('../lib/pricingRevisionRequired');
 const { sendGeneralEmail } = require('../emailService');
 const { buildOutlookDraftVbs } = require('../lib/outlookDraftVbs');
 const { buildSmtpTransport, stripQuotes, getSmtpFromEmail } = require('../lib/smtpTransport');
 const { buildQuoteEmlDraftBuffer } = require('../lib/quoteSmtpDraft');
 const { resolveQuoteOutlookEmailFields } = require('../lib/quoteOutlookEmailFields');
-const { resolveQuoteUploadDestination } = require('../lib/attachmentsRoot');
+const { resolveQuoteUploadDestination, resolveQuoteUploadDestinationByVisibility } = require('../lib/attachmentsRoot');
+const {
+    getAttachmentAccessContext,
+    canReadAttachmentByVisibility,
+} = require('../lib/attachmentAccess');
 
 /**
  * UNC paths (`\\server\share\...`) must not be passed through `path.resolve()` — Node can change the prefix and break Express.sendFile / existsSync.
@@ -356,6 +407,15 @@ function absolutePathForFilesystem(p) {
  */
 function shouldOmitFromPendingQuoteList(row) {
     const roll = String(row.ListQuoteRollupStatus ?? row.listquoterollupstatus ?? '').trim();
+    // Own-job Revision Required stays on pending until the next quote clears the EPV flag.
+    if (roll === 'Revision Required') return false;
+    if (
+        String(row.ListPendingRevisionRequired ?? row.listpendingrevisionrequired ?? '')
+            .trim()
+            .toLowerCase() === 'yes'
+    ) {
+        return false;
+    }
     if (roll === 'All Quoted') return true;
     const lines = row.ListQuoteDetailLines;
     if (Array.isArray(lines) && lines.length > 0) {
@@ -365,18 +425,214 @@ function shouldOmitFromPendingQuoteList(row) {
     return false;
 }
 
-// Quote attachments: ENQUIRY_ATTACHMENTS_ROOT + Quotes/<quoteId>, or QUOTE_ATTACHMENTS_ROOT=<UNC>/Quotes, or explicit QUOTE_ATTACHMENTS_ROOT (see lib/attachmentsRoot.js).
+/**
+ * Draft attachments reuse QuoteAttachments without a schema change:
+ * store under QuoteID = -DraftQuoteId (never collides with EnquiryQuotes.ID > 0).
+ * On promote, rows are remapped to the new positive QuoteID and files moved.
+ */
+function draftAttachmentOwnerQuoteId(draftQuoteId) {
+    const d = Math.abs(Number(draftQuoteId));
+    if (!Number.isFinite(d) || d <= 0) return null;
+    return -d;
+}
+
+function resolveQuoteAttachmentFolder(ownerQuoteId, visibility, division) {
+    const n = Number(ownerQuoteId);
+    const folderKey =
+        Number.isFinite(n) && n < 0 ? `draft_${Math.abs(n)}` : ownerQuoteId;
+    const vis = String(visibility || '').trim();
+    if (vis) {
+        return resolveQuoteUploadDestinationByVisibility(folderKey, vis, division || 'General');
+    }
+    return resolveQuoteUploadDestination(folderKey);
+}
+
+let quoteAttachmentsVisibilitySchemaReady = false;
+async function ensureQuoteAttachmentsVisibilitySchema() {
+    if (quoteAttachmentsVisibilitySchemaReady) return;
+    try {
+        await sql.query`
+            IF NOT EXISTS (
+                SELECT * FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = 'QuoteAttachments' AND COLUMN_NAME = 'Visibility'
+            )
+            BEGIN
+                ALTER TABLE QuoteAttachments ADD Visibility nvarchar(50) DEFAULT 'Public';
+            END
+        `;
+        await sql.query`
+            IF NOT EXISTS (
+                SELECT * FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = 'QuoteAttachments' AND COLUMN_NAME = 'UploadedBy'
+            )
+            BEGIN
+                ALTER TABLE QuoteAttachments ADD UploadedBy nvarchar(255) NULL;
+            END
+        `;
+        await sql.query`
+            IF NOT EXISTS (
+                SELECT * FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_NAME = 'QuoteAttachments' AND COLUMN_NAME = 'Division'
+            )
+            BEGIN
+                ALTER TABLE QuoteAttachments ADD Division nvarchar(255) NULL;
+            END
+        `;
+        await sql.query`
+            UPDATE QuoteAttachments SET Visibility = 'Public' WHERE Visibility IS NULL
+        `;
+        quoteAttachmentsVisibilitySchemaReady = true;
+    } catch (err) {
+        console.warn('[quote-attachments] visibility schema ensure failed:', err?.message || err);
+    }
+}
+
+async function resolveRequestNoForQuoteAttachmentOwner(ownerQuoteId) {
+    const n = Number(ownerQuoteId);
+    if (!Number.isFinite(n) || n === 0) return null;
+    if (n < 0) {
+        const draftId = Math.abs(n);
+        const draftRes = await sql.query`
+            SELECT TOP 1 RequestNo FROM EnquiryQuotesDraft WHERE ID = ${draftId}
+        `;
+        const rn = draftRes.recordset?.[0]?.RequestNo;
+        return rn != null ? String(rn).trim() : null;
+    }
+    const quoteRes = await sql.query`
+        SELECT TOP 1 RequestNo FROM EnquiryQuotes WHERE ID = ${n}
+    `;
+    const rn = quoteRes.recordset?.[0]?.RequestNo;
+    return rn != null ? String(rn).trim() : null;
+}
+
+async function assertQuoteAttachmentAccess(ownerQuoteId, req) {
+    const requestNo =
+        String(req.query.requestNo || req.body?.requestNo || '').trim() ||
+        (await resolveRequestNoForQuoteAttachmentOwner(ownerQuoteId));
+    if (!requestNo) {
+        return {
+            ok: false,
+            status: 400,
+            error: 'Missing enquiry RequestNo for attachment access check',
+        };
+    }
+    const accessCtx = await getAttachmentAccessContext(
+        requestNo,
+        req.query.userEmail || req.body?.userEmail,
+        req.query.userRole || req.body?.userRole
+    );
+    if (!accessCtx.allowed) {
+        return {
+            ok: false,
+            status: 403,
+            error: accessCtx.reason || 'Not allowed to access quote attachments',
+            accessCtx,
+            requestNo,
+        };
+    }
+    return { ok: true, accessCtx, requestNo };
+}
+
+async function promoteDraftAttachmentsToQuote(draftQuoteId, newQuoteId) {
+    const draftOwnerId = draftAttachmentOwnerQuoteId(draftQuoteId);
+    const qId = Number(newQuoteId);
+    if (draftOwnerId == null || !Number.isFinite(qId) || qId <= 0) return;
+
+    await ensureQuoteAttachmentsVisibilitySchema();
+
+    const listed = await sql.query`
+        SELECT ID, FileName, FilePath, Visibility, Division
+        FROM QuoteAttachments
+        WHERE QuoteID = ${draftOwnerId}
+    `;
+    const rows = listed.recordset || [];
+    if (!rows.length) return;
+
+    /* Instant ownership remlink — UI/download keep working via existing FilePath. */
+    await sql.query`
+        UPDATE QuoteAttachments
+        SET QuoteID = ${qId}
+        WHERE QuoteID = ${draftOwnerId}
+    `;
+    console.log(
+        `[promoteDraftAttachments] remapped ${rows.length} row(s) draft ${draftQuoteId} → quote ${qId} (files async)`
+    );
+
+    /* UNC rename/copy must NOT hold the HTTP/ARR slot or freeze the Node event loop. */
+    setImmediate(() => {
+        void (async () => {
+            const fsp = fs.promises;
+            for (const row of rows) {
+                const attId = Number(row.ID);
+                const visibility = String(row.Visibility || 'Public').trim() || 'Public';
+                const division = String(row.Division || 'General').trim() || 'General';
+                const destDir = resolveQuoteAttachmentFolder(qId, visibility, division);
+                try {
+                    await fsp.mkdir(destDir, { recursive: true });
+                } catch (_) {
+                    /* exists */
+                }
+                try {
+                    const oldAbs = absolutePathForFilesystem(row.FilePath);
+                    if (!oldAbs) continue;
+                    try {
+                        await fsp.access(oldAbs);
+                    } catch (_) {
+                        continue;
+                    }
+                    const baseName = path.basename(oldAbs);
+                    const candidate = path.join(destDir, baseName);
+                    let nextPath = oldAbs;
+                    if (path.normalize(oldAbs) !== path.normalize(candidate)) {
+                        try {
+                            await fsp.rename(oldAbs, candidate);
+                            nextPath = absolutePathForFilesystem(candidate);
+                        } catch (_) {
+                            await fsp.copyFile(oldAbs, candidate);
+                            try {
+                                await fsp.unlink(oldAbs);
+                            } catch (__) {
+                                /* keep original */
+                            }
+                            nextPath = absolutePathForFilesystem(candidate);
+                        }
+                        await sql.query`
+                            UPDATE QuoteAttachments
+                            SET FilePath = ${nextPath}
+                            WHERE ID = ${attId}
+                        `;
+                    }
+                } catch (fileErr) {
+                    console.warn(
+                        `[promoteDraftAttachments] async file move failed for ${attId}:`,
+                        fileErr.message || fileErr
+                    );
+                }
+            }
+        })().catch((err) => {
+            console.warn('[promoteDraftAttachments] async batch failed:', err?.message || err);
+        });
+    });
+}
+
+// Quote attachments: Public/Private under Quotes/{Public|Private}/{id}/{Division}
 const quoteAttachmentStorage = multer.diskStorage({
     destination: (req, file, cb) => {
         try {
-            const dest = resolveQuoteUploadDestination(req.params.quoteId);
+            const ownerId =
+                req.params.draftQuoteId != null
+                    ? draftAttachmentOwnerQuoteId(req.params.draftQuoteId)
+                    : req.params.quoteId;
+            const visibility = String(req.query.visibility || 'Public').trim() || 'Public';
+            const division = String(req.query.division || 'General').trim() || 'General';
+            const dest = resolveQuoteAttachmentFolder(ownerId, visibility, division);
             if (!fs.existsSync(dest)) {
                 fs.mkdirSync(dest, { recursive: true });
             }
-            console.log('[quote-attachments] multer destination:', dest);
+            console.log('[quote-attachments] multer destination:', dest, { visibility, division });
             cb(null, dest);
         } catch (err) {
-            console.error('[quote-attachments] mkdir failed:', err && err.message, resolveQuoteUploadDestination(req.params.quoteId));
+            console.error('[quote-attachments] mkdir failed:', err && err.message);
             cb(err);
         }
     },
@@ -393,9 +649,12 @@ const upload = multer({ storage: quoteAttachmentStorage });
  */
 function applyOwnJobAfterDepartmentLookup(currentOwnJob, userDept) {
     const oj = String(currentOwnJob || '').trim();
-    const ud = String(userDept || '').trim();
-    if (!ud) return oj;
-    if (!oj || oj.toLowerCase() === ud.toLowerCase()) return ud;
+    const tokens = parseUserDepartments(userDept);
+    if (!tokens.length) return oj;
+    if (!oj) return tokens[0];
+    const ojLower = oj.toLowerCase();
+    const match = tokens.find((t) => t.toLowerCase() === ojLower);
+    if (match) return match;
     return oj;
 }
 
@@ -407,53 +666,58 @@ function parseMailCsv(raw) {
 }
 
 function departmentMatchesMefRow(department, mefRow) {
-    const dept = String(department || '').trim();
-    if (!dept || !mefRow) return false;
+    if (!mefRow) return false;
     const labels = [mefRow.ItemName, mefRow.DepartmentName]
         .map((s) => String(s || '').trim())
         .filter(Boolean);
-    const deptLower = dept.toLowerCase();
-    for (const lab of labels) {
-        const labLower = lab.toLowerCase();
-        if (deptLower === labLower) return true;
-        if (labLower.includes(deptLower) || deptLower.includes(labLower)) return true;
-        const safe = dept.replace(/%/g, '');
-        if (safe.length > 2 && (lab.includes(safe) || dept.includes(lab))) return true;
-    }
-    return false;
+    if (!labels.length) return false;
+    if (userDepartmentMatchesAny(department, labels)) return true;
+    // Soft includes match per token (legacy fuzzy behaviour)
+    return parseUserDepartments(department).some((tok) => {
+        const deptLower = tok.toLowerCase();
+        if (!deptLower) return false;
+        for (const lab of labels) {
+            const labLower = lab.toLowerCase();
+            if (labLower.includes(deptLower) || deptLower.includes(labLower)) return true;
+        }
+        return false;
+    });
 }
 
 async function resolveUserCompanyName(userDept) {
-    const dept = String(userDept || '').trim();
-    if (!dept) return '';
-    const safeDept = dept.replace(/%/g, '');
-    let companyRes = await sql.query`
-        SELECT TOP 1 CompanyName
-        FROM Master_EnquiryFor
-        WHERE LTRIM(RTRIM(ISNULL(CompanyName, N''))) <> N''
-          AND (
-            LTRIM(RTRIM(ItemName)) = LTRIM(RTRIM(${dept}))
-            OR LTRIM(RTRIM(DepartmentName)) = LTRIM(RTRIM(${dept}))
-          )
-        ORDER BY CASE
-            WHEN LTRIM(RTRIM(ItemName)) = LTRIM(RTRIM(${dept})) THEN 0
-            WHEN LTRIM(RTRIM(DepartmentName)) = LTRIM(RTRIM(${dept})) THEN 1
-            ELSE 2 END
-    `;
-    let companyName = String(companyRes.recordset?.[0]?.CompanyName || '').trim();
-    if (!companyName) {
-        companyRes = await sql.query`
+    const tokens = parseUserDepartments(userDept);
+    if (!tokens.length) return '';
+    for (const dept of tokens) {
+        const safeDept = dept.replace(/%/g, '');
+        let companyRes = await sql.query`
             SELECT TOP 1 CompanyName
             FROM Master_EnquiryFor
             WHERE LTRIM(RTRIM(ISNULL(CompanyName, N''))) <> N''
               AND (
-                LTRIM(RTRIM(ItemName)) LIKE ${'%' + safeDept + '%'}
-                OR LTRIM(RTRIM(DepartmentName)) LIKE ${'%' + safeDept + '%'}
+                LTRIM(RTRIM(ItemName)) = LTRIM(RTRIM(${dept}))
+                OR LTRIM(RTRIM(DepartmentName)) = LTRIM(RTRIM(${dept}))
               )
+            ORDER BY CASE
+                WHEN LTRIM(RTRIM(ItemName)) = LTRIM(RTRIM(${dept})) THEN 0
+                WHEN LTRIM(RTRIM(DepartmentName)) = LTRIM(RTRIM(${dept})) THEN 1
+                ELSE 2 END
         `;
-        companyName = String(companyRes.recordset?.[0]?.CompanyName || '').trim();
+        let companyName = String(companyRes.recordset?.[0]?.CompanyName || '').trim();
+        if (!companyName && safeDept) {
+            companyRes = await sql.query`
+                SELECT TOP 1 CompanyName
+                FROM Master_EnquiryFor
+                WHERE LTRIM(RTRIM(ISNULL(CompanyName, N''))) <> N''
+                  AND (
+                    LTRIM(RTRIM(ItemName)) LIKE ${'%' + safeDept + '%'}
+                    OR LTRIM(RTRIM(DepartmentName)) LIKE ${'%' + safeDept + '%'}
+                  )
+            `;
+            companyName = String(companyRes.recordset?.[0]?.CompanyName || '').trim();
+        }
+        if (companyName) return companyName;
     }
-    return companyName;
+    return '';
 }
 
 async function notifyParentJobQuoteEvent({
@@ -495,9 +759,11 @@ async function notifyParentJobQuoteEvent({
             parseMailCsv(mef.recordset[0].CCMailIds).forEach((e) => recipientEmails.add(e));
         }
         const deptUsers = await sql.query`
-            SELECT EmailId FROM Master_ConcernedSE WHERE LTRIM(RTRIM(ISNULL(Department, N''))) = ${parentJobName}
+            SELECT EmailId, Department FROM Master_ConcernedSE
+            WHERE Status = N'Active' OR Status IS NULL OR LTRIM(RTRIM(ISNULL(Status, N''))) = N''
         `;
         for (const r of deptUsers.recordset || []) {
+            if (!userHasDepartment(r.Department, parentJobName)) continue;
             const em = String(r.EmailId || '').trim().toLowerCase();
             if (em) recipientEmails.add(em);
         }
@@ -1026,7 +1292,7 @@ router.get('/attention-by-department', async (req, res) => {
             return `${p} ${n}`;
         };
         const names = (masterSeRes.recordset || [])
-            .filter((r) => normDeptLabel(r.Department) === target)
+            .filter((r) => userHasDepartment(r.Department, target) || userHasDepartment(r.Department, dept))
             .map((r) => composeName(r.FullName, r.Prefix))
             .filter(Boolean);
         res.json([...new Set(names)].sort((a, b) => a.localeCompare(b)));
@@ -1090,15 +1356,29 @@ router.get('/list/search', async (req, res) => {
         let approvalRaw;
         let accessCtx;
         let ue;
+
+        const runSearchQueries = async (extraSql, includeWorkflow) => {
+            const [pendingResult, quotedResult, approvalResult] = await Promise.all([
+                runPendingQuoteListQuery(sql, userEmail, extraSql, divisionTrim),
+                runQuotedQuoteListQuery(sql, userEmail, extraSql, divisionTrim),
+                includeWorkflow
+                    ? runApprovalWorkflowQuoteListQuery(sql, userEmail, extraSql)
+                    : Promise.resolve({ enquiries: [], accessCtx: null, userEmail }),
+            ]);
+            return {
+                pendingRaw: pendingResult.enquiries || [],
+                quotedRaw: quotedResult.enquiries || [],
+                approvalRaw: approvalResult.enquiries || [],
+                accessCtx: pendingResult.accessCtx,
+                userEmail: pendingResult.userEmail,
+            };
+        };
+
         try {
-            ({ enquiries: pendingRaw, accessCtx, userEmail: ue } = await runPendingQuoteListQuery(
-                sql,
-                userEmail,
+            ({ pendingRaw, quotedRaw, approvalRaw, accessCtx, userEmail: ue } = await runSearchQueries(
                 extra.sql,
-                divisionTrim
+                true
             ));
-            ({ enquiries: quotedRaw } = await runQuotedQuoteListQuery(sql, userEmail, extra.sql, divisionTrim));
-            ({ enquiries: approvalRaw } = await runApprovalWorkflowQuoteListQuery(sql, userEmail, extra.sql));
         } catch (err) {
             if (!isMissingQuoteApprovalStepsTableError(err.message)) {
                 throw err;
@@ -1109,18 +1389,18 @@ router.get('/list/search', async (req, res) => {
             if (!extra.ok) {
                 return res.json([]);
             }
-            ({ enquiries: pendingRaw, accessCtx, userEmail: ue } = await runPendingQuoteListQuery(
-                sql,
-                userEmail,
+            ({ pendingRaw, quotedRaw, approvalRaw, accessCtx, userEmail: ue } = await runSearchQueries(
                 extra.sql,
-                divisionTrim
+                false
             ));
-            ({ enquiries: quotedRaw } = await runQuotedQuoteListQuery(sql, userEmail, extra.sql, divisionTrim));
-            approvalRaw = [];
         }
-        const pendingMapped = await mapQuoteListingRows(sql, pendingRaw || [], ue, accessCtx, divisionTrim);
-        const quotedMapped = await mapQuoteListingRows(sql, quotedRaw || [], ue, accessCtx, divisionTrim);
-        const approvalMapped = await mapQuoteListingRows(sql, approvalRaw || [], ue, accessCtx, '');
+
+        const rawMerged = mergeQuoteListSearchRawRows(pendingRaw, quotedRaw, approvalRaw);
+        const mappedRows = await mapQuoteListingRows(sql, rawMerged, ue, accessCtx, divisionTrim);
+
+        const pendingReqNos = new Set((pendingRaw || []).map((r) => String(r.RequestNo)));
+        const approvalReqNos = new Set((approvalRaw || []).map((r) => String(r.RequestNo)));
+
         const byNo = new Map();
         const quoteRowScore = (row) => {
             if (!row) return 0;
@@ -1152,23 +1432,22 @@ router.get('/list/search', async (req, res) => {
             if (next.QuoteListKind === 'quoted') return next;
             return next;
         };
-        for (const row of pendingMapped) {
+        for (const row of mappedRows) {
             const key = String(row.RequestNo);
-            const next = { ...row, QuoteListKind: 'pending' };
-            byNo.set(key, pickBetter(byNo.get(key), next));
-        }
-        for (const row of quotedMapped) {
-            const key = String(row.RequestNo);
-            const next = { ...row, QuoteListKind: 'quoted' };
-            byNo.set(key, pickBetter(byNo.get(key), next));
-        }
-        for (const row of approvalMapped) {
-            const key = String(row.RequestNo);
+            let kind = 'quoted';
+            if (pendingReqNos.has(key)) kind = 'pending';
             const wfQuoteId = Number(row.ApprovalWorkflowQuoteId ?? row.approvalworkflowquoteid);
             const next = {
                 ...row,
-                QuoteListKind: 'quoted',
-                ListApprovalWorkflowQuoteId: Number.isFinite(wfQuoteId) && wfQuoteId > 0 ? wfQuoteId : null,
+                QuoteListKind: kind,
+                ApprovalWorkflowListAccess:
+                    row.ApprovalWorkflowListAccess ||
+                    approvalReqNos.has(key) ||
+                    Boolean(row.ListApprovalWorkflowQuoteId),
+                ListApprovalWorkflowQuoteId:
+                    Number.isFinite(wfQuoteId) && wfQuoteId > 0
+                        ? wfQuoteId
+                        : row.ListApprovalWorkflowQuoteId ?? null,
             };
             byNo.set(key, pickBetter(byNo.get(key), next));
         }
@@ -1656,26 +1935,28 @@ router.get('/approver-options', async (req, res) => {
         }
 
         if (!mefRows.length && userDept) {
-            const safeDept = userDept.replace(/%/g, '');
-            let ccRes = await sql.query`
-                SELECT TOP 1 CCMailIds
-                FROM Master_EnquiryFor
-                WHERE LTRIM(RTRIM(ItemName)) = LTRIM(RTRIM(${userDept}))
-                   OR LTRIM(RTRIM(DepartmentName)) = LTRIM(RTRIM(${userDept}))
-            `;
-            let ccRaw = String(ccRes.recordset?.[0]?.CCMailIds || '');
-            if (!ccRaw.trim()) {
-                ccRes = await sql.query`
+            for (const deptTok of parseUserDepartments(userDept)) {
+                const safeDept = deptTok.replace(/%/g, '');
+                let ccRes = await sql.query`
                     SELECT TOP 1 CCMailIds
                     FROM Master_EnquiryFor
-                    WHERE LTRIM(RTRIM(ItemName)) LIKE ${'%' + safeDept + '%'}
-                       OR LTRIM(RTRIM(DepartmentName)) LIKE ${'%' + safeDept + '%'}
+                    WHERE LTRIM(RTRIM(ItemName)) = LTRIM(RTRIM(${deptTok}))
+                       OR LTRIM(RTRIM(DepartmentName)) = LTRIM(RTRIM(${deptTok}))
                 `;
-                ccRaw = String(ccRes.recordset?.[0]?.CCMailIds || '');
-            }
-            for (const em of parseMailCsv(ccRaw)) {
-                const norm = normalizeUserEmail(em);
-                if (norm) ccEmails.add(norm);
+                let ccRaw = String(ccRes.recordset?.[0]?.CCMailIds || '');
+                if (!ccRaw.trim() && safeDept) {
+                    ccRes = await sql.query`
+                        SELECT TOP 1 CCMailIds
+                        FROM Master_EnquiryFor
+                        WHERE LTRIM(RTRIM(ItemName)) LIKE ${'%' + safeDept + '%'}
+                           OR LTRIM(RTRIM(DepartmentName)) LIKE ${'%' + safeDept + '%'}
+                    `;
+                    ccRaw = String(ccRes.recordset?.[0]?.CCMailIds || '');
+                }
+                for (const em of parseMailCsv(ccRaw)) {
+                    const norm = normalizeUserEmail(em);
+                    if (norm) ccEmails.add(norm);
+                }
             }
         }
 
@@ -1976,7 +2257,7 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
             // Use REPLACE/STUFF or logic to match both "L1 - Civil Project" and "Civil Project"
             const rawItemsResult = await sql.query`
                 SELECT EF.ID, EF.ParentID, EF.ItemName, EF.LeadJobCode, EF.LeadJobName, MEF.CommonMailIds, MEF.CCMailIds, MEF.DepartmentName,
-                       MEF.DivisionCode, MEF.DepartmentCode, MEF.Phone, MEF.FaxNo, MEF.CompanyName, MEF.Address
+                       MEF.DivisionCode, MEF.DepartmentCode, MEF.Phone, MEF.FaxNo, MEF.CompanyName, MEF.Address, MEF.CompanyLogo
                 FROM EnquiryFor EF
                 LEFT JOIN Master_EnquiryFor MEF ON (
                     EF.ItemName = MEF.ItemName OR 
@@ -2125,7 +2406,7 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
 
             const userRes = await sql.query`SELECT Roles, Department, FullName FROM Master_ConcernedSE WHERE EmailId = ${userEmail}`;
             const userRole = userRes.recordset.length > 0 ? userRes.recordset[0].Roles : '';
-            const userDepartment = userRes.recordset.length > 0 && userRes.recordset[0].Department ? userRes.recordset[0].Department.trim().toLowerCase() : '';
+            const userDepartment = userRes.recordset.length > 0 && userRes.recordset[0].Department ? userRes.recordset[0].Department.trim() : '';
             const userFullName = userRes.recordset.length > 0 && userRes.recordset[0].FullName ? userRes.recordset[0].FullName.trim().toLowerCase() : '';
             const isAdmin = userRole === 'Admin' || userRole === 'Super Admin';
 
@@ -2145,11 +2426,10 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
                 const userScopeItems = rawItems.filter(item => {
                     const mails = [item.CommonMailIds, item.CCMailIds].filter(Boolean).join(',').toLowerCase();
                     const normalizedMails = mails.replace(/@almcg\.com/g, '@almoayyedcg.com');
-                    const itemNameLower = item.ItemName.toLowerCase().trim();
 
                     return normalizedMails.includes(normalizedUser) ||
                         (userPrefix && normalizedMails.split(',').some(m => m.trim().startsWith(userPrefix + '@'))) ||
-                        (userDepartment && itemNameLower.includes(userDepartment)) ||
+                        (userDepartment && anyDepartmentTokenMatchesJobName(userDepartment, item.ItemName)) ||
                         (userFullName && normalizedMails.includes(userFullName));
                 });
 
@@ -2276,6 +2556,11 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
                     resolvedItems.push({
                         ...masterData,
                         ...item,
+                        CompanyLogo: normQuoteLogoPath(masterData.CompanyLogo || item.CompanyLogo || null),
+                        CompanyName: item.CompanyName || masterData.CompanyName,
+                        Address: item.Address || masterData.Address,
+                        Phone: item.Phone || masterData.Phone,
+                        FaxNo: item.FaxNo || masterData.FaxNo,
                         CCMailIds: item.CCMailIds || masterData.CCMailIds,
                         CommonMailIds: item.CommonMailIds || masterData.CommonMailIds,
                         DepartmentName: item.DepartmentName || masterData.DepartmentName
@@ -2298,7 +2583,7 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
                         departmentCode: masterData.DepartmentCode || 'AAC',
                         divisionCode: masterData.DivisionCode || 'GEN',
                         name: masterData.CompanyName || cleanName,
-                        logo: masterData.CompanyLogo ? masterData.CompanyLogo.replace(/\\/g, '/') : null,
+                        logo: normQuoteLogoPath(masterData.CompanyLogo),
                         address: masterData.Address || [masterData.Address1, masterData.Address2].filter(Boolean).join('\n'),
                         phone: masterData.Phone ? String(masterData.Phone).trim() : '',
                         fax: masterData.FaxNo ? String(masterData.FaxNo).trim() : '',
@@ -2347,7 +2632,7 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
                                 departmentCode: masterData.DepartmentCode || 'AAC',
                                 divisionCode: masterData.DivisionCode || 'GEN',
                                 name: masterData.CompanyName || userDept,
-                                logo: masterData.CompanyLogo ? masterData.CompanyLogo.replace(/\\/g, '/') : null,
+                                logo: normQuoteLogoPath(masterData.CompanyLogo),
                                 address: masterData.Address || [masterData.Address1, masterData.Address2].filter(Boolean).join('\n'),
                                 phone: masterData.Phone ? String(masterData.Phone).trim() : '',
                                 fax: masterData.FaxNo ? String(masterData.FaxNo).trim() : '',
@@ -2383,7 +2668,7 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
                 companyDetails.divisionCode = match.DivisionCode || 'AAC';
                 companyDetails.departmentCode = match.DepartmentCode || '';
                 if (match.CompanyName) companyDetails.name = match.CompanyName;
-                if (match.CompanyLogo) companyDetails.logo = match.CompanyLogo.replace(/\\/g, '/');
+                if (match.CompanyLogo) companyDetails.logo = normQuoteLogoPath(match.CompanyLogo);
                 if (match.Address) companyDetails.address = match.Address;
                 if (match.Phone) companyDetails.phone = match.Phone;
                 if (match.FaxNo) companyDetails.fax = match.FaxNo;
@@ -2406,7 +2691,7 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
                 itemName: r.ItemName || '',
                 departmentName: r.DepartmentName || '',
                 companyName: r.CompanyName || '',
-                companyLogo: r.CompanyLogo ? String(r.CompanyLogo).replace(/\\/g, '/') : null,
+                companyLogo: normQuoteLogoPath(r.CompanyLogo),
                 address: r.Address || [r.Address1, r.Address2].filter(Boolean).join('\n') || '',
                 phone: r.Phone ? String(r.Phone).trim() : '',
                 faxNo: r.FaxNo ? String(r.FaxNo).trim() : '',
@@ -2424,7 +2709,7 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
                 ? String(r.Address).trim()
                 : [r.Address1, r.Address2].filter(Boolean).join('\n').trim(),
             companyName: r.CompanyName ? String(r.CompanyName).trim() : '',
-            companyLogo: r.CompanyLogo ? String(r.CompanyLogo).replace(/\\/g, '/') : null,
+            companyLogo: normQuoteLogoPath(r.CompanyLogo),
             departmentName: r.DepartmentName ? String(r.DepartmentName).trim() : '',
             itemName: r.ItemName ? String(r.ItemName).trim() : '',
         });
@@ -2435,7 +2720,7 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
             masterEnquiryForFooterLookup[k] = mefFooterRecordFromRow(r);
         };
         for (const r of resolvedItems || []) {
-            if (!r?.Phone && !r?.FaxNo && !r?.CommonMailIds && !r?.Address && !r?.CompanyName) continue;
+            if (!r?.Phone && !r?.FaxNo && !r?.CommonMailIds && !r?.Address && !r?.CompanyName && !r?.CompanyLogo) continue;
             addMefFooterLookupKey(r.DepartmentName, r);
             addMefFooterLookupKey(r.ItemName, r);
             addMefFooterLookupKey(r.CompanyName, r);
@@ -2500,25 +2785,38 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
                 const sessionMef = sessionMefRes.recordset[0];
                 if (sessionMef) {
                     addMefFooterLookupKey(sessionMef.DepartmentName, sessionMef, true);
+                    addMefFooterLookupKey(effectiveSessionDivision, sessionMef, true);
                     const deptKey = String(sessionMef.DepartmentName || effectiveSessionDivision).trim().toLowerCase();
-                    const hasBrandingRow = enquiryForBrandingRows.some(
+                    const sessionLogo = normQuoteLogoPath(sessionMef.CompanyLogo);
+                    const sessionRow = {
+                        itemName: sessionMef.ItemName || '',
+                        departmentName: sessionMef.DepartmentName || effectiveSessionDivision,
+                        companyName: sessionMef.CompanyName || '',
+                        companyLogo: sessionLogo,
+                        address: sessionMef.Address ? String(sessionMef.Address).trim() : '',
+                        phone: sessionMef.Phone ? String(sessionMef.Phone).trim() : '',
+                        faxNo: sessionMef.FaxNo ? String(sessionMef.FaxNo).trim() : '',
+                        commonMailIds: sessionMef.CommonMailIds
+                            ? String(sessionMef.CommonMailIds).trim()
+                            : '',
+                    };
+                    const existingIdx = enquiryForBrandingRows.findIndex(
                         (row) => String(row.departmentName || '').trim().toLowerCase() === deptKey
                     );
-                    if (!hasBrandingRow) {
-                        enquiryForBrandingRows.push({
-                            itemName: sessionMef.ItemName || '',
-                            departmentName: sessionMef.DepartmentName || effectiveSessionDivision,
-                            companyName: sessionMef.CompanyName || '',
-                            companyLogo: sessionMef.CompanyLogo
-                                ? String(sessionMef.CompanyLogo).replace(/\\/g, '/')
-                                : null,
-                            address: sessionMef.Address ? String(sessionMef.Address).trim() : '',
-                            phone: sessionMef.Phone ? String(sessionMef.Phone).trim() : '',
-                            faxNo: sessionMef.FaxNo ? String(sessionMef.FaxNo).trim() : '',
-                            commonMailIds: sessionMef.CommonMailIds
-                                ? String(sessionMef.CommonMailIds).trim()
-                                : '',
-                        });
+                    if (existingIdx >= 0) {
+                        const prev = enquiryForBrandingRows[existingIdx];
+                        enquiryForBrandingRows[existingIdx] = {
+                            ...prev,
+                            ...sessionRow,
+                            companyLogo: sessionLogo || prev.companyLogo || null,
+                            companyName: sessionRow.companyName || prev.companyName || '',
+                            address: sessionRow.address || prev.address || '',
+                            phone: sessionRow.phone || prev.phone || '',
+                            faxNo: sessionRow.faxNo || prev.faxNo || '',
+                            commonMailIds: sessionRow.commonMailIds || prev.commonMailIds || '',
+                        };
+                    } else {
+                        enquiryForBrandingRows.push(sessionRow);
                     }
                 }
             } catch (sessionMefErr) {
@@ -3260,11 +3558,112 @@ function ownJobsMatchForDraft(dbOwnJob, queryOwnJob) {
     return dbNorm.includes(qNorm) || qNorm.includes(dbNorm);
 }
 
+/**
+ * QuoteNo is preset per Enquiry No + Lead Job Name + Customer Name.
+ * Returns the canonical (earliest) QuoteNo for that tuple and its max RevisionNo, or null if none.
+ */
+async function findExistingQuoteSeriesForTuple(requestNo, leadJob, toName) {
+    const rn = String(requestNo || '').trim();
+    const tn = String(toName || '').trim();
+    if (!rn || !tn) return null;
+
+    const result = await sql.query`
+        SELECT ID, QuoteNo, RevisionNo, QuoteNumber, LeadJob, ToName, CreatedAt
+        FROM EnquiryQuotes
+        WHERE LTRIM(RTRIM(ISNULL(CAST(RequestNo AS NVARCHAR(50)), ''))) = LTRIM(RTRIM(${rn}))
+          AND LOWER(LTRIM(RTRIM(ISNULL(ToName, N'')))) = LOWER(LTRIM(RTRIM(${tn})))
+        ORDER BY
+            CASE WHEN CreatedAt IS NULL THEN 1 ELSE 0 END,
+            CreatedAt ASC,
+            ID ASC
+    `;
+    let rows = result.recordset || [];
+    if (!rows.length) return null;
+
+    const leadNorm = normalizeLeadJobNameForDraftTuple(leadJob);
+    if (leadNorm) {
+        rows = rows.filter((r) => leadJobsMatchForDraft(r.LeadJob, leadNorm));
+        if (!rows.length) return null;
+    }
+
+    const quoteNos = [
+        ...new Set(
+            rows
+                .map((r) => Number(r.QuoteNo))
+                .filter((n) => Number.isFinite(n) && n > 0)
+        ),
+    ].sort((a, b) => a - b);
+    if (!quoteNos.length) return null;
+
+    const quoteNo = quoteNos[0];
+    const seriesRows = rows.filter((r) => Number(r.QuoteNo) === quoteNo);
+    const maxRevisionNo = seriesRows.reduce((max, r) => {
+        const rev = Number(r.RevisionNo);
+        return Number.isFinite(rev) && rev > max ? rev : max;
+    }, -1);
+
+    return {
+        quoteNo,
+        maxRevisionNo,
+        allQuoteNos: quoteNos,
+        rowCount: rows.length,
+    };
+}
+
+/**
+ * Allocate QuoteNo + RevisionNo for EnquiryQuotes.
+ * - Same RequestNo + LeadJob + ToName → reuse QuoteNo, next R#
+ * - New combination → next global QuoteNo at R0
+ * - draftQuoteNo > 0 is a hint (revision draft) but tuple series wins when present
+ */
+async function allocateQuoteNoAndRevision({ requestNo, leadJob, toName, draftQuoteNo = 0 }) {
+    const series = await findExistingQuoteSeriesForTuple(requestNo, leadJob, toName);
+    const hinted = Number(draftQuoteNo);
+    const hasHint = Number.isFinite(hinted) && hinted > 0;
+
+    if (series) {
+        // Prefer hinted QuoteNo only when it already belongs to this tuple's series set.
+        const quoteNo =
+            hasHint && series.allQuoteNos.includes(hinted) ? hinted : series.quoteNo;
+        const maxRevRes = await sql.query`
+            SELECT ISNULL(MAX(RevisionNo), -1) AS MaxRevisionNo
+            FROM EnquiryQuotes
+            WHERE QuoteNo = ${quoteNo}
+        `;
+        const maxRev = Number(maxRevRes.recordset?.[0]?.MaxRevisionNo);
+        let revisionNo = (Number.isFinite(maxRev) ? maxRev : -1) + 1;
+        if (revisionNo < 0) revisionNo = 0;
+        return { quoteNo, revisionNo, reused: true };
+    }
+
+    if (hasHint) {
+        const maxRevRes = await sql.query`
+            SELECT ISNULL(MAX(RevisionNo), -1) AS MaxRevisionNo
+            FROM EnquiryQuotes
+            WHERE QuoteNo = ${hinted}
+        `;
+        const maxRev = Number(maxRevRes.recordset?.[0]?.MaxRevisionNo);
+        if (Number.isFinite(maxRev) && maxRev >= 0) {
+            return { quoteNo: hinted, revisionNo: maxRev + 1, reused: true };
+        }
+        return { quoteNo: hinted, revisionNo: 0, reused: true };
+    }
+
+    const existingQuotesResult = await sql.query`
+        SELECT ISNULL(MAX(QuoteNo), 0) AS MaxQuoteNo
+        FROM EnquiryQuotes
+    `;
+    const quoteNo = (Number(existingQuotesResult.recordset[0].MaxQuoteNo) || 0) + 1;
+    return { quoteNo, revisionNo: 0, reused: false };
+}
+
 async function findQuoteDraftByTuple(requestNo, leadJob, toName, ownJob = '', options = {}) {
     const leadJobNorm = normalizeLeadJobNameForDraftTuple(leadJob);
     const ownJobNorm = normalizeDraftTupleText(ownJob);
     const sessionDivision = normalizeDraftTupleText(options.sessionDivision || '');
     const useDepartmentForOwnJob = !!options.useDepartmentForOwnJob;
+    // Active collaborative / revision workspace only — never reuse Promoted history rows.
+    const includePromoted = options.includePromoted === true;
     const result = await sql.query`
         SELECT TOP 40 *,
                CONVERT(varchar(10), CAST(QuoteDate AS DATE), 23) AS QuoteDateYmd
@@ -3275,6 +3674,11 @@ async function findQuoteDraftByTuple(requestNo, leadJob, toName, ownJob = '', op
     `;
     let rows = result.recordset || [];
     if (!rows.length) return null;
+
+    if (!includePromoted) {
+        rows = rows.filter((r) => String(r.Status || '').trim().toLowerCase() !== 'promoted');
+        if (!rows.length) return null;
+    }
 
     if (leadJobNorm) {
         rows = rows.filter((r) => leadJobsMatchForDraft(r.LeadJob, leadJobNorm));
@@ -3420,6 +3824,9 @@ function parseQuoteDraftBody(body) {
         approvalWorkflowJson,
         reasonForRevision = '',
         requestNo,
+        quoteNo = null,
+        revisionNo = null,
+        sourceQuoteNo = null,
     } = body;
 
     const leadJob = normalizeLeadJobNameForDraftTuple(leadJobRaw);
@@ -3487,6 +3894,15 @@ function parseQuoteDraftBody(body) {
         toAttention,
         leadJob,
         reasonForRevision: String(reasonForRevision || '').trim(),
+        // QuoteNo > 0 marks a revision draft of an existing quote series (promotes to next R#).
+        quoteNo: (() => {
+            const n = Number(quoteNo ?? sourceQuoteNo);
+            return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+        })(),
+        revisionNo: (() => {
+            const n = Number(revisionNo);
+            return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+        })(),
     };
 }
 
@@ -3550,6 +3966,19 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
             return res.status(400).json({ error: 'Request number is required' });
         }
 
+        // If this enquiry+lead+customer already has a QuoteNo, bind the draft to that series
+        // so final approval creates R1/R2… instead of a second R0 with a new QuoteNo.
+        if (!(fields.quoteNo > 0)) {
+            const series = await findExistingQuoteSeriesForTuple(
+                fields.requestNo,
+                fields.leadJob || '',
+                fields.toName || ''
+            );
+            if (series?.quoteNo > 0) {
+                fields.quoteNo = series.quoteNo;
+            }
+        }
+
         const sessionDivision = String(
             body.sessionDivision || body.divisionScope || body.ownJob || ''
         ).trim();
@@ -3563,14 +3992,43 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
 
         let existingRow = null;
         let existingId = draftId;
+        const forceNewDraft = body.forceNewDraft === true || body.forceNewDraft === 1 || body.forceNewDraft === '1';
+
         if (existingId) {
             const byId = await sql.query`
-                SELECT TOP 1 ID, PreparedByEmail, RequestNo, LeadJob, ToName
+                SELECT TOP 1 ID, PreparedByEmail, RequestNo, LeadJob, ToName, Status, QuoteNo
                 FROM EnquiryQuotesDraft WHERE ID = ${existingId}
             `;
             existingRow = byId.recordset?.[0] || null;
+            // Never overwrite a Promoted history row — start a fresh Draft for the next cycle.
+            if (existingRow && String(existingRow.Status || '').trim().toLowerCase() === 'promoted') {
+                existingId = null;
+                existingRow = null;
+            }
         }
-        if (!existingId) {
+
+        // + Revision: reuse an active Draft for the same QuoteNo if one exists; otherwise INSERT.
+        // Never fall back to a blank / other-series Draft or a Promoted row.
+        if (forceNewDraft) {
+            existingId = null;
+            existingRow = null;
+            if (fields.quoteNo > 0) {
+                const ownJobForTuple = String(identity.effectiveOwnJob || body.ownJob || '').trim();
+                const useDepartmentForOwnJob =
+                    !ownJobForTuple && !String(sessionDivision || '').trim();
+                const activeRev = await findQuoteDraftByTuple(
+                    fields.requestNo,
+                    fields.leadJob || '',
+                    fields.toName || '',
+                    ownJobForTuple || sessionDivision,
+                    { useDepartmentForOwnJob, sessionDivision }
+                );
+                if (activeRev && Number(activeRev.QuoteNo) === fields.quoteNo) {
+                    existingId = activeRev.ID;
+                    existingRow = activeRev;
+                }
+            }
+        } else if (!existingId) {
             const ownJobForTuple = String(identity.effectiveOwnJob || body.ownJob || '').trim();
             const useDepartmentForOwnJob =
                 !ownJobForTuple && !String(sessionDivision || '').trim();
@@ -3584,6 +4042,19 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
             if (existingRow?.ID != null) {
                 existingId = existingRow.ID;
             }
+        }
+
+        // Revision of an existing QuoteNo: if the active Draft is for a different series,
+        // insert a dedicated revision draft instead of mixing QuoteNo into an unrelated row.
+        if (
+            existingId &&
+            fields.quoteNo > 0 &&
+            existingRow &&
+            Number(existingRow.QuoteNo || 0) > 0 &&
+            Number(existingRow.QuoteNo) !== fields.quoteNo
+        ) {
+            existingId = null;
+            existingRow = null;
         }
 
         const allowed = await userCanCollaborateOnQuoteDraft(userEmail, fields.requestNo, {
@@ -3607,9 +4078,20 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
         fields.totalAmount = resolvedDraftTotal;
 
         if (existingId) {
+            // Never wipe a revision-source QuoteNo with 0 from a partial client payload.
+            const existingQnRes = await sql.query`
+                SELECT QuoteNo, RevisionNo FROM EnquiryQuotesDraft WHERE ID = ${existingId}
+            `;
+            const existingQn = Number(existingQnRes.recordset?.[0]?.QuoteNo) || 0;
+            const existingRn = Number(existingQnRes.recordset?.[0]?.RevisionNo) || 0;
+            const persistQuoteNo = fields.quoteNo > 0 ? fields.quoteNo : existingQn;
+            const persistRevisionNo = fields.revisionNo > 0 ? fields.revisionNo : existingRn;
+
             await sql.query`
                 UPDATE EnquiryQuotesDraft SET
                     QuoteNumber = ${identity.quoteNumber},
+                    QuoteNo = ${persistQuoteNo},
+                    RevisionNo = ${persistRevisionNo},
                     ValidityDays = ${fields.validityDays},
                     PreparedBy = ${fields.preparedBy},
                     PreparedByEmail = ${fields.preparedByEmail},
@@ -3660,7 +4142,15 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
                     UpdatedAt = ${now}
                 WHERE ID = ${existingId}
             `;
-            return res.json({ success: true, id: existingId, draftId: existingId, quoteNumber: identity.quoteNumber, updated: true });
+            return res.json({
+                success: true,
+                id: existingId,
+                draftId: existingId,
+                quoteNumber: identity.quoteNumber,
+                quoteNo: persistQuoteNo,
+                revisionNo: persistRevisionNo,
+                updated: true,
+            });
         }
 
         const insertResult = await sql.query`
@@ -3675,9 +4165,9 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
                 QuoteDate, CustomerReference, YourRef, QuoteType, Subject, Signatory, SignatoryDesignation, CoSignatory, CoSignatoryDesignation,
                 ToName, ToAddress, ToPhone, ToEmail, ToFax, ToAttention, LeadJob, OwnJob, ReasonForRevision, CreatedAt, UpdatedAt
             )
-            OUTPUT INSERTED.ID, INSERTED.QuoteNumber
+            OUTPUT INSERTED.ID, INSERTED.QuoteNumber, INSERTED.QuoteNo, INSERTED.RevisionNo
             VALUES (
-                ${fields.requestNo}, ${identity.quoteNumber}, 0, 0, ${fields.validityDays},
+                ${fields.requestNo}, ${identity.quoteNumber}, ${fields.quoteNo || 0}, ${fields.revisionNo || 0}, ${fields.validityDays},
                 ${fields.preparedBy}, ${fields.preparedByEmail},
                 ${fields.showScopeOfWork ? 1 : 0}, ${fields.showBasisOfOffer ? 1 : 0}, ${fields.showExclusions ? 1 : 0}, ${fields.showPricingTerms ? 1 : 0},
                 ${fields.showSchedule ? 1 : 0}, ${fields.showWarranty ? 1 : 0}, ${fields.showResponsibilityMatrix ? 1 : 0}, ${fields.showTermsConditions ? 1 : 0}, ${fields.showAcceptance ? 1 : 0}, ${fields.showBillOfQuantity ? 1 : 0},
@@ -3697,6 +4187,8 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
             id: row.ID,
             draftId: row.ID,
             quoteNumber: row.QuoteNumber,
+            quoteNo: row.QuoteNo,
+            revisionNo: row.RevisionNo,
             updated: false,
         });
     } catch (err) {
@@ -3960,13 +4452,22 @@ router.delete('/form-drafts/:id', async (req, res) => {
 });
 
 // GET /api/quotes/list/pending-approvals/count — badge count for current approver
+const pendingApprovalCountCache = new Map(); // email → { count, at }
+const PENDING_COUNT_CACHE_MS = 15000;
+
 router.get('/list/pending-approvals/count', async (req, res) => {
     try {
         const userEmail = normalizeUserEmail(req.query.userEmail);
         if (!userEmail) {
             return res.json({ count: 0 });
         }
+        const key = String(userEmail).toLowerCase();
+        const hit = pendingApprovalCountCache.get(key);
+        if (hit && Date.now() - hit.at < PENDING_COUNT_CACHE_MS) {
+            return res.json({ count: hit.count, cached: true });
+        }
         const count = await countPendingApprovalsForUser(userEmail);
+        pendingApprovalCountCache.set(key, { count, at: Date.now() });
         res.json({ count });
     } catch (err) {
         if (isMissingQuoteApprovalStepsTableError(err.message)) {
@@ -3976,6 +4477,10 @@ router.get('/list/pending-approvals/count', async (req, res) => {
         res.status(500).json({ error: 'Failed to count pending approvals', details: err.message });
     }
 });
+
+function clearPendingApprovalCountCache() {
+    pendingApprovalCountCache.clear();
+}
 
 // GET /api/quotes/list/pending-approvals — quotes awaiting this user's approval
 router.get('/list/pending-approvals', async (req, res) => {
@@ -4040,6 +4545,32 @@ router.get('/list/rejected-by-me', async (req, res) => {
         }
         console.error('[quotes] rejected-by-me list:', err);
         res.status(500).json({ error: 'Failed to fetch rejected quotes', details: err.message });
+    }
+});
+
+// GET /api/quotes/list/corrections-requested-by-me — quotes where this user requested a correction
+router.get('/list/corrections-requested-by-me', async (req, res) => {
+    try {
+        const userEmail = normalizeUserEmail(req.query.userEmail);
+        if (!userEmail) {
+            return res.json([]);
+        }
+        const rows = await fetchCorrectionsRequestedByUser(userEmail, {
+            q: req.query.q,
+            dateFrom: req.query.dateFrom,
+            dateTo: req.query.dateTo,
+            division: String(req.query.division || '').trim(),
+        });
+        res.json(rows);
+    } catch (err) {
+        if (
+            isMissingQuoteApprovalStepsTableError(err.message) ||
+            isMissingQuoteApprovalCorrectionsTableError(err.message)
+        ) {
+            return res.json([]);
+        }
+        console.error('[quotes] corrections-requested-by-me list:', err);
+        res.status(500).json({ error: 'Failed to fetch correction requests', details: err.message });
     }
 });
 
@@ -4257,22 +4788,31 @@ router.post('/send-approval-request', async (req, res) => {
 
         let steps = [];
         if (req.body?.steps && (Array.isArray(req.body.steps) || typeof req.body.steps === 'object')) {
-            steps = parseApprovalWorkflowJson(req.body.steps);
+            steps = coerceFinalApproverFlags(parseApprovalWorkflowJson(req.body.steps));
         }
         if (!steps.length) {
             return res.status(400).json({ error: 'Approval workflow path is required' });
         }
+        try {
+            assertFinalApproverRules(steps);
+        } catch (e) {
+            return res.status(400).json({ error: e.message || 'Invalid approval hierarchy' });
+        }
 
         const savedQuoteId = quoteId != null && Number.isFinite(Number(quoteId)) ? Number(quoteId) : null;
-        if (!savedQuoteId) {
+        const savedDraftId =
+            draftQuoteId != null && Number.isFinite(Number(draftQuoteId)) ? Number(draftQuoteId) : null;
+
+        // Prefer draft: quote number / EnquiryQuotes row are created only on final approval.
+        if (!savedDraftId && !savedQuoteId) {
             return res.status(400).json({
-                error: 'A saved quote revision is required before sending for approval.',
+                error: 'Save the quote as a draft before sending for approval.',
             });
         }
 
         const persistCtx = await resolveApprovalPersistContext({
-            quoteId: savedQuoteId,
-            draftQuoteId: null,
+            quoteId: savedDraftId ? null : savedQuoteId,
+            draftQuoteId: savedDraftId || null,
             requestNo: rn,
             customerName: String(customerName || '').trim(),
             leadJobName: String(leadJobName || leadJob || '').trim(),
@@ -4282,6 +4822,12 @@ router.post('/send-approval-request', async (req, res) => {
             revisionNo,
         });
 
+        if (!persistCtx.draftQuoteId && !persistCtx.quoteId) {
+            return res.status(400).json({
+                error: 'Save the quote as a draft before sending for approval.',
+            });
+        }
+
         const replaceResult = await replaceApprovalSteps({
             quoteId: persistCtx.quoteId,
             draftQuoteId: persistCtx.draftQuoteId,
@@ -4290,6 +4836,26 @@ router.post('/send-approval-request', async (req, res) => {
             createdByEmail: normalizedEmail,
         });
         const savedSteps = replaceResult?.steps || replaceResult;
+
+        // Mirror workflow JSON onto the draft / quote row
+        try {
+            const jsonStr = serializeApprovalWorkflowJson(savedSteps);
+            if (persistCtx.draftQuoteId) {
+                await sql.query`
+                    UPDATE EnquiryQuotesDraft
+                    SET ApprovalWorkflowJson = ${jsonStr}, UpdatedAt = ${new Date()}
+                    WHERE ID = ${persistCtx.draftQuoteId}
+                `;
+            } else if (persistCtx.quoteId) {
+                await sql.query`
+                    UPDATE EnquiryQuotes
+                    SET ApprovalWorkflowJson = ${jsonStr}, UpdatedAt = ${new Date()}
+                    WHERE ID = ${persistCtx.quoteId}
+                `;
+            }
+        } catch (mirrorErr) {
+            console.warn('[send-approval-request] workflow JSON mirror:', mirrorErr.message);
+        }
 
         const pendingApprovers = [...savedSteps]
             .sort((a, b) => a.sequence - b.sequence)
@@ -4337,9 +4903,6 @@ router.post('/send-approval-request', async (req, res) => {
             console.warn('[send-approval-request] in-app notification:', inAppErr.message);
         }
 
-        // Steps are already persisted, so approvers see the quote in Pending immediately.
-        // Respond now and deliver emails in the background — the corp SMTP relay (port 25)
-        // can take tens of seconds per message and must not block the sender's UI.
         res.json({
             success: true,
             approvalRequestSent: true,
@@ -4390,6 +4953,193 @@ router.post('/send-approval-request', async (req, res) => {
     }
 });
 
+/**
+ * Promote an approved draft into EnquiryQuotes and allocate a real quote number.
+ * Called only when the final approver approves.
+ */
+async function promoteDraftToEnquiryQuote(draftQuoteId, nextSteps = []) {
+    const draftId = Number(draftQuoteId);
+    if (!Number.isFinite(draftId) || draftId <= 0) {
+        throw new Error('Invalid draftQuoteId');
+    }
+
+    const draftRes = await sql.query`
+        SELECT * FROM EnquiryQuotesDraft WHERE ID = ${draftId}
+    `;
+    const draft = draftRes.recordset?.[0];
+    if (!draft) throw new Error('Quote draft not found');
+
+    // Already promoted?
+    const linked = await sql.query`
+        SELECT TOP 1 QuoteId, QuoteNumber, QuoteNo, RevisionNo
+        FROM QuoteApprovalSteps
+        WHERE DraftQuoteId = ${draftId}
+          AND QuoteId IS NOT NULL
+          AND QuoteId > 0
+        ORDER BY ID DESC
+    `;
+    if (linked.recordset?.[0]?.QuoteId) {
+        const existingQuoteId = Number(linked.recordset[0].QuoteId);
+        try {
+            await promoteDraftAttachmentsToQuote(draftId, existingQuoteId);
+        } catch (attErr) {
+            console.warn('[promoteDraft] attachment remlink (already promoted):', attErr.message || attErr);
+        }
+        return {
+            quoteId: existingQuoteId,
+            quoteNumber: String(linked.recordset[0].QuoteNumber || '').trim(),
+            quoteNo: Number(linked.recordset[0].QuoteNo) || null,
+            revisionNo: Number(linked.recordset[0].RevisionNo) || 0,
+            alreadyPromoted: true,
+        };
+    }
+
+    const requestNo = String(draft.RequestNo || '').trim();
+    if (!requestNo) throw new Error('Draft is missing request number');
+
+    const identity = await resolveQuoteDraftIdentity({
+        requestNo,
+        preparedByEmail: draft.PreparedByEmail || '',
+        ownJob: draft.OwnJob || '',
+        leadJobPrefix: draft.LeadJob || '',
+        divisionCode: '',
+        departmentCode: '',
+    });
+
+    // QuoteNo is unique/preset for Enquiry + Lead Job + Customer; only RevisionNo advances.
+    const allocated = await allocateQuoteNoAndRevision({
+        requestNo,
+        leadJob: draft.LeadJob || '',
+        toName: draft.ToName || '',
+        draftQuoteNo: Number(draft.QuoteNo) || 0,
+    });
+    const quoteNo = allocated.quoteNo;
+    const revisionNo = allocated.revisionNo;
+    const quoteNumber = `${identity.dept}/${identity.division}/${identity.requestRef}/${quoteNo}-R${revisionNo}`;
+    console.log(
+        `[promoteDraft] tuple RequestNo=${requestNo} LeadJob=${draft.LeadJob || ''} ToName=${draft.ToName || ''} → QuoteNo=${quoteNo} R${revisionNo} (reused=${allocated.reused})`
+    );
+
+    const totalAmount = Number(draft.TotalAmount);
+    if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
+        throw new Error(
+            'Ownjob base price must be greater than zero. Cannot finalize quote until the first-tab ownjob base price is priced.'
+        );
+    }
+
+    const approvalWorkflowJsonStr = serializeApprovalWorkflowJson(nextSteps);
+    const now = new Date();
+    const reasonForRevisionStr = String(draft.ReasonForRevision || '').trim();
+
+    const result = await sql.query`
+        INSERT INTO EnquiryQuotes (
+            RequestNo, QuoteNumber, QuoteNo, RevisionNo, ValidityDays,
+            PreparedBy, PreparedByEmail,
+            ShowScopeOfWork, ShowBasisOfOffer, ShowExclusions, ShowPricingTerms,
+            ShowSchedule, ShowWarranty, ShowResponsibilityMatrix, ShowTermsConditions, ShowAcceptance, ShowBillOfQuantity,
+            ScopeOfWork, BasisOfOffer, Exclusions, PricingTerms,
+            Schedule, Warranty, ResponsibilityMatrix, TermsConditions, Acceptance, BillOfQuantity,
+            TotalAmount, Status, CustomClauses, ClauseOrder, DigitalSignaturesJson, ApprovalWorkflowJson,
+            QuoteDate, CustomerReference, YourRef, QuoteType, Subject, Signatory, SignatoryDesignation, CoSignatory, CoSignatoryDesignation,
+            ToName, ToAddress, ToPhone, ToEmail, ToFax, ToAttention, LeadJob, OwnJob, ReasonForRevision, CreatedAt, UpdatedAt
+        )
+        OUTPUT INSERTED.ID, INSERTED.QuoteNumber
+        VALUES (
+            ${requestNo}, ${quoteNumber}, ${quoteNo}, ${revisionNo}, ${draft.ValidityDays ?? 30},
+            ${draft.PreparedBy || ''}, ${draft.PreparedByEmail || ''},
+            ${draft.ShowScopeOfWork ? 1 : 0}, ${draft.ShowBasisOfOffer ? 1 : 0}, ${draft.ShowExclusions ? 1 : 0}, ${draft.ShowPricingTerms ? 1 : 0},
+            ${draft.ShowSchedule ? 1 : 0}, ${draft.ShowWarranty ? 1 : 0}, ${draft.ShowResponsibilityMatrix ? 1 : 0}, ${draft.ShowTermsConditions ? 1 : 0}, ${draft.ShowAcceptance ? 1 : 0}, ${draft.ShowBillOfQuantity ? 1 : 0},
+            ${draft.ScopeOfWork || ''}, ${draft.BasisOfOffer || ''}, ${draft.Exclusions || ''}, ${draft.PricingTerms || ''},
+            ${draft.Schedule || ''}, ${draft.Warranty || ''}, ${draft.ResponsibilityMatrix || ''}, ${draft.TermsConditions || ''}, ${draft.Acceptance || ''}, ${draft.BillOfQuantity || ''},
+            ${totalAmount}, N'Approved', ${draft.CustomClauses || null}, ${draft.ClauseOrder || null},
+            ${draft.DigitalSignaturesJson || null}, ${approvalWorkflowJsonStr},
+            ${draft.QuoteDate || null}, ${draft.CustomerReference || ''}, ${draft.YourRef || draft.CustomerReference || ''},
+            ${draft.QuoteType || ''}, ${draft.Subject || ''},
+            ${draft.Signatory || ''}, ${draft.SignatoryDesignation || ''}, ${draft.CoSignatory || ''}, ${draft.CoSignatoryDesignation || ''},
+            ${draft.ToName || ''}, ${draft.ToAddress || ''}, ${draft.ToPhone || ''}, ${draft.ToEmail || ''},
+            ${draft.ToFax || ''}, ${draft.ToAttention || ''},
+            ${draft.LeadJob || ''}, ${identity.effectiveOwnJob || draft.OwnJob || ''},
+            ${reasonForRevisionStr || null}, ${now}, ${now}
+        )
+    `;
+
+    const newQuoteId = result.recordset[0].ID;
+    const newQuoteNumber = result.recordset[0].QuoteNumber;
+
+    await linkDraftStepsToQuote(draftId, newQuoteId, {
+        quoteNumber: newQuoteNumber,
+        quoteNo,
+        revisionNo,
+        requestNo,
+        leadJobName: draft.LeadJob || '',
+        ownJob: identity.effectiveOwnJob || draft.OwnJob || '',
+        customerName: draft.ToName || '',
+    });
+
+    try {
+        await promoteDraftAttachmentsToQuote(draftId, newQuoteId);
+    } catch (attErr) {
+        console.warn('[promoteDraft] attachment remlink:', attErr.message || attErr);
+    }
+
+    await sql.query`
+        UPDATE EnquiryQuotes
+        SET ApprovalWorkflowJson = ${approvalWorkflowJsonStr}, UpdatedAt = ${now}
+        WHERE ID = ${newQuoteId}
+    `;
+
+    await sql.query`
+        UPDATE EnquiryQuotesDraft
+        SET Status = N'Promoted',
+            QuoteNumber = ${newQuoteNumber},
+            QuoteNo = ${quoteNo},
+            RevisionNo = ${revisionNo},
+            ApprovalWorkflowJson = ${approvalWorkflowJsonStr},
+            UpdatedAt = ${now}
+        WHERE ID = ${draftId}
+    `;
+
+    await sql.query`
+        UPDATE EnquiryMaster
+        SET Status = 'Quote'
+        WHERE RequestNo = ${requestNo}
+          AND (Status IS NULL OR Status IN ('Enquiry', 'Open', 'Pricing', 'Pending'))
+    `;
+
+    try {
+        await notifyParentJobQuoteEvent({
+            requestNo,
+            ownJobName: identity.effectiveOwnJob || draft.OwnJob || '',
+            quoteId: newQuoteId,
+            quoteNumber: newQuoteNumber,
+            eventType: 'Subjob Quote Creation',
+            triggerUserName: draft.PreparedBy || '',
+            triggerUserEmail: draft.PreparedByEmail || '',
+        });
+    } catch (nErr) {
+        console.warn('[promoteDraft] parent notify:', nErr.message);
+    }
+
+    try {
+        await clearPricingRevisionRequiredForQuoteTuple({
+            requestNo,
+            ownJob: identity.effectiveOwnJob || draft.OwnJob || '',
+            leadJob: draft.LeadJob || '',
+            customerName: draft.ToName || '',
+        });
+    } catch (clrErr) {
+        console.warn('[promoteDraft] clear RevisionRequired:', clrErr.message || clrErr);
+    }
+
+    return {
+        quoteId: newQuoteId,
+        quoteNumber: newQuoteNumber,
+        quoteNo,
+        revisionNo,
+        alreadyPromoted: false,
+    };
+}
+
 // POST /api/quotes/draft-approval-action — record approval/rejection on a quote draft
 router.post('/draft-approval-action', async (req, res) => {
     try {
@@ -4415,6 +5165,78 @@ router.post('/draft-approval-action', async (req, res) => {
         const allowed = await userHasActionableDraftApprovalStep(draftId, normalizedEmail);
         if (!allowed) {
             return res.status(403).json({ error: 'This quote is not awaiting your approval' });
+        }
+
+        // After final approval the draft is promoted — act on the linked EnquiryQuotes row.
+        const linkedQuoteId = await resolveLinkedQuoteIdFromDraft(draftId);
+        if (linkedQuoteId) {
+            const userResLinked = await sql.query`
+                SELECT TOP 1 FullName, Designation, EmailId, DigitalSignaturesJson
+                FROM Master_ConcernedSE
+                WHERE LOWER(LTRIM(RTRIM(EmailId))) = ${normalizedEmail}
+            `;
+            const userRowLinked = userResLinked.recordset?.[0] || {};
+            let sigPayloadLinked = digitalSignatureJson;
+            if (!sigPayloadLinked && userRowLinked.DigitalSignaturesJson) {
+                try {
+                    const parsed = JSON.parse(userRowLinked.DigitalSignaturesJson);
+                    const defaultId = parsed?.defaultSignatureId;
+                    const hit = Array.isArray(parsed?.signatures)
+                        ? parsed.signatures.find((s) => s.id === defaultId) || parsed.signatures[0]
+                        : null;
+                    if (hit) sigPayloadLinked = hit;
+                } catch {
+                    sigPayloadLinked = null;
+                }
+            }
+            const actorLinked = {
+                email: normalizedEmail,
+                name: String(userRowLinked.FullName || '').trim(),
+                designation: String(userRowLinked.Designation || '').trim(),
+                comments: String(comments || '').trim(),
+            };
+            let nextStepsLinked;
+            try {
+                nextStepsLinked = await recordQuoteApprovalAction(
+                    linkedQuoteId,
+                    stepSequence,
+                    actionNorm,
+                    actorLinked,
+                    sigPayloadLinked
+                );
+            } catch (e) {
+                return res.status(400).json({ error: e.message || 'Invalid approval action' });
+            }
+            const quoteMetaRes = await sql.query`
+                SELECT RequestNo, OwnJob, ToName, Subject, QuoteNumber
+                FROM EnquiryQuotes
+                WHERE ID = ${linkedQuoteId}
+            `;
+            const quoteMeta = quoteMetaRes.recordset?.[0] || {};
+            let notification = null;
+            try {
+                notifyAfterApprovalActionInBackground({
+                    nextSteps: nextStepsLinked,
+                    action: actionNorm,
+                    stepSequence,
+                    requestNo: String(quoteMeta.RequestNo || '').trim(),
+                    customerName: String(quoteMeta.ToName || '').trim(),
+                    subject: String(quoteMeta.Subject || '').trim(),
+                    ownJob: String(quoteMeta.OwnJob || '').trim(),
+                    quoteId: linkedQuoteId,
+                    draftQuoteId: draftId,
+                });
+                notification = { queued: true };
+            } catch (notifyErr) {
+                console.warn('[draft-approval-action] notify (linked quote):', notifyErr.message || notifyErr);
+            }
+            // Same shape as POST /:id/approval-action — do not set quoteFinalized (already promoted).
+            clearPendingApprovalCountCache();
+            return res.json({
+                success: true,
+                steps: nextStepsLinked,
+                notification,
+            });
         }
 
         const draftMetaRes = await sql.query`
@@ -4464,22 +5286,54 @@ router.post('/draft-approval-action', async (req, res) => {
             return res.status(400).json({ error: e.message || 'Invalid approval action' });
         }
 
+        let promoted = null;
+        const actedStep = (nextSteps || []).find((s) => Number(s.sequence) === Number(stepSequence));
+        const finalJustApproved =
+            actionNorm === 'approved' &&
+            isFinalApproverApproved(nextSteps) &&
+            !!actedStep?.isFinalApprover;
+
+        if (finalJustApproved) {
+            try {
+                promoted = await promoteDraftToEnquiryQuote(draftId, nextSteps);
+            } catch (promoteErr) {
+                console.error('[draft-approval-action] promote:', promoteErr);
+                return res.status(500).json({
+                    error: 'Final approval recorded but quote could not be generated',
+                    details: promoteErr.message,
+                    steps: nextSteps,
+                });
+            }
+        }
+
         let notification = null;
         try {
-            notification = await notifyAfterApprovalAction({
+            notifyAfterApprovalActionInBackground({
                 nextSteps,
                 action: actionNorm,
+                stepSequence,
                 requestNo: String(draftMeta.RequestNo || '').trim(),
                 customerName: String(draftMeta.ToName || '').trim(),
                 subject: String(draftMeta.Subject || '').trim(),
                 ownJob: String(draftMeta.OwnJob || '').trim(),
                 draftQuoteId: draftId,
+                quoteId: promoted?.quoteId || null,
             });
+            notification = { queued: true };
         } catch (notifyErr) {
             console.warn('[draft-approval-action] notification:', notifyErr.message);
         }
 
-        res.json({ success: true, steps: nextSteps, notification });
+        clearPendingApprovalCountCache();
+        res.json({
+            success: true,
+            steps: nextSteps,
+            notification,
+            quoteId: promoted?.quoteId || null,
+            quoteNumber: promoted?.quoteNumber || null,
+            quoteFinalized: !!promoted,
+            editLocked: !!promoted,
+        });
     } catch (err) {
         if (isMissingQuoteApprovalStepsTableError(err.message)) {
             return res.status(503).json({
@@ -4489,6 +5343,153 @@ router.post('/draft-approval-action', async (req, res) => {
         }
         console.error('[draft-approval-action] POST:', err);
         res.status(500).json({ error: 'Failed to record draft approval action', details: err.message });
+    }
+});
+
+// GET /api/quotes/approval-corrections — correction history for quote / draft
+router.get('/approval-corrections', async (req, res) => {
+    try {
+        const quoteId = req.query.quoteId ? Number(req.query.quoteId) : null;
+        const draftQuoteId = req.query.draftQuoteId ? Number(req.query.draftQuoteId) : null;
+        if (
+            !(Number.isFinite(quoteId) && quoteId > 0) &&
+            !(Number.isFinite(draftQuoteId) && draftQuoteId > 0)
+        ) {
+            return res.status(400).json({ error: 'quoteId or draftQuoteId is required' });
+        }
+        const corrections = await fetchQuoteCorrectionHistory({
+            quoteId: Number.isFinite(quoteId) ? quoteId : null,
+            draftQuoteId: Number.isFinite(draftQuoteId) ? draftQuoteId : null,
+        });
+        res.json({ corrections });
+    } catch (err) {
+        if (isMissingQuoteApprovalCorrectionsTableError(err.message)) {
+            return res.status(503).json({
+                error: 'Quote correction storage is not initialized',
+                hint: 'Run node server/migrations/run_create_quote_approval_corrections.js',
+            });
+        }
+        console.error('[approval-corrections] GET:', err);
+        res.status(500).json({ error: 'Failed to load correction history', details: err.message });
+    }
+});
+
+// POST /api/quotes/correction-required — approver requests correction; unlocks draft; emails all
+router.post('/correction-required', async (req, res) => {
+    try {
+        const {
+            quoteId = null,
+            draftQuoteId = null,
+            userEmail,
+            reason = '',
+            comments = '',
+        } = req.body || {};
+        const normalizedEmail = normalizeApprovalEmail(userEmail);
+        if (!normalizedEmail) {
+            return res.status(400).json({ error: 'userEmail is required' });
+        }
+        const reasonText = String(reason || comments || '').trim();
+        if (!reasonText) {
+            return res.status(400).json({ error: 'Reason for correction is required' });
+        }
+
+        const qId = quoteId != null && Number.isFinite(Number(quoteId)) ? Number(quoteId) : null;
+        const dId =
+            draftQuoteId != null && Number.isFinite(Number(draftQuoteId))
+                ? Number(draftQuoteId)
+                : null;
+        if (!qId && !dId) {
+            return res.status(400).json({ error: 'quoteId or draftQuoteId is required' });
+        }
+
+        const userRes = await sql.query`
+            SELECT TOP 1 FullName, Designation, EmailId
+            FROM Master_ConcernedSE
+            WHERE LOWER(LTRIM(RTRIM(EmailId))) = ${normalizedEmail}
+        `;
+        const userRow = userRes.recordset?.[0] || {};
+        const actor = {
+            email: normalizedEmail,
+            name: String(userRow.FullName || '').trim(),
+            designation: String(userRow.Designation || '').trim(),
+        };
+
+        let result;
+        try {
+            result = await recordQuoteCorrectionRequired({
+                quoteId: qId,
+                draftQuoteId: dId,
+                reason: reasonText,
+                actor,
+            });
+        } catch (e) {
+            return res.status(400).json({ error: e.message || 'Could not record correction' });
+        }
+
+        const mailContext = await fetchApprovalMailContext({
+            quoteId: qId,
+            draftQuoteId: dId,
+            meta: result.meta,
+            subjectOverride: '',
+            projectNameOverride: '',
+        });
+
+        /* Respond immediately — SMTP/in-app must not hold ARR slots (was a common production stuck). */
+        clearPendingApprovalCountCache();
+        res.json({
+            success: true,
+            steps: result.steps,
+            correction: result.correction,
+            corrections: result.corrections,
+            approvalUnlocked: true,
+            approvalRequestSent: false,
+            mailResult: { queued: true },
+        });
+
+        setImmediate(() => {
+            void (async () => {
+                try {
+                    await sendQuoteCorrectionRequiredEmails({
+                        toEmails: result.recipientEmails,
+                        requesterName: actor.name || actor.email,
+                        reason: reasonText,
+                        mailContext,
+                    });
+                } catch (mailErr) {
+                    console.warn('[correction-required] email:', mailErr.message);
+                }
+                try {
+                    await notifyQuoteCorrectionRequiredInApp({
+                        recipientEmails: result.recipientEmails,
+                        requestNo: result.meta?.requestNo || '',
+                        projectName: mailContext?.projectName || '',
+                        quoteNumber: mailContext?.quoteNumber || result.meta?.quoteNumber || '',
+                        quoteId: qId,
+                        draftQuoteId: dId,
+                        triggerUserName: actor.name || actor.email,
+                        reason: reasonText,
+                    });
+                } catch (inAppErr) {
+                    console.warn('[correction-required] in-app:', inAppErr.message);
+                }
+            })();
+        });
+        return;
+    } catch (err) {
+        if (isMissingQuoteApprovalCorrectionsTableError(err.message)) {
+            return res.status(503).json({
+                error: 'Quote correction storage is not initialized',
+                hint: 'Run node server/migrations/run_create_quote_approval_corrections.js',
+            });
+        }
+        if (isMissingQuoteApprovalStepsTableError(err.message)) {
+            return res.status(503).json({
+                error: 'Quote approval storage is not initialized',
+                hint: 'Run node server/migrations/run_create_quote_approval_steps.js',
+            });
+        }
+        console.error('[correction-required] POST:', err);
+        res.status(500).json({ error: 'Failed to record correction required', details: err.message });
     }
 });
 
@@ -4567,19 +5568,22 @@ router.post('/:id/approval-action', async (req, res) => {
 
         let notification = null;
         try {
-            notification = await notifyAfterApprovalAction({
+            notifyAfterApprovalActionInBackground({
                 nextSteps,
                 action: actionNorm,
+                stepSequence,
                 requestNo: String(row.RequestNo || '').trim(),
                 customerName: String(row.ToName || '').trim(),
                 subject: String(row.Subject || '').trim(),
                 ownJob: String(row.OwnJob || '').trim(),
                 quoteId: Number(id),
             });
+            notification = { queued: true };
         } catch (notifyErr) {
             console.warn('[approval-action] notification:', notifyErr.message);
         }
 
+        clearPendingApprovalCountCache();
         res.json({ success: true, steps: nextSteps, notification });
     } catch (err) {
         if (isMissingQuoteApprovalStepsTableError(err.message)) {
@@ -4839,23 +5843,22 @@ router.post('/', async (req, res) => {
 
         const requestRef = finalLeadJobCode ? `${requestNo}-${finalLeadJobCode}` : requestNo;
 
+        // QuoteNo is preset per Enquiry + Lead Job + Customer; only RevisionNo changes.
+        const allocated = await allocateQuoteNoAndRevision({
+            requestNo,
+            leadJob: leadJob || '',
+            toName: toName || '',
+            draftQuoteNo: 0,
+        });
+        const quoteNo = allocated.quoteNo;
+        const revisionNo = allocated.revisionNo;
 
-        // Get next quote number - UNIQUE PER ENQUIRY (GLOBAL SEQUENCE)
-        // User requested: "continuation serial next number of quote number" 
-        // This means regardless of Dept/Div, numbers should be 1, 2, 3... for Enquiry 50.
-
-        const existingQuotesResult = await sql.query`
-            SELECT ISNULL(MAX(QuoteNo), 0) AS MaxQuoteNo
-            FROM EnquiryQuotes
-            -- WHERE RequestNo = ${requestNo} -- Global Serial Logic requested by user        `;
-
-        const quoteNo = (existingQuotesResult.recordset[0].MaxQuoteNo || 0) + 1;
-        const revisionNo = 0;
-
-        // FORMAT: Dept/Div/EnquiryRef/QuoteNo-Revision
+        // FORMAT: Dept/Div/EnquiryRef/QuoteNo-Revision (first quote is R0; revisions are R1, R2, …)
         const quoteNumber = `${dept}/${division}/${requestRef}/${quoteNo}-R${revisionNo}`;
 
-        console.log(`[Quote Creation] Customer: ${toName}, Division: ${division}, QuoteNo: ${quoteNo}, Full: ${quoteNumber}`);
+        console.log(
+            `[Quote Creation] Customer: ${toName}, Division: ${division}, QuoteNo: ${quoteNo}, Rev: ${revisionNo}, reused=${allocated.reused}, Full: ${quoteNumber}`
+        );
 
         const resolvedCreateTotal = await resolveTotalAmountForPersist(
             { ...req.body, requestNo, toName, leadJob, ownJob: effectiveOwnJob },
@@ -4912,6 +5915,17 @@ router.post('/', async (req, res) => {
         });
 
         try {
+            await clearPricingRevisionRequiredForQuoteTuple({
+                requestNo,
+                ownJob: effectiveOwnJob,
+                leadJob: leadJob || '',
+                customerName: toName || '',
+            });
+        } catch (clrErr) {
+            console.warn('[Quote Creation] clear RevisionRequired:', clrErr.message || clrErr);
+        }
+
+        try {
             const newQuoteId = result.recordset[0].ID;
             const steps = parseApprovalWorkflowJson(approvalWorkflowJson);
             if (steps.length) {
@@ -4945,7 +5959,13 @@ router.post('/', async (req, res) => {
             const fs = require('fs');
             fs.appendFileSync('quote_creation_error.log', `[${new Date().toISOString()}] Error creating quote: ${err.message}\nStack: ${err.stack}\nBody: ${JSON.stringify(req.body)}\n\n`);
         } catch (logErr) { }
-        res.status(500).json({ error: 'Failed to create quote', details: err.message });
+        const isTruncation = /truncat/i.test(String(err.message || ''));
+        res.status(isTruncation ? 400 : 500).json({
+            error: isTruncation
+                ? 'Quote could not be saved because one or more text fields exceed the database limit (e.g. phone, subject, customer reference).'
+                : 'Failed to create quote',
+            details: err.message,
+        });
     }
 });
 
@@ -5129,207 +6149,23 @@ router.put('/:id', async (req, res) => {
 
     } catch (err) {
         console.error('Error updating quote:', err);
-        res.status(500).json({ error: 'Failed to update quote' });
+        const isTruncation = /truncat/i.test(String(err.message || ''));
+        res.status(isTruncation ? 400 : 500).json({
+            error: isTruncation
+                ? 'Quote could not be saved because one or more text fields exceed the database limit (e.g. phone, subject, customer reference).'
+                : 'Failed to update quote',
+            details: err.message,
+        });
     }
 });
 
-// POST /api/quotes/:id/revise - Create a new revision of a quote
+// POST /api/quotes/:id/revise — blocked: revisions must go through draft + approval
 router.post('/:id/revise', async (req, res) => {
-    try {
-        const { id } = req.params;
-        console.log(`[Revise] Starting revision for quote ID: ${id}`);
-
-        const {
-            preparedBy, preparedByEmail, validityDays,
-            showScopeOfWork, showBasisOfOffer, showExclusions, showPricingTerms,
-            showSchedule, showWarranty, showResponsibilityMatrix, showTermsConditions, showAcceptance, showBillOfQuantity,
-            scopeOfWork, basisOfOffer, exclusions, pricingTerms,
-            schedule, warranty, responsibilityMatrix, termsConditions, acceptance, billOfQuantity,
-            totalAmount, customClauses, clauseOrder,
-            quoteDate, customerReference, quoteType, subject, signatory, signatoryDesignation, coSignatory, coSignatoryDesignation, toName, toAddress, toPhone, toEmail, toFax, toAttention,
-            leadJob,
-            ownJob,
-            digitalSignaturesJson,
-            approvalWorkflowJson,
-            reasonForRevision
-        } = req.body;
-
-        const cleanQuoteDate = quoteDate ? quoteDate.split('T')[0] : null;
-        const reasonForRevisionStr = String(reasonForRevision || '').trim();
-        if (!reasonForRevisionStr) {
-            return res.status(400).json({ error: 'Reason for Revision is required' });
-        }
-
-        const existingResult = await sql.query`SELECT * FROM EnquiryQuotes WHERE ID = ${id}`;
-
-        if (existingResult.recordset.length === 0) {
-            console.log(`[Revise] Quote not found for ID: ${id}`);
-            return res.status(404).json({ error: 'Quote not found' });
-        }
-        const existing = existingResult.recordset[0];
-        const newRevisionNo = existing.RevisionNo + 1;
-        console.log(`[Revise] Existing quote: ${existing.QuoteNumber}, Current Revision: ${existing.RevisionNo}, New Revision: ${newRevisionNo}`);
-
-        const existingParts = existing.QuoteNumber ? existing.QuoteNumber.split("/") : [];
-
-        // For revisions, preserve the existing quote's reference part (including lead job prefix)
-        // Don't recalculate - just use what's already in the quote number
-        let correctRefPart = existingParts.length > 2 ? existingParts[2] : existing.RequestNo;
-        console.log(`[Revise] Using existing reference part: ${correctRefPart}`);
-
-        // 2. Reconstruct Quote Number
-        // Expected Format: Dept/Div/Ref/QuoteNo-Rev
-        let newQuoteNumber;
-        if (existingParts.length >= 4) {
-            const dept = existingParts[0];
-            const div = existingParts[1];
-            // Part 2 is Ref (Updated)
-            // Part 3 is Quote-Rev
-            newQuoteNumber = `${dept}/${div}/${correctRefPart}/${existing.QuoteNo}-R${newRevisionNo}`;
-        } else {
-            // Fallback for non-standard formats
-            if (existingParts.length > 0) existingParts.pop();
-            const quoteRevPart = `${existing.QuoteNo}-R${newRevisionNo}`;
-            newQuoteNumber = existingParts.length > 0 ? `${existingParts.join('/')}/${quoteRevPart}` : `${existing.QuoteNumber}-R${newRevisionNo}`;
-        }
-        console.log(`[Revise] New quote number: ${newQuoteNumber}`);
-
-        const customClausesJson = customClauses ? JSON.stringify(customClauses) : existing.CustomClauses;
-        const clauseOrderJson = clauseOrder ? JSON.stringify(clauseOrder) : existing.ClauseOrder;
-        const hasReviseDigitalSignatures = Object.prototype.hasOwnProperty.call(req.body, 'digitalSignaturesJson');
-        const reviseDigitalSignaturesJsonStr = hasReviseDigitalSignatures
-            ? typeof digitalSignaturesJson === 'string'
-                ? digitalSignaturesJson
-                : JSON.stringify(Array.isArray(digitalSignaturesJson) ? digitalSignaturesJson : [])
-            : '[]';
-        const hasReviseApprovalWorkflow = Object.prototype.hasOwnProperty.call(req.body, 'approvalWorkflowJson');
-        const reviseApprovalWorkflowJsonStr = hasReviseApprovalWorkflow
-            ? typeof approvalWorkflowJson === 'string'
-                ? approvalWorkflowJson
-                : serializeApprovalWorkflowJson(
-                      Array.isArray(approvalWorkflowJson)
-                          ? approvalWorkflowJson
-                          : approvalWorkflowJson?.steps
-                  )
-            : existing.ApprovalWorkflowJson || '{"steps":[]}';
-        let effectiveOwnJob = String(ownJob !== undefined && ownJob !== null ? ownJob : (existing.OwnJob || '')).trim();
-
-        if (preparedByEmail || existing.PreparedByEmail) {
-            try {
-                const emailForIdentity = (preparedByEmail || existing.PreparedByEmail || '').toLowerCase().replace(/@almcg\.com/g, '@almoayyedcg.com');
-                if (emailForIdentity) {
-                    const userRes = await sql.query`SELECT Department FROM Master_ConcernedSE WHERE EmailId = ${emailForIdentity}`;
-                    const userDept = userRes.recordset.length > 0 ? userRes.recordset[0].Department : null;
-                    if (userDept) effectiveOwnJob = applyOwnJobAfterDepartmentLookup(effectiveOwnJob, userDept);
-                }
-            } catch (e) {
-                console.error('[Revise] Identity lookup error:', e);
-            }
-        }
-
-        const resolvedTotalForRev = await resolveTotalAmountForPersist(
-            {
-                ...req.body,
-                requestNo: existing.RequestNo,
-                toName: toName !== undefined ? toName : existing.ToName,
-                leadJob: leadJob !== undefined ? leadJob : existing.LeadJob,
-                ownJob: effectiveOwnJob,
-            },
-            existing.TotalAmount
-        );
-        if (!Number.isFinite(resolvedTotalForRev) || resolvedTotalForRev <= 0) {
-            return res.status(400).json({
-                error: 'Ownjob base price must be greater than zero. Cannot create revision until the first-tab ownjob base price is priced.',
-            });
-        }
-
-        const now = new Date();
-        const result = await sql.query`
-            INSERT INTO EnquiryQuotes (
-                RequestNo, QuoteNumber, QuoteNo, RevisionNo, ValidityDays,
-                PreparedBy, PreparedByEmail,
-                ShowScopeOfWork, ShowBasisOfOffer, ShowExclusions, ShowPricingTerms,
-                ShowSchedule, ShowWarranty, ShowResponsibilityMatrix, ShowTermsConditions, ShowAcceptance, ShowBillOfQuantity,
-                ScopeOfWork, BasisOfOffer, Exclusions, PricingTerms,
-                Schedule, Warranty, ResponsibilityMatrix, TermsConditions, Acceptance, BillOfQuantity,
-                TotalAmount, Status, CustomClauses, ClauseOrder, DigitalSignaturesJson, ApprovalWorkflowJson,
-                QuoteDate, CustomerReference, YourRef, QuoteType, Subject, Signatory, SignatoryDesignation, CoSignatory, CoSignatoryDesignation, ToName, ToAddress, ToPhone, ToEmail, ToFax, ToAttention, LeadJob, OwnJob, ReasonForRevision, CreatedAt, UpdatedAt
-            )
-            OUTPUT INSERTED.ID, INSERTED.QuoteNumber
-            VALUES (
-                ${existing.RequestNo}, ${newQuoteNumber}, ${existing.QuoteNo}, ${newRevisionNo}, ${validityDays !== undefined ? validityDays : existing.ValidityDays},
-                ${preparedBy || existing.PreparedBy}, ${preparedByEmail || existing.PreparedByEmail},
-                ${showScopeOfWork !== undefined ? (showScopeOfWork ? 1 : 0) : existing.ShowScopeOfWork}, 
-                ${showBasisOfOffer !== undefined ? (showBasisOfOffer ? 1 : 0) : existing.ShowBasisOfOffer}, 
-                ${showExclusions !== undefined ? (showExclusions ? 1 : 0) : existing.ShowExclusions}, 
-                ${showPricingTerms !== undefined ? (showPricingTerms ? 1 : 0) : existing.ShowPricingTerms},
-                ${showSchedule !== undefined ? (showSchedule ? 1 : 0) : existing.ShowSchedule}, 
-                ${showWarranty !== undefined ? (showWarranty ? 1 : 0) : existing.ShowWarranty}, 
-                ${showResponsibilityMatrix !== undefined ? (showResponsibilityMatrix ? 1 : 0) : existing.ShowResponsibilityMatrix}, 
-                ${showTermsConditions !== undefined ? (showTermsConditions ? 1 : 0) : existing.ShowTermsConditions}, 
-                ${showAcceptance !== undefined ? (showAcceptance ? 1 : 0) : existing.ShowAcceptance}, 
-                ${showBillOfQuantity !== undefined ? (showBillOfQuantity ? 1 : 0) : existing.ShowBillOfQuantity},
-                ${scopeOfWork !== undefined ? scopeOfWork : existing.ScopeOfWork}, 
-                ${basisOfOffer !== undefined ? basisOfOffer : existing.BasisOfOffer}, 
-                ${exclusions !== undefined ? exclusions : existing.Exclusions}, 
-                ${pricingTerms !== undefined ? pricingTerms : existing.PricingTerms},
-                ${schedule !== undefined ? schedule : existing.Schedule}, 
-                ${warranty !== undefined ? warranty : existing.Warranty}, 
-                ${responsibilityMatrix !== undefined ? responsibilityMatrix : existing.ResponsibilityMatrix}, 
-                ${termsConditions !== undefined ? termsConditions : existing.TermsConditions}, 
-                ${acceptance !== undefined ? acceptance : existing.Acceptance}, 
-                ${billOfQuantity !== undefined ? billOfQuantity : existing.BillOfQuantity},
-                ${resolvedTotalForRev},
-                'Saved',
-                ${customClausesJson}, 
-                ${clauseOrderJson},
-                ${reviseDigitalSignaturesJsonStr},
-                ${reviseApprovalWorkflowJsonStr},
-                ${cleanQuoteDate !== null ? cleanQuoteDate : (existing.QuoteDate ? existing.QuoteDate.toISOString().split('T')[0] : null)}, 
-                ${customerReference !== undefined ? customerReference : existing.CustomerReference}, 
-                ${customerReference !== undefined ? customerReference : (existing.YourRef != null ? existing.YourRef : existing.CustomerReference)}, 
-                ${quoteType !== undefined ? (quoteType || '') : (existing.QuoteType != null ? existing.QuoteType : '')}, 
-                ${subject !== undefined ? subject : existing.Subject}, 
-                ${signatory !== undefined ? signatory : existing.Signatory}, 
-                ${signatoryDesignation !== undefined ? signatoryDesignation : existing.SignatoryDesignation}, 
-                ${coSignatory !== undefined ? coSignatory : existing.CoSignatory}, 
-                ${coSignatoryDesignation !== undefined ? coSignatoryDesignation : existing.CoSignatoryDesignation}, 
-                ${toName !== undefined ? toName : existing.ToName}, 
-                ${toAddress !== undefined ? toAddress : existing.ToAddress}, 
-                ${toPhone !== undefined ? toPhone : existing.ToPhone}, 
-                ${toEmail !== undefined ? toEmail : existing.ToEmail}, 
-                ${toFax !== undefined ? (toFax || '') : (existing.ToFax || '')}, 
-                ${toAttention !== undefined ? (toAttention || '') : (existing.ToAttention || '')}, 
-                ${leadJob !== undefined ? leadJob : existing.LeadJob},
-                ${effectiveOwnJob},
-                ${reasonForRevisionStr},
-                ${now}, ${now}
-            )
-        `;
-
-        console.log(`[Revise] Revision created successfully! New ID: ${result.recordset[0].ID}, QuoteNumber: ${result.recordset[0].QuoteNumber}`);
-
-        await notifyParentJobQuoteEvent({
-            requestNo: existing.RequestNo,
-            ownJobName: effectiveOwnJob,
-            quoteId: result.recordset[0].ID,
-            quoteNumber: result.recordset[0].QuoteNumber,
-            eventType: 'Subjob Quote Revision',
-            triggerUserName: preparedBy || existing.PreparedBy || '',
-            triggerUserEmail: preparedByEmail || existing.PreparedByEmail || '',
-        });
-
-        res.json({
-            success: true,
-            id: result.recordset[0].ID,
-            quoteNumber: result.recordset[0].QuoteNumber,
-            revisionNo: newRevisionNo,
-        });
-
-    } catch (err) {
-        console.error('[Revise] Error creating revision:', err);
-        res.status(500).json({ error: 'Failed to create revision', details: err.message });
-    }
+    return res.status(400).json({
+        error:
+            'Revisions require approval. Use + Revision to start a revision draft, then send for approval. The next R# is issued only when the final approver approves.',
+        code: 'REVISION_REQUIRES_APPROVAL',
+    });
 });
 
 // DELETE /api/quotes/:id - Delete a quote
@@ -5468,20 +6304,145 @@ router.delete('/config/templates/:id', async (req, res) => {
 
 // --- Quote Attachments ---
 
+async function listQuoteAttachmentsByOwnerId(ownerQuoteId, accessCtx) {
+    await ensureQuoteAttachmentsVisibilitySchema();
+    const result = await sql.query`
+        SELECT ID, QuoteID, FileName, UploadedAt, Visibility, UploadedBy, Division
+        FROM QuoteAttachments
+        WHERE QuoteID = ${ownerQuoteId}
+        ORDER BY UploadedAt DESC
+    `;
+    const rows = result.recordset || [];
+    if (!accessCtx) return rows;
+    return rows.filter((att) => canReadAttachmentByVisibility(att, accessCtx));
+}
+
+async function insertUploadedQuoteAttachments(ownerQuoteId, files, meta = {}) {
+    await ensureQuoteAttachmentsVisibilitySchema();
+    const visibility =
+        String(meta.visibility || 'Public').trim().toLowerCase() === 'private' ? 'Private' : 'Public';
+    const uploadedBy = String(meta.uploadedBy || '').trim() || null;
+    const division = String(meta.division || 'General').trim() || 'General';
+
+    const uploadedResults = [];
+    for (const file of files) {
+        const fileName = file.originalname;
+        const filePath = absolutePathForFilesystem(file.path);
+        if (!fs.existsSync(filePath)) {
+            const err = new Error('Upload failed: file was not written to storage');
+            err.code = 'UPLOAD_MISSING_FILE';
+            err.attemptedPath = filePath;
+            throw err;
+        }
+        console.log('[quote-attachments] saved file:', filePath, { visibility, division });
+
+        const result = await sql.query`
+            INSERT INTO QuoteAttachments (QuoteID, FileName, FilePath, Visibility, UploadedBy, Division)
+            VALUES (${ownerQuoteId}, ${fileName}, ${filePath}, ${visibility}, ${uploadedBy}, ${division});
+            SELECT SCOPE_IDENTITY() AS ID;
+        `;
+        uploadedResults.push({
+            id: result.recordset[0].ID,
+            fileName,
+            visibility,
+            division,
+            uploadedBy,
+        });
+    }
+    return uploadedResults;
+}
+
+function quoteAttachmentUploadMeta(req) {
+    return {
+        visibility: req.query.visibility || 'Public',
+        uploadedBy: req.query.userName || req.query.uploadedBy || '',
+        division: req.query.division || 'General',
+    };
+}
+
+// GET /api/quotes/attachments/draft/:draftQuoteId — list draft-scoped attachments
+router.get('/attachments/draft/:draftQuoteId', async (req, res) => {
+    try {
+        const ownerId = draftAttachmentOwnerQuoteId(req.params.draftQuoteId);
+        if (ownerId == null) {
+            return res.status(400).json({ error: 'Invalid draft quote id' });
+        }
+        const access = await assertQuoteAttachmentAccess(ownerId, req);
+        if (!access.ok) {
+            return res.status(access.status).json({ error: access.error });
+        }
+        res.json(await listQuoteAttachmentsByOwnerId(ownerId, access.accessCtx));
+    } catch (err) {
+        console.error('Error fetching draft quote attachments:', err);
+        const msg = String(err && err.message ? err.message : err);
+        if (/invalid object name ['"]?quoteattachments/i.test(msg)) {
+            return res.status(500).json({
+                error: 'QuoteAttachments table missing',
+                hint: 'Run: node server/migrate_quote_attachments.js',
+            });
+        }
+        res.status(500).json({ error: 'Failed to fetch attachments' });
+    }
+});
+
+// POST /api/quotes/attachments/draft/:draftQuoteId — upload while quote is still a draft
+router.post('/attachments/draft/:draftQuoteId', upload.array('files'), async (req, res) => {
+    try {
+        const ownerId = draftAttachmentOwnerQuoteId(req.params.draftQuoteId);
+        if (ownerId == null) {
+            return res.status(400).json({ error: 'Invalid draft quote id' });
+        }
+        const access = await assertQuoteAttachmentAccess(ownerId, req);
+        if (!access.ok) {
+            return res.status(access.status).json({ error: access.error });
+        }
+        const files = req.files;
+        if (!files || files.length === 0) {
+            return res.status(400).json({ error: 'No files uploaded' });
+        }
+        const uploadedResults = await insertUploadedQuoteAttachments(
+            ownerId,
+            files,
+            quoteAttachmentUploadMeta(req)
+        );
+        res.status(201).json({
+            message: 'Files uploaded successfully',
+            storageMode: 'filesystem',
+            draftScoped: true,
+            files: uploadedResults,
+        });
+    } catch (err) {
+        console.error('Error uploading draft quote attachments:', err);
+        if (err && err.code === 'UPLOAD_MISSING_FILE') {
+            return res.status(500).json({
+                error: err.message,
+                hint: 'Verify ENQUIRY_ATTACHMENTS_ROOT / QUOTE_ATTACHMENTS_ROOT and that the Windows account running Node can create files on that UNC share.',
+                attemptedPath: err.attemptedPath,
+            });
+        }
+        const msg = String(err && err.message ? err.message : err);
+        if (/invalid object name ['"]?quoteattachments/i.test(msg)) {
+            return res.status(500).json({
+                error: 'QuoteAttachments table missing',
+                hint: 'Run: node server/migrate_quote_attachments.js',
+            });
+        }
+        res.status(500).json({ error: 'Failed to upload attachments', details: msg });
+    }
+});
+
 // GET /api/quotes/attachments/:quoteId - List all attachments for a quote
 router.get('/attachments/:quoteId', async (req, res) => {
     try {
         const quoteIdNum = parseInt(String(req.params.quoteId), 10);
-        if (!Number.isFinite(quoteIdNum)) {
+        if (!Number.isFinite(quoteIdNum) || quoteIdNum <= 0) {
             return res.status(400).json({ error: 'Invalid quote id' });
         }
-        const result = await sql.query`
-            SELECT ID, QuoteID, FileName, UploadedAt 
-            FROM QuoteAttachments 
-            WHERE QuoteID = ${quoteIdNum}
-            ORDER BY UploadedAt DESC
-        `;
-        res.json(result.recordset);
+        const access = await assertQuoteAttachmentAccess(quoteIdNum, req);
+        if (!access.ok) {
+            return res.status(access.status).json({ error: access.error });
+        }
+        res.json(await listQuoteAttachmentsByOwnerId(quoteIdNum, access.accessCtx));
     } catch (err) {
         console.error('Error fetching quote attachments:', err);
         const msg = String(err && err.message ? err.message : err);
@@ -5499,8 +6460,12 @@ router.get('/attachments/:quoteId', async (req, res) => {
 router.post('/attachments/:quoteId', upload.array('files'), async (req, res) => {
     try {
         const quoteIdNum = parseInt(String(req.params.quoteId), 10);
-        if (!Number.isFinite(quoteIdNum)) {
+        if (!Number.isFinite(quoteIdNum) || quoteIdNum <= 0) {
             return res.status(400).json({ error: 'Invalid quote id' });
+        }
+        const access = await assertQuoteAttachmentAccess(quoteIdNum, req);
+        if (!access.ok) {
+            return res.status(access.status).json({ error: access.error });
         }
         const files = req.files;
 
@@ -5508,27 +6473,11 @@ router.post('/attachments/:quoteId', upload.array('files'), async (req, res) => 
             return res.status(400).json({ error: 'No files uploaded' });
         }
 
-        const uploadedResults = [];
-        for (const file of files) {
-            const fileName = file.originalname;
-            const filePath = absolutePathForFilesystem(file.path);
-            if (!fs.existsSync(filePath)) {
-                console.error('[quote-attachments] file missing after multer write:', filePath);
-                return res.status(500).json({
-                    error: 'Upload failed: file was not written to storage',
-                    hint: 'Verify ENQUIRY_ATTACHMENTS_ROOT / QUOTE_ATTACHMENTS_ROOT and that the Windows account running Node can create files on that UNC share.',
-                    attemptedPath: filePath,
-                });
-            }
-            console.log('[quote-attachments] saved file:', filePath);
-
-            const result = await sql.query`
-                INSERT INTO QuoteAttachments (QuoteID, FileName, FilePath)
-                VALUES (${quoteIdNum}, ${fileName}, ${filePath});
-                SELECT SCOPE_IDENTITY() AS ID;
-            `;
-            uploadedResults.push({ id: result.recordset[0].ID, fileName });
-        }
+        const uploadedResults = await insertUploadedQuoteAttachments(
+            quoteIdNum,
+            files,
+            quoteAttachmentUploadMeta(req)
+        );
 
         res.status(201).json({
             message: 'Files uploaded successfully',
@@ -5537,6 +6486,13 @@ router.post('/attachments/:quoteId', upload.array('files'), async (req, res) => 
         });
     } catch (err) {
         console.error('Error uploading quote attachments:', err);
+        if (err && err.code === 'UPLOAD_MISSING_FILE') {
+            return res.status(500).json({
+                error: err.message,
+                hint: 'Verify ENQUIRY_ATTACHMENTS_ROOT / QUOTE_ATTACHMENTS_ROOT and that the Windows account running Node can create files on that UNC share.',
+                attemptedPath: err.attemptedPath,
+            });
+        }
         const msg = String(err && err.message ? err.message : err);
         if (/invalid object name ['"]?quoteattachments/i.test(msg)) {
             return res.status(500).json({
@@ -5551,14 +6507,24 @@ router.post('/attachments/:quoteId', upload.array('files'), async (req, res) => 
 // GET /api/quotes/attachments/download/:id - Download a quote attachment
 router.get('/attachments/download/:id', async (req, res) => {
     try {
+        await ensureQuoteAttachmentsVisibilitySchema();
         const { id } = req.params;
         const result = await sql.query`
-            SELECT FileName, FilePath FROM QuoteAttachments WHERE ID = ${id}
+            SELECT ID, QuoteID, FileName, FilePath, Visibility, UploadedBy, Division
+            FROM QuoteAttachments WHERE ID = ${id}
         `;
         const attachment = result.recordset[0];
 
         if (!attachment) {
             return res.status(404).json({ error: 'Attachment not found' });
+        }
+
+        const access = await assertQuoteAttachmentAccess(attachment.QuoteID, req);
+        if (!access.ok) {
+            return res.status(access.status).json({ error: access.error });
+        }
+        if (!canReadAttachmentByVisibility(attachment, access.accessCtx)) {
+            return res.status(403).json({ error: 'Not allowed to download this private attachment' });
         }
 
         const absPath = absolutePathForFilesystem(attachment.FilePath);
@@ -5585,17 +6551,39 @@ router.get('/attachments/download/:id', async (req, res) => {
 // DELETE /api/quotes/attachments/:id - Delete a quote attachment
 router.delete('/attachments/:id', async (req, res) => {
     try {
+        await ensureQuoteAttachmentsVisibilitySchema();
         const { id } = req.params;
         const result = await sql.query`
-            SELECT FilePath FROM QuoteAttachments WHERE ID = ${id}
+            SELECT ID, QuoteID, FilePath, Visibility, UploadedBy, Division
+            FROM QuoteAttachments WHERE ID = ${id}
         `;
         const attachment = result.recordset[0];
 
-        if (attachment) {
-            const absPath = absolutePathForFilesystem(attachment.FilePath);
-            if (fs.existsSync(absPath)) {
-                fs.unlinkSync(absPath);
-            }
+        if (!attachment) {
+            return res.status(404).json({ error: 'Attachment not found' });
+        }
+
+        // Positive QuoteID = finalized EnquiryQuotes row (after final approver).
+        // Draft attachments use negative QuoteID (-DraftQuoteId) and stay deletable.
+        const ownerQuoteId = Number(attachment.QuoteID);
+        if (Number.isFinite(ownerQuoteId) && ownerQuoteId > 0) {
+            return res.status(403).json({
+                error:
+                    'Attachments cannot be removed after the final approver has approved. You can still add new files.',
+            });
+        }
+
+        const access = await assertQuoteAttachmentAccess(attachment.QuoteID, req);
+        if (!access.ok) {
+            return res.status(access.status).json({ error: access.error });
+        }
+        if (!canReadAttachmentByVisibility(attachment, access.accessCtx)) {
+            return res.status(403).json({ error: 'Not allowed to delete this private attachment' });
+        }
+
+        const absPath = absolutePathForFilesystem(attachment.FilePath);
+        if (fs.existsSync(absPath)) {
+            fs.unlinkSync(absPath);
         }
 
         await sql.query`DELETE FROM QuoteAttachments WHERE ID = ${id}`;

@@ -121,13 +121,18 @@ router.get('/manager-access', async (req, res) => {
         const profile = profileRes.recordset?.[0] || {};
         const roleStr = String(profile.Roles || '').toLowerCase();
         const isAdmin = roleStr.includes('admin') || roleStr.includes('system');
-        const isManagementDept = String(profile.Department || '').trim().toLowerCase() === 'management';
+        const { userHasManagementDepartment, parseUserDepartments } = require('../lib/userDepartments');
+        const isManagementDept = userHasManagementDepartment(profile.Department || '');
 
         if (isAdmin || isManagementDept) {
             const allDivs = await new sql.Request().query(
                 'SELECT DISTINCT DepartmentName FROM Master_EnquiryFor WHERE DepartmentName IS NOT NULL'
             );
             divisions = allDivs.recordset.map(r => r.DepartmentName);
+        } else {
+            // CCMailIds divisions (if any) + own Master_ConcernedSE.Department list (CSV / cross-company OK)
+            const profileDivs = parseUserDepartments(profile.Department || '');
+            divisions = [...new Set([...divisions, ...profileDivs].filter(Boolean))];
         }
 
         res.json({
@@ -150,11 +155,16 @@ router.get('/engineers', async (req, res) => {
         const request = new sql.Request();
         request.input('division', sql.NVarChar, division);
 
-        // Fetch SEs whose Department matches
+        // Fetch SEs whose Department list contains this division (comma-separated OK)
         const result = await request.query(`
             SELECT FullName, EmailId 
             FROM Master_ConcernedSE 
-            WHERE Department = @division AND Status = 'Active'
+            WHERE Status = 'Active'
+              AND (
+                LTRIM(RTRIM(ISNULL(Department, N''))) = LTRIM(RTRIM(@division))
+                OR N',' + REPLACE(LTRIM(RTRIM(ISNULL(Department, N''))), N' ', N'') + N','
+                   LIKE N'%,' + REPLACE(LTRIM(RTRIM(@division)), N' ', N'') + N',%'
+              )
             ORDER BY FullName ASC
         `);
 

@@ -79,16 +79,20 @@ npm install -g pm2
 
 ### 2.3 ARR proxy timeout (critical for PDF)
 
-Large quote PDFs can take 60â€“180 seconds. Default ARR timeout (~120s) causes 502 errors.
+Large quote PDFs can take several minutes under load. Default ARR timeout (~120s) causes 502 errors.
 
 ```powershell
 # Run in elevated PowerShell on the server
 Import-Module WebAdministration
 Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `
-    -Filter 'system.webServer/proxy' -Name 'timeout' -Value '00:03:00'
+    -Filter 'system.webServer/proxy' -Name 'timeout' -Value '00:05:00'
+try {
+    Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `
+        -Filter 'system.webServer/proxy' -Name 'responseBufferLimit' -Value 0
+} catch {}
 ```
 
-Or use the included script: `helpers\configure_arr.ps1`
+Or use: `scripts\configure_arr_pdf_streaming.ps1` (preferred) / `helpers\configure_arr.ps1`
 
 ### 2.4 Firewall
 

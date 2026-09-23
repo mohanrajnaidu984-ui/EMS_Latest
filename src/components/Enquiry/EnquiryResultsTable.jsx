@@ -125,11 +125,14 @@ const EnquiryResultsTable = ({
     enableHeaderFilters = false,
     /** Called when displayed rows change (after column filters). Used for export. */
     onDisplayRowsChange,
+    /** When > 0, show results in pages of this size (Search Enquiry). */
+    pageSize = 0,
 }) => {
     const [columnFilters, setColumnFilters] = useState({});
     const [activeHeaderFilter, setActiveHeaderFilter] = useState(null);
     const [headerFilterSearch, setHeaderFilterSearch] = useState('');
     const [headerFilterDraft, setHeaderFilterDraft] = useState([]);
+    const [currentPage, setCurrentPage] = useState(1);
     const headerFilterRef = useRef(null);
     const headerFilterAnchorRef = useRef(null);
     const [headerFilterPopoverStyle, setHeaderFilterPopoverStyle] = useState(null);
@@ -163,6 +166,31 @@ const EnquiryResultsTable = ({
             })
         );
     }, [sortedRows, columnFilters, masters, enableHeaderFilters]);
+
+    const pageSizeNum = Number(pageSize) > 0 ? Math.floor(Number(pageSize)) : 0;
+    const totalFilteredRows = rowsToDisplay.length;
+    const totalPages = pageSizeNum > 0 ? Math.max(1, Math.ceil(totalFilteredRows / pageSizeNum)) : 1;
+
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [sortedRows, columnFilters, pageSizeNum]);
+
+    useEffect(() => {
+        if (currentPage > totalPages) setCurrentPage(totalPages);
+    }, [currentPage, totalPages]);
+
+    const pagedRows = useMemo(() => {
+        if (!pageSizeNum || totalFilteredRows === 0) return rowsToDisplay;
+        const start = (currentPage - 1) * pageSizeNum;
+        return rowsToDisplay.slice(start, start + pageSizeNum);
+    }, [rowsToDisplay, pageSizeNum, currentPage, totalFilteredRows]);
+
+    const pageRangeLabel = useMemo(() => {
+        if (!pageSizeNum || totalFilteredRows === 0) return '';
+        const start = (currentPage - 1) * pageSizeNum + 1;
+        const end = Math.min(currentPage * pageSizeNum, totalFilteredRows);
+        return `${start}–${end} of ${totalFilteredRows}`;
+    }, [pageSizeNum, currentPage, totalFilteredRows]);
 
     useEffect(() => {
         if (typeof onDisplayRowsChange === 'function') {
@@ -550,6 +578,41 @@ const EnquiryResultsTable = ({
                     </span>
                 </div>
             ) : null}
+            {pageSizeNum > 0 && totalFilteredRows > pageSizeNum ? (
+                <div
+                    className="enquiry-results-table-pagination flex-shrink-0 px-2 py-1 d-flex align-items-center justify-content-between gap-2 flex-wrap"
+                    role="navigation"
+                    aria-label="Enquiry results pages"
+                >
+                    <span className="small text-muted">
+                        Showing <span className="fw-semibold text-dark">{pageRangeLabel}</span>
+                        <span className="ms-2">({pageSizeNum} per page)</span>
+                    </span>
+                    <div className="d-flex align-items-center gap-1">
+                        <button
+                            type="button"
+                            className="btn btn-sm btn-outline-secondary py-0 px-2"
+                            disabled={currentPage <= 1}
+                            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                            aria-label="Previous page"
+                        >
+                            Prev
+                        </button>
+                        <span className="small fw-semibold text-dark px-1" aria-live="polite">
+                            Page {currentPage} of {totalPages}
+                        </span>
+                        <button
+                            type="button"
+                            className="btn btn-sm btn-outline-secondary py-0 px-2"
+                            disabled={currentPage >= totalPages}
+                            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                            aria-label="Next page"
+                        >
+                            Next
+                        </button>
+                    </div>
+                </div>
+            ) : null}
             <div className="enquiry-search-table-wrap">
                 <table
                     className="table table-sm table-hover align-middle"
@@ -604,14 +667,14 @@ const EnquiryResultsTable = ({
                         </tr>
                     </thead>
                     <tbody>
-                        {rowsToDisplay.length === 0 ? (
+                        {pagedRows.length === 0 ? (
                             <tr>
                                 <td colSpan="17" className="text-muted text-center">
                                     {emptyLabel}
                                 </td>
                             </tr>
                         ) : (
-                            rowsToDisplay.map((r, idx) => {
+                            pagedRows.map((r, idx) => {
                                 const jobLines = getLeadJobDisplayLines(r, { users: masters?.users });
                                 const reqNo = getEnquiryRowRequestNo(r);
                                 const canActivate = Boolean(reqNo && typeof onRowOpen === 'function');

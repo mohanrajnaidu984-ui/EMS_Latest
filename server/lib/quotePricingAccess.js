@@ -9,6 +9,11 @@ const {
     userHasApprovalWorkflowQuoteAccess,
     fetchApprovalWorkflowVisibleQuotesByRequest,
 } = require('./quoteApprovalSteps');
+const { divisionCompareKeysCompatible } = require('./quoteListDivisionFilter');
+const {
+    parseUserDepartments,
+    userHasManagementDepartment,
+} = require('./userDepartments');
 
 function normalizePricingEmail(email) {
     return (email || '').trim().toLowerCase().replace(/@almcg\.com$/i, '@almoayyedcg.com');
@@ -78,8 +83,7 @@ async function resolvePricingAccessContext(userEmail) {
 
     const roleStr = String(user.Roles || '').toLowerCase();
     const isAdmin = roleStr.includes('admin') || roleStr.includes('system');
-    const deptNorm = normalizePricingJobName(user.Department || '');
-    const isManagementDept = deptNorm === 'management';
+    const isManagementDept = userHasManagementDepartment(user.Department || '');
     // Management + Admin: CC-coordinator style access (all divisions, unlocked report filters, pricing division toolbar).
     // They may not appear in CCMailIds, so treat them as CC-like with global division coordinator permissions.
     const isCcUser = isCcFromMaster || isManagementDept || isAdmin;
@@ -160,27 +164,29 @@ function collapsePricingCompareKey(s) {
     return (s || '').toString().toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
-/** Jobs on this enquiry whose ItemName matches Master.Department (used for SE scoping and pending checks). */
+/** Jobs on this enquiry whose ItemName matches any Master.Department token (CSV OK). */
 function getDepartmentPricingAnchors(enqJobs, userDepartment) {
     const myJobs = [];
-    const deptNorm = normalizePricingJobName(userDepartment);
-    const deptKey = collapsePricingCompareKey(userDepartment);
-    if (!deptNorm && !deptKey) return myJobs;
+    const deptTokens = parseUserDepartments(userDepartment);
+    if (!deptTokens.length) return myJobs;
+
     enqJobs.forEach((job) => {
         const mefDeptKey = collapsePricingCompareKey(job.DepartmentName ?? job.departmentName ?? '');
-        if (deptKey && mefDeptKey && mefDeptKey === deptKey) {
-            const jId = jobIdOfPricing(job);
-            if (jId != null && !myJobs.find((x) => String(jobIdOfPricing(x)) === String(jId))) {
-                myJobs.push(job);
-            }
-            return;
-        }
         const jNorm = normalizePricingJobName(job.ItemName);
-        const deptAnchors =
-            jNorm === deptNorm ||
-            (deptNorm.length >= 3 && jNorm.includes(deptNorm)) ||
-            (deptNorm.length >= 3 && deptNorm.includes(jNorm));
-        if (deptAnchors) {
+        const rawItemKey = collapsePricingCompareKey(job.ItemName ?? job.itemName ?? '');
+
+        const matched = deptTokens.some((token) => {
+            const deptNorm = normalizePricingJobName(token);
+            const deptKey = collapsePricingCompareKey(token);
+            if (deptKey && mefDeptKey && mefDeptKey === deptKey) return true;
+            return (
+                jNorm === deptNorm ||
+                divisionCompareKeysCompatible(deptNorm, jNorm) ||
+                divisionCompareKeysCompatible(deptKey, rawItemKey)
+            );
+        });
+
+        if (matched) {
             const jId = jobIdOfPricing(job);
             if (jId != null && !myJobs.find((x) => String(jobIdOfPricing(x)) === String(jId))) {
                 myJobs.push(job);
@@ -214,26 +220,26 @@ function getPricingAnchorJobs(enqJobs, ctx, userEmail) {
  * or fuzzy ItemName match, same as {@link getDepartmentPricingAnchors} when MEF has no DepartmentName on this row).
  */
 function jobBelongsToSessionDivision(job, divTrim) {
-    const d = (divTrim || '').trim();
-    if (!d) return true;
-    const divKey = collapsePricingCompareKey(d);
-    const mefDeptKey = collapsePricingCompareKey(job.DepartmentName ?? job.departmentName ?? '');
-    if (mefDeptKey && divKey && mefDeptKey === divKey) return true;
+    const tokens = parseUserDepartments(divTrim);
+    if (!tokens.length) return true;
+    return tokens.some((d) => {
+        const divKey = collapsePricingCompareKey(d);
+        const mefDeptKey = collapsePricingCompareKey(job.DepartmentName ?? job.departmentName ?? '');
+        if (mefDeptKey && divKey && mefDeptKey === divKey) return true;
 
-    const itemNorm = normalizePricingJobName(job.ItemName ?? job.itemName ?? '');
-    const divNorm = normalizePricingJobName(d);
-    if (itemNorm && divNorm) {
-        if (itemNorm === divNorm) return true;
-        if (divNorm.length >= 3 && itemNorm.includes(divNorm)) return true;
-        if (divNorm.length >= 3 && divNorm.includes(itemNorm)) return true;
-    }
-    const rawItemKey = collapsePricingCompareKey(job.ItemName ?? job.itemName ?? '');
-    if (rawItemKey && divKey) {
-        if (rawItemKey === divKey) return true;
-        if (divKey.length >= 3 && rawItemKey.includes(divKey)) return true;
-        if (rawItemKey.length >= 3 && divKey.includes(rawItemKey)) return true;
-    }
-    return false;
+        const itemNorm = normalizePricingJobName(job.ItemName ?? job.itemName ?? '');
+        const divNorm = normalizePricingJobName(d);
+        if (itemNorm && divNorm) {
+            if (itemNorm === divNorm) return true;
+            if (divisionCompareKeysCompatible(divNorm, itemNorm)) return true;
+        }
+        const rawItemKey = collapsePricingCompareKey(job.ItemName ?? job.itemName ?? '');
+        if (rawItemKey && divKey) {
+            if (rawItemKey === divKey) return true;
+            if (divisionCompareKeysCompatible(divKey, rawItemKey)) return true;
+        }
+        return false;
+    });
 }
 
 /**
@@ -404,10 +410,7 @@ function extractQuoteDivisionCodeFromNumber(quoteNumber) {
 }
 
 /** Saved quote row belongs to the user's session / profile division on this enquiry. */
-function quoteBelongsToSessionDivision(quote, enqJobs, sessionDivTrim, userDepartment) {
-    const div = (sessionDivTrim || userDepartment || '').trim();
-    if (!div) return true;
-
+function quoteBelongsToOneDivision(quote, enqJobs, div) {
     const ownJob = String(quote?.OwnJob ?? quote?.ownJob ?? '').trim();
     const qNum = String(quote?.QuoteNumber ?? quote?.quoteNumber ?? '').trim();
     const divJobs = (enqJobs || []).filter((j) => jobBelongsToSessionDivision(j, div));
@@ -442,6 +445,14 @@ function quoteBelongsToSessionDivision(quote, enqJobs, sessionDivTrim, userDepar
     return false;
 }
 
+function quoteBelongsToSessionDivision(quote, enqJobs, sessionDivTrim, userDepartment) {
+    const sessionDiv = String(sessionDivTrim || '').trim();
+    if (sessionDiv) return quoteBelongsToOneDivision(quote, enqJobs, sessionDiv);
+    const tokens = parseUserDepartments(userDepartment);
+    if (!tokens.length) return true;
+    return tokens.some((tok) => quoteBelongsToOneDivision(quote, enqJobs, tok));
+}
+
 function workflowEntryBelongsToUserDivision(entry, enqJobs, sessionDivTrim, userDepartment) {
     return quoteBelongsToSessionDivision(
         { OwnJob: entry?.ownJob, QuoteNumber: entry?.quoteNumber },
@@ -452,9 +463,12 @@ function workflowEntryBelongsToUserDivision(entry, enqJobs, sessionDivTrim, user
 }
 
 function filterQuotesToSessionDivision(quotes, enqJobs, sessionDivTrim, userDepartment) {
-    const div = (sessionDivTrim || userDepartment || '').trim();
-    if (!div) return quotes || [];
-    return (quotes || []).filter((q) => quoteBelongsToSessionDivision(q, enqJobs, sessionDivTrim, userDepartment));
+    const sessionDiv = String(sessionDivTrim || '').trim();
+    const tokens = sessionDiv ? [sessionDiv] : parseUserDepartments(userDepartment);
+    if (!tokens.length) return quotes || [];
+    return (quotes || []).filter((q) =>
+        tokens.some((tok) => quoteBelongsToOneDivision(q, enqJobs, tok))
+    );
 }
 
 /**
@@ -469,11 +483,17 @@ function resolveEnquiryQuoteListScope({
     workflowVisible,
     workflowOnlyListRow,
 }) {
-    if (!accessCtx || accessCtx.isAdmin) {
+    const sessionDiv = (sessionDivTrim || '').trim();
+    /** Division toolbar always scopes quote list rows (including admin). */
+    if (sessionDiv) {
+        if (!accessCtx || accessCtx.isAdmin) {
+            return { mode: 'division', quoteIds: null };
+        }
+    } else if (!accessCtx || accessCtx.isAdmin) {
         return { mode: 'all', quoteIds: null };
     }
 
-    const userDiv = (sessionDivTrim || userDepartment || '').trim();
+    const userDiv = sessionDiv || (userDepartment || '').trim();
 
     /**
      * Own job = user's division has jobs on this enquiry (non-CC: department anchors; CC: CCMailIds).

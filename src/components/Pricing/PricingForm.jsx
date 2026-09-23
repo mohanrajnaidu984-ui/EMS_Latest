@@ -17,15 +17,39 @@ import {
 import { EMS_TABLE_HEADER_GRADIENT } from '../../constants/emsTheme';
 import { quoteBlocksDeclineToQuote } from '../../utils/pricingQuoteTupleMatch';
 import { downloadPricingListXlsx } from './pricingListExcel';
+import { runtimeCurrencySymbol } from '../../utils/currency';
+import { useMasterCurrency } from '../../hooks/useMasterCurrency';
+import MasterCurrencyBadge from '../shared/MasterCurrencyBadge';
+import { parseUserDepartments, formatUserDepartments } from '../../utils/userDepartments';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
+
+/**
+ * Effective division scope for API calls.
+ * Pricing uses a single-select Division — empty only while options are still loading.
+ */
+function pricingEffectiveDivisions(selectedCsvOrList, allOptions = []) {
+    const selected = parseUserDepartments(selectedCsvOrList);
+    if (selected.length) return [selected[0]];
+    const all = parseUserDepartments(allOptions);
+    return all.length ? [all[0]] : [];
+}
+
+/** Build `&division=` query from single-select (always one division when options exist). */
+function pricingDivisionQueryParam(selectedCsvOrList, allOptions = []) {
+    const list = pricingEffectiveDivisions(selectedCsvOrList, allOptions);
+    if (!list.length) return '';
+    return `&division=${encodeURIComponent(formatUserDepartments(list))}`;
+}
 
 /** Parent layout already offsets content below fixed header; keep sticky bar flush. */
 const PRICING_STICKY_TOP = '0px';
 
 /** Price entry grid: quarter view width, capped to parent on small screens. */
 const PRICING_INPUT_SECTION_STYLE = {
-    width: 'min(25vw, 100%)',
+    // Wide enough for ~308px description + 116px value + Decline + trash (~40% over prior 25vw).
+    width: 'min(38vw, 100%)',
+    minWidth: 'min(620px, 100%)',
     maxWidth: '100%',
     boxSizing: 'border-box',
 };
@@ -542,6 +566,19 @@ function buildDefaultOptionNameGroupMaxIds(filteredOptions) {
     return m;
 }
 
+/** Base Price first, then other options by id (stable). */
+function sortPricingOptionsForDisplay(options) {
+    return [...(options || [])].sort((a, b) => {
+        const aBase = String(a?.name || '').trim().toLowerCase() === 'base price' ? 0 : 1;
+        const bBase = String(b?.name || '').trim().toLowerCase() === 'base price' ? 0 : 1;
+        if (aBase !== bBase) return aBase - bBase;
+        const ai = optIdNum(a?.id);
+        const bi = optIdNum(b?.id);
+        if (Number.isFinite(ai) && Number.isFinite(bi) && ai !== bi) return ai - bi;
+        return String(a?.name || '').localeCompare(String(b?.name || ''), undefined, { sensitivity: 'base' });
+    });
+}
+
 /** Trim-only alias (legacy name kept for call sites). */
 const stripJobItemPrefix = (n) => String(n || '').trim();
 
@@ -571,12 +608,12 @@ const sameEnquiryItemName = (optItem, jobItem) => {
  */
 function resolveEffectiveMyJobItemNames(jobs, serverEditableJobs, pricingListDivision) {
     const base = (serverEditableJobs || []).map((s) => (s || '').trim()).filter(Boolean);
-    const div = (pricingListDivision || '').trim();
-    if (!div || !Array.isArray(jobs) || !jobs.length) return base;
+    const divs = parseUserDepartments(pricingListDivision);
+    if (!divs.length || !Array.isArray(jobs) || !jobs.length) return base;
     const matches = [];
     for (const j of jobs) {
         const n = (j.itemName || '').trim();
-        if (n && sameEnquiryItemName(n, div)) {
+        if (n && divs.some((div) => sameEnquiryItemName(n, div))) {
             matches.push(n);
         }
     }
@@ -618,7 +655,7 @@ function splitSubJobPricesForListColumns(subJobPricesStr) {
     };
 }
 
-/** Department spec status from `getEnquiryPricingList` (Partial / None / All Priced). */
+/** Department spec status from `getEnquiryPricingList` (Partial / None / All Priced / Revision Required). */
 function pricingListSpecStatusMeta(enq) {
     const rawSpecStatus = enq?.UserSpecPricingSummaryStatus ?? enq?.userSpecPricingSummaryStatus;
     if (!rawSpecStatus) return null;
@@ -631,15 +668,19 @@ function pricingListSpecStatusMeta(enq) {
                 ? 'All Quoted for this Ownjob'
                 : rawSpecStatus === 'All Priced'
                   ? 'All Priced for Ownjob'
-                  : rawSpecStatus;
+                  : rawSpecStatus === 'Revision Required'
+                    ? 'Revision Required'
+                    : rawSpecStatus;
     const specStatusColor =
-        rawSpecStatus === 'All Quoted' || rawSpecStatus === 'All Priced'
-            ? '#16a34a'
-            : rawSpecStatus === 'None Priced'
-              ? '#dc2626'
-              : rawSpecStatus === 'Partial Priced'
-                ? '#ca8a04'
-                : '#64748b';
+        rawSpecStatus === 'Revision Required'
+            ? '#c2410c'
+            : rawSpecStatus === 'All Quoted' || rawSpecStatus === 'All Priced'
+              ? '#16a34a'
+              : rawSpecStatus === 'None Priced'
+                ? '#dc2626'
+                : rawSpecStatus === 'Partial Priced'
+                  ? '#ca8a04'
+                  : '#64748b';
     return { rawSpecStatus, specStatusDisplay, specStatusColor };
 }
 
@@ -648,6 +689,7 @@ function pricingListSpecStatusTwoLines(specMeta) {
     if (!specMeta) return null;
     const raw = specMeta.rawSpecStatus;
     const tail = 'for Ownjob';
+    if (raw === 'Revision Required') return { line1: 'Revision Required', line2: '' };
     if (raw === 'None Priced') return { line1: 'None Priced', line2: tail };
     if (raw === 'Partial Priced') return { line1: 'Partial Priced', line2: tail };
     if (raw === 'All Quoted') return { line1: 'All Quoted', line2: 'for this Ownjob' };
@@ -916,7 +958,7 @@ function PricingListCustomerTotalsFromJson({ items, priceFixedDecimals }) {
                         console.error('Date parse error:', e);
                     }
                 }
-                const badgeLabel = declined ? 'Decline to Quote' : has ? `BD ${displayPrice}` : 'Not Updated';
+                const badgeLabel = declined ? 'Decline to Quote' : has ? `${runtimeCurrencySymbol()} ${displayPrice}` : 'Not Updated';
                 const badgeStyle = declined
                     ? { color: '#9a3412', fontStyle: 'normal', background: '#ffedd5' }
                     : has
@@ -987,7 +1029,7 @@ function PricingListJobForestFromJson({ nodes, priceFixedDecimals }) {
         }
         const by = String(node.pricedBy ?? node.updatedBy ?? '').trim();
         const kids = Array.isArray(node.children) ? node.children : [];
-        const badgeLabel = declined ? 'Decline to Quote' : has ? `BD ${formatAmt(node.price)}` : 'Not Updated';
+        const badgeLabel = declined ? 'Decline to Quote' : has ? `${runtimeCurrencySymbol()} ${formatAmt(node.price)}` : 'Not Updated';
         const badgeStyle = declined
             ? { color: '#9a3412', fontStyle: 'normal', background: '#ffedd5' }
             : has
@@ -1126,7 +1168,7 @@ function PricingListSubJobPriceLines({ rows, priceFixedDecimals }) {
                         flexShrink: 0,
                     }}
                 >
-                    {isUpdated ? `BD ${displayPrice}` : 'Not Updated'}
+                    {isUpdated ? `${runtimeCurrencySymbol()} ${displayPrice}` : 'Not Updated'}
                 </span>
                 {isUpdated && displayDate && (
                     <span style={{ marginLeft: '3px', color: '#94a3b8', fontSize: '10px', lineHeight: 1.05, flexShrink: 0 }}>({displayDate})</span>
@@ -1180,16 +1222,24 @@ const PricingForm = ({ openContext = null }) => {
     const [pricingListDivision, setPricingListDivision] = useState(
         () => localStorage.getItem('pricing_listDivision') || ''
     );
+    const { currencyCode: pricingCurrencyCode } = useMasterCurrency({
+        division:
+            pricingEffectiveDivisions(pricingListDivision, pricingListDivisions)[0] || '',
+    });
     /** Pending list waits for this so the first fetch uses the resolved Division (avoids flicker + empty after refetch). */
     const [pricingDivisionBootstrapDone, setPricingDivisionBootstrapDone] = useState(false);
     const searchRef = useRef(null);
     const pricingListDivisionRef = useRef(pricingListDivision);
+    const pricingListDivisionsRef = useRef(pricingListDivisions);
     const pricingListSearchCriteriaRef = useRef(pricingListSearchCriteria);
     const pricingSearchColFiltersClearRef = useRef(() => {});
     const pricingPendingColFiltersClearRef = useRef(() => {});
     useEffect(() => {
         pricingListDivisionRef.current = pricingListDivision;
     }, [pricingListDivision]);
+    useEffect(() => {
+        pricingListDivisionsRef.current = pricingListDivisions;
+    }, [pricingListDivisions]);
     useEffect(() => {
         pricingListSearchCriteriaRef.current = pricingListSearchCriteria;
     }, [pricingListSearchCriteria]);
@@ -1203,6 +1253,10 @@ const PricingForm = ({ openContext = null }) => {
     const valuesRef = useRef(values);
     const [declineToQuote, setDeclineToQuote] = useState({});
     const declineToQuoteRef = useRef(declineToQuote);
+    /** Revision Required checkbox for current enquiry + lead job + customer. */
+    const [revisionRequired, setRevisionRequired] = useState(false);
+    /** True when backend already has RevisionRequired=Yes for current lead+customer scope. */
+    const [revisionRequiredSavedYes, setRevisionRequiredSavedYes] = useState(false);
     const draftValuesByCustomerRef = useRef({}); // { [normalizedCustomer]: { [cellKey]: value } }
     const draftDeclineByCustomerRef = useRef({}); // { [normalizedCustomer]: { [cellKey]: boolean } }
     useEffect(() => {
@@ -1214,10 +1268,17 @@ const PricingForm = ({ openContext = null }) => {
     const [newOptionNames, setNewOptionNames] = useState({});
     const [newOptionPrices, setNewOptionPrices] = useState({});
     const [showNewOptionInputs, setShowNewOptionInputs] = useState({});
+    /** Draft option labels while editing Base Price / Option-* names (keyed by option.id). */
+    const [optionNameDrafts, setOptionNameDrafts] = useState({});
+    /** Set when option rename/delete already persisted so Save All can confirm instead of "No changes". */
+    const pricingStructuralDirtyRef = React.useRef(false);
+    /** Lets Save All wait for an in-flight blur rename before flushing drafts / empty-check. */
+    const optionRenameInFlightRef = React.useRef(Promise.resolve());
     // Tracks the EnquiryFor jobId for each open "+ Add" draft so Save All can auto-commit drafts
     // even when the section `groupName` includes an `Lx - ` prefix (addOption's name lookup misses those).
     const [pendingAddJobIds, setPendingAddJobIds] = useState({});
     const [focusedCell, setFocusedCell] = useState(null); // tracks which price input is focused
+    const [focusedOptionNameId, setFocusedOptionNameId] = useState(null);
 
     // Customer state
     const [selectedCustomer, setSelectedCustomer] = useState(() => localStorage.getItem('pricing_selectedCustomer') || '');
@@ -1237,9 +1298,9 @@ const PricingForm = ({ openContext = null }) => {
             resolveEffectiveMyJobItemNames(
                 pricingData?.jobs,
                 pricingData?.access?.editableJobs,
-                pricingListDivision
+                pricingEffectiveDivisions(pricingListDivision, pricingListDivisions)
             ),
-        [pricingData?.jobs, pricingData?.access?.editableJobs, pricingListDivision]
+        [pricingData?.jobs, pricingData?.access?.editableJobs, pricingListDivision, pricingListDivisions]
     );
 
     // --- SHARED HELPERS (Step 4522) ---
@@ -1268,6 +1329,64 @@ const PricingForm = ({ openContext = null }) => {
         else localStorage.removeItem('pricing_selectedLeadId');
     }, [selectedLeadId]);
 
+    // Restore Revision Required checkbox from EPV for selected enquiry + lead job + customer.
+    useEffect(() => {
+        // After load, `pricingData.values` is a cell map — use raw EPV rows (or allValues buckets).
+        let valuesList = Array.isArray(pricingData?.rawEnquiryPricingValues)
+            ? pricingData.rawEnquiryPricingValues
+            : [];
+        if (!valuesList.length && pricingData?.allValues && typeof pricingData.allValues === 'object') {
+            const seen = new Set();
+            valuesList = [];
+            for (const bucket of Object.values(pricingData.allValues)) {
+                if (!bucket || typeof bucket !== 'object') continue;
+                for (const row of Object.values(bucket)) {
+                    if (!row || typeof row !== 'object') continue;
+                    const id = row.ID ?? row.id ?? `${row.OptionID}_${row.EnquiryForID}_${row.PriceOption}`;
+                    if (seen.has(String(id))) continue;
+                    seen.add(String(id));
+                    valuesList.push(row);
+                }
+            }
+        }
+        if (!valuesList.length && pricingData?.values && typeof pricingData.values === 'object' && !Array.isArray(pricingData.values)) {
+            valuesList = Object.values(pricingData.values);
+        }
+
+        const leadJob = (pricingData?.jobs || []).find((j) => String(j.id) === String(selectedLeadId));
+        const leadName = String(leadJob?.itemName || '').trim();
+        const custName = String(selectedCustomer || '').trim();
+        if (!leadName || !custName || !valuesList.length) {
+            setRevisionRequired(false);
+            setRevisionRequiredSavedYes(false);
+            return;
+        }
+        const yes = valuesList.some((v) => {
+            const flag = String(v.RevisionRequired ?? v.revisionRequired ?? '').trim().toLowerCase();
+            if (flag !== 'yes') return false;
+            const vLead = String(v.LeadJobName ?? v.leadJobName ?? '').trim();
+            const vCust = String(v.CustomerName ?? v.customerName ?? '').trim();
+            const leadOk =
+                !vLead ||
+                sameEnquiryItemName(vLead, leadName) ||
+                vLead.toLowerCase() === leadName.toLowerCase();
+            const custOk =
+                !vCust ||
+                vCust.toLowerCase() === custName.toLowerCase() ||
+                sameEnquiryItemName(vCust, custName);
+            return leadOk && custOk;
+        });
+        setRevisionRequired(yes);
+        setRevisionRequiredSavedYes(yes);
+    }, [
+        pricingData?.rawEnquiryPricingValues,
+        pricingData?.allValues,
+        pricingData?.values,
+        pricingData?.jobs,
+        selectedLeadId,
+        selectedCustomer,
+    ]);
+
 
     // Debounce timer
     const debounceRef = useRef(null);
@@ -1286,9 +1405,7 @@ const PricingForm = ({ openContext = null }) => {
         }
         setPendingListLoading(true);
         try {
-            const divQ = pricingListDivision.trim()
-                ? `&division=${encodeURIComponent(pricingListDivision.trim())}`
-                : '';
+            const divQ = pricingDivisionQueryParam(pricingListDivision, pricingListDivisions);
             const res = await fetch(
                 `${API_BASE}/api/pricing/list/pending?userEmail=${encodeURIComponent(userEmail)}${divQ}`
             );
@@ -1315,7 +1432,7 @@ const PricingForm = ({ openContext = null }) => {
         } finally {
             setPendingListLoading(false);
         }
-    }, [resolvePricingUserEmail, pricingListDivision]);
+    }, [resolvePricingUserEmail, pricingListDivision, pricingListDivisions]);
 
     const closePricingEditor = useCallback(() => {
         setPricingEditorStandalone(false);
@@ -1363,11 +1480,12 @@ const PricingForm = ({ openContext = null }) => {
                 if (cancelled) return;
                 const list = Array.isArray(data.divisions) ? data.divisions : [];
                 setPricingListDivisions(list);
-                setPricingListDivision((prev) => {
+                setPricingListDivision(() => {
                     if (!list.length) return '';
-                    const saved = localStorage.getItem('pricing_listDivision') || '';
-                    if (saved && list.includes(saved)) return saved;
-                    if (prev && list.includes(prev)) return prev;
+                    const rawSaved = localStorage.getItem('pricing_listDivision');
+                    const saved = parseUserDepartments(rawSaved).filter((s) => list.includes(s));
+                    // Single-select: prefer last saved division, else first accessible option.
+                    if (saved.length) return saved[0];
                     return list[0];
                 });
             } catch {
@@ -1404,10 +1522,10 @@ const PricingForm = ({ openContext = null }) => {
                 if (!userEmail) return;
                 const v = String(pricingListSearchCriteriaRef.current || '').trim();
                 if (v.length < 1) return;
-                const div = pricingListDivisionRef.current
-                    ? String(pricingListDivisionRef.current).trim()
-                    : '';
-                const divQ = div ? `&division=${encodeURIComponent(div)}` : '';
+                const divQ = pricingDivisionQueryParam(
+                    pricingListDivisionRef.current,
+                    pricingListDivisionsRef.current
+                );
                 const res = await fetch(
                     `${API_BASE}/api/pricing/list?search=${encodeURIComponent(v)}&userEmail=${encodeURIComponent(userEmail)}&pendingOnly=false${divQ}`
                 );
@@ -1448,8 +1566,10 @@ const PricingForm = ({ openContext = null }) => {
             debounceRef.current = setTimeout(async () => {
                 try {
                     const userEmail = resolvePricingUserEmail();
-                    const div = (pricingListDivisionRef.current || '').trim();
-                    const divQ = div ? `&division=${encodeURIComponent(div)}` : '';
+                    const divQ = pricingDivisionQueryParam(
+                        pricingListDivisionRef.current,
+                        pricingListDivisionsRef.current
+                    );
                     const res = await fetch(
                         `${API_BASE}/api/pricing/list?search=${encodeURIComponent(value.trim())}&userEmail=${encodeURIComponent(userEmail)}&pendingOnly=false${divQ}`
                     );
@@ -1504,7 +1624,8 @@ const PricingForm = ({ openContext = null }) => {
             if (q) params.set('search', q);
             if (df) params.set('dateFrom', df);
             if (dt) params.set('dateTo', dt);
-            if (pricingListDivision.trim()) params.set('division', pricingListDivision.trim());
+            const divList = pricingEffectiveDivisions(pricingListDivision, pricingListDivisions);
+            if (divList.length) params.set('division', formatUserDepartments(divList));
             const res = await fetch(`${API_BASE}/api/pricing/list?${params.toString()}`);
             if (res.ok) {
                 const data = await res.json();
@@ -1562,10 +1683,7 @@ const PricingForm = ({ openContext = null }) => {
 
         try {
             const userEmail = resolvePricingUserEmail();
-            const divQ =
-                pricingListDivision.trim() !== ''
-                    ? `&division=${encodeURIComponent(pricingListDivision.trim())}`
-                    : '';
+            const divQ = pricingDivisionQueryParam(pricingListDivision, pricingListDivisions);
             const url = `${API_BASE}/api/pricing/${encodeURIComponent(requestNo)}?userEmail=${encodeURIComponent(userEmail)}${divQ}${customerName ? `&customerName=${encodeURIComponent(customerName)}` : ''}`;
             // Always bypass HTTP cache — stale 304 bodies omit freshly POSTed EPO rows so Save All cannot resolve OptionID.
             const res = await fetch(url, { cache: 'no-store' });
@@ -1685,23 +1803,28 @@ const PricingForm = ({ openContext = null }) => {
                     return n === 'base price' || n === 'price' || n === 'optional';
                 };
 
-                // Build expected (ItemName, OptionName) pairs per job for **default** option rows only (+ Base Price).
-                // Custom option names are excluded so loadPricing does not POST duplicate EnquiryPricingOptions per lead/customer.
+                // Build expected (ItemName, OptionName) pairs per job for **default** option rows only.
+                // Do NOT always force "Base Price" — if the user renamed Base Price (e.g. to Base Price1),
+                // hardcoding Base Price here re-POSTs a blank Base Price row on every load.
+                // Only seed Base Price when the job still has no options at all.
                 const uniqueOptions = [];
                 const seenUo = new Set();
 
                 if (data.jobs) {
                     data.jobs.forEach(j => {
                         const ljName = findLeadJobName(j);
-                        const names = new Set(['Base Price']);
-                        if (data.options) {
-                            data.options.forEach((o) => {
-                                if (!o || !o.name) return;
-                                if (o.itemName && sameEnquiryItemName(o.itemName, j.itemName) && isAutoProvisionOptionName(o.name)) {
-                                    names.add(o.name);
-                                }
-                            });
+                        const jobOptions = (data.options || []).filter(
+                            (o) => o && o.itemName && sameEnquiryItemName(o.itemName, j.itemName)
+                        );
+                        const names = new Set();
+                        if (!jobOptions.length) {
+                            names.add('Base Price');
                         }
+                        jobOptions.forEach((o) => {
+                            if (isAutoProvisionOptionName(o.name)) {
+                                names.add(String(o.name).trim());
+                            }
+                        });
 
                         names.forEach(name => {
                             const key = `${j.itemName}|${name}|${ljName}`;
@@ -1981,6 +2104,8 @@ const PricingForm = ({ openContext = null }) => {
                 // ---------------------------------------------------------
 
                 setPricingData(data);
+                setOptionNameDrafts({});
+                setFocusedOptionNameId(null);
 
                 // Set selected customer (Ensure it's valid after filtering)
                 let validCustomer = customerName;
@@ -2765,7 +2890,13 @@ const PricingForm = ({ openContext = null }) => {
         }
 
         const nameNorm = (optToDelete.name || '').trim().toLowerCase();
-        if (nameNorm === 'base price') {
+        const siblingsSameItem = (pricingData.options || []).filter(
+            (o) =>
+                String(o.id) !== String(optionId) &&
+                sameEnquiryItemName(o.itemName, optToDelete.itemName)
+        );
+        // Allow deleting a leftover empty "Base Price" row after rename; otherwise keep the old rule.
+        if (nameNorm === 'base price' && siblingsSameItem.length === 0) {
             alert('Use the trash icon on the Base Price row to delete Base Price values.');
             return;
         }
@@ -2835,6 +2966,7 @@ const PricingForm = ({ openContext = null }) => {
 
             const allOk = results.every((res) => res.ok);
             if (allOk) {
+                pricingStructuralDirtyRef.current = true;
                 // Remove the deleted option's values from currentValues to prevent stale keys
                 const cleanedValues = Object.keys(currentValues).reduce((acc, key) => {
                     const kOptId = String(key).split('_')[0];
@@ -3025,6 +3157,171 @@ const PricingForm = ({ openContext = null }) => {
         }));
     };
 
+    /** Persist Base Price / Option-* label edits (EnquiryPricingOptions.OptionName). */
+    const renamePricingOptionName = async (option, job, nextNameRaw) => {
+        if (!pricingData || !option) return false;
+        // Base Price label is fixed — only custom option names can be renamed.
+        if (String(option.name || '').trim().toLowerCase() === 'base price') {
+            setFocusedOptionNameId(null);
+            setOptionNameDrafts((prev) => {
+                const next = { ...prev };
+                delete next[option.id];
+                return next;
+            });
+            return false;
+        }
+        const trimmed = String(nextNameRaw || '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const prevName = String(option.name || '').trim();
+        setFocusedOptionNameId(null);
+        if (!trimmed) {
+            setOptionNameDrafts((prev) => {
+                const next = { ...prev };
+                delete next[option.id];
+                return next;
+            });
+            return false;
+        }
+        if (trimmed === prevName) {
+            setOptionNameDrafts((prev) => {
+                const next = { ...prev };
+                delete next[option.id];
+                return next;
+            });
+            return false;
+        }
+
+        const isSimulated =
+            !!option.isSimulated || String(option.id || '').startsWith('simulated');
+
+        const run = async () => {
+            try {
+                if (isSimulated) {
+                    // Realize simulated Base Price as a real option under the new name.
+                    const priceNow =
+                        String(values[`${option.id}_${job?.id}`] ?? '')
+                            .replace(/,/g, '')
+                            .trim() || '0';
+                    const ok = await addOption(
+                        job?.itemName || option.itemName,
+                        trimmed,
+                        selectedCustomer,
+                        job?.id,
+                        priceNow
+                    );
+                    if (!ok) {
+                        setOptionNameDrafts((prev) => {
+                            const next = { ...prev };
+                            delete next[option.id];
+                            return next;
+                        });
+                        return false;
+                    }
+                    pricingStructuralDirtyRef.current = true;
+                    setOptionNameDrafts((prev) => {
+                        const next = { ...prev };
+                        delete next[option.id];
+                        return next;
+                    });
+                    return true;
+                }
+
+                const res = await fetch(`${API_BASE}/api/pricing/option/${encodeURIComponent(option.id)}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ optionName: trimmed }),
+                });
+                if (!res.ok) {
+                    let detail = '';
+                    try {
+                        const body = await res.json();
+                        detail = body?.error ? String(body.error) : '';
+                    } catch {
+                        /* ignore */
+                    }
+                    alert(detail || 'Could not rename price option.');
+                    setOptionNameDrafts((prev) => {
+                        const next = { ...prev };
+                        delete next[option.id];
+                        return next;
+                    });
+                    return false;
+                }
+
+                pricingStructuralDirtyRef.current = true;
+                setPricingData((prev) => {
+                    if (!prev) return prev;
+                    const opts = Array.isArray(prev.options) ? prev.options : [];
+                    return {
+                        ...prev,
+                        options: opts.map((o) =>
+                            String(o.id) === String(option.id) ? { ...o, name: trimmed } : o
+                        ),
+                    };
+                });
+                setOptionNameDrafts((prev) => {
+                    const next = { ...prev };
+                    delete next[option.id];
+                    return next;
+                });
+
+                // Auto-provision used to re-create "Base Price" after rename; remove any leftover
+                // empty Base Price siblings for the same item so the UI does not keep a ghost row.
+                if (prevName.toLowerCase() === 'base price') {
+                    const leftovers = (pricingData.options || []).filter(
+                        (o) =>
+                            String(o.id) !== String(option.id) &&
+                            String(o.name || '').trim().toLowerCase() === 'base price' &&
+                            sameEnquiryItemName(o.itemName, option.itemName)
+                    );
+                    if (leftovers.length) {
+                        await Promise.all(
+                            leftovers.map((o) =>
+                                fetch(`${API_BASE}/api/pricing/option/${encodeURIComponent(o.id)}`, {
+                                    method: 'DELETE',
+                                }).catch(() => null)
+                            )
+                        );
+                        const leftoverIds = new Set(leftovers.map((o) => String(o.id)));
+                        setPricingData((prev) => {
+                            if (!prev) return prev;
+                            return {
+                                ...prev,
+                                options: (prev.options || []).filter((o) => !leftoverIds.has(String(o.id))),
+                            };
+                        });
+                        setValues((prev) => {
+                            const next = { ...prev };
+                            Object.keys(next).forEach((k) => {
+                                const optId = k.split('_')[0];
+                                if (leftoverIds.has(String(optId))) delete next[k];
+                            });
+                            return next;
+                        });
+                    }
+                }
+                return true;
+            } catch (err) {
+                console.error('Rename option failed', err);
+                alert('Could not rename price option: ' + (err?.message || err));
+                setOptionNameDrafts((prev) => {
+                    const next = { ...prev };
+                    delete next[option.id];
+                    return next;
+                });
+                return false;
+            }
+        };
+
+        const p = run();
+        optionRenameInFlightRef.current = p.then(
+            () => undefined,
+            () => undefined
+        );
+        return p;
+    };
+
     const handleDeclineToQuoteChange = (jobId, checked, jobOptions) => {
         const rows = Array.isArray(jobOptions) ? jobOptions : [];
         if (!rows.length) return;
@@ -3091,6 +3388,54 @@ const PricingForm = ({ openContext = null }) => {
                 Object.assign(declineLive, declineDraft);
             }
         }
+
+        // Revision Required (enquiry + lead job + customer): prompt when re-saving while still checked.
+        const leadJobForRevision = (pricingData.jobs || []).find(
+            (j) => String(j.id) === String(selectedLeadId)
+        );
+        const revisionLeadJobName = String(leadJobForRevision?.itemName || '').trim();
+        let revisionCustomerName = String(selectedCustomer || '').trim();
+        if (!revisionCustomerName) {
+            revisionCustomerName = firstEnquiryCustomerName(pricingData, selectedCustomer);
+        }
+        let revisionFlagToSave = null;
+        let revisionNeedsPersist = false;
+        if (revisionRequiredSavedYes && revisionRequired) {
+            const keep = window.confirm('Does revision still required ?');
+            if (!keep) {
+                // Cancel = abort entire Save All (prices + revision flag unchanged).
+                return;
+            }
+            revisionFlagToSave = 'Yes';
+            revisionNeedsPersist = true;
+        } else if (revisionRequired && !revisionRequiredSavedYes) {
+            revisionFlagToSave = 'Yes';
+            revisionNeedsPersist = true;
+        } else if (!revisionRequired && revisionRequiredSavedYes) {
+            revisionFlagToSave = null;
+            revisionNeedsPersist = true;
+        }
+
+        const persistRevisionRequiredFlag = async () => {
+            if (!revisionNeedsPersist) return;
+            if (!revisionLeadJobName || !revisionCustomerName) {
+                throw new Error('Lead job and customer are required to save Revision Required.');
+            }
+            const rr = await fetch(`${API_BASE}/api/pricing/revision-required`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    requestNo: pricingData.enquiry.requestNo,
+                    leadJobName: revisionLeadJobName,
+                    customerName: revisionCustomerName,
+                    revisionRequired: revisionFlagToSave,
+                }),
+            });
+            if (!rr.ok) {
+                const body = await rr.text().catch(() => '');
+                throw new Error(`Revision Required save failed: HTTP ${rr.status}. ${body}`);
+            }
+        };
 
         // Auto-commit any open "+ Add" drafts where the user has typed both Name and Price.
         // Without this the user had to click "Add" a second time (to POST the option) BEFORE clicking
@@ -3227,6 +3572,42 @@ const PricingForm = ({ openContext = null }) => {
             const snapshot = pricingData.options.slice();
             setPricingData((prev) => (prev ? { ...prev, options: snapshot } : prev));
         }
+
+        // Wait for blur-rename that fires when clicking Save All, then flush any remaining description drafts.
+        await optionRenameInFlightRef.current;
+        let optionNamesSaved = 0;
+        const draftsToFlush = { ...(optionNameDrafts || {}) };
+        for (const [optId, draftRaw] of Object.entries(draftsToFlush)) {
+            const option = (pricingData.options || []).find((o) => String(o.id) === String(optId));
+            if (!option) continue;
+            const trimmed = String(draftRaw || '')
+                .replace(/\s+/g, ' ')
+                .trim();
+            const prevName = String(option.name || '').trim();
+            if (!trimmed || trimmed === prevName) {
+                setOptionNameDrafts((prev) => {
+                    const next = { ...prev };
+                    delete next[optId];
+                    return next;
+                });
+                continue;
+            }
+            const job =
+                (pricingData.jobs || []).find((j) => sameEnquiryItemName(j.itemName, option.itemName)) ||
+                (pricingData.jobs || []).find((j) => String(j.id) === String(selectedLeadId)) ||
+                null;
+            const ok = await renamePricingOptionName(option, job, trimmed);
+            if (ok) {
+                optionNamesSaved += 1;
+                // Keep in-memory option name current for priceOption fields in the save loop below.
+                option.name = trimmed;
+            }
+        }
+        await optionRenameInFlightRef.current;
+
+        const hadStructuralChanges =
+            pricingStructuralDirtyRef.current || optionNamesSaved > 0 || draftCreatedOptions.length > 0;
+        pricingStructuralDirtyRef.current = false;
 
         const requestNo = pricingData.enquiry.requestNo;
         const userName = currentUser?.name || currentUser?.FullName || 'Unknown';
@@ -3900,6 +4281,22 @@ const PricingForm = ({ openContext = null }) => {
                 return;
             }
 
+            if (hadStructuralChanges || revisionNeedsPersist) {
+                setSaving(true);
+                try {
+                    await persistRevisionRequiredFlag();
+                    alert('✓ Pricing saved successfully!');
+                    loadPricing(pricingData.enquiry.requestNo, selectedCustomer);
+                    refreshPendingRequests();
+                } catch (err) {
+                    console.error('Error saving:', err);
+                    alert('Failed to save pricing: ' + (err?.message || err));
+                } finally {
+                    setSaving(false);
+                }
+                return;
+            }
+
             alert('No changes to save.');
             loadPricing(pricingData.enquiry.requestNo, selectedCustomer);
             return;
@@ -3938,6 +4335,7 @@ const PricingForm = ({ openContext = null }) => {
                 }
                 await r.json().catch(() => null);
             }
+            await persistRevisionRequiredFlag();
             alert('✓ Pricing saved successfully!');
             loadPricing(pricingData.enquiry.requestNo, selectedCustomer);
             refreshPendingRequests();
@@ -4294,12 +4692,14 @@ const PricingForm = ({ openContext = null }) => {
             }
         });
 
-        // Step 3: Ensure "Base Price" row is ALWAYS present for relevant jobs
+        // Step 3: Ensure a Base Price row only when this job has no options yet.
+        // Do NOT re-inject "Base Price" after the user renames the existing Base Price row.
         const custKeyForSim = normalizePricingCustomerKey(selectedCustomer);
         const leadJob = pricingData.jobs?.find(j => j.id == selectedLeadId);
-        if (leadJob && selectedCustomer && !results.some(
-            (o) => o.name === 'Base Price' && sameEnquiryItemName(o.itemName, leadJob.itemName)
-        )) {
+        const itemHasAnyOption = (itemName) =>
+            results.some((o) => sameEnquiryItemName(o.itemName, itemName));
+
+        if (leadJob && selectedCustomer && !itemHasAnyOption(leadJob.itemName)) {
             results.push({
                 // Include customer key so simulated rows don't leak values across BEMCO/TEMCO tabs.
                 id: `simulated_base_lead_${leadJob.id}_${custKeyForSim || 'tab'}`,
@@ -4317,9 +4717,7 @@ const PricingForm = ({ openContext = null }) => {
                 pricingData.access.hasLeadAccess ||
                 clientOwnJobCoversLeadSubtree ||
                 editable.some((en) => sameEnquiryItemName(en, sj.itemName));
-            if (canSeeOrEdit && !results.some(
-                (o) => o.name === 'Base Price' && sameEnquiryItemName(o.itemName, sj.itemName)
-            )) {
+            if (canSeeOrEdit && !itemHasAnyOption(sj.itemName)) {
                 results.push({
                     // Include customer key so simulated rows don't leak values across tabs.
                     id: `simulated_base_sj_${sj.id}_${custKeyForSim || 'tab'}`,
@@ -4343,8 +4741,38 @@ const PricingForm = ({ openContext = null }) => {
             console.log('[Pricing filteredOptions] selectedLeadId', selectedLeadId, 'jobs', pricingData.jobs?.length, 'raw options', pricingData.options?.length, 'filtered', results.length, 'by leadJobName', byLead, 'by itemName', byItem);
         }
 
-        return results;
-    }, [pricingData, selectedCustomer, selectedLeadId, effectiveMyJobItemNames, pricingListDivision]);
+        // Hide leftover empty "Base Price" when the same job already has other options
+        // (created by old auto-provision after renaming Base Price).
+        const optionHasPositivePrice = (optId) => {
+            const idStr = String(optId);
+            const buckets = [values, pricingData.values];
+            if (pricingData.allValues && typeof pricingData.allValues === 'object') {
+                buckets.push(...Object.values(pricingData.allValues));
+            }
+            for (const bucket of buckets) {
+                if (!bucket || typeof bucket !== 'object') continue;
+                for (const [k, v] of Object.entries(bucket)) {
+                    if (!k.startsWith(`${idStr}_`)) continue;
+                    const n = parseFloat(String(v ?? '').replace(/,/g, ''));
+                    if (Number.isFinite(n) && n > 0) return true;
+                }
+            }
+            return false;
+        };
+
+        return results.filter((o) => {
+            const name = String(o.name || '').trim().toLowerCase();
+            if (name !== 'base price') return true;
+            const siblings = results.filter(
+                (x) =>
+                    String(x.id) !== String(o.id) &&
+                    sameEnquiryItemName(x.itemName, o.itemName)
+            );
+            if (!siblings.length) return true;
+            if (optionHasPositivePrice(o.id)) return true;
+            return false;
+        });
+    }, [pricingData, selectedCustomer, selectedLeadId, effectiveMyJobItemNames, pricingListDivision, values]);
 
     /** Full-height list shell so wide tables scroll horizontally at the bottom of the viewport, not under a short tbody. */
     const listFillsViewport =
@@ -4396,7 +4824,8 @@ const PricingForm = ({ openContext = null }) => {
                 rows,
                 mode: isSearch ? 'search' : 'pending',
                 meta: {
-                    division: pricingListDivision || '',
+                    division:
+                        pricingEffectiveDivisions(pricingListDivision, pricingListDivisions)[0] || '',
                     category: isSearch ? 'Search Price' : 'Pending Pricing',
                     searchQuery: String(pricingListSearchCriteria || '').trim(),
                     dateFrom: pricingListDateFrom || '',
@@ -4513,11 +4942,24 @@ const PricingForm = ({ openContext = null }) => {
                                 lineHeight: 1.15,
                             }}
                         >
-                            Division
+                            Division Name
                         </span>
                         <select
-                            value={pricingListDivision}
-                            onChange={(e) => setPricingListDivision(e.target.value)}
+                            aria-label="Division Name"
+                            value={
+                                pricingListDivisions.includes(String(pricingListDivision || '').trim())
+                                    ? String(pricingListDivision).trim()
+                                    : pricingListDivisions[0] || ''
+                            }
+                            onChange={(e) => {
+                                const next = String(e.target.value || '').trim();
+                                setPricingListDivision(next);
+                                if (pricingListCategory === PRICING_LIST_CATEGORY.PENDING) {
+                                    setPricingEditorStandalone(false);
+                                    setPricingData(null);
+                                    setSelectedEnquiry(null);
+                                }
+                            }}
                             disabled={pricingListDivisionsLoading || !pricingListDivisions.length}
                             style={{
                                 minWidth: '168px',
@@ -4527,25 +4969,20 @@ const PricingForm = ({ openContext = null }) => {
                                 minHeight: '26px',
                                 borderRadius: '6px',
                                 border: '1px solid #cbd5e1',
-                                background: pricingListDivisionsLoading ? '#f1f5f9' : '#fff',
+                                background:
+                                    pricingListDivisionsLoading || !pricingListDivisions.length
+                                        ? '#f1f5f9'
+                                        : '#fff',
                                 color: '#334155',
                                 cursor:
-                                    pricingListDivisionsLoading
-                                    || pricingListDivisions.length === 0
+                                    pricingListDivisionsLoading || !pricingListDivisions.length
                                         ? 'not-allowed'
                                         : 'pointer',
                             }}
                         >
-                            {pricingListDivisionsLoading && pricingListDivisions.length === 0 && (
-                                <option value="" disabled>
-                                    Loading…
-                                </option>
-                            )}
-                            {!pricingListDivisionsLoading && pricingListDivisions.length === 0 && (
-                                <option value="" disabled>
-                                    No divisions
-                                </option>
-                            )}
+                            {pricingListDivisionsLoading && !pricingListDivisions.length ? (
+                                <option value="">Loading…</option>
+                            ) : null}
                             {pricingListDivisions.map((d) => (
                                 <option key={d} value={d}>
                                     {d}
@@ -4851,6 +5288,16 @@ const PricingForm = ({ openContext = null }) => {
                                 >
                                     <FilterX size={13} strokeWidth={2} aria-hidden="true" />
                                 </button>
+                                <MasterCurrencyBadge
+                                    currencyCode={pricingCurrencyCode}
+                                    division={
+                                        pricingEffectiveDivisions(
+                                            pricingListDivision,
+                                            pricingListDivisions
+                                        )[0] || ''
+                                    }
+                                    style={{ alignSelf: 'center' }}
+                                />
                             </div>
                         </div>
                     </div>
@@ -4986,6 +5433,15 @@ const PricingForm = ({ openContext = null }) => {
                                 </h3>
                             </div>
                             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                <MasterCurrencyBadge
+                                    currencyCode={pricingCurrencyCode}
+                                    division={
+                                        pricingEffectiveDivisions(
+                                            pricingListDivision,
+                                            pricingListDivisions
+                                        )[0] || ''
+                                    }
+                                />
                                 {(() => {
                                     // Access type should depend on whether the user's "own job" is the selected Lead Job.
                                     // - If selected lead job is the same as user's assigned editable job => "Lead Job Access"
@@ -6358,6 +6814,7 @@ const PricingForm = ({ openContext = null }) => {
 
                                                 return hierarchyResults.map(group => {
                                                     const job = group.job;
+                                                    const displayOptions = sortPricingOptionsForDisplay(group.options);
                                                     let groupName = job.itemName;
                                                     if (job.isLead) {
                                                         const code = (job.leadJobCode || job.LeadJobCode || '').trim();
@@ -6384,7 +6841,7 @@ const PricingForm = ({ openContext = null }) => {
                                                                     {sectionTitle}
                                                                 </td>
                                                             </tr>
-                                                            {group.options.map(option => {
+                                                            {displayOptions.map(option => {
                                                                 const key = `${option.id}_${job.id}`;
                                                                 const canEditRow = canEditSection;
                                                                 const priceMaskedByQuote =
@@ -6438,16 +6895,128 @@ const PricingForm = ({ openContext = null }) => {
                                                                 return (
                                                                     <React.Fragment key={`${option.id}_${job.id}`}>
                                                                     <tr style={{ borderBottom: priceMaskedByQuote ? 'none' : '1px solid #e2e8f0' }}>
-                                                                        <td style={{ padding: '4px 10px', fontWeight: '500', color: '#1e293b', fontSize: '12px' }}>{option.name}</td>
-                                                                        <td style={{ padding: '2px 6px', textAlign: 'right', verticalAlign: 'middle' }}>
+                                                                        <td
+                                                                            style={{
+                                                                                padding: '4px 10px',
+                                                                                fontWeight: '500',
+                                                                                color: '#1e293b',
+                                                                                fontSize: '12px',
+                                                                                width: '308px',
+                                                                                minWidth: '308px',
+                                                                                maxWidth: '308px',
+                                                                                verticalAlign: 'middle',
+                                                                                overflow: 'hidden',
+                                                                            }}
+                                                                        >
+                                                                            {canEditRow &&
+                                                                            String(option.name || '').trim().toLowerCase() !== 'base price' ? (
+                                                                                <textarea
+                                                                                    rows={1}
+                                                                                    value={
+                                                                                        Object.prototype.hasOwnProperty.call(
+                                                                                            optionNameDrafts,
+                                                                                            option.id
+                                                                                        )
+                                                                                            ? optionNameDrafts[option.id]
+                                                                                            : (option.name || '')
+                                                                                    }
+                                                                                    onFocus={() => setFocusedOptionNameId(option.id)}
+                                                                                    onChange={(e) => {
+                                                                                        const el = e.currentTarget;
+                                                                                        setOptionNameDrafts((prev) => ({
+                                                                                            ...prev,
+                                                                                            [option.id]: e.target.value,
+                                                                                        }));
+                                                                                        el.style.height = 'auto';
+                                                                                        el.style.height = `${Math.max(24, el.scrollHeight)}px`;
+                                                                                    }}
+                                                                                    onBlur={() =>
+                                                                                        renamePricingOptionName(
+                                                                                            option,
+                                                                                            job,
+                                                                                            Object.prototype.hasOwnProperty.call(
+                                                                                                optionNameDrafts,
+                                                                                                option.id
+                                                                                            )
+                                                                                                ? optionNameDrafts[option.id]
+                                                                                                : option.name
+                                                                                        )
+                                                                                    }
+                                                                                    onKeyDown={(e) => {
+                                                                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                                                                            e.preventDefault();
+                                                                                            e.currentTarget.blur();
+                                                                                        }
+                                                                                    }}
+                                                                                    ref={(el) => {
+                                                                                        if (!el) return;
+                                                                                        el.style.height = 'auto';
+                                                                                        el.style.height = `${Math.max(24, el.scrollHeight)}px`;
+                                                                                    }}
+                                                                                    title="Edit price option name"
+                                                                                    style={{
+                                                                                        display: 'block',
+                                                                                        width: '100%',
+                                                                                        maxWidth: '100%',
+                                                                                        boxSizing: 'border-box',
+                                                                                        padding: '2px 6px',
+                                                                                        margin: 0,
+                                                                                        border:
+                                                                                            focusedOptionNameId === option.id
+                                                                                                ? '1px solid #94a3b8'
+                                                                                                : '1px solid #e2e8f0',
+                                                                                        borderRadius: '4px',
+                                                                                        fontSize: '12px',
+                                                                                        fontWeight: '500',
+                                                                                        fontFamily: 'inherit',
+                                                                                        lineHeight: '18px',
+                                                                                        minHeight: '24px',
+                                                                                        resize: 'none',
+                                                                                        overflow: 'hidden',
+                                                                                        whiteSpace: 'pre-wrap',
+                                                                                        overflowWrap: 'anywhere',
+                                                                                        wordBreak: 'break-word',
+                                                                                        color: '#1e293b',
+                                                                                        backgroundColor: '#fff',
+                                                                                    }}
+                                                                                />
+                                                                            ) : (
+                                                                                <span
+                                                                                    style={{
+                                                                                        display: 'block',
+                                                                                        padding: '2px 6px',
+                                                                                        whiteSpace: 'pre-wrap',
+                                                                                        overflowWrap: 'anywhere',
+                                                                                        wordBreak: 'break-word',
+                                                                                    }}
+                                                                                    title={
+                                                                                        String(option.name || '').trim().toLowerCase() === 'base price'
+                                                                                            ? 'Base Price name cannot be edited'
+                                                                                            : undefined
+                                                                                    }
+                                                                                >
+                                                                                    {option.name}
+                                                                                </span>
+                                                                            )}
+                                                                        </td>
+                                                                        <td
+                                                                            style={{
+                                                                                padding: '4px 6px',
+                                                                                textAlign: 'right',
+                                                                                verticalAlign: 'middle',
+                                                                                width: 'auto',
+                                                                                whiteSpace: 'nowrap',
+                                                                            }}
+                                                                        >
                                                                             <div
                                                                                 style={{
-                                                                                    display: 'flex',
+                                                                                    display: 'inline-flex',
                                                                                     alignItems: 'center',
                                                                                     justifyContent: 'flex-end',
-                                                                                    gap: '6px',
-                                                                                    width: '100%',
+                                                                                    gap: '10px',
                                                                                     flexWrap: 'nowrap',
+                                                                                    height: '24px',
+                                                                                    verticalAlign: 'middle',
                                                                                 }}
                                                                             >
                                                                                 <input
@@ -6475,6 +7044,7 @@ const PricingForm = ({ openContext = null }) => {
                                                                                         border: '1px solid #e2e8f0',
                                                                                         borderRadius: '4px',
                                                                                         fontSize: '12px',
+                                                                                        lineHeight: '18px',
                                                                                         minHeight: '24px',
                                                                                         height: '24px',
                                                                                         textAlign: 'right',
@@ -6494,7 +7064,9 @@ const PricingForm = ({ openContext = null }) => {
                                                                                         display: 'inline-flex',
                                                                                         alignItems: 'center',
                                                                                         gap: '4px',
+                                                                                        height: '24px',
                                                                                         fontSize: '10px',
+                                                                                        lineHeight: '24px',
                                                                                         color: declineBlockedByQuote ? '#94a3b8' : '#64748b',
                                                                                         whiteSpace: 'nowrap',
                                                                                         margin: 0,
@@ -6519,6 +7091,9 @@ const PricingForm = ({ openContext = null }) => {
                                                                                         }
                                                                                         style={{
                                                                                             margin: 0,
+                                                                                            width: '14px',
+                                                                                            height: '14px',
+                                                                                            flexShrink: 0,
                                                                                             cursor:
                                                                                                 canEditRow && !declineBlockedByQuote
                                                                                                     ? 'pointer'
@@ -6530,8 +7105,9 @@ const PricingForm = ({ openContext = null }) => {
                                                                                 <span
                                                                                     style={{
                                                                                         width: '22px',
+                                                                                        height: '24px',
                                                                                         flexShrink: 0,
-                                                                                        display: 'flex',
+                                                                                        display: 'inline-flex',
                                                                                         alignItems: 'center',
                                                                                         justifyContent: 'center',
                                                                                     }}
@@ -6595,7 +7171,7 @@ const PricingForm = ({ openContext = null }) => {
                                                             {canEditSection && (
                                                                 <>
                                                                     <tr style={{ background: '#f8fafc' }}>
-                                                                        <td style={{ padding: '4px 10px', verticalAlign: 'middle' }}>
+                                                                        <td style={{ padding: '4px 10px', verticalAlign: 'middle', width: '308px', minWidth: '308px', maxWidth: '308px' }}>
                                                                             {showNewOptionInputs[groupName] ? (
                                                                                 <input
                                                                                     type="text"
@@ -6613,7 +7189,10 @@ const PricingForm = ({ openContext = null }) => {
                                                                                         }
                                                                                     }}
                                                                                     style={{
-                                                                                        width: '100%',
+                                                                                        width: '308px',
+                                                                                        minWidth: '308px',
+                                                                                        maxWidth: '308px',
+                                                                                        boxSizing: 'border-box',
                                                                                         padding: '2px 6px',
                                                                                         border: '1px solid #cbd5e1',
                                                                                         borderRadius: '4px',
@@ -6781,7 +7360,7 @@ const PricingForm = ({ openContext = null }) => {
                                         </tbody>
                                     </table>
                                     {/* Actions Footer */}
-                                    <div style={{ padding: '8px 12px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-start', alignItems: 'center', background: '#f8fafc' }}>
+                                    <div style={{ padding: '8px 12px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-start', alignItems: 'center', gap: '14px', background: '#f8fafc' }}>
                                         <button
                                             onClick={saveAll}
                                             disabled={saving}
@@ -6801,6 +7380,28 @@ const PricingForm = ({ openContext = null }) => {
                                         >
                                             <Save size={14} /> {saving ? 'Saving...' : 'Save All Prices'}
                                         </button>
+                                        <label
+                                            style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '6px',
+                                                margin: 0,
+                                                fontSize: '11.5px',
+                                                fontWeight: 600,
+                                                color: '#334155',
+                                                cursor: saving ? 'not-allowed' : 'pointer',
+                                                userSelect: 'none',
+                                            }}
+                                            title="When checked and saved, this enquiry stays on Pending Updates until Revision Required is cleared."
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={revisionRequired}
+                                                disabled={saving}
+                                                onChange={(e) => setRevisionRequired(e.target.checked)}
+                                            />
+                                            Revision Required
+                                        </label>
                                     </div>
                                 </>
                             )}

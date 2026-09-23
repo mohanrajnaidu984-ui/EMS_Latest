@@ -3,6 +3,8 @@
  * Stabilizes levels, customer resolution, and department visibility
  */
 
+const { anyDepartmentTokenMatchesJobName } = require('../lib/userDepartments');
+
 /**
  * Builds a map of JobID -> Job object
  */
@@ -126,17 +128,12 @@ function filterJobsByDepartment(jobs, userParams) {
         const userEmailLower = userEmail ? userEmail.toLowerCase() : '';
         const userEmailUsername = userEmailLower.split('@')[0];
         
-        const deptNorm = userDepartment ? userDepartment.toLowerCase().trim().replace(/\s+project\s*$/i, '').trim() : '';
-        // Strip "L1 - ", "L2 - " etc. from job name so "L2 - HVAC Project" matches department "HVAC"
-        const jobNameRaw = job.ItemName ? job.ItemName.replace(/^(L\d+|Sub Job)\s*-\s*/i, '').trim() : '';
-        const jobNameNorm = jobNameRaw.toLowerCase();
-
         // Manager Rule (Rule 1): direct email / username in CC/Common mails
         const isManager = (userEmailLower && emails.includes(userEmailLower)) ||
             (userEmailUsername && emails.split(',').some(e => e.trim() === userEmailUsername.trim()));
 
-        // Division Rule (Rule 2): department keyword in Job Name (e.g. "HVAC" / "HVAC Project" in "L2 - HVAC Project")
-        const isDivisionMatch = deptNorm && (jobNameNorm.includes(deptNorm) || jobNameNorm.replace(/\s+project\s*$/i, '').trim().includes(deptNorm));
+        // Division Rule (Rule 2): any Master_ConcernedSE.Department token in Job Name (CSV OK)
+        const isDivisionMatch = !!(userDepartment && anyDepartmentTokenMatchesJobName(userDepartment, job.ItemName));
 
         // Assignment Visibility (Rule 3): assigned engineers (isConcernedSE) must ALSO
         // satisfy division rule – they should not see unrelated divisions.

@@ -46,7 +46,7 @@ function resolveLeadJobCodeForEnquiryForItem(item, allItems) {
     return segments.join('-');
 }
 
-/** Build ConcernedSE rows — one accountable member per structure division row; ownJob = that division. */
+/** Build ConcernedSE rows — every selected SE gets OwnJob for that division; only one Accountability=Yes. */
 function buildConcernedSEAssignmentsFromEnquiryFor(enqForList) {
     const items = Array.isArray(enqForList) ? enqForList : [];
     const seen = new Map();
@@ -79,7 +79,8 @@ function buildConcernedSEAssignmentsFromEnquiryFor(enqForList) {
                 seName,
                 leadJobCode: leadJobCode || null,
                 accountability: isAccountable ? 'Yes' : null,
-                ownJob: isAccountable && divisionName ? divisionName : null,
+                // OwnJob applies to every selected member on this structure row (not only accountable).
+                ownJob: divisionName || null,
             });
         }
     }
@@ -87,7 +88,7 @@ function buildConcernedSEAssignmentsFromEnquiryFor(enqForList) {
     return finalizeAccountability([...seen.values()]);
 }
 
-/** One accountable SE per lead-job code + division (ownJob) scope. */
+/** One accountable SE per lead-job code + division (ownJob) scope. Keep OwnJob on all selected members. */
 function finalizeAccountability(rows) {
     const list = Array.isArray(rows) ? rows : [];
     const winnerByScope = new Map();
@@ -104,14 +105,20 @@ function finalizeAccountability(rows) {
 
     return list.map((row) => {
         const code = String(row.leadJobCode || '').trim().toUpperCase();
-        const own = String(row.ownJob || row.OwnJob || '').trim().toLowerCase();
+        const ownRaw = row.ownJob ?? row.OwnJob ?? null;
+        const own = String(ownRaw || '').trim().toLowerCase();
         const scopeKey = own ? `${code}|${own}` : code;
-        if (!scopeKey || !winnerByScope.has(scopeKey)) return row;
+        if (!scopeKey || !winnerByScope.has(scopeKey)) {
+            return {
+                ...row,
+                ownJob: ownRaw || null,
+            };
+        }
         const winner = winnerByScope.get(scopeKey);
         return {
             ...row,
             accountability: row.seName === winner ? 'Yes' : null,
-            ownJob: row.seName === winner ? row.ownJob || row.OwnJob || null : null,
+            ownJob: ownRaw || null,
         };
     });
 }
@@ -219,7 +226,7 @@ async function clearPriorAccountabilityForLeadJobs(sql, transaction, requestNo, 
         if (flags.ownJob && winner.ownJob) {
             await r.query(`
                 UPDATE ConcernedSE
-                SET accountability = NULL, ownjob = NULL
+                SET accountability = NULL
                 WHERE RequestNo = @reqNo
                   AND UPPER(LTRIM(RTRIM(ISNULL(leadjobcode, ISNULL(LeadJobCode, N''))))) = UPPER(LTRIM(RTRIM(@code)))
                   AND LOWER(LTRIM(RTRIM(ISNULL(ownjob, N'')))) = LOWER(LTRIM(RTRIM(@ownJob)))

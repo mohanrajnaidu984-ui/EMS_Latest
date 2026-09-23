@@ -17,6 +17,42 @@ import {
     PROBABILITY_VIEW_MODE_LABELS,
 } from './probabilityListExcel';
 import '../../styles/emsTableColumnFilters.css';
+import { formatRuntimeCurrencyAmount, stripCurrencyNoise, getRuntimeCurrencyCode } from '../../utils/currency';
+import { useMasterCurrency } from '../../hooks/useMasterCurrency';
+import MasterCurrencyBadge from '../shared/MasterCurrencyBadge';
+import SalesReportMultiSelect from '../SalesReport/SalesReportMultiSelect';
+import {
+    parseUserDepartments,
+    formatUserDepartments,
+    userHasElevatedDepartment,
+} from '../../utils/userDepartments';
+
+function isProbabilitySubUser(currentUser) {
+    if (!currentUser) return false;
+    if (currentUser?.Roles === 'Admin' || currentUser?.role === 'Admin') return false;
+    const depts = parseUserDepartments(currentUser?.Department || currentUser?.Division || '');
+    if (!depts.length) return false;
+    return !userHasElevatedDepartment(depts);
+}
+
+/** Empty multi-select = all accessible divisions. */
+function probabilityEffectiveDivisions(selectedCsvOrList, allOptions = []) {
+    const selected = parseUserDepartments(selectedCsvOrList);
+    if (selected.length) return selected;
+    return parseUserDepartments(allOptions);
+}
+
+function probabilityDivisionQueryValue(selectedCsvOrList, allOptions = []) {
+    const list = probabilityEffectiveDivisions(selectedCsvOrList, allOptions);
+    return list.length ? formatUserDepartments(list) : '';
+}
+
+/** Single division for mutations / currency (row OwnJobName preferred). */
+function probabilityMutationDivision(selectedCsvOrList, allOptions = [], rowOwnJobName = '') {
+    const fromRow = String(rowOwnJobName || '').trim();
+    if (fromRow) return fromRow;
+    return probabilityEffectiveDivisions(selectedCsvOrList, allOptions)[0] || '';
+}
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '';
 
@@ -136,12 +172,34 @@ const buildProbItemSnapshot = (item) => {
     return snap;
 };
 
+const parseLostCompetitorPriceRaw = (item) =>
+    stripCurrencyNoise(String(item?.LostCompetitorPrice ?? '')).trim();
+
+const getLostMandatoryMissingFields = (item) => {
+    if (!item || item.Status !== 'Lost') return [];
+    const missing = [];
+    if (!String(item.LostCompetitor || '').trim()) missing.push('Lost To');
+    if (!String(item.LostReason || '').trim()) missing.push('Reason for losing');
+    const priceRaw = parseLostCompetitorPriceRaw(item);
+    if (priceRaw === '' || Number.isNaN(Number(priceRaw)) || Number(priceRaw) <= 0) {
+        missing.push("Competitor's price");
+    }
+    const lostDateVal = item.LostDate;
+    if (lostDateVal == null || (typeof lostDateVal === 'string' && !lostDateVal.trim())) {
+        missing.push('Lost Date');
+    } else {
+        const lostTime = new Date(lostDateVal).getTime();
+        if (Number.isNaN(lostTime)) missing.push('Lost Date (invalid)');
+    }
+    return missing;
+};
+
 /** Parse EnquiryQuotes.TotalAmount from a quote-ref list entry. */
 function parseQuoteRefTotalAmount(hit) {
     if (!hit || typeof hit !== 'object') return null;
     const raw = hit.TotalAmount ?? hit.totalAmount;
     if (raw === null || raw === undefined || raw === '') return null;
-    const n = Number(String(raw).replace(/,/g, '').replace(/BD/gi, '').trim());
+    const n = Number(stripCurrencyNoise(String(raw)).trim());
     return Number.isFinite(n) ? n : null;
 }
 
@@ -172,8 +230,7 @@ function resolveRowNetQuotedNumber(item) {
 
 /** Numeric net quoted for filters/sort (same rules as display cell). */
 function getRowNetQuotedNumber(item, currentUser) {
-    const userDept = (currentUser?.Department || currentUser?.Division || '').trim().toLowerCase();
-    const isSubUser = userDept && userDept !== 'civil' && userDept !== 'admin' && currentUser?.Roles !== 'Admin' && currentUser?.role !== 'Admin';
+    const isSubUser = isProbabilitySubUser(currentUser);
     if (isSubUser && (!item.QuoteRefs || item.QuoteRefs.length === 0)) return null;
     return resolveRowNetQuotedNumber(item);
 }
@@ -181,7 +238,7 @@ function getRowNetQuotedNumber(item, currentUser) {
 function formatNetQuotedDisplay(item) {
     const n = resolveRowNetQuotedNumber(item);
     if (n === null || Number.isNaN(n)) return '';
-    return 'BD ' + n.toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+    return formatRuntimeCurrencyAmount(n);
 }
 
 function compareEnquiryNo(a, b) {
@@ -195,13 +252,35 @@ function compareEnquiryNo(a, b) {
     return sa.localeCompare(sb, undefined, { numeric: true, sensitivity: 'base' });
 }
 
+const resolveSessionUserEmail = (currentUser, storedLoginEmail) =>
+    String(
+        currentUser?.EmailId ||
+        currentUser?.email ||
+        currentUser?.MailId ||
+        storedLoginEmail ||
+        ''
+    ).trim();
+
 const ProbabilityForm = () => {
-    const { currentUser } = useAuth();
+    const { currentUser, storedLoginEmail } = useAuth();
     const { masters } = useData();
+    const sessionUserEmail = useMemo(
+        () => resolveSessionUserEmail(currentUser, storedLoginEmail),
+        [currentUser, storedLoginEmail]
+    );
 
     // --- View State ---
     const [divisionOptions, setDivisionOptions] = useState([]);
+    const [divisionLoading, setDivisionLoading] = useState(false);
+    const [divisionLoadError, setDivisionLoadError] = useState('');
     const [selectedDivision, setSelectedDivision] = useState(() => localStorage.getItem('prob_division') || '');
+    const probabilityCurrencyDivision = useMemo(
+        () => probabilityMutationDivision(selectedDivision, divisionOptions),
+        [selectedDivision, divisionOptions]
+    );
+    const { currencyCode: probabilityCurrencyCode } = useMasterCurrency({
+        division: probabilityCurrencyDivision || '',
+    });
     const [listMode, setListMode] = useState(() => localStorage.getItem('prob_listMode') || 'Pending'); // 'Pending', 'Won', 'Lost', 'OnHold', 'Cancelled', 'FollowUp', 'Retendered'
     const [fromDate, setFromDate] = useState(() => localStorage.getItem('prob_fromDate') || '');
     const [toDate, setToDate] = useState(() => localStorage.getItem('prob_toDate') || '');
@@ -209,6 +288,7 @@ const ProbabilityForm = () => {
     const [viewSearchText, setViewSearchText] = useState(() => localStorage.getItem('prob_viewSearchText') || '');
 
     const [loadingList, setLoadingList] = useState(false);
+    const listFetchAbortRef = useRef(null);
     const [updatingReqNo, setUpdatingReqNo] = useState(null); // Track which row is being updated
     const [updatedItems, setUpdatedItems] = useState({});
     /** Per-row snapshot of editable fields, captured on fetch and after each successful save.
@@ -285,40 +365,75 @@ const ProbabilityForm = () => {
 
 
     useEffect(() => {
+        if (!currentUser) return undefined;
+        if (!sessionUserEmail) {
+            setDivisionOptions([]);
+            setSelectedDivision('');
+            setDivisionLoadError('');
+            setDivisionLoading(false);
+            return undefined;
+        }
+
+        let cancelled = false;
         const loadDivisions = async () => {
-            if (!currentUser) return;
+            setDivisionLoading(true);
+            setDivisionLoadError('');
             try {
-                const userEmail = currentUser?.EmailId || currentUser?.email || '';
-                if (!userEmail) return;
-                const res = await fetch(`${API_BASE}/api/probability/divisions?userEmail=${encodeURIComponent(userEmail)}`);
-                if (!res.ok) return;
+                const res = await fetch(
+                    `${API_BASE}/api/probability/divisions?userEmail=${encodeURIComponent(sessionUserEmail)}`
+                );
+                if (cancelled) return;
+                if (!res.ok) {
+                    setDivisionOptions([]);
+                    setSelectedDivision('');
+                    setDivisionLoadError('Could not load divisions. Check that the API server is running.');
+                    return;
+                }
                 const data = await res.json();
-                const list = Array.isArray(data?.divisions) ? data.divisions.map((d) => String(d || '').trim()).filter(Boolean) : [];
+                const list = Array.isArray(data?.divisions)
+                    ? data.divisions.map((d) => String(d || '').trim()).filter(Boolean)
+                    : [];
                 setDivisionOptions(list);
                 if (!list.length) {
                     setSelectedDivision('');
+                    setDivisionLoadError('No division access for your account.');
                     return;
                 }
-                const existing = String(selectedDivision || '').trim().toLowerCase();
-                const hit = list.find((d) => d.toLowerCase() === existing);
-                setSelectedDivision(hit || data?.selectedDivision || list[0]);
+                setDivisionLoadError('');
+                const saved = parseUserDepartments(selectedDivision)
+                    .map((s) => list.find((d) => d.toLowerCase() === String(s).toLowerCase()))
+                    .filter(Boolean);
+                // Empty = All divisions (Pricing/Quote UX). Migrate legacy single value if still valid.
+                setSelectedDivision(formatUserDepartments(saved));
             } catch (e) {
+                if (cancelled) return;
                 console.error('ProbabilityForm: failed to load divisions', e);
                 setDivisionOptions([]);
                 setSelectedDivision('');
+                setDivisionLoadError('Could not load divisions. Check that the API server is running.');
+            } finally {
+                if (!cancelled) setDivisionLoading(false);
             }
         };
         loadDivisions();
+        return () => {
+            cancelled = true;
+        };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [currentUser?.EmailId, currentUser?.email]);
+    }, [currentUser, sessionUserEmail]);
 
-    // --- Fetch List ---
     useEffect(() => {
-        if (currentUser && selectedDivision) {
-            console.log('ProbabilityForm: Current User:', currentUser);
+        if (currentUser && sessionUserEmail && !divisionLoading && divisionOptions.length > 0) {
             fetchList();
         }
-    }, [listMode, fromDate, toDate, filterProbability, selectedDivision, currentUser]);
+        return () => {
+            if (listFetchAbortRef.current) {
+                listFetchAbortRef.current.abort();
+                listFetchAbortRef.current = null;
+            }
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [listMode, fromDate, toDate, filterProbability, selectedDivision, currentUser, sessionUserEmail, divisionLoading, divisionOptions]);
 
     useEffect(() => {
         if (!historyReqNo) return undefined;
@@ -334,6 +449,11 @@ const ProbabilityForm = () => {
     }, [historyReqNo]);
 
     const fetchList = async () => {
+        if (listFetchAbortRef.current) {
+            listFetchAbortRef.current.abort();
+        }
+        const controller = new AbortController();
+        listFetchAbortRef.current = controller;
         setLoadingList(true);
         try {
             const queryParams = new URLSearchParams({
@@ -341,16 +461,16 @@ const ProbabilityForm = () => {
                 fromDate: fromDate || '',
                 toDate: toDate || '',
                 probability: filterProbability || '',
-                userEmail: currentUser?.EmailId || currentUser?.email || '',
+                userEmail: sessionUserEmail,
                 userDepartment: currentUser?.Department || '',
-                division: selectedDivision || ''
+                division: probabilityDivisionQueryValue(selectedDivision, divisionOptions),
             });
 
             const url = `${API_BASE}/api/probability/list?${queryParams}`;
-            console.log('ProbabilityForm: Fetching list from:', url);
-            const res = await fetch(url);
+            const res = await fetch(url, { signal: controller.signal });
+            if (controller.signal.aborted) return;
             if (res.ok) {
-                const data = (await res.json()).map((item, index) => {
+                const data = (await res.json()).map((item) => {
                     if (item.QuoteOptions && typeof item.QuoteOptions === 'string') {
                         if (item.QuoteOptions.includes('::')) {
                             // Parse custom delimited string: OptionName::Price##OptionName2::Price2
@@ -373,7 +493,6 @@ const ProbabilityForm = () => {
                         item.QuoteOptions = [];
                     }
 
-                    console.log(`Enquiry ${item.RequestNo} API Data:`, { FilteredQuoteRefs: item.FilteredQuoteRefs, FinalQuoteRefsTarget: item.FinalQuoteRefsTarget });
                     // Handle QuoteRefsData from new FilteredQuoteRefs or legacy fields
                     let qRefsRaw = item.FilteredQuoteRefs || item.FinalQuoteRefsTarget || item.FinalQuoteRefTarget || item.QuoteRefsData;
 
@@ -475,11 +594,9 @@ const ProbabilityForm = () => {
                         }
                     }
 
-                    if (item.QuoteRefs && item.QuoteRefs.length > 0) {
-                        console.log(`Enquiry ${item.RequestNo} QuoteRefs:`, item.QuoteRefs);
-                    }
                     return item;
                 });
+                if (controller.signal.aborted) return;
                 setEnquiriesList(data);
                 // Capture baseline snapshots so the Update button can detect real edits.
                 const initialSnapshots = {};
@@ -497,10 +614,16 @@ const ProbabilityForm = () => {
                 setItemSnapshots({});
             }
         } catch (err) {
+            if (err?.name === 'AbortError') return;
             console.error("Error fetching list:", err);
             setEnquiriesList([]);
         } finally {
-            setLoadingList(false);
+            if (listFetchAbortRef.current === controller) {
+                listFetchAbortRef.current = null;
+            }
+            if (!controller.signal.aborted) {
+                setLoadingList(false);
+            }
         }
     };
 
@@ -650,7 +773,7 @@ const ProbabilityForm = () => {
                 return;
             }
             // Clean value for check
-            const rawVal = String(item.WonOrderValue || '').replace(/,/g, '').replace(/BD/g, '').trim();
+            const rawVal = stripCurrencyNoise(String(item.WonOrderValue || '')).trim();
             if (!item.WonOrderValue || isNaN(rawVal) || Number(rawVal) <= 0) {
                 alert('Valid Job Value is mandatory for Won status.');
                 return;
@@ -670,34 +793,11 @@ const ProbabilityForm = () => {
         }
 
         if (item.Status === 'Lost') {
-            if (!String(item.LostCompetitor || '').trim()) {
-                alert('Lost To is mandatory for Lost status.');
-                return;
-            }
-            if (!String(item.LostReason || '').trim()) {
-                alert('Reason for losing is mandatory for Lost status.');
-                return;
-            }
-            const priceRaw = String(item.LostCompetitorPrice ?? '')
-                .replace(/,/g, '')
-                .replace(/BD/gi, '')
-                .trim();
-            if (priceRaw === '' || Number.isNaN(Number(priceRaw))) {
-                alert("Competitor's price is mandatory for Lost status (enter a number, 0 is allowed).");
-                return;
-            }
-            if (Number(priceRaw) < 0) {
-                alert("Competitor's price cannot be negative.");
-                return;
-            }
-            const lostDateVal = item.LostDate;
-            if (lostDateVal == null || (typeof lostDateVal === 'string' && !lostDateVal.trim())) {
-                alert('Lost Date is mandatory for Lost status.');
-                return;
-            }
-            const lostTime = new Date(lostDateVal).getTime();
-            if (Number.isNaN(lostTime)) {
-                alert('Lost Date is invalid. Please select a valid date.');
+            const missingLost = getLostMandatoryMissingFields(item);
+            if (missingLost.length) {
+                alert(
+                    `Mandatory fields are not entered for Lost status.\n\nPlease fill in:\n• ${missingLost.join('\n• ')}`
+                );
                 return;
             }
         }
@@ -737,15 +837,16 @@ const ProbabilityForm = () => {
             // For Follow-up status, use NetQuotedValue as CustomerPreferredPrice if not explicitly set
             let customerPreferredPrice = item.CustomerPreferredPrice;
             if ((item.Status === 'FollowUp' || item.Status === 'Follow-up') && !customerPreferredPrice && item.NetQuotedValue) {
-                customerPreferredPrice = String(item.NetQuotedValue).replace(/,/g, '').replace(/BD/g, '').trim();
+                customerPreferredPrice = stripCurrencyNoise(String(item.NetQuotedValue)).trim();
             }
 
             const payload = {
                 enquiryNo: item.RequestNo,
                 projectName: item.ProjectName,
                 leadJobName: item.LeadJobName || '',
-                userEmail: currentUser?.EmailId || currentUser?.email || '',
-                division: selectedDivision || '',
+                userEmail: sessionUserEmail,
+                division: String(item.OwnJobName || '').trim()
+                    || probabilityDivisionQueryValue(selectedDivision, divisionOptions),
                 toName: item.WonCustomerName || '',
                 totalQuotedValue: item.SelectedTotalQuotedValue ?? item.TotalQuotedValue,
                 netQuotedValue: resolveRowNetQuotedNumber(item) ?? item.NetQuotedValue,
@@ -754,7 +855,7 @@ const ProbabilityForm = () => {
                 remarks: item.ProbabilityRemarks,
                 wonDetails: {
                     customerName: item.WonCustomerName,
-                    orderValue: String(item.WonOrderValue || '').replace(/,/g, '').replace(/BD/g, '').trim(),
+                    orderValue: stripCurrencyNoise(String(item.WonOrderValue || '')).trim(),
                     jobNo: item.WonJobNo,
                     wonQuoteRef: item.WonQuoteRef,
                     wonOption: item.WonOption,
@@ -771,7 +872,7 @@ const ProbabilityForm = () => {
                 lostDetails: {
                     customer: item.LostCompetitor,
                     reason: item.LostReason,
-                    competitorPrice: String(item.LostCompetitorPrice || '').replace(/,/g, '').replace(/BD/g, '').trim(),
+                    competitorPrice: stripCurrencyNoise(String(item.LostCompetitorPrice || '')).trim(),
                     lostDate: item.LostDate
                 }
             };
@@ -817,10 +918,13 @@ const ProbabilityForm = () => {
                 leadJobName: item?.LeadJobName || '',
             });
             setHistoryLoading(true);
-            const userEmail = currentUser?.EmailId || currentUser?.email || '';
             const qs = new URLSearchParams({
-                userEmail,
-                division: selectedDivision || '',
+                userEmail: sessionUserEmail,
+                division: probabilityMutationDivision(
+                    selectedDivision,
+                    divisionOptions,
+                    item?.OwnJobName
+                ),
             });
             const res = await fetch(`${API_BASE}/api/probability/history/${encodeURIComponent(requestNo)}?${qs.toString()}`);
             if (!res.ok) throw new Error('Failed to load history');
@@ -845,8 +949,7 @@ const ProbabilityForm = () => {
 
     const fetchQuoteDetails = async (quoteNumber) => {
         try {
-            const userEmail = currentUser?.EmailId || currentUser?.email || '';
-            const res = await fetch(`${API_BASE}/api/probability/quote-details/${encodeURIComponent(quoteNumber)}?userEmail=${encodeURIComponent(userEmail)}&division=${encodeURIComponent(selectedDivision || '')}`);
+            const res = await fetch(`${API_BASE}/api/probability/quote-details/${encodeURIComponent(quoteNumber)}?userEmail=${encodeURIComponent(sessionUserEmail)}&division=${encodeURIComponent(probabilityMutationDivision(selectedDivision, divisionOptions))}`);
             if (res.ok) {
                 return await res.json();
             }
@@ -1028,7 +1131,7 @@ const ProbabilityForm = () => {
         }
     };
     const wonJobValueNum = (item) => {
-        const raw = String(item.WonOrderValue ?? '').replace(/,/g, '').replace(/BD/gi, '').trim();
+        const raw = stripCurrencyNoise(String(item.WonOrderValue ?? '')).trim();
         const n = parseFloat(raw);
         return Number.isFinite(n) ? n : null;
     };
@@ -1041,7 +1144,7 @@ const ProbabilityForm = () => {
         return Number.isFinite(n) ? n : null;
     };
     const lostCompetitorPriceNum = (item) => {
-        const raw = String(item.LostCompetitorPrice ?? '').replace(/,/g, '').replace(/BD/gi, '').trim();
+        const raw = stripCurrencyNoise(String(item.LostCompetitorPrice ?? '')).trim();
         const n = parseFloat(raw);
         return Number.isFinite(n) ? n : null;
     };
@@ -1386,7 +1489,7 @@ const ProbabilityForm = () => {
                 rows: filteredSortedRows,
                 viewModeLabel,
                 meta: {
-                    division: selectedDivision || '',
+                    division: probabilityDivisionQueryValue(selectedDivision, divisionOptions) || 'All divisions',
                     viewMode: viewModeLabel,
                     searchQuery: String(viewSearchText || '').trim(),
                     dateFrom: fromDate || '',
@@ -1394,13 +1497,7 @@ const ProbabilityForm = () => {
                     probabilityFilter: filterProbability || ''
                 },
                 enrichRow: (item) => {
-                    const userDept = (currentUser?.Department || currentUser?.Division || '').trim().toLowerCase();
-                    const isSubUser =
-                        userDept &&
-                        userDept !== 'civil' &&
-                        userDept !== 'admin' &&
-                        currentUser?.Roles !== 'Admin' &&
-                        currentUser?.role !== 'Admin';
+                    const isSubUser = isProbabilitySubUser(currentUser);
                     const netRestricted = !!(isSubUser && (!item.QuoteRefs || item.QuoteRefs.length === 0));
                     const sel = quoteRefSelectValue(item);
                     return {
@@ -1417,6 +1514,7 @@ const ProbabilityForm = () => {
             window.alert(err?.message || 'Failed to export Excel workbook');
         }
     }, [
+        divisionOptions,
         filteredSortedRows,
         listMode,
         selectedDivision,
@@ -1442,7 +1540,7 @@ const ProbabilityForm = () => {
             if (n !== null && !Number.isNaN(n)) sumNet += n;
             const statusNorm = String(item.Status || '').trim().toLowerCase();
             if (statusNorm === 'won') {
-                const rawJv = String(item.WonOrderValue ?? '').replace(/,/g, '').replace(/BD/g, '').trim();
+                const rawJv = stripCurrencyNoise(String(item.WonOrderValue ?? '')).trim();
                 const jv = parseFloat(rawJv);
                 if (!Number.isNaN(jv)) sumJob += jv;
                 const gp = Number(item.WonGrossProfit);
@@ -1452,12 +1550,12 @@ const ProbabilityForm = () => {
                 }
             }
             if (statusNorm === 'lost') {
-                const rawLost = String(item.LostCompetitorPrice ?? '').replace(/,/g, '').replace(/BD/g, '').trim();
+                const rawLost = stripCurrencyNoise(String(item.LostCompetitorPrice ?? '')).trim();
                 const lostVal = parseFloat(rawLost);
                 if (!Number.isNaN(lostVal)) sumLost += lostVal;
             }
             if (statusNorm === 'followup' || statusNorm === 'follow-up') {
-                const rawFollow = String(item.WonOrderValue ?? '').replace(/,/g, '').replace(/BD/g, '').trim();
+                const rawFollow = stripCurrencyNoise(String(item.WonOrderValue ?? '')).trim();
                 const followVal = parseFloat(rawFollow);
                 if (!Number.isNaN(followVal)) {
                     sumFollowup += followVal;
@@ -1478,8 +1576,9 @@ const ProbabilityForm = () => {
     const formatSummaryAmountCompact = useCallback((value) => {
         const n = Number(value);
         if (!Number.isFinite(n) || n <= 0) return null;
-        if (n >= 1000000) return `BD ${(n / 1000000).toFixed(2)} M`;
-        return `BD ${(n / 1000).toFixed(2)} K`;
+        const sym = getRuntimeCurrencyCode();
+        if (n >= 1000000) return `${sym} ${(n / 1000000).toFixed(2)} M`;
+        return `${sym} ${(n / 1000).toFixed(2)} K`;
     }, []);
 
     const parseIsoDate = useCallback((value) => {
@@ -2078,32 +2177,31 @@ const ProbabilityForm = () => {
                         <div className="card-header border-0 bg-transparent py-0 px-2" style={{ flexShrink: 0 }}>
                             <div className="prob-list-filter-panel">
                                 <div
-                                    className="d-flex align-items-end gap-1"
+                                    className="d-flex align-items-end gap-1 prob-list-filter-row"
                                     style={{
                                         flexWrap: 'nowrap',
-                                        overflowX: 'auto',
-                                        overflowY: 'visible',
-                                        scrollbarGutter: 'stable',
-                                        WebkitOverflowScrolling: 'touch',
+                                        overflow: 'visible',
                                     }}
                                 >
-                                {/* Division Selector */}
-                                <div style={{ width: '158px', flex: '0 0 auto' }}>
-                                    <label className="small text-muted fw-normal mb-0">Division</label>
-                                    <select
-                                        className="form-select form-select-sm"
-                                        value={selectedDivision}
-                                        onChange={(e) => setSelectedDivision(e.target.value)}
-                                        disabled={divisionOptions.length <= 1}
-                                    >
-                                        {divisionOptions.length === 0 ? (
-                                            <option value="">Select division</option>
-                                        ) : (
-                                            divisionOptions.map((div) => (
-                                                <option key={div} value={div}>{div}</option>
-                                            ))
-                                        )}
-                                    </select>
+                                {/* Division Selector — overflow must stay visible so multi-select panel is not clipped */}
+                                <div className="prob-division-filter-wrap" style={{ width: '200px', flex: '0 0 auto', overflow: 'visible', position: 'relative', zIndex: 50 }}>
+                                    <SalesReportMultiSelect
+                                        label="Division"
+                                        ariaLabel="Division"
+                                        minWidth={200}
+                                        options={divisionOptions}
+                                        value={parseUserDepartments(selectedDivision)}
+                                        onChange={(picked) => {
+                                            setSelectedDivision(formatUserDepartments(picked || []));
+                                        }}
+                                        disabled={divisionLoading || divisionOptions.length === 0}
+                                        allLabel="All divisions"
+                                    />
+                                    {divisionLoadError ? (
+                                        <div className="small text-danger mt-0" style={{ lineHeight: 1.2 }}>
+                                            {divisionLoadError}
+                                        </div>
+                                    ) : null}
                                 </div>
 
                                 {/* Mode Selector */}
@@ -2296,6 +2394,10 @@ const ProbabilityForm = () => {
                                     >
                                         <RefreshCw size={14} />
                                     </button>
+                                    <MasterCurrencyBadge
+                                        currencyCode={probabilityCurrencyCode}
+                                        division={probabilityCurrencyDivision}
+                                    />
                                 </div>
                                 </div>
                             </div>
@@ -2538,7 +2640,7 @@ const ProbabilityForm = () => {
                                     <tbody>
                                         {loadingList ? (
                                             <tr>
-                                                <td colSpan="9" className="text-center py-5">Loading...</td>
+                                                <td colSpan="9" className="text-center py-5 text-muted">Loading probability list…</td>
                                             </tr>
                                         ) : enquiriesList.length === 0 ? (
                                             <tr>
@@ -2636,8 +2738,7 @@ const ProbabilityForm = () => {
                                                     </td>
                                                     <td className="px-2 pt-1 pb-2 fw-medium prob-td prob-td-net" style={{ fontSize: '12px' }}>
                                                         {(() => {
-                                                            const userDept = (currentUser?.Department || currentUser?.Division || '').trim().toLowerCase();
-                                                            const isSubUser = userDept && userDept !== 'civil' && userDept !== 'admin' && currentUser?.Roles !== 'Admin' && currentUser?.role !== 'Admin';
+                                                            const isSubUser = isProbabilitySubUser(currentUser);
                                                             if (isSubUser && (!item.QuoteRefs || item.QuoteRefs.length === 0)) return <span className="text-muted italic">Restricted</span>;
                                                             return formatNetQuotedDisplay(item);
                                                         })()}
@@ -2883,16 +2984,28 @@ const ProbabilityForm = () => {
                                                                         </div>
                                                                     </div>
                                                                     <div className="d-flex flex-column prob-detail-col-4">
-                                                                        <span style={{ fontSize: '10px', color: '#666', marginBottom: '2px' }}>Competitor's price</span>
+                                                                        <span style={{ fontSize: '10px', color: '#666', marginBottom: '2px' }}>
+                                                                            Competitor's price <span style={{ color: '#dc3545' }}>*</span>
+                                                                        </span>
                                                                         <div className="input-group input-group-sm" style={{ width: '120px' }}>
-                                                                            <span className="input-group-text px-1 text-muted" style={{ fontSize: '10px' }}>BD</span>
+                                                                            <span className="input-group-text px-1 text-muted" style={{ fontSize: '10px' }}>{getRuntimeCurrencyCode()}</span>
                                                                             <input
                                                                                 type="number"
                                                                                 className="form-control form-control-sm"
-                                                                                placeholder="0"
+                                                                                placeholder="Required"
+                                                                                min="0.01"
+                                                                                step="any"
+                                                                                required
                                                                                 value={item.LostCompetitorPrice || ''}
                                                                                 onChange={(e) => handleInlineUpdate(item, 'LostCompetitorPrice', e.target.value)}
                                                                                 onClick={(e) => e.stopPropagation()}
+                                                                                style={
+                                                                                    item.Status === 'Lost' &&
+                                                                                    (!parseLostCompetitorPriceRaw(item) ||
+                                                                                        Number(parseLostCompetitorPriceRaw(item)) <= 0)
+                                                                                        ? { borderColor: '#dc3545' }
+                                                                                        : undefined
+                                                                                }
                                                                             />
                                                                         </div>
                                                                     </div>
@@ -3155,7 +3268,7 @@ const ProbabilityForm = () => {
                                                                     <div className="d-flex flex-column prob-detail-field-num prob-detail-col-3">
                                                                         <span style={{ fontSize: '10px', color: '#666', marginBottom: '2px' }}>Job Value</span>
                                                                         <div className="input-group input-group-sm" style={{ width: '140px' }}>
-                                                                            <span className="input-group-text px-1 text-muted" style={{ fontSize: '10px' }}>BD</span>
+                                                                            <span className="input-group-text px-1 text-muted" style={{ fontSize: '10px' }}>{getRuntimeCurrencyCode()}</span>
                                                                             <input
                                                                                 type="number"
                                                                                 className="form-control form-control-sm"
@@ -3420,11 +3533,11 @@ const ProbabilityForm = () => {
                                       <option value="lte">Less or equal</option>
                                       <option value="between">Between</option>
                                   </select>
-                                  <label className="form-label small mb-1">Value (BD)</label>
+                                  <label className="form-label small mb-1">Value ({getRuntimeCurrencyCode()})</label>
                                   <input type="text" className="form-control form-control-sm mb-2" placeholder="e.g. 101.100" value={draftNet.v1} onChange={(e) => setDraftNet((d) => ({ ...d, v1: e.target.value }))} />
                                   {draftNet.mode === 'between' && (
                                       <>
-                                          <label className="form-label small mb-1">And (BD)</label>
+                                          <label className="form-label small mb-1">And ({getRuntimeCurrencyCode()})</label>
                                           <input type="text" className="form-control form-control-sm mb-2" placeholder="e.g. 200" value={draftNet.v2} onChange={(e) => setDraftNet((d) => ({ ...d, v2: e.target.value }))} />
                                       </>
                                   )}
@@ -3615,10 +3728,10 @@ const ProbabilityForm = () => {
                               'lostTo',
                               'lostReason',
                           ].includes(openColFilter) && renderMultiFilterPanel(openColFilter)}
-                          {openColFilter === 'wonJobValue' && renderNumericFilterPanel('wonJobValue', 'Value (BD)')}
+                          {openColFilter === 'wonJobValue' && renderNumericFilterPanel('wonJobValue', `Value (${getRuntimeCurrencyCode()})`)}
                           {openColFilter === 'wonGpPct' && renderNumericFilterPanel('wonGpPct', 'Value (%)')}
                           {openColFilter === 'grossMargin' && renderNumericFilterPanel('grossMargin', 'Value (%)')}
-                          {openColFilter === 'lostCompetitorPrice' && renderNumericFilterPanel('lostCompetitorPrice', 'Value (BD)')}
+                          {openColFilter === 'lostCompetitorPrice' && renderNumericFilterPanel('lostCompetitorPrice', `Value (${getRuntimeCurrencyCode()})`)}
                       </div>,
                       document.body,
                   )

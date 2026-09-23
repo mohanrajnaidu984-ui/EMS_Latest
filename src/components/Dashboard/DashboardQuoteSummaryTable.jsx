@@ -1,18 +1,20 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { format } from 'date-fns';
-import { FilterX } from 'lucide-react';
 import { EMS_TABLE_HEADER_GRADIENT } from '../../constants/emsTheme';
 import {
     useTableColumnHeaderFilters,
     TableColumnFilterHeader,
 } from '../shared/tableColumnHeaderFilters';
 import '../../styles/emsTableColumnFilters.css';
+import { formatRuntimeCurrencyAmount } from '../../utils/currency';
 
 /** Rollup key from API for colour + label (aligned with QuoteForm). */
 function normalizeListQuoteRollupKey(raw) {
     let s = String(raw || '').trim();
+    if (s === 'Revision Required') return s;
     if (s === 'All Quoted' || s === 'Partial Quoted' || s === 'None Quoted') return s;
     const base = s.replace(/\s*\([^)]*\)\s*$/g, '').trim();
+    if (base === 'Revision Required') return base;
     if (base === 'All Quoted' || base === 'Partial Quoted' || base === 'None Quoted') return base;
     return 'None Quoted';
 }
@@ -20,6 +22,7 @@ function normalizeListQuoteRollupKey(raw) {
 export function formatListQuoteRollupStatusTwoLines(raw) {
     const key = normalizeListQuoteRollupKey(raw);
     const tail = 'for this Ownjob';
+    if (key === 'Revision Required') return { line1: 'Revision Required', line2: '' };
     if (key === 'None Quoted') return { line1: 'None Quoted', line2: tail };
     if (key === 'Partial Quoted') return { line1: 'Partial Quoted', line2: tail };
     if (key === 'All Quoted') return { line1: 'All Quoted', line2: tail };
@@ -28,6 +31,7 @@ export function formatListQuoteRollupStatusTwoLines(raw) {
 
 export function listQuoteRollupStatusColor(raw) {
     const k = normalizeListQuoteRollupKey(raw);
+    if (k === 'Revision Required') return '#c2410c';
     if (k === 'All Quoted') return '#047857';
     if (k === 'Partial Quoted') return '#b45309';
     return '#64748b';
@@ -280,6 +284,52 @@ function countQuoteLinesInRowForScope(enq, scope) {
     return 0;
 }
 
+/** Highest BD amount shown for one list row (multiple quote lines → max). */
+function getRowMaxQuotedValue(enq, scope = null) {
+    if (!enq) return 0;
+    const amounts = [];
+
+    if (Array.isArray(enq.ListQuoteDetailLines) && enq.ListQuoteDetailLines.length > 0) {
+        const lines = scope
+            ? enq.ListQuoteDetailLines.filter((ln) => detailLineInScope(ln, scope))
+            : enq.ListQuoteDetailLines;
+        for (const ln of lines) {
+            const v = Number(ln?.bdTotal);
+            if (Number.isFinite(v) && v > 0) amounts.push(v);
+        }
+    } else if (countQuoteLinesInRowForScope(enq, scope) > 0) {
+        const v = Number(enq.ListQuoteUnderRefTotal);
+        if (Number.isFinite(v) && v > 0) amounts.push(v);
+    }
+
+    return amounts.length ? Math.max(...amounts) : 0;
+}
+
+/**
+ * Sum quoted values for the visible list.
+ * Per enquiry (RequestNo): use the highest quote amount; then sum those maxima.
+ */
+function sumQuotedValueHighestPerEnquiry(rows, scope = null) {
+    const list = Array.isArray(rows) ? rows : [];
+    const maxByEnquiry = new Map();
+    list.forEach((enq, idx) => {
+        const rn = String(enq?.RequestNo ?? '').trim() || `row-${idx}`;
+        const rowMax = getRowMaxQuotedValue(enq, scope);
+        if (rowMax <= 0) return;
+        const prev = maxByEnquiry.get(rn) || 0;
+        if (rowMax > prev) maxByEnquiry.set(rn, rowMax);
+    });
+    let sum = 0;
+    for (const v of maxByEnquiry.values()) sum += v;
+    return sum;
+}
+
+function formatQuotedValueBd(amount) {
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return formatRuntimeCurrencyAmount(0);
+    return formatRuntimeCurrencyAmount(n);
+}
+
 /**
  * Quote module summary grid (Quote list + Dashboard quote-date popup).
  */
@@ -396,7 +446,8 @@ export default function DashboardQuoteSummaryTable({
                 quotes += qLines;
             }
         });
-        return { projects: reqSet.size, quotes };
+        const quotedValue = sumQuotedValueHighestPerEnquiry(list, quoteDateScope);
+        return { projects: reqSet.size, quotes, quotedValue };
     }, [displayRows, quoteDateScope]);
 
     const displayQuoteTotal =
@@ -474,25 +525,15 @@ export default function DashboardQuoteSummaryTable({
                     style={{ borderBottom: '1px solid #e2e8f0' }}
                 >
                     <div className="d-flex align-items-center gap-2 flex-wrap">
-                        <span className="small fw-semibold text-dark d-inline-flex align-items-center gap-1" style={{ letterSpacing: '0.02em' }}>
-                            <span>
-                                Total projects: <span className="text-primary">{headerStats.projects}</span>
-                            </span>
-                            {headerStats.projects > 0 ? (
-                                <button
-                                    type="button"
-                                    className="ems-cf-clear-filters-btn"
-                                    onClick={colFilters.clearAllColumnFilters}
-                                    disabled={!colFilters.hasColumnFilters}
-                                    title="Clear all column filters"
-                                    aria-label="Clear all column filters"
-                                >
-                                    <FilterX size={13} strokeWidth={2} aria-hidden="true" />
-                                </button>
-                            ) : null}
+                        <span className="small fw-semibold text-dark" style={{ letterSpacing: '0.02em' }}>
+                            Total projects: <span className="text-primary">{headerStats.projects}</span>
                         </span>
                         <span className="small fw-semibold text-dark" style={{ letterSpacing: '0.02em' }}>
                             Total quotes: <span className="text-success">{displayQuoteTotal}</span>
+                        </span>
+                        <span className="small fw-semibold text-dark" style={{ letterSpacing: '0.02em' }}>
+                            Quoted value:{' '}
+                            <span className="text-success">{formatQuotedValueBd(headerStats.quotedValue)}</span>
                         </span>
                     </div>
                     <span
@@ -500,10 +541,10 @@ export default function DashboardQuoteSummaryTable({
                         style={{ fontSize: '10px' }}
                         title={
                             typeof calendarAlignedQuoteTotal === 'number'
-                                ? 'Projects = unique enquiries in this list. Total quotes matches the calendar (each saved quote revision row in the date range).'
+                                ? 'Projects = unique enquiries in this list. Total quotes matches the calendar (each saved quote revision row in the date range). Quoted value = sum of highest amount per enquiry.'
                                 : quoteDateScope
-                                  ? 'Projects = enquiries with at least one quote line in the selected quote-date range; quotes = those lines only.'
-                                  : 'Projects = unique enquiry numbers; quotes = lines in quote details.'
+                                  ? 'Projects = enquiries with at least one quote line in the selected quote-date range; quotes = those lines only. Quoted value = sum of highest amount per enquiry.'
+                                  : 'Projects = unique enquiry numbers; quotes = lines in quote details. Quoted value = sum of highest amount per enquiry.'
                         }
                     >
                         Unique enquiries
@@ -830,11 +871,7 @@ export default function DashboardQuoteSummaryTable({
                                                                 </span>
                                                                 {ln.bdTotal != null && ln.bdTotal > 0 ? (
                                                                     <span style={{ ...bdStyle, fontSize: '10px' }}>
-                                                                        BD{' '}
-                                                                        {Number(ln.bdTotal).toLocaleString(undefined, {
-                                                                            minimumFractionDigits: 2,
-                                                                            maximumFractionDigits: 2,
-                                                                        })}
+                                                                        {formatRuntimeCurrencyAmount(ln.bdTotal)}
                                                                     </span>
                                                                 ) : null}
                                                                 {linePrep ? <span style={preparedByStyle}>{linePrep}</span> : null}
@@ -864,11 +901,7 @@ export default function DashboardQuoteSummaryTable({
                                                             <span style={refDateStyle}>{joined}</span>
                                                             {enq.ListQuoteUnderRefTotal != null && enq.ListQuoteUnderRefTotal > 0 ? (
                                                                 <span style={bdStyle}>
-                                                                    BD{' '}
-                                                                    {Number(enq.ListQuoteUnderRefTotal).toLocaleString(undefined, {
-                                                                        minimumFractionDigits: 2,
-                                                                        maximumFractionDigits: 2,
-                                                                    })}
+                                                                    {formatRuntimeCurrencyAmount(enq.ListQuoteUnderRefTotal)}
                                                                 </span>
                                                             ) : null}
                                                             {multiPrep ? (
@@ -897,11 +930,7 @@ export default function DashboardQuoteSummaryTable({
                                                             </span>
                                                             {enq.ListQuoteUnderRefTotal != null && enq.ListQuoteUnderRefTotal > 0 ? (
                                                                 <span style={bdStyle}>
-                                                                    BD{' '}
-                                                                    {Number(enq.ListQuoteUnderRefTotal).toLocaleString(undefined, {
-                                                                        minimumFractionDigits: 2,
-                                                                        maximumFractionDigits: 2,
-                                                                    })}
+                                                                    {formatRuntimeCurrencyAmount(enq.ListQuoteUnderRefTotal)}
                                                                 </span>
                                                             ) : null}
                                                             {rowPreparedBy ? <span style={preparedByStyle}>{rowPreparedBy}</span> : null}

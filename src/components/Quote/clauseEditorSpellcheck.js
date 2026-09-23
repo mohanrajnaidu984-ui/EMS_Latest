@@ -428,9 +428,9 @@ function stripSpellMarkExportDebrisFromHtmlString(html) {
     s = s.replace(/\s*data-spell-id="[^"]*"\s*/gi, ' ');
     s = s.replace(/\s*data-word="[^"]*"\s*/gi, ' ');
 
-    // Collapse duplicated lump-sum tails left after debris (same BD words clause repeated).
+    // Collapse duplicated lump-sum tails left after debris (same currency words clause repeated).
     s = s.replace(
-        /(\(Bahraini Dinars[^)]{0,240}?only\.\))(?:\s*(?:\(?Bahraini Dinars[^)]{0,240}?only\.\)))+/gi,
+        /(\([^)]{0,40}?(?:Dinars|Dirhams|Riyals|Dollars|Euros|Sterling|Rials)[^)]{0,240}?only\.\))(?:\s*(?:\(?[^)]{0,40}?(?:Dinars|Dirhams|Riyals|Dollars|Euros|Sterling|Rials)[^)]{0,240}?only\.\)))+/gi,
         '$1'
     );
 

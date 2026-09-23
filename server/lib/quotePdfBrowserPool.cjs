@@ -18,7 +18,7 @@ let poolUserDataDir = null;
 let activeJobs = 0;
 /** After a protocol/timeout failure, close the shared browser once the last job finishes. */
 let closeAfterDrain = false;
-/** Waiters for the concurrency semaphore. */
+/** Waiters for the concurrency semaphore: { resolve, timer }. */
 const slotWaiters = [];
 
 function idleCloseMs() {
@@ -30,6 +30,21 @@ function idleCloseMs() {
 function maxConcurrentPages() {
     const n = Number(process.env.QUOTE_PDF_MAX_CONCURRENT);
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3;
+}
+
+/** Max time a request may wait for a free PDF slot (avoids sitting past IIS ARR timeout). */
+function slotWaitMs() {
+    const n = Number(process.env.QUOTE_PDF_SLOT_WAIT_MS);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 60000;
+}
+
+class PdfSlotTimeoutError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'PdfSlotTimeoutError';
+        this.code = 'PDF_SLOT_TIMEOUT';
+        this.status = 503;
+    }
 }
 
 function scheduleIdleClose() {
@@ -74,13 +89,33 @@ async function killBrowserProcess(browser) {
 }
 
 function acquireJobSlot() {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
         if (activeJobs < maxConcurrentPages()) {
             activeJobs += 1;
             resolve();
             return;
         }
-        slotWaiters.push(resolve);
+        const waitMs = slotWaitMs();
+        const entry = {
+            resolve() {
+                if (entry.timer) clearTimeout(entry.timer);
+                entry.timer = null;
+                resolve();
+            },
+            timer: null,
+        };
+        if (waitMs > 0) {
+            entry.timer = setTimeout(() => {
+                const idx = slotWaiters.indexOf(entry);
+                if (idx >= 0) slotWaiters.splice(idx, 1);
+                reject(
+                    new PdfSlotTimeoutError(
+                        `PDF generation busy (waited ${waitMs}ms for a free slot). Please retry shortly.`
+                    )
+                );
+            }, waitMs);
+        }
+        slotWaiters.push(entry);
     });
 }
 
@@ -88,7 +123,7 @@ function releaseJobSlot() {
     const next = slotWaiters.shift();
     if (next) {
         /** Transfer the slot to the next waiter (activeJobs unchanged). */
-        next();
+        next.resolve();
         return;
     }
     activeJobs = Math.max(0, activeJobs - 1);
@@ -204,4 +239,5 @@ module.exports = {
     newPage,
     releaseAfterJob,
     getPoolStats,
+    PdfSlotTimeoutError,
 };

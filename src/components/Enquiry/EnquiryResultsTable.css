@@ -12,6 +12,18 @@
     margin-bottom: 0;
 }
 
+.enquiry-results-table-root > .enquiry-results-table-pagination {
+    background: #f8fafc;
+    border: 1px solid rgba(203, 213, 225, 0.85);
+    border-top: none;
+    border-bottom: none;
+    margin-bottom: 0;
+}
+
+.enquiry-results-table-root > .enquiry-results-table-pagination + .enquiry-search-table-wrap {
+    border-top: 1px solid rgba(203, 213, 225, 0.85);
+}
+
 /* Same funnel+X icon as Sales Report Jobs table toolbar (lucide FilterX) */
 .enquiry-results-table-root .ert-clear-column-filters-btn {
     width: 1.75rem;

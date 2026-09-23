@@ -8,12 +8,15 @@ import SearchEnquiry from './SearchEnquiry';
 import CustomerModal from '../Modals/CustomerModal';
 import ContactModal from '../Modals/ContactModal';
 import UserModal from '../Modals/UserModal';
+import UserManagementModal from '../Modals/UserManagementModal';
 import EnquiryItemModal from '../Modals/EnquiryItemModal';
 // import ParticleBackground from '../Common/ParticleBackground';
 import DateInput from './DateInput';
 import ValidationTooltip from '../Common/ValidationTooltip';
+import { parseUserDepartments, userHasDepartment } from '../../utils/userDepartments';
 import CollaborativeNotes from './CollaborativeNotes';
 import { inferAssignedSEsForEnquiryForItem } from '../../utils/inferAssignedSEsForEnquiryForItem';
+import { isChatboxEnabled } from '../../utils/chatboxSocket';
 import {
     buildConcernedSEAssignmentsFromEnquiryFor,
     hydrateEnquiryForWithConcernedSEAssignments,
@@ -182,7 +185,7 @@ function createEmptyFormState() {
     };
 }
 
-const EnquiryForm = ({ requestNoToOpen }) => {
+const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
     const { masters, addEnquiry, updateEnquiry, getEnquiry, updateMasters, addMaster, updateMaster, enquiries } = useData();
 
     const { currentUser } = useAuth();
@@ -197,6 +200,7 @@ const EnquiryForm = ({ requestNoToOpen }) => {
     const [showCustomerModal, setShowCustomerModal] = useState(false);
     const [showContactModal, setShowContactModal] = useState(false);
     const [showUserModal, setShowUserModal] = useState(false);
+    const [showUserManagementModal, setShowUserManagementModal] = useState(false);
     const [showEnqItemModal, setShowEnqItemModal] = useState(false);
 
     // Edit States
@@ -1406,7 +1410,11 @@ const EnquiryForm = ({ requestNoToOpen }) => {
 
     const uploadPendingFiles = async (requestNo) => {
         const userName = currentUser?.name || currentUser?.FullName || 'System';
-        const userDivision = currentUser?.DivisionName || currentUser?.Department || '';
+        // Prefer explicit DivisionName when it is a single label; else first assigned Department token.
+        const userDivision =
+            String(currentUser?.DivisionName || '').includes(',')
+                ? (parseUserDepartments(currentUser?.Department || currentUser?.DivisionName || '')[0] || '')
+                : (currentUser?.DivisionName || parseUserDepartments(currentUser?.Department || '')[0] || '');
         const failures = [];
 
         const groups = pendingFiles.reduce((acc, item) => {
@@ -1822,7 +1830,7 @@ const EnquiryForm = ({ requestNoToOpen }) => {
     };
 
     const renderAttachmentList = (visibility, type) => {
-        const userDivision = (currentUser?.DivisionName || '').trim().toLowerCase();
+        const userDeptCsv = currentUser?.Department || currentUser?.DivisionName || '';
         const isAdmin = (currentUser?.role || currentUser?.Roles || '').toLowerCase().includes('admin');
 
         // Combined filter for both individual files and folders when type is 'File'
@@ -1837,13 +1845,13 @@ const EnquiryForm = ({ requestNoToOpen }) => {
             if ((a.Visibility || 'Public') === 'Private') {
                 if (visibility !== 'Private') return false;
 
-                // Strict check: Show only to Admin, same Division, or original Uploader
+                // Strict check: Show only to Admin, same Division (CSV OK), or original Uploader
                 if (!isAdmin) {
-                    const fileDivision = (a.Division || '').trim().toLowerCase();
+                    const fileDivision = (a.Division || '').trim();
                     const isOwnFile = (a.UploadedBy || '').toLowerCase() === (currentUser?.FullName || currentUser?.name || currentUser?.UserName || '').toLowerCase();
 
-                    if (fileDivision && userDivision) {
-                        if (fileDivision !== userDivision && !isOwnFile) return false;
+                    if (fileDivision && userDeptCsv) {
+                        if (!userHasDepartment(userDeptCsv, fileDivision) && !isOwnFile) return false;
                     } else if (!isOwnFile) {
                         // If either division is missing, fallback to creator only
                         return false;
@@ -2658,8 +2666,35 @@ const EnquiryForm = ({ requestNoToOpen }) => {
                                                 {/* Enquiry For */}
                                                 {/* Enquiry For / Hierarchy */}
                                                 <div className="mb-3" style={{ width: '100%' }}>
+                                                    <div
+                                                        style={{
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'space-between',
+                                                            gap: '8px',
+                                                            flexWrap: 'wrap',
+                                                            marginBottom: '4px',
+                                                        }}
+                                                    >
+                                                        <label className="form-label mb-0">
+                                                            Enquiry For Structure<span className="text-danger">*</span>
+                                                        </label>
+                                                        {(currentUser?.role || currentUser?.Roles || '')
+                                                            .toLowerCase()
+                                                            .includes('admin') && (
+                                                            <button
+                                                                type="button"
+                                                                className="btn btn-sm btn-outline-secondary"
+                                                                style={{ fontSize: '11px', padding: '2px 8px' }}
+                                                                title="Add/edit Concerned SE users and assign multiple divisions"
+                                                                onClick={() => setShowUserManagementModal(true)}
+                                                            >
+                                                                Manage Concerned SE
+                                                            </button>
+                                                        )}
+                                                    </div>
                                                     <HierarchyBuilder
-                                                        label={<span>Enquiry For Structure<span className="text-danger">*</span></span>}
+                                                        label={null}
                                                         options={masters.enquiryFor}
                                                         value={enqForList}
                                                         onChange={(newList) => {
@@ -3012,6 +3047,16 @@ const EnquiryForm = ({ requestNoToOpen }) => {
                                                     SelectedConcernedSEs: seList,
                                                     SelectedEnquiryFor: enqForList
                                                 }}
+                                                onOpenChatBox={
+                                                    isChatboxEnabled() && onOpenEnquiry
+                                                        ? (requestNo) =>
+                                                              onOpenEnquiry({
+                                                                  tab: 'ChatBox',
+                                                                  chatRequestNo: requestNo,
+                                                                  requestNo,
+                                                              })
+                                                        : undefined
+                                                }
                                             />
                                         )}
 
@@ -3211,6 +3256,10 @@ const EnquiryForm = ({ requestNoToOpen }) => {
                                         mode={modalMode}
                                         initialData={editData}
                                         onSubmit={handleUserSubmit}
+                                    />
+                                    <UserManagementModal
+                                        show={showUserManagementModal}
+                                        onClose={() => setShowUserManagementModal(false)}
                                     />
                                     <EnquiryItemModal
                                         show={showEnqItemModal}

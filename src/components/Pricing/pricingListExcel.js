@@ -6,6 +6,7 @@ import {
     downloadExcelBlob,
     safeExcelFilePart,
 } from '../../utils/emsExcelWorkbook';
+import { runtimeCurrencySymbol } from '../../utils/currency';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -95,7 +96,7 @@ function flattenCustomerTotals(items) {
             const declined = !!it.declinedToQuote;
             const total = Number(it.total);
             const has = !declined && Number.isFinite(total) && total > 0;
-            const badge = declined ? 'Decline to Quote' : has ? `BD ${formatAmt(total)}` : 'Not Updated';
+            const badge = declined ? 'Decline to Quote' : has ? `${runtimeCurrencySymbol()} ${formatAmt(total)}` : 'Not Updated';
             const when = (has || declined) && it.updatedAt ? ` (${formatDisplayDateTime(it.updatedAt)})` : '';
             return `${String(it.label || '').trim()}: ${badge}${when}`;
         })
@@ -114,7 +115,7 @@ function flattenLegacyPriceRows(rows) {
                 if (!Number.isNaN(num)) displayPrice = formatAmt(num);
             }
             const indent = row.level > 0 ? `${'  '.repeat(row.level)}→ ` : '';
-            const badge = isUpdated ? `BD ${displayPrice}` : 'Not Updated';
+            const badge = isUpdated ? `${runtimeCurrencySymbol()} ${displayPrice}` : 'Not Updated';
             const when = isUpdated && row.rawDate ? ` (${formatDisplayDateTime(row.rawDate)})` : '';
             return `${indent}${row.name}: ${badge}${when}`;
         })
@@ -128,7 +129,7 @@ function flattenJobForest(nodes, depth = 0) {
         if (!node) continue;
         const declined = !!node.declinedToQuote;
         const has = !declined && node.hasPrice && Number(node.price) > 0;
-        const badge = declined ? 'Decline to Quote' : has ? `BD ${formatAmt(node.price)}` : 'Not Updated';
+        const badge = declined ? 'Decline to Quote' : has ? `${runtimeCurrencySymbol()} ${formatAmt(node.price)}` : 'Not Updated';
         const by = String(node.pricedBy ?? node.updatedBy ?? '').trim();
         const when =
             (has || declined) && node.updatedAt

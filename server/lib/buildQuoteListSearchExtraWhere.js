@@ -1,5 +1,71 @@
 'use strict';
 
+const MONTH_3 = {
+    jan: '01',
+    feb: '02',
+    mar: '03',
+    apr: '04',
+    may: '05',
+    jun: '06',
+    jul: '07',
+    aug: '08',
+    sep: '09',
+    oct: '10',
+    nov: '11',
+    dec: '12',
+};
+
+/** Normalize UI dates (YYYY-MM-DD or DD-MMM-YYYY) for SQL Server DATE literals. */
+function normalizeSearchDateParam(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const m = s.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+    if (m) {
+        const mm = MONTH_3[m[2].toLowerCase().slice(0, 3)];
+        if (mm) return `${m[3]}-${mm}-${String(m[1]).padStart(2, '0')}`;
+    }
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+    return s;
+}
+
+/** Dedupe raw list rows before a single mapQuoteListingRows pass (search perf). */
+function quoteListRawRowKey(row) {
+    const req = String(row?.RequestNo ?? '').trim();
+    const pvRaw = row?.ListPendingPvId ?? row?.listpendingpvid;
+    const pvNum = pvRaw != null && pvRaw !== '' ? Number(pvRaw) : 0;
+    if (!Number.isNaN(pvNum) && pvNum > 0) return `${req}\tpv:${pvNum}`;
+    return [
+        req,
+        String(row?.ListPendingOwnJobItem ?? row?.listpendingownjobitem ?? '')
+            .trim()
+            .toLowerCase(),
+        String(row?.ListPendingLeadJobName ?? row?.listpendingleadjobname ?? '')
+            .trim()
+            .toLowerCase(),
+        String(row?.ListPendingCustomerName ?? row?.listpendingcustomername ?? '')
+            .trim()
+            .toLowerCase(),
+    ].join('\t');
+}
+
+function mergeQuoteListSearchRawRows(pendingRaw, quotedRaw, approvalRaw) {
+    const seen = new Set();
+    const out = [];
+    const push = (row) => {
+        if (!row || row.RequestNo == null) return;
+        const key = quoteListRawRowKey(row);
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(row);
+    };
+    for (const row of pendingRaw || []) push(row);
+    for (const row of quotedRaw || []) push(row);
+    for (const row of approvalRaw || []) push(row);
+    return out;
+}
+
 /**
  * Builds optional SQL fragments for /list/search (applied to EnquiryMaster E).
  * Valid when: non-empty search text, OR both quote date bounds are provided.
@@ -17,8 +83,8 @@
 function buildQuoteListSearchExtraWhere(qRaw, dateFrom, dateTo, options = {}) {
     const includeWorkflowSearch = options.includeWorkflowSearch !== false;
     const q = (qRaw || '').trim();
-    const d1 = (dateFrom || '').trim();
-    const d2 = (dateTo || '').trim();
+    const d1 = normalizeSearchDateParam(dateFrom);
+    const d2 = normalizeSearchDateParam(dateTo);
     const bothDates = !!(d1 && d2);
     if (!q && !bothDates) {
         return { ok: false, sql: '' };
@@ -95,3 +161,5 @@ function buildQuoteListSearchExtraWhere(qRaw, dateFrom, dateTo, options = {}) {
 }
 
 module.exports = buildQuoteListSearchExtraWhere;
+module.exports.normalizeSearchDateParam = normalizeSearchDateParam;
+module.exports.mergeQuoteListSearchRawRows = mergeQuoteListSearchRawRows;

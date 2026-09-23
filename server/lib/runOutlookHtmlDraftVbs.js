@@ -1,73 +1,89 @@
 /**
- * Write HTML + VBScript and run wscript to open/send an Outlook mail item.
+ * Write HTML to a temp file and open/send via Outlook VBScript (Windows COM).
  */
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
-const { buildOutlookHtmlDraftVbs, buildOutlookCustomerAckDraftVbs } = require('./outlookDraftVbs');
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const {
+    buildOutlookHtmlDraftVbs,
+    buildOutlookCustomerAckDraftVbs,
+} = require('./outlookDraftVbs');
 
 /**
  * @param {object} opts
- * @param {string} opts.html
+ * @param {string} opts.html - HTML body content
  * @param {string} [opts.to]
  * @param {string} [opts.cc]
+ * @param {string} [opts.bcc]
  * @param {string} [opts.subject]
- * @param {boolean} [opts.send]
- * @param {boolean} [opts.windowsHide]
- * @param {string} [opts.tmpSubdir]
- * @param {boolean} [opts.useDefaultSignature] - Display first; prepend body before Outlook signature
+ * @param {string} [opts.replyTo]
+ * @param {string} [opts.replyToName]
+ * @param {boolean} [opts.send=false] - Send immediately instead of opening draft
+ * @param {boolean} [opts.windowsHide=true]
+ * @param {boolean} [opts.useDefaultSignature=false] - Insert body before Outlook signature
+ * @param {string} [opts.tmpSubdir='ems-outlook-html']
+ * @param {string[]} [opts.attachmentPaths]
+ * @param {number} [opts.cleanupDelayMs=120000]
  */
-async function runOutlookHtmlDraftVbs(opts) {
-    const dir = path.join(os.tmpdir(), opts.tmpSubdir || 'ems-outlook', String(Date.now()) + '-' + Math.random().toString(36).slice(2, 8));
+async function runOutlookHtmlDraftVbs(opts = {}) {
+    const html = String(opts.html ?? '');
+    if (!html.trim()) {
+        throw new Error('html is required');
+    }
+
+    const subdir = String(opts.tmpSubdir || 'ems-outlook-html');
+    const dir = path.join(os.tmpdir(), subdir, String(Date.now()));
     fs.mkdirSync(dir, { recursive: true });
+
     const htmlPath = path.join(dir, 'email-body.html');
-    fs.writeFileSync(htmlPath, '\uFEFF' + String(opts.html || ''), 'utf8');
-
     const vbsPath = path.join(dir, 'open-outlook.vbs');
-    const vbsBuilder =
-        opts.useDefaultSignature && !opts.send
-            ? buildOutlookCustomerAckDraftVbs
-            : buildOutlookHtmlDraftVbs;
-    fs.writeFileSync(
-        vbsPath,
-        vbsBuilder({
-            htmlPath,
-            to: opts.to,
-            cc: opts.cc,
-            subject: opts.subject,
-            replyTo: opts.replyTo,
-            replyToName: opts.replyToName,
-            attachmentPaths: opts.attachmentPaths || [],
-            send: !!opts.send,
-        }),
-        'utf8'
-    );
 
-    await new Promise((resolve, reject) => {
-        execFile(
-            'wscript.exe',
-            ['//B', vbsPath],
-            { windowsHide: opts.windowsHide !== false },
-            (err) => {
+    try {
+        fs.writeFileSync(htmlPath, '\uFEFF' + html, 'utf8');
+
+        const vbsOpts = {
+            htmlPath,
+            to: opts.to || '',
+            cc: opts.cc || '',
+            bcc: opts.bcc || '',
+            subject: opts.subject || '',
+            replyTo: opts.replyTo || '',
+            replyToName: opts.replyToName || '',
+            attachmentPaths: opts.attachmentPaths || [],
+            send: Boolean(opts.send),
+        };
+
+        const vbs = opts.useDefaultSignature
+            ? buildOutlookCustomerAckDraftVbs(vbsOpts)
+            : buildOutlookHtmlDraftVbs(vbsOpts);
+
+        fs.writeFileSync(vbsPath, vbs, 'utf8');
+
+        const windowsHide = opts.windowsHide !== false;
+        const cleanupDelay = Number(opts.cleanupDelayMs) || 120000;
+
+        await new Promise((resolve, reject) => {
+            execFile('wscript.exe', ['//B', vbsPath], { windowsHide }, (err) => {
                 setTimeout(() => {
                     try {
                         fs.rmSync(dir, { recursive: true, force: true });
                     } catch {
                         /* ignore */
                     }
-                }, 120000);
+                }, cleanupDelay);
                 if (err) reject(err);
                 else resolve();
-            }
-        );
-    });
-
-    if (!opts.send) {
-        await sleep(600);
+            });
+        });
+    } catch (err) {
+        try {
+            fs.rmSync(dir, { recursive: true, force: true });
+        } catch {
+            /* ignore */
+        }
+        throw err;
     }
 }
 
-module.exports = { runOutlookHtmlDraftVbs, sleep };
+module.exports = { runOutlookHtmlDraftVbs };

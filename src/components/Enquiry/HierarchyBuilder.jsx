@@ -315,19 +315,9 @@ const HierarchyBuilder = ({
 
         const leadPrefix = getRootLeadPrefix(item);
 
-        // Derive clean base name:
-        // - For Lead jobs (level 0): take the part BEFORE " - "
-        // - For Sub jobs: take the part AFTER " - "
-        let baseName = (item.itemName || '').trim();
-        const parts = baseName.split(' - ');
-        if (parts.length > 1) {
-            if (level === 0) {
-                baseName = parts[0].trim();
-            } else {
-                baseName = parts[1].trim();
-            }
-        }
-
+        // Show full Master_EnquiryFor ItemName (e.g. "Interiors Project - KSA").
+        // Do not split on " - " — that hid region/suffix text like "KSA".
+        const baseName = (item.itemName || '').trim();
         const displayText = `${leadPrefix ? `${leadPrefix} - ` : ''}${baseName}`;
 
         return (

@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import Modal from './Modal';
 import { availableRoles } from '../../data/mockData';
 import ValidationTooltip from '../Common/ValidationTooltip';
+import { parseUserDepartments, formatUserDepartments } from '../../utils/userDepartments';
+
+const PREFIX_OPTIONS = ['Mr.', 'Mrs.', 'Ms.', 'Miss', 'Dr.', 'Eng.', 'Prof.'];
 
 const defaultFormData = {
     FullName: '',
@@ -9,33 +12,31 @@ const defaultFormData = {
     EmailId: '',
     MobileNumber: '',
     Status: 'Active',
-    Department: 'MEP',
+    Prefix: '',
+    Department: [],
     Roles: []
 };
 
 const UserModal = ({ show, onClose, mode = 'Add', initialData = null, onSubmit, allUsers = [], onEmailMatch }) => {
     const [formData, setFormData] = useState(defaultFormData);
     const [newRole, setNewRole] = useState('');
+    const [newDivision, setNewDivision] = useState('');
     const [errors, setErrors] = useState({});
 
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [suggestions, setSuggestions] = useState([]);
 
-    const [divisions, setDivisions] = useState([]); // New state for divisions
+    const [divisions, setDivisions] = useState([]);
 
-    // Fetch Divisions on mount
     useEffect(() => {
         fetch('/api/master/divisions')
             .then(res => res.json())
-            .then(data => setDivisions(data))
+            .then(data => setDivisions(Array.isArray(data) ? data : []))
             .catch(err => console.error('Error fetching divisions:', err));
     }, []);
 
-    // Sync formData with initialData when it changes (for Edit mode)
-    // Reset form when modal is closed
     useEffect(() => {
         if (initialData) {
-            // Ensure Roles is an array (it might come as a comma-separated string from DB)
             let roles = initialData.Roles;
             if (typeof roles === 'string') {
                 roles = roles.split(',').map(r => r.trim()).filter(r => r);
@@ -44,12 +45,17 @@ const UserModal = ({ show, onClose, mode = 'Add', initialData = null, onSubmit, 
             }
 
             setFormData({
+                ...defaultFormData,
                 ...initialData,
-                Roles: roles
+                Prefix: initialData.Prefix || initialData.prefix || '',
+                Roles: roles,
+                Department: parseUserDepartments(initialData.Department),
             });
+            setNewDivision('');
         } else if (!show) {
             setFormData(defaultFormData);
             setNewRole('');
+            setNewDivision('');
         }
         setErrors({});
     }, [initialData, show]);
@@ -60,16 +66,13 @@ const UserModal = ({ show, onClose, mode = 'Add', initialData = null, onSubmit, 
             setErrors(prev => ({ ...prev, [field]: null }));
         }
 
-        // Auto-retrieve existing user if Email matches in Add mode
         if (field === 'EmailId' && mode === 'Add' && allUsers.length > 0) {
             const val = value.trim().toLowerCase();
             if (val) {
-                // Generate suggestion list containing the typed characters
                 const filtered = allUsers.filter(u => u.EmailId && u.EmailId.toLowerCase().includes(val));
                 setSuggestions(filtered);
                 setShowSuggestions(true);
 
-                // If typing exactly matches an existing email, automatically select it
                 const existing = allUsers.find(u => u.EmailId && u.EmailId.trim().toLowerCase() === val);
                 if (existing && onEmailMatch) {
                     onEmailMatch(existing);
@@ -98,9 +101,33 @@ const UserModal = ({ show, onClose, mode = 'Add', initialData = null, onSubmit, 
     };
 
     const handleRemoveRole = () => {
-        // Remove the last role from the list
         if (formData.Roles.length > 0) {
             setFormData(prev => ({ ...prev, Roles: prev.Roles.slice(0, -1) }));
+        }
+    };
+
+    const handleAddDivision = () => {
+        const div = String(newDivision || '').trim();
+        if (!div) return;
+        const existing = parseUserDepartments(formData.Department);
+        if (existing.some((d) => d.toLowerCase() === div.toLowerCase())) {
+            setNewDivision('');
+            return;
+        }
+        setFormData((prev) => ({
+            ...prev,
+            Department: [...parseUserDepartments(prev.Department), div],
+        }));
+        setNewDivision('');
+        if (errors.Department) {
+            setErrors((prev) => ({ ...prev, Department: null }));
+        }
+    };
+
+    const handleRemoveDivision = () => {
+        const list = parseUserDepartments(formData.Department);
+        if (list.length > 0) {
+            setFormData((prev) => ({ ...prev, Department: list.slice(0, -1) }));
         }
     };
 
@@ -108,9 +135,8 @@ const UserModal = ({ show, onClose, mode = 'Add', initialData = null, onSubmit, 
         e.preventDefault();
 
         const newErrors = {};
-
-        // Email validation regex
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        const deptList = parseUserDepartments(formData.Department);
 
         if (!formData.FullName) newErrors.FullName = 'Full Name is required';
         if (!formData.EmailId) {
@@ -118,31 +144,39 @@ const UserModal = ({ show, onClose, mode = 'Add', initialData = null, onSubmit, 
         } else if (!emailRegex.test(formData.EmailId.trim())) {
             newErrors.EmailId = 'Please enter a valid email address (e.g., user@example.com)';
         }
+        if (deptList.length === 0) {
+            newErrors.Department = 'Select at least one Division';
+        }
 
         if (Object.keys(newErrors).length > 0) {
             setErrors(newErrors);
             return;
         }
 
-        // Convert Roles array to comma-separated string
         const payload = {
             ...formData,
-            Roles: Array.isArray(formData.Roles) ? formData.Roles.join(',') : formData.Roles
+            Prefix: String(formData.Prefix || '').trim(),
+            Roles: Array.isArray(formData.Roles) ? formData.Roles.join(',') : formData.Roles,
+            Department: formatUserDepartments(deptList),
         };
         onSubmit(payload);
-        // Reset form is handled by useEffect on close/open or we can do it here if needed, 
-        // but onClose usually triggers parent state change which triggers useEffect here.
-        // For good measure:
         setFormData(defaultFormData);
         setNewRole('');
+        setNewDivision('');
         onClose();
     };
+
+    const selectedDivisions = parseUserDepartments(formData.Department);
+    const availableDivisionOptions = divisions.filter(
+        (d) => !selectedDivisions.some((s) => s.toLowerCase() === String(d).toLowerCase())
+    );
 
     return (
         <Modal
             show={show}
             title={`User Details (${mode} User)`}
             onClose={onClose}
+            maxWidth="720px"
             footer={
                 <>
                     <button type="button" className="btn btn-primary" style={{ width: '80px' }} onClick={handleSubmit}>
@@ -154,13 +188,27 @@ const UserModal = ({ show, onClose, mode = 'Add', initialData = null, onSubmit, 
         >
             <form>
                 <div className="row mb-2">
-                    <div className="col-md-6" style={{ position: 'relative' }}>
+                    <div className="col-md-2">
+                        <label className="form-label">Prefix</label>
+                        <select
+                            className="form-select"
+                            style={{ fontSize: '13px' }}
+                            value={formData.Prefix || ''}
+                            onChange={(e) => handleChange('Prefix', e.target.value)}
+                        >
+                            <option value="">—</option>
+                            {PREFIX_OPTIONS.map((p) => (
+                                <option key={p} value={p}>{p}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div className="col-md-5" style={{ position: 'relative' }}>
                         <label className="form-label">Full Name<span className="text-danger">*</span></label>
                         <input type="text" className="form-control" style={{ fontSize: '13px' }}
                             value={formData.FullName} onChange={(e) => handleChange('FullName', e.target.value)} />
                         {errors.FullName && <ValidationTooltip message={errors.FullName} />}
                     </div>
-                    <div className="col-md-6">
+                    <div className="col-md-5">
                         <label className="form-label">Designation</label>
                         <input type="text" className="form-control" style={{ fontSize: '13px' }}
                             value={formData.Designation} onChange={(e) => handleChange('Designation', e.target.value)} />
@@ -186,7 +234,7 @@ const UserModal = ({ show, onClose, mode = 'Add', initialData = null, onSubmit, 
                                         key={i}
                                         className="list-group-item list-group-item-action py-1 px-2"
                                         style={{ fontSize: '12px', cursor: 'pointer' }}
-                                        onMouseDown={(e) => e.preventDefault()} // Prevents input blur from firing before onClick
+                                        onMouseDown={(e) => e.preventDefault()}
                                         onClick={() => handleSuggestionClick(u)}
                                     >
                                         <div className="fw-bold text-dark">{u.EmailId}</div>
@@ -197,13 +245,11 @@ const UserModal = ({ show, onClose, mode = 'Add', initialData = null, onSubmit, 
                         )}
                         {errors.EmailId && <ValidationTooltip message={errors.EmailId} />}
                     </div>
-                    <div className="col-md-6">
+                    <div className="col-md-3">
                         <label className="form-label">Mobile Number</label>
                         <input type="text" className="form-control" style={{ fontSize: '13px' }}
                             value={formData.MobileNumber} onChange={(e) => handleChange('MobileNumber', e.target.value)} />
                     </div>
-                </div>
-                <div className="row mb-2">
                     <div className="col-md-3">
                         <label className="form-label">Status</label>
                         <select className="form-select" style={{ fontSize: '13px' }}
@@ -212,15 +258,36 @@ const UserModal = ({ show, onClose, mode = 'Add', initialData = null, onSubmit, 
                             <option>Inactive</option>
                         </select>
                     </div>
-                    <div className="col-md-3">
-                        <label className="form-label">Division</label>
-                        <select className="form-select" style={{ fontSize: '13px' }}
-                            value={formData.Department} onChange={(e) => handleChange('Department', e.target.value)}>
+                </div>
+                <div className="row mb-2 g-2">
+                    <div className="col-md-6" style={{ position: 'relative' }}>
+                        <label className="form-label">
+                            Division<span className="text-danger">*</span>
+                            <span className="text-muted fw-normal" style={{ fontSize: '11px' }}> (multi / cross-company)</span>
+                        </label>
+                        <select
+                            className="form-select mb-1"
+                            style={{ fontSize: '13px' }}
+                            value={newDivision}
+                            onChange={(e) => setNewDivision(e.target.value)}
+                        >
                             <option value="">-- Select Division --</option>
-                            {divisions.map((div, index) => (
+                            {availableDivisionOptions.map((div, index) => (
                                 <option key={index} value={div}>{div}</option>
                             ))}
                         </select>
+                        <div className="d-flex align-items-center mt-1">
+                            <select className="form-select" multiple style={{ height: '70px', fontSize: '13px' }} readOnly>
+                                {selectedDivisions.map((d) => (
+                                    <option key={d} value={d}>{d}</option>
+                                ))}
+                            </select>
+                            <div className="d-flex flex-column ms-1">
+                                <button type="button" className="btn btn-outline-success mb-1" style={{ width: '36px', padding: '0.25rem 0.5rem' }} onClick={handleAddDivision}>+</button>
+                                <button type="button" className="btn btn-outline-danger" style={{ width: '36px', padding: '0.25rem 0.5rem' }} onClick={handleRemoveDivision}>-</button>
+                            </div>
+                        </div>
+                        {errors.Department && <ValidationTooltip message={errors.Department} />}
                     </div>
                     <div className="col-md-6">
                         <label className="form-label">Roles</label>

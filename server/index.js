@@ -6,12 +6,16 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const {
-    connectDB,
     connectDBWithRetry,
+    reconnectDB,
+    ensureDbConnected,
+    ensureDbMiddleware,
+    noteDbErrorFromRequest,
+    isDbConnectionError,
     isPoolConnected,
+    getPool,
     startDbKeepAlive,
     sql,
-    dbConfig,
 } = require('./dbConfig');
 const {
     resolvePricingAccessContext,
@@ -44,6 +48,7 @@ const {
     resolveWritableEnquiryUploadDestination,
     resolveLocalEnquiryAttachmentsRoot,
     sanitizeFolderName,
+    resolveChatboxAttachmentsBase,
 } = require('./lib/attachmentsRoot');
 const { previewNextRequestNo, resolveRequestNoForCreate } = require('./lib/allocateRequestNo');
 
@@ -431,39 +436,23 @@ function formatRouteError(err) {
 const app = express();
 const PORT = process.env.PORT || 5001;
 
-// DEBUG ROUTE
-app.get('/api/debug/check-user-status', async (req, res) => {
-    const email = 'bmselveng1@almoayyedcg.com';
-    try {
-        // Ensure we are connected
-        if (!isPoolConnected()) {
-            await connectDB();
-        }
-
-        const pool = await sql.connect(dbConfig); // dbConfig is exported from dbConfig.js
-        const result = await pool.request()
-            .input('email', sql.NVarChar, email)
-            .query('SELECT * FROM Master_ConcernedSE WHERE EmailId = @email');
-
-        const similar = await pool.request()
-            .input('part', sql.NVarChar, '%' + email.split('@')[0] + '%')
-            .query('SELECT FullName, EmailId FROM Master_ConcernedSE WHERE EmailId LIKE @part');
-
-        res.json({
-            target: email,
-            found: result.recordset.length > 0,
-            directMatch: result.recordset[0] || null,
-            similar: similar.recordset,
-            count: result.recordset.length
-        });
-    } catch (err) {
-        res.status(500).json({ error: err.message, stack: err.stack });
-    }
-});
-
 // Middleware
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+const { findLogoFilenameOnDisk } = require('./lib/resolveCompanyLogoPath');
+const logosStaticDir = path.join(__dirname, 'uploads', 'logos');
+app.use('/uploads/logos', (req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    const requested = decodeURIComponent(path.basename(req.path || ''));
+    if (!requested || requested === '.' || requested === '..') return next();
+    const exactPath = path.join(logosStaticDir, requested);
+    if (fs.existsSync(exactPath)) return next();
+    const alt = findLogoFilenameOnDisk(requested, logosStaticDir);
+    if (alt) {
+        return res.sendFile(alt, { root: logosStaticDir });
+    }
+    return next();
+});
 app.use('/uploads', express.static(path.join(__dirname, 'uploads'))); // Serve uploaded files from server/uploads
 app.use('/fonts', express.static(path.join(__dirname, '../public/fonts'))); // Inter etc. for quote PDF (Puppeteer)
 app.use(
@@ -477,24 +466,98 @@ app.use(
     })
 ); // Quote spell-check Hunspell dictionaries
 
-// Request Logger
+// Request Logger — never log Socket.IO polls (high frequency; slows production I/O)
 app.use((req, res, next) => {
+    const url = String(req.originalUrl || req.url || '');
+    if (
+        url.startsWith('/api/socket.io') ||
+        url.startsWith('/socket.io')
+    ) {
+        return next();
+    }
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-    // console.log('Body:', JSON.stringify(req.body, null, 2)); // Reduce noise
     next();
 });
 
-/** Lightweight probe for IIS/PM2 — separate from quote-pdf Puppeteer health. */
-app.get('/api/health', async (req, res) => {
-    try {
-        if (!isPoolConnected()) {
-            await connectDB();
+/** Heal stale SQL pool before API handlers (no-op when healthy). */
+app.use(ensureDbMiddleware);
+
+/** Track who is online for Admin Usage page (any API call with email). */
+const { presenceMiddleware } = require('./lib/usagePresence');
+app.use(presenceMiddleware);
+
+/** Rolling API latency / error counters for Usage diagnostics. */
+const { requestStatsMiddleware } = require('./lib/usageRequestStats');
+app.use(requestStatsMiddleware);
+
+/** Debug only — uses shared pool (never sql.connect in handlers; that races reconnect). */
+if (process.env.NODE_ENV !== 'production') {
+    app.get('/api/debug/check-user-status', async (req, res) => {
+        const email = 'bmselveng1@almoayyedcg.com';
+        try {
+            await ensureDbConnected();
+            const pool = getPool();
+            if (!pool) {
+                return res.status(503).json({ error: 'Database pool not available' });
+            }
+            const result = await pool
+                .request()
+                .input('email', sql.NVarChar, email)
+                .query('SELECT * FROM Master_ConcernedSE WHERE EmailId = @email');
+
+            const similar = await pool
+                .request()
+                .input('part', sql.NVarChar, '%' + email.split('@')[0] + '%')
+                .query('SELECT FullName, EmailId FROM Master_ConcernedSE WHERE EmailId LIKE @part');
+
+            res.json({
+                target: email,
+                found: result.recordset.length > 0,
+                directMatch: result.recordset[0] || null,
+                similar: similar.recordset,
+                count: result.recordset.length,
+            });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
         }
-        await sql.query`SELECT 1 AS ok`;
-        res.json({ ok: true, db: true, uptimeSec: Math.round(process.uptime()) });
+    });
+}
+
+/** Lightweight liveness for IIS/PM2 — never force DB reconnect (that blocked all /api under load). */
+app.get('/api/health', (req, res) => {
+    res.json({
+        ok: true,
+        db: isPoolConnected(),
+        poolConnected: isPoolConnected(),
+        uptimeSec: Math.round(process.uptime()),
+    });
+});
+
+/** Readiness: optional DB check without reconnect storms. Use for deeper probes only. */
+app.get('/api/health/ready', async (req, res) => {
+    try {
+        await ensureDbConnected({ forcePing: false });
+        if (!isPoolConnected()) {
+            return res.status(503).json({
+                ok: false,
+                db: false,
+                poolConnected: false,
+                error: 'Database pool not connected',
+            });
+        }
+        res.json({
+            ok: true,
+            db: true,
+            poolConnected: true,
+            uptimeSec: Math.round(process.uptime()),
+        });
     } catch (err) {
-        console.error('[health] DB check failed:', err?.message || err);
-        res.status(503).json({ ok: false, db: false, error: err?.message || 'Database unavailable' });
+        res.status(503).json({
+            ok: false,
+            db: false,
+            poolConnected: isPoolConnected(),
+            error: err?.message || 'Database unavailable',
+        });
     }
 });
 
@@ -613,6 +676,22 @@ app.get('/api/master/divisions', async (req, res) => {
     }
 });
 
+/** Resolve Master_EnquiryFor.Currency for company / division / item. */
+app.get('/api/master/currency', async (req, res) => {
+    try {
+        const { resolveCurrencyFromDb } = require('./lib/masterCurrency');
+        const currency = await resolveCurrencyFromDb(sql, {
+            departmentName: req.query.division || req.query.departmentName || '',
+            companyName: req.query.company || req.query.companyName || '',
+            itemName: req.query.itemName || '',
+        });
+        res.json({ currency });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Server Error', currency: 'BHD' });
+    }
+});
+
 // Upload Logo (Defined early to avoid Router conflicts)
 app.post('/api/upload/logo', (req, res, next) => {
     console.log('Hitting /api/upload/logo');
@@ -657,6 +736,10 @@ const salesReportRoutes = require('./routes/salesReportRoutes');
 app.use('/api/sales-report', salesReportRoutes);
 const salesTargetRoutes = require('./routes/salesTargetRoutes');
 app.use('/api/sales-targets', salesTargetRoutes);
+const chatboxRoutes = require('./routes/chatboxRoutes');
+app.use('/api/chatbox', chatboxRoutes);
+const usageRoutes = require('./routes/usageRoutes');
+app.use('/api/usage', usageRoutes);
 
 
 // --- OCR Extraction Route ---
@@ -730,7 +813,13 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(400).json({ message: 'Invalid email or password' });
         }
 
-        // Check password
+        if (!user.LoginPassword) {
+            return res.status(400).json({
+                message: 'Password not set. Please use first-time login to create a password.',
+                isFirstLogin: true,
+            });
+        }
+
         // Check password
         const isMatch = await bcrypt.compare(password, user.LoginPassword);
         if (!isMatch) {
@@ -992,7 +1081,11 @@ async function resolveEnquiryVisibilityContext({ userEmail, userName, userRole }
             SELECT TOP 1 1 AS ok
             FROM Master_ConcernedSE
             WHERE LOWER(REPLACE(REPLACE(LTRIM(RTRIM(ISNULL(EmailId, N''))), N'@almcg.com', N'@almoayyedcg.com'), N'@ALMCG.COM', N'@almoayyedcg.com')) = ${email}
-              AND LOWER(LTRIM(RTRIM(ISNULL(Department, N'')))) = N'management'
+              AND (
+                LOWER(LTRIM(RTRIM(ISNULL(Department, N'')))) = N'management'
+                OR N',' + REPLACE(LOWER(LTRIM(RTRIM(ISNULL(Department, N'')))), N' ', N'') + N','
+                   LIKE N'%,management,%'
+              )
         `
     ]);
     const fullName = (userRes.recordset?.[0]?.FullName || userName || '').toString().trim();
@@ -1309,11 +1402,11 @@ app.post('/api/enquiries', async (req, res) => {
         request.input('DueDate', sql.VarChar(10), DueOn ? DueOn.split('T')[0] : null);
         request.input('SiteVisitDate', sql.VarChar(10), SiteVisitDate ? SiteVisitDate.split('T')[0] : null);
 
-        request.input('CustomerName', sql.NVarChar, SelectedCustomers ? SelectedCustomers.join(',') : null);
-        request.input('ReceivedFrom', sql.NVarChar, SelectedReceivedFroms ? SelectedReceivedFroms.map(i => i.split('|')[0]).join(',') : null);
+        request.input('CustomerName', sql.NVarChar(sql.MAX), SelectedCustomers ? SelectedCustomers.join(',') : null);
+        request.input('ReceivedFrom', sql.NVarChar(sql.MAX), SelectedReceivedFroms ? SelectedReceivedFroms.map(i => i.split('|')[0]).join(',') : null);
         request.input('ProjectName', sql.NVarChar, ProjectName || null);
         request.input('ClientName', sql.NVarChar, ClientName || null);
-        request.input('ConsultantName', sql.NVarChar, SelectedConsultants ? SelectedConsultants.join(',') : (ConsultantName || null));
+        request.input('ConsultantName', sql.NVarChar(sql.MAX), SelectedConsultants ? SelectedConsultants.join(',') : (ConsultantName || null));
         request.input('EnquiryDetails', sql.NVarChar, DetailsOfEnquiry || null);
 
         request.input('Doc_HardCopies', sql.Bit, hardcopy ?? false);
@@ -1973,12 +2066,12 @@ app.put('/api/enquiries/:id', async (req, res) => {
         request.input('EnquiryDate', sql.VarChar(10), EnquiryDate ? EnquiryDate.split('T')[0] : null);
         request.input('DueDate', sql.VarChar(10), DueOn ? DueOn.split('T')[0] : null);
         request.input('SiteVisitDate', sql.VarChar(10), SiteVisitDate ? SiteVisitDate.split('T')[0] : null);
-        request.input('CustomerName', sql.NVarChar, customersToSave.length ? customersToSave.join(',') : null);
-        request.input('ReceivedFrom', sql.NVarChar, SelectedReceivedFroms ? SelectedReceivedFroms.map(i => i.split('|')[0]).join(',') : null);
+        request.input('CustomerName', sql.NVarChar(sql.MAX), customersToSave.length ? customersToSave.join(',') : null);
+        request.input('ReceivedFrom', sql.NVarChar(sql.MAX), SelectedReceivedFroms ? SelectedReceivedFroms.map(i => i.split('|')[0]).join(',') : null);
 
         request.input('ProjectName', sql.NVarChar, ProjectName);
         request.input('ClientName', sql.NVarChar, ClientName);
-        request.input('ConsultantName', sql.NVarChar, SelectedConsultants ? SelectedConsultants.join(',') : (ConsultantName || null));
+        request.input('ConsultantName', sql.NVarChar(sql.MAX), SelectedConsultants ? SelectedConsultants.join(',') : (ConsultantName || null));
         request.input('EnquiryDetails', sql.NVarChar, DetailsOfEnquiry);
         // DocumentsReceived is not in new schema as a single field, it's checkboxes
         request.input('Doc_HardCopies', sql.Bit, hardcopy);
@@ -2578,7 +2671,10 @@ app.get('/api/version', (req, res) => {
 });
 
 app.post('/api/users', async (req, res) => {
-    const { FullName, Designation, EmailId, MobileNumber, LoginPassword, Status, Department, Roles, RequestNo, ModifiedBy } = req.body;
+    const { FullName, Designation, EmailId, MobileNumber, LoginPassword, Status, Department, Roles, RequestNo, ModifiedBy, Prefix } = req.body;
+    const { formatUserDepartments } = require('./lib/userDepartments');
+    const departmentCsv = formatUserDepartments(Department);
+    const prefixVal = Prefix != null ? String(Prefix).trim() : '';
 
     try {
         let hashedPassword = null;
@@ -2589,8 +2685,8 @@ app.post('/api/users', async (req, res) => {
 
         // Insert and get ID
         const result = await sql.query`
-            INSERT INTO Master_ConcernedSE (FullName, Designation, EmailId, MobileNumber, LoginPassword, Status, Department, Roles, RequestNo)
-            VALUES (${FullName}, ${Designation}, ${EmailId}, ${MobileNumber}, ${hashedPassword}, ${Status}, ${Department}, ${Roles}, ${RequestNo});
+            INSERT INTO Master_ConcernedSE (FullName, Designation, EmailId, MobileNumber, LoginPassword, Status, Department, Roles, RequestNo, Prefix)
+            VALUES (${FullName}, ${Designation}, ${EmailId}, ${MobileNumber}, ${hashedPassword}, ${Status}, ${departmentCsv}, ${Roles}, ${RequestNo}, ${prefixVal});
             SELECT SCOPE_IDENTITY() AS ID;
         `;
 
@@ -2617,10 +2713,13 @@ app.post('/api/users', async (req, res) => {
 
 app.put('/api/users/:id', async (req, res) => {
     const { id } = req.params;
-    const { FullName, Designation, EmailId, MobileNumber, Status, Department, Roles, ModifiedBy } = req.body; // Expect ModifiedBy (Admin Name)
+    const { FullName, Designation, EmailId, MobileNumber, Status, Department, Roles, ModifiedBy, Prefix } = req.body; // Expect ModifiedBy (Admin Name)
+    const { formatUserDepartments } = require('./lib/userDepartments');
+    const departmentCsv = formatUserDepartments(Department);
+    const prefixVal = Prefix != null ? String(Prefix).trim() : '';
     try {
         // Note: Password update logic should be separate or handled carefully. Skipping password update here for simplicity unless provided.
-        await sql.query`UPDATE Master_ConcernedSE SET FullName=${FullName}, Designation=${Designation}, EmailId=${EmailId}, MobileNumber=${MobileNumber}, Status=${Status}, Department=${Department}, Roles=${Roles} WHERE ID=${id}`;
+        await sql.query`UPDATE Master_ConcernedSE SET FullName=${FullName}, Designation=${Designation}, EmailId=${EmailId}, MobileNumber=${MobileNumber}, Status=${Status}, Department=${departmentCsv}, Roles=${Roles}, Prefix=${prefixVal} WHERE ID=${id}`;
 
         // Notify the user
         const displayRoles = Array.isArray(Roles) ? Roles.join(', ') : Roles;
@@ -2635,6 +2734,38 @@ app.put('/api/users/:id', async (req, res) => {
         }
 
         res.json({ message: 'User updated and notified' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Server Error' });
+    }
+});
+
+/** Admin: clear LoginPassword so user must set a new password on next login (first-login flow). */
+app.post('/api/users/:id/reset-password', async (req, res) => {
+    const { id } = req.params;
+    const adminName = req.body?.ModifiedBy || 'Admin';
+    try {
+        const existing = await sql.query`
+            SELECT ID, FullName, EmailId FROM Master_ConcernedSE WHERE ID = ${id}
+        `;
+        const user = existing.recordset?.[0];
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        await sql.query`
+            UPDATE Master_ConcernedSE SET LoginPassword = NULL WHERE ID = ${id}
+        `;
+
+        if (!isExcludedNotificationEmail(user.EmailId)) {
+            const msg = 'Your password has been reset by an administrator. Please sign in and set a new password.';
+            await sql.query`
+                INSERT INTO Notifications (UserID, Type, Message, LinkID, CreatedBy)
+                VALUES (${id}, 'System', ${msg}, 'Profile', ${adminName})
+            `;
+        }
+
+        res.json({ message: 'Password reset to null', id: Number(id) });
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: 'Server Error' });
@@ -2677,10 +2808,11 @@ app.get('/api/enquiry-items', async (req, res) => {
 });
 
 app.post('/api/enquiry-items', async (req, res) => {
-    const { ItemName, CompanyName, DepartmentName, Status, CommonMailIds, CCMailIds, RequestNo, DivisionCode, DepartmentCode, Phone, Address, FaxNo, CompanyLogo } = req.body;
+    const { ItemName, CompanyName, DepartmentName, Status, CommonMailIds, CCMailIds, RequestNo, DivisionCode, DepartmentCode, Phone, Address, FaxNo, CompanyLogo, Currency } = req.body;
     try {
-        const result = await sql.query`INSERT INTO Master_EnquiryFor (ItemName, CompanyName, DepartmentName, Status, CommonMailIds, CCMailIds, RequestNo, DivisionCode, DepartmentCode, Phone, Address, FaxNo, CompanyLogo)
-                        VALUES (${ItemName}, ${CompanyName}, ${DepartmentName}, ${Status}, ${CommonMailIds}, ${CCMailIds}, ${RequestNo}, ${DivisionCode}, ${DepartmentCode}, ${Phone}, ${Address}, ${FaxNo}, ${CompanyLogo});
+        const currencyVal = String(Currency || '').trim() || null;
+        const result = await sql.query`INSERT INTO Master_EnquiryFor (ItemName, CompanyName, DepartmentName, Status, CommonMailIds, CCMailIds, RequestNo, DivisionCode, DepartmentCode, Phone, Address, FaxNo, CompanyLogo, Currency)
+                        VALUES (${ItemName}, ${CompanyName}, ${DepartmentName}, ${Status}, ${CommonMailIds}, ${CCMailIds}, ${RequestNo}, ${DivisionCode}, ${DepartmentCode}, ${Phone}, ${Address}, ${FaxNo}, ${CompanyLogo}, ${currencyVal});
                         SELECT SCOPE_IDENTITY() AS ID;`;
         res.status(201).json({ message: 'Item added', id: result.recordset[0].ID });
     } catch (err) {
@@ -2691,9 +2823,10 @@ app.post('/api/enquiry-items', async (req, res) => {
 
 app.put('/api/enquiry-items/:id', async (req, res) => {
     const { id } = req.params;
-    const { ItemName, CompanyName, DepartmentName, Status, CommonMailIds, CCMailIds, DivisionCode, DepartmentCode, Phone, Address, FaxNo, CompanyLogo } = req.body;
+    const { ItemName, CompanyName, DepartmentName, Status, CommonMailIds, CCMailIds, DivisionCode, DepartmentCode, Phone, Address, FaxNo, CompanyLogo, Currency } = req.body;
     try {
-        await sql.query`UPDATE Master_EnquiryFor SET ItemName=${ItemName}, CompanyName=${CompanyName}, DepartmentName=${DepartmentName}, Status=${Status}, CommonMailIds=${CommonMailIds}, CCMailIds=${CCMailIds}, DivisionCode=${DivisionCode}, DepartmentCode=${DepartmentCode}, Phone=${Phone}, Address=${Address}, FaxNo=${FaxNo}, CompanyLogo=${CompanyLogo} WHERE ID=${id}`;
+        const currencyVal = String(Currency || '').trim() || null;
+        await sql.query`UPDATE Master_EnquiryFor SET ItemName=${ItemName}, CompanyName=${CompanyName}, DepartmentName=${DepartmentName}, Status=${Status}, CommonMailIds=${CommonMailIds}, CCMailIds=${CCMailIds}, DivisionCode=${DivisionCode}, DepartmentCode=${DepartmentCode}, Phone=${Phone}, Address=${Address}, FaxNo=${FaxNo}, CompanyLogo=${CompanyLogo}, Currency=${currencyVal} WHERE ID=${id}`;
         res.json({ message: 'Item updated' });
     } catch (err) {
         console.error(err);
@@ -2701,112 +2834,10 @@ app.put('/api/enquiry-items/:id', async (req, res) => {
     }
 });
 // --- Attachments API ---
-const normalizeAttachmentEmail = (raw) =>
-    String(raw || '')
-        .trim()
-        .toLowerCase()
-        .replace(/@almcg\.com/g, '@almoayyedcg.com');
-
-const normText = (raw) => String(raw || '').trim().toLowerCase();
-
-async function getAttachmentAccessContext(requestNo, rawUserEmail, userRole) {
-    const email = normalizeAttachmentEmail(rawUserEmail);
-    if (!email) return { allowed: false, reason: 'Missing userEmail', user: null, fullAccess: false };
-
-    const isAdminFromRole = roleIsAdmin(userRole) || email === 'ranigovardhan@gmail.com';
-
-    const userRes = await new sql.Request()
-        .input('email', sql.NVarChar, email)
-        .query(`
-            SELECT TOP 1 FullName, Department, EmailId, Roles
-            FROM Master_ConcernedSE
-            WHERE LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(EmailId, ''), '@almcg.com', '@almoayyedcg.com'), '@ALMCG.COM', '@almoayyedcg.com'))))
-                  = LOWER(LTRIM(RTRIM(@email)))
-        `);
-    const user = userRes.recordset?.[0];
-    if (!user && !isAdminFromRole) {
-        return { allowed: false, reason: 'User not found', user: null, fullAccess: false };
-    }
-
-    const fullName = String(user?.FullName || '').trim();
-    const department = String(user?.Department || '').trim();
-    const isAdmin = isAdminFromRole || roleIsAdmin(user?.Roles);
-    const isManagement = department.toLowerCase() === 'management';
-
-    const ccRes = await new sql.Request()
-        .input('email', sql.NVarChar, email)
-        .query(`
-            SELECT TOP 1 1 AS ok
-            FROM Master_EnquiryFor
-            WHERE ',' + REPLACE(REPLACE(ISNULL(CCMailIds, ''), ' ', ''), ';', ',') + ','
-                  LIKE '%,' + @email + ',%'
-        `);
-    const isCcUser = (ccRes.recordset || []).length > 0 || isManagement;
-
-    const reqNo = String(requestNo || '').trim();
-    const enqRes = await new sql.Request()
-        .input('requestNo', sql.NVarChar, reqNo)
-        .query(`
-            SELECT TOP 1 CreatedBy
-            FROM EnquiryMaster
-            WHERE LTRIM(RTRIM(RequestNo)) = LTRIM(RTRIM(@requestNo))
-        `);
-    const createdBy = String(enqRes.recordset?.[0]?.CreatedBy || '').trim();
-    let isCreator = false;
-    if (createdBy) {
-        if (createdBy.includes('@')) {
-            isCreator = normalizeAttachmentEmail(createdBy) === email;
-        } else if (fullName) {
-            isCreator = createdBy.toUpperCase().trim() === fullName.toUpperCase().trim();
-        }
-    }
-
-    const assignedRes = await new sql.Request()
-        .input('requestNo', sql.NVarChar, reqNo)
-        .input('fullName', sql.NVarChar, fullName)
-        .query(`
-            SELECT TOP 1 1 AS ok
-            FROM ConcernedSE
-            WHERE LTRIM(RTRIM(RequestNo)) = LTRIM(RTRIM(@requestNo))
-              AND LOWER(LTRIM(RTRIM(ISNULL(SEName, '')))) = LOWER(LTRIM(RTRIM(ISNULL(@fullName, ''))))
-        `);
-    const isAssigned = (assignedRes.recordset || []).length > 0;
-
-    const fullAccess = isAdmin || isCcUser || isCreator;
-    const allowed = fullAccess || isAssigned;
-
-    return {
-        allowed,
-        fullAccess,
-        isAdmin,
-        isCcUser,
-        isCreator,
-        isAssigned,
-        reason: allowed ? null : 'Not assigned to enquiry',
-        user: {
-            fullName,
-            department,
-            email: normalizeAttachmentEmail(user?.EmailId || email)
-        }
-    };
-}
-
-function canReadAttachmentByVisibility(att, accessCtx) {
-    if (!accessCtx?.allowed) return false;
-    if (accessCtx.fullAccess || accessCtx.isAdmin) return true;
-
-    const visibility = normText(att.Visibility || 'Public');
-    if (visibility !== 'private') return true;
-
-    const uploadedBy = normText(att.UploadedBy || '');
-    const userName = normText(accessCtx.user?.fullName || '');
-    if (uploadedBy && userName && uploadedBy === userName) return true;
-
-    const attDivision = normText(att.Division || '');
-    const userDept = normText(accessCtx.user?.department || '');
-    if (!attDivision || !userDept) return false;
-    return attDivision === userDept;
-}
+const {
+    getAttachmentAccessContext,
+    canReadAttachmentByVisibility,
+} = require('./lib/attachmentAccess');
 
 // Upload Attachment - Store in DB
 // Upload Attachment - Store in Disk and DB (files land under ENQUIRY_ATTACHMENTS_ROOT/<RequestNo>/)
@@ -3151,7 +3182,12 @@ app.delete('/api/notifications/:userId', async (req, res) => {
 app.get('/api/enquiries/:id/notes', async (req, res) => {
     try {
         const enquiryId = decodeURIComponent(req.params.id);
-        const result = await sql.query`SELECT * FROM EnquiryNotes WHERE EnquiryID = ${enquiryId} ORDER BY CreatedAt ASC`;
+        const result = await sql.query`
+            SELECT * FROM EnquiryNotes
+            WHERE EnquiryID = ${enquiryId}
+              AND ISNULL(IsSystem, 0) = 0
+            ORDER BY CreatedAt ASC
+        `;
         res.json(result.recordset);
     } catch (err) {
         console.error('Error fetching notes:', err);
@@ -3557,6 +3593,8 @@ app.post('/api/enquiries/notify', async (req, res) => {
 // JSON error handler — multer and other middleware errors otherwise return HTML "Internal Server Error"
 app.use((err, req, res, next) => {
     if (res.headersSent) return next(err);
+    const dbDown = isDbConnectionError(err);
+    if (dbDown) noteDbErrorFromRequest(err);
     const formatted = formatRouteError(err);
     console.error(`[express-error] ${req.method} ${req.originalUrl || req.url}:`, err);
     const status =
@@ -3566,17 +3604,50 @@ app.use((err, req, res, next) => {
     const hint =
         String(req.originalUrl || req.url || '').includes('attachments')
             ? 'Verify ENQUIRY_ATTACHMENTS_ROOT and that the PM2 service account has Modify on the UNC share.'
-            : undefined;
-    res.status(status).json({ ...formatted, hint });
+            : dbDown
+              ? 'Database connection was lost; the API is reconnecting. Please retry.'
+              : undefined;
+    res.status(dbDown ? 503 : status).json({ ...formatted, hint });
 });
 
 process.on('unhandledRejection', (reason) => {
     console.error('[process] Unhandled rejection:', reason);
+    noteDbErrorFromRequest(reason);
 });
 
 process.on('uncaughtException', (err) => {
     console.error('[process] Uncaught exception:', err);
+    const msg = String(err && err.message ? err.message : err || '');
+    const fatal =
+        /out of memory|heap limit|uv_errno|ENOSPC|EADDRINUSE/i.test(msg) ||
+        err?.code === 'ERR_OUT_OF_MEMORY';
+    // Do not exit on routine/socket/SQL errors — that looked like "backend disconnected"
+    // after ChatBox. Only exit for clearly fatal conditions so PM2 can recover.
+    if (fatal) {
+        setTimeout(() => process.exit(1), 250);
+    }
 });
+
+function shutdown(signal) {
+    console.log(`[process] ${signal} received — shutting down`);
+    const { disconnectDB } = require('./dbConfig');
+    let closePooledBrowser = async () => false;
+    try {
+        ({ closePooledBrowser } = require('./lib/quotePdfBrowserPool.cjs'));
+    } catch {
+        /* PDF pool optional at shutdown */
+    }
+    Promise.resolve()
+        .then(() => closePooledBrowser({ force: true }))
+        .catch(() => {})
+        .then(() => disconnectDB())
+        .catch(() => {})
+        .finally(() => process.exit(0));
+    setTimeout(() => process.exit(1), 8000).unref?.();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 async function startServer() {
     console.log('Starting server initialization...');
@@ -3588,7 +3659,20 @@ async function startServer() {
         process.exit(1);
     }
 
-    const server = app.listen(PORT, () => {
+    const http = require('http');
+    const { initChatboxRealtime } = require('./lib/chatboxRealtime');
+    const server = http.createServer(app);
+    // Kill-switch: EMS_CHATBOX_REALTIME=0 disables Socket.IO entirely (REST chat still works)
+    const chatRealtimeOff = ['0', 'false', 'no', 'off'].includes(
+        String(process.env.EMS_CHATBOX_REALTIME || '1').trim().toLowerCase()
+    );
+    if (chatRealtimeOff) {
+        console.warn('[ChatBox] Socket.IO DISABLED via EMS_CHATBOX_REALTIME=0 (EMS protected)');
+    } else {
+        initChatboxRealtime(server);
+    }
+
+    server.listen(PORT, () => {
         const procUser = (() => {
             try {
                 return os.userInfo().username;
@@ -3600,6 +3684,7 @@ async function startServer() {
         console.log(`EMS process user: ${procUser}`);
         console.log(`EMS attachments root (enquiries): ${resolveEnquiryAttachmentsBase()}`);
         console.log(`EMS attachments root (quotes): ${resolveQuoteAttachmentsBase()}`);
+        console.log(`EMS attachments root (chatbox): ${resolveChatboxAttachmentsBase()}`);
         console.log(`Database pool connected: ${isPoolConnected()}`);
         /** Non-blocking: first PDF download reuses this Chromium instead of paying cold launch. */
         setImmediate(() => {
@@ -3608,9 +3693,19 @@ async function startServer() {
             });
         });
     });
-    server.keepAliveTimeout = parseInt(process.env.HTTP_KEEP_ALIVE_TIMEOUT_MS || '65000', 10);
-    server.headersTimeout = parseInt(process.env.HTTP_HEADERS_TIMEOUT_MS || '66000', 10);
+    // MUST exceed IIS ARR proxy timeout (production ARR = 300s). If Node closes first,
+    // ARR reuses a dead socket → intermittent 502 ("backend disconnected") on /api and /socket.io.
+    // ChatBox long-polling makes this far more visible — keepAlive must stay above ARR.
+    server.keepAliveTimeout = parseInt(process.env.HTTP_KEEP_ALIVE_TIMEOUT_MS || '310000', 10);
+    server.headersTimeout = parseInt(process.env.HTTP_HEADERS_TIMEOUT_MS || '315000', 10);
+    // Do not time out long Socket.IO polls / large PDF streams at the HTTP server layer.
+    server.requestTimeout = parseInt(process.env.HTTP_REQUEST_TIMEOUT_MS || '0', 10);
+    server.timeout = parseInt(process.env.HTTP_SERVER_TIMEOUT_MS || '0', 10);
     server.on('error', (e) => console.error('Server Error:', e));
+    console.log(
+        `[http] keepAliveTimeout=${server.keepAliveTimeout}ms headersTimeout=${server.headersTimeout}ms ` +
+            `(ARR proxy should be ≤ keepAlive; prod ARR is typically 300000ms)`
+    );
 }
 
 startServer().catch((err) => {

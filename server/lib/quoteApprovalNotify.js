@@ -1,5 +1,6 @@
 const { buildSmtpTransport, stripQuotes, getSmtpFromEmail } = require('./smtpTransport');
 const { filterNotificationRecipients } = require('./notificationEmailExclusions');
+const { escapeHtml } = require('./htmlEscape');
 
 /** Reuse one pooled O365 transport so each send skips a full TLS handshake. */
 let approvalTransporter = null;
@@ -83,14 +84,6 @@ async function sendApprovalMailFast({ to, subject, html }) {
     });
     console.log(`[quoteApprovalNotify] delivered in ${Date.now() - t0}ms via pooled SMTP`);
     return { from: fromAddress, to: filtered.to };
-}
-
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
 }
 
 const WORKFLOW_STATUS_BADGES = {
@@ -419,14 +412,128 @@ async function sendQuoteApprovedForSubmissionEmails({
     }
 }
 
+function buildQuoteCorrectionRequiredHtml({
+    requesterName = '',
+    reason = '',
+    ...mailFields
+} = {}) {
+    const fields = normalizeApprovalMailFields({
+        ...mailFields,
+        workflowStatus: 'rejected',
+    });
+    // Reuse rejected badge styling but label as Correction Required in body copy
+    const tableRows = buildApprovalDetailsTableHtml({
+        ...fields,
+        workflowStatus: 'rejected',
+    }).replace(/>Rejected</g, '>Correction required<');
+    const who = escapeHtml(String(requesterName || '').trim() || 'An approver');
+    const why = escapeHtml(String(reason || '').trim() || '—');
+
+    return `
+        <div style="font-family: Arial, sans-serif; color: #1e293b; font-size: 14px; line-height: 1.5;">
+            <p style="margin:0 0 8px 0;">Dear Team,</p>
+            <p style="margin:0 0 8px 0;"><strong>${who}</strong> has requested a correction on this quote.</p>
+            <p style="margin:0 0 8px 0;"><strong>Reason for correction:</strong></p>
+            <p style="margin:0 0 12px 0; padding:10px 12px; background:#fff7ed; border:1px solid #fdba74; border-radius:6px; white-space:pre-wrap;">${why}</p>
+            <table cellpadding="0" cellspacing="0" border="0" role="presentation" style="border-collapse:collapse; border-spacing:0; width:100%; max-width:640px; margin:8px 0; table-layout:fixed;">
+                ${tableRows}
+            </table>
+            <p style="margin:8px 0 0 0;">The initiator should update the quote draft and send it for approval again. Previous approvals have been cleared.</p>
+            <p style="margin-top:16px; font-size:12px; color:#64748b; font-style:italic;">* This is an auto generated email from Enquiry Management System *</p>
+        </div>
+    `;
+}
+
+function buildQuoteCorrectionRequiredSubject(projectName) {
+    const project = String(projectName || '').trim() || '—';
+    return `Quote correction required — Project: ${project}`;
+}
+
+async function sendQuoteCorrectionRequiredEmails({
+    toEmails = [],
+    requesterName = '',
+    reason = '',
+    mailContext = null,
+}) {
+    const list = Array.isArray(toEmails) ? toEmails : [toEmails];
+    const unique = Array.from(new Set(list.map((e) => String(e || '').trim()).filter(Boolean)));
+    if (!unique.length) {
+        return { success: false, error: 'No recipients for correction notification' };
+    }
+
+    const fields = mailContext || {};
+    const html = buildQuoteCorrectionRequiredHtml({
+        requesterName,
+        reason,
+        ...fields,
+        workflowStatus: 'rejected',
+    });
+    const mailSubject = buildQuoteCorrectionRequiredSubject(fields.projectName);
+    const approvalSmtp = getQuoteApprovalSmtpOverrides();
+    const tStart = Date.now();
+
+    try {
+        console.log(
+            `[quoteApprovalNotify] Correction-required to ${unique.length} recipient(s) via ${approvalSmtp.host}:${approvalSmtp.port}`
+        );
+        await sendApprovalMailFast({
+            to: unique.join(';'),
+            subject: mailSubject,
+            html,
+        });
+        return { success: true, via: 'smtp-relay-pool', elapsedMs: Date.now() - tStart, sentTo: unique };
+    } catch (primaryErr) {
+        const primaryMessage = primaryErr?.message || String(primaryErr);
+        console.warn(
+            `[quoteApprovalNotify] Correction-required SMTP failed after ${Date.now() - tStart}ms:`,
+            primaryMessage
+        );
+
+        if (!approvalFallbackEnabled() || isSameSmtpEndpoint(approvalSmtp)) {
+            return {
+                success: false,
+                error: primaryMessage,
+                smtpError: primaryMessage,
+                elapsedMs: Date.now() - tStart,
+            };
+        }
+
+        try {
+            const { sendEnquiryNotificationViaSmtp } = require('./enquiryNotifySmtp');
+            const fastFailExtra = { connectionTimeout: 8000, greetingTimeout: 8000, socketTimeout: 12000 };
+            await sendEnquiryNotificationViaSmtp({
+                to: unique.join(';'),
+                cc: '',
+                subject: mailSubject,
+                html,
+                fromEmail: getSmtpFromEmail(),
+                transportExtra: fastFailExtra,
+            });
+            return { success: true, via: 'smtp-fallback', elapsedMs: Date.now() - tStart, sentTo: unique };
+        } catch (fallbackErr) {
+            const fallbackMessage = fallbackErr?.message || String(fallbackErr);
+            return {
+                success: false,
+                error: `Correction email failed: ${primaryMessage}`,
+                smtpError: primaryMessage,
+                fallbackSmtpError: fallbackMessage,
+                elapsedMs: Date.now() - tStart,
+            };
+        }
+    }
+}
+
 module.exports = {
     sendQuoteApprovalRequestEmail,
     sendQuoteApprovedForSubmissionEmails,
+    sendQuoteCorrectionRequiredEmails,
     buildQuoteApprovalRequiredHtml,
     buildQuoteApprovedForSubmissionHtml,
+    buildQuoteCorrectionRequiredHtml,
     buildApprovalDetailsTableHtml,
     buildWorkflowStatusBadgeHtml,
     normalizeApprovalMailFields,
     buildApprovalSubject,
     buildQuoteApprovedSubject,
+    buildQuoteCorrectionRequiredSubject,
 };

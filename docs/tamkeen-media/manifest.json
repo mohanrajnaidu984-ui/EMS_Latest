@@ -1,0 +1,72 @@
+{
+  "base": "http://151.50.1.38",
+  "capturedAt": "2026-08-27T06:57:04.696Z",
+  "entities": {
+    "aluminium": {
+      "label": "Almoayyed Aluminium",
+      "files": {
+        "dashboard": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\aluminium\\01-dashboard.png",
+        "enquiry": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\aluminium\\02-enquiry.png",
+        "quotes": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\aluminium\\03-quotes.png",
+        "report": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\aluminium\\04-sales-report.png",
+        "probability": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\aluminium\\05-probability.png",
+        "video": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\aluminium\\aluminium-walkthrough.webm"
+      }
+    },
+    "landscapes": {
+      "label": "Almoayyed Landscapes and Pools",
+      "files": {
+        "dashboard": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\landscapes\\01-dashboard.png",
+        "enquiry": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\landscapes\\02-enquiry.png",
+        "quotes": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\landscapes\\03-quotes.png",
+        "report": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\landscapes\\04-sales-report.png",
+        "probability": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\landscapes\\05-probability.png",
+        "video": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\landscapes\\landscapes-walkthrough.webm"
+      }
+    },
+    "security": {
+      "label": "Guardus Security Co. W.L.L.",
+      "files": {
+        "dashboard": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\security\\01-dashboard.png",
+        "enquiry": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\security\\02-enquiry.png",
+        "quotes": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\security\\03-quotes.png",
+        "report": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\security\\04-sales-report.png",
+        "probability": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\security\\05-probability.png",
+        "video": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\security\\security-walkthrough.webm"
+      }
+    },
+    "simplex": {
+      "label": "Simplex Almoayyed",
+      "files": {
+        "dashboard": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\simplex\\01-dashboard.png",
+        "enquiry": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\simplex\\02-enquiry.png",
+        "quotes": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\simplex\\03-quotes.png",
+        "report": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\simplex\\04-sales-report.png",
+        "probability": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\simplex\\05-probability.png",
+        "video": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\simplex\\simplex-walkthrough.webm"
+      }
+    },
+    "interiors": {
+      "label": "Almoayyed Interiors",
+      "files": {
+        "dashboard": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\interiors\\01-dashboard.png",
+        "enquiry": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\interiors\\02-enquiry.png",
+        "quotes": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\interiors\\03-quotes.png",
+        "report": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\interiors\\04-sales-report.png",
+        "probability": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\interiors\\05-probability.png",
+        "video": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\interiors\\interiors-walkthrough.webm"
+      }
+    },
+    "camair": {
+      "label": "CAMAIR",
+      "files": {
+        "dashboard": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\camair\\01-dashboard.png",
+        "enquiry": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\camair\\02-enquiry.png",
+        "quotes": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\camair\\03-quotes.png",
+        "report": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\camair\\04-sales-report.png",
+        "probability": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\camair\\05-probability.png",
+        "video": "d:\\Data\\EMS Online\\EMS\\docs\\tamkeen-media\\camair\\camair-walkthrough.webm"
+      }
+    }
+  }
+}

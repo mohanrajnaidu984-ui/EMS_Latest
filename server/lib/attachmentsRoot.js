@@ -172,6 +172,63 @@ function resolveQuoteUploadDestination(quoteId) {
     return path.join(__dirname, '..', 'uploads', 'quotes', safeId);
 }
 
+/**
+ * Quote Public/Private layout (mirrors Enquiries):
+ *   {root}/Quotes/Public/{quoteId}/{Division}
+ *   {root}/Quotes/Private/{quoteId}/{Division}
+ * Legacy flat {root}/Quotes/{quoteId} still resolved via resolveQuoteUploadDestination.
+ */
+function resolveQuoteUploadDestinationByVisibility(quoteId, visibility, division) {
+    const raw = quoteId != null ? String(quoteId) : 'unknown';
+    const safeId = sanitizeFolderName(raw, 'unknown');
+    const safeDivision = sanitizeFolderName(division, 'General');
+    const v = String(visibility || 'Public').toLowerCase();
+    const visFolder = v === 'private' ? 'Private' : 'Public';
+
+    const explicitRoot =
+        process.env.QUOTE_ATTACHMENTS_ROOT || process.env.EMS_QUOTE_ATTACHMENTS_ROOT;
+    if (explicitRoot && String(explicitRoot).trim()) {
+        return path.join(path.normalize(String(explicitRoot).trim()), visFolder, safeId, safeDivision);
+    }
+
+    const envRoot = normalizeEnvRoot();
+    if (envRoot) {
+        return path.join(envRoot, quoteAttachmentsSubfolder(), visFolder, safeId, safeDivision);
+    }
+    return path.join(__dirname, '..', 'uploads', 'quotes', visFolder, safeId, safeDivision);
+}
+
+/** Parent directory for ChatBox images/attachments (default `ChatBox` under ENQUIRY_ATTACHMENTS_ROOT). */
+function chatboxAttachmentsSubfolder() {
+    const s = process.env.CHATBOX_ATTACHMENTS_SUBFOLDER;
+    if (s != null && String(s).trim()) return String(s).trim();
+    return 'ChatBox';
+}
+
+/**
+ * ChatBox storage root.
+ * Prefer CHATBOX_ATTACHMENTS_ROOT, else \\…\ems app\ChatBox from ENQUIRY_ATTACHMENTS_ROOT.
+ */
+function resolveChatboxAttachmentsBase() {
+    const explicit =
+        process.env.CHATBOX_ATTACHMENTS_ROOT || process.env.EMS_CHATBOX_ATTACHMENTS_ROOT;
+    if (explicit && String(explicit).trim()) {
+        return path.normalize(String(explicit).trim());
+    }
+    const envRoot = normalizeEnvRoot();
+    if (envRoot) {
+        return path.join(envRoot, chatboxAttachmentsSubfolder());
+    }
+    return path.join(__dirname, '..', 'uploads', 'chatbox');
+}
+
+/** Per-enquiry folder under ChatBox root. */
+function resolveChatboxUploadDestination(requestNo) {
+    const raw = requestNo != null ? String(requestNo) : 'unknown';
+    const safeId = raw.replace(/[^a-zA-Z0-9-_]/g, '_') || 'unknown';
+    return path.join(resolveChatboxAttachmentsBase(), safeId);
+}
+
 module.exports = {
     normalizeEnvRoot,
     resolveEnquiryAttachmentsBase,
@@ -182,5 +239,9 @@ module.exports = {
     resolveWritableEnquiryUploadDestination,
     resolveQuoteAttachmentsBase,
     resolveQuoteUploadDestination,
+    resolveQuoteUploadDestinationByVisibility,
     sanitizeFolderName,
+    chatboxAttachmentsSubfolder,
+    resolveChatboxAttachmentsBase,
+    resolveChatboxUploadDestination,
 };

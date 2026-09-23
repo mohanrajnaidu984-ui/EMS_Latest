@@ -1,0 +1,125 @@
+.sr-multi-select {
+    position: relative;
+}
+
+.sr-filter-field.sr-multi-select {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    margin: 0;
+}
+
+.sr-multi-select .sr-filter-label {
+    display: block;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: #475569;
+    margin-bottom: 0;
+    line-height: 1.15;
+}
+
+.sr-multi-select__trigger {
+    text-align: left;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    cursor: pointer;
+    min-height: 26px;
+    padding: 3px 6px;
+    font-size: 10.5px;
+    border-radius: 6px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #334155;
+}
+
+.sr-multi-select__trigger:disabled {
+    background: #f1f5f9;
+    cursor: not-allowed;
+}
+
+.sr-multi-select__trigger::after {
+    content: '';
+    border-top: 0.3em solid;
+    border-right: 0.3em solid transparent;
+    border-left: 0.3em solid transparent;
+    margin-left: 8px;
+    flex-shrink: 0;
+}
+
+.sr-multi-select__text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sr-multi-select__panel {
+    position: absolute;
+    z-index: 1200;
+    top: calc(100% + 2px);
+    left: 0;
+    min-width: max(100%, 220px);
+    max-height: 280px;
+    overflow: auto;
+    background: #fff;
+    border: 1px solid #ced4da;
+    border-radius: 0.25rem;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    padding: 6px 0;
+}
+
+/* Portaled to body — escapes page overflow:hidden / filter strip clipping */
+.sr-multi-select__panel--portal {
+    position: fixed;
+    top: auto;
+    left: auto;
+    z-index: 10050;
+}
+
+.sr-multi-select__actions {
+    display: flex;
+    gap: 8px;
+    padding: 4px 10px 8px;
+    border-bottom: 1px solid #e9ecef;
+}
+
+.sr-multi-select__actions button {
+    border: none;
+    background: none;
+    color: #0d6efd;
+    font-size: 0.75rem;
+    padding: 0;
+    cursor: pointer;
+}
+
+.sr-multi-select__options {
+    display: flex;
+    flex-direction: column;
+}
+
+.sr-multi-select__option {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 4px 10px;
+    margin: 0;
+    font-size: 0.8125rem;
+    cursor: pointer;
+}
+
+.sr-multi-select__option:hover {
+    background: #f8f9fa;
+}
+
+.sr-multi-select__option input {
+    margin-top: 2px;
+    flex-shrink: 0;
+}
+
+.sr-multi-select__option span {
+    line-height: 1.25;
+}

@@ -6,7 +6,23 @@ const {
     applyApprovalAction,
     getCurrentPendingStep,
     deriveWorkflowRollupStatusLabel,
+    coerceFinalApproverFlags,
+    assertFinalApproverRules,
+    truthyFinalFlag,
+    isFinalApproverApproved,
 } = require('./approvalWorkflowJson');
+const {
+    userHasDepartment,
+    anyDepartmentTokenMatchesJobName,
+    parseUserDepartments,
+} = require('./userDepartments');
+
+/** MEF.DepartmentName equals or is contained in Master_ConcernedSE.Department CSV. */
+const SQL_MEF_DEPT_IN_MASTER_DEPT = `(
+    LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))) = LTRIM(RTRIM(ISNULL(m.Department, N'')))
+    OR N',' + REPLACE(LTRIM(RTRIM(ISNULL(m.Department, N''))), N' ', N'') + N','
+       LIKE N'%,' + REPLACE(LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))), N' ', N'') + N',%'
+)`;
 
 function isMissingQuoteApprovalStepsTableError(message) {
     const m = String(message || '');
@@ -27,6 +43,7 @@ function mapDbRowToStep(row) {
         actionAt: row.ApprovedAt ? new Date(row.ApprovedAt).toISOString() : null,
         comments: String(row.Comments || '').trim(),
         digitalSignatureJson: row.ApproverDigitalSignatureJson || null,
+        isFinalApprover: !!row.IsFinalApprover,
     };
 }
 
@@ -40,6 +57,7 @@ function stepsToJson(steps) {
             status: s.status,
             actionAt: s.actionAt,
             comments: s.comments || '',
+            isFinalApprover: !!s.isFinalApprover,
         }))
     );
 }
@@ -72,7 +90,7 @@ async function fetchApprovalStepsByQuoteId(quoteId) {
         WHERE QuoteId = ${quoteId}
         ORDER BY ApproverSequence ASC, ID ASC
     `;
-    return (result.recordset || []).map(mapDbRowToStep).filter(Boolean);
+    return coerceFinalApproverFlags((result.recordset || []).map(mapDbRowToStep).filter(Boolean));
 }
 
 async function fetchApprovalStepsByDraftId(draftQuoteId) {
@@ -83,7 +101,7 @@ async function fetchApprovalStepsByDraftId(draftQuoteId) {
           AND (QuoteId IS NULL OR QuoteId = 0)
         ORDER BY ApproverSequence ASC, ID ASC
     `;
-    return (result.recordset || []).map(mapDbRowToStep).filter(Boolean);
+    return coerceFinalApproverFlags((result.recordset || []).map(mapDbRowToStep).filter(Boolean));
 }
 
 function formatApproverPathLabel(step) {
@@ -320,7 +338,7 @@ async function fetchApprovalMailContext({
     const steps = await fetchApprovalStepsForMailContext({ quoteId, draftQuoteId, meta });
     const hierarchyPath = buildApprovalHierarchyPath(steps);
 
-    const dash = (v) => (String(v || '').trim() || '—');
+    const dash = (v) => (String(v || '').trim() || 'â€”');
     return {
         workflowNo: dash(wf.workflowNo),
         enquiryNo: dash(rn),
@@ -335,7 +353,7 @@ async function fetchApprovalMailContext({
     };
 }
 
-/** Creator + all approvers (distinct) for final approval completion email. */
+/** Creator / approval seeker + all approvers (distinct) after final approval. */
 function buildApprovalCompletionRecipientEmails(steps = [], createdByEmail = '') {
     const emails = new Set();
     const creator = normalizeApprovalEmail(createdByEmail);
@@ -413,27 +431,34 @@ async function replaceApprovalSteps({
         });
     }
 
-    const normalizedSteps = (Array.isArray(steps) ? steps : [])
-        .map((s, i) => ({
-            sequence: Number(s.sequence ?? i + 1),
-            approverEmail: normalizeApprovalEmail(s.approverEmail),
-            approverName: String(s.approverName || '').trim(),
-            approverDesignation: String(s.approverDesignation || '').trim(),
-            status: ['approved', 'rejected'].includes(String(s.status || '').toLowerCase())
-                ? String(s.status).toLowerCase()
-                : 'pending',
-            actionAt: s.actionAt || null,
-            comments: String(s.comments || '').trim(),
-            digitalSignatureJson: s.digitalSignatureJson || null,
-        }))
-        .filter((s) => s.approverName || s.approverEmail)
-        .sort((a, b) => a.sequence - b.sequence)
-        .map((s, i) => ({ ...s, sequence: i + 1 }));
+    const normalizedSteps = coerceFinalApproverFlags(
+        (Array.isArray(steps) ? steps : [])
+            .map((s, i) => ({
+                sequence: Number(s.sequence ?? i + 1),
+                approverEmail: normalizeApprovalEmail(s.approverEmail),
+                approverName: String(s.approverName || '').trim(),
+                approverDesignation: String(s.approverDesignation || '').trim(),
+                status: ['approved', 'rejected'].includes(String(s.status || '').toLowerCase())
+                    ? String(s.status).toLowerCase()
+                    : 'pending',
+                actionAt: s.actionAt || null,
+                comments: String(s.comments || '').trim(),
+                digitalSignatureJson: s.digitalSignatureJson || null,
+                isFinalApprover: truthyFinalFlag(s.isFinalApprover ?? s.IsFinalApprover),
+            }))
+            .filter((s) => s.approverName || s.approverEmail)
+            .sort((a, b) => a.sequence - b.sequence)
+            .map((s, i) => ({ ...s, sequence: i + 1 }))
+    );
 
     const quoteRef = deriveQuoteRef(m.quoteNumber) || m.quoteRef || '';
     const now = new Date();
 
     const isNewWorkflow = !!normalizeApprovalEmail(createdByEmail);
+    if (isNewWorkflow) {
+        assertFinalApproverRules(normalizedSteps);
+    }
+
     const existingMeta = isNewWorkflow
         ? null
         : await fetchExistingWorkflowMeta({ quoteId: qId, draftQuoteId: dId, meta: m });
@@ -484,7 +509,7 @@ async function replaceApprovalSteps({
                 QuoteId, DraftQuoteId, RequestNo, LeadJobName, OwnJob, CustomerName,
                 QuoteNo, RevisionNo, QuoteRef, QuoteNumber,
                 ApproverEmail, ApproverName, ApproverDesignation, ApproverSequence,
-                Status, ApprovedAt, Comments, ApproverDigitalSignatureJson,
+                Status, ApprovedAt, Comments, ApproverDigitalSignatureJson, IsFinalApprover,
                 WorkflowNo, CreatedByEmail, CreatedByName, CreatedByCompanyName, CreatedByDivisionName,
                 CreatedAt, UpdatedAt
             )
@@ -507,6 +532,7 @@ async function replaceApprovalSteps({
                 ${approvedAt},
                 ${step.comments || null},
                 ${step.digitalSignatureJson || null},
+                ${step.isFinalApprover ? 1 : 0},
                 ${workflowNo || null},
                 ${creatorEmail || null},
                 ${creatorName || null},
@@ -536,10 +562,23 @@ async function linkDraftStepsToQuote(draftQuoteId, quoteId, quoteRow = {}) {
         WHERE DraftQuoteId = ${draftQuoteId}
           AND (QuoteId IS NULL OR QuoteId = 0)
     `;
+    // Keep correction history visible on the finalized quote (Previous Quotes browse).
+    try {
+        await sql.query`
+            UPDATE QuoteApprovalCorrections
+            SET QuoteId = ${quoteId}
+            WHERE DraftQuoteId = ${draftQuoteId}
+              AND (QuoteId IS NULL OR QuoteId = 0)
+        `;
+    } catch (err) {
+        if (!isMissingQuoteApprovalCorrectionsTableError(err.message)) throw err;
+    }
 }
 
 
 function mapPendingApprovalListRow(row) {
+    const totalRaw = row.TotalAmount ?? row.totalAmount;
+    const totalAmount = totalRaw != null && totalRaw !== '' ? Number(totalRaw) : null;
     return {
         quoteId: row.QuoteId || row.ResolvedQuoteId || null,
         draftQuoteId: row.DraftQuoteId || row.ResolvedDraftQuoteId || null,
@@ -561,6 +600,7 @@ function mapPendingApprovalListRow(row) {
         workflowNo: String(row.WorkflowNo || '').trim(),
         approvalStatus: String(row.ApprovalStatus || row.approvalStatus || '').trim(),
         reasonForRevision: String(row.ReasonForRevision || row.reasonForRevision || '').trim(),
+        totalAmount: Number.isFinite(totalAmount) ? totalAmount : null,
     };
 }
 
@@ -603,7 +643,7 @@ async function fetchSavedQuoteByNumber(requestNo, quoteNumber) {
     return quoteRes.recordset?.[0] || null;
 }
 
-/** Resolve preview target for pending rows — saved EnquiryQuotes only (exact quote ref). */
+/** Resolve preview target for pending rows â€” saved EnquiryQuotes only (exact quote ref). */
 async function resolveScopeApprovalStepTargets(row) {
     const requestNo = String(row?.RequestNo || '').trim();
     const storedQuoteNumber = String(row?.QuoteNumber || '').trim();
@@ -870,17 +910,32 @@ async function enrichPendingApprovalRows(rows) {
     const out = [];
     for (const { row, resolved } of resolvedBatch) {
         const quoteId = Number(row.QuoteId || resolved.quoteId) || null;
+        const draftId = Number(row.DraftQuoteId || resolved.draftQuoteId) || null;
+        let approvalStatus = quoteId ? statusMap.get(quoteId) || '' : '';
+        if (!approvalStatus && draftId) {
+            try {
+                const draftSteps = await fetchApprovalStepsByDraftId(draftId);
+                approvalStatus = deriveWorkflowRollupStatusLabel(draftSteps);
+            } catch {
+                approvalStatus = '';
+            }
+        }
         out.push(
             mapPendingApprovalListRow({
                 ...row,
                 QuoteId: row.QuoteId || resolved.quoteId,
-                DraftQuoteId: row.DraftQuoteId || resolved.draftQuoteId,
+                // Once promoted, hide draft id so clients open/act on the saved quote.
+                DraftQuoteId:
+                    Number(row.QuoteId || resolved.quoteId) > 0
+                        ? null
+                        : row.DraftQuoteId || resolved.draftQuoteId,
                 ResolvedQuoteId: resolved.quoteId,
-                ResolvedDraftQuoteId: resolved.draftQuoteId,
+                ResolvedDraftQuoteId:
+                    Number(row.QuoteId || resolved.quoteId) > 0 ? null : resolved.draftQuoteId,
                 ResolvedQuoteNumber: resolved.quoteNumber,
                 ResolvedSubject: resolved.subject,
                 ResolvedQuoteDate: resolved.quoteDate,
-                ApprovalStatus: quoteId ? statusMap.get(quoteId) || '' : '',
+                ApprovalStatus: approvalStatus,
             })
         );
     }
@@ -970,22 +1025,34 @@ function buildDraftWorkflowNotRejectedSql(alias = 's') {
               )`;
 }
 
-/** Rows in QuoteApprovalSteps assigned to this user with status Pending. */
+/** Rows in QuoteApprovalSteps assigned to this user with status Pending (saved quotes + drafts). */
 async function countPendingApprovalsForUser(userEmail) {
     const email = normalizeApprovalEmail(userEmail);
     if (!email) return 0;
-    const actionableSql = buildActionablePendingStepSql('s', 'quote');
-    const notRejectedSql = buildQuoteWorkflowNotRejectedSql('s');
+    const actionableSql = buildActionablePendingStepSql('s');
+    const notRejectedQuoteSql = buildQuoteWorkflowNotRejectedSql('s');
+    const notRejectedDraftSql = buildDraftWorkflowNotRejectedSql('s');
     const request = new sql.Request();
     request.input('approverEmail', sql.NVarChar, email);
     const result = await request.query(`
-        SELECT COUNT(DISTINCT CONCAT(N'Q:', CAST(s.QuoteId AS NVARCHAR(20)))) AS cnt
-        FROM QuoteApprovalSteps s
-        WHERE s.QuoteId IS NOT NULL
-          AND s.QuoteId > 0
-          AND LOWER(LTRIM(RTRIM(ISNULL(s.ApproverEmail, N'')))) = LOWER(LTRIM(RTRIM(@approverEmail)))
-          ${actionableSql}
-          ${notRejectedSql}
+        SELECT COUNT(*) AS cnt FROM (
+            SELECT DISTINCT CONCAT(N'Q:', CAST(s.QuoteId AS NVARCHAR(20))) AS k
+            FROM QuoteApprovalSteps s
+            WHERE s.QuoteId IS NOT NULL
+              AND s.QuoteId > 0
+              AND LOWER(LTRIM(RTRIM(ISNULL(s.ApproverEmail, N'')))) = LOWER(LTRIM(RTRIM(@approverEmail)))
+              ${actionableSql}
+              ${notRejectedQuoteSql}
+            UNION
+            SELECT DISTINCT CONCAT(N'D:', CAST(s.DraftQuoteId AS NVARCHAR(20))) AS k
+            FROM QuoteApprovalSteps s
+            WHERE s.DraftQuoteId IS NOT NULL
+              AND s.DraftQuoteId > 0
+              AND (s.QuoteId IS NULL OR s.QuoteId = 0)
+              AND LOWER(LTRIM(RTRIM(ISNULL(s.ApproverEmail, N'')))) = LOWER(LTRIM(RTRIM(@approverEmail)))
+              ${actionableSql}
+              ${notRejectedDraftSql}
+        ) u
     `);
     return Number(result.recordset?.[0]?.cnt) || 0;
 }
@@ -994,8 +1061,9 @@ async function fetchPendingApprovalsForUser(userEmail, { division = '' } = {}) {
     const email = normalizeApprovalEmail(userEmail);
     if (!email) return [];
     const divisionSql = buildApprovalDivisionFilterSql(division, 's');
-    const actionableSql = buildActionablePendingStepSql('s', 'quote');
-    const notRejectedSql = buildQuoteWorkflowNotRejectedSql('s');
+    const actionableSql = buildActionablePendingStepSql('s');
+    const notRejectedQuoteSql = buildQuoteWorkflowNotRejectedSql('s');
+    const notRejectedDraftSql = buildDraftWorkflowNotRejectedSql('s');
     const request = new sql.Request();
     request.input('approverEmail', sql.NVarChar, email);
     const result = await request.query(`
@@ -1019,7 +1087,8 @@ async function fetchPendingApprovalsForUser(userEmail, { division = '' } = {}) {
             ranked.DueDate,
             ranked.ConsultantName,
             ranked.EnquiryCustomerName,
-            ranked.ReasonForRevision
+            ranked.ReasonForRevision,
+            ranked.TotalAmount
         FROM (
             SELECT
                 s.QuoteId,
@@ -1042,8 +1111,9 @@ async function fetchPendingApprovalsForUser(userEmail, { division = '' } = {}) {
                 em.ConsultantName,
                 em.CustomerName AS EnquiryCustomerName,
                 q.ReasonForRevision AS ReasonForRevision,
+                q.TotalAmount AS TotalAmount,
                 ROW_NUMBER() OVER (
-                    PARTITION BY s.QuoteId
+                    PARTITION BY CONCAT(N'Q:', CAST(s.QuoteId AS NVARCHAR(20)))
                     ORDER BY s.ApproverSequence ASC, s.ID ASC
                 ) AS rn
             FROM QuoteApprovalSteps s
@@ -1053,11 +1123,50 @@ async function fetchPendingApprovalsForUser(userEmail, { division = '' } = {}) {
               AND s.QuoteId > 0
               AND LOWER(LTRIM(RTRIM(ISNULL(s.ApproverEmail, N'')))) = LOWER(LTRIM(RTRIM(@approverEmail)))
               ${actionableSql}
-              ${notRejectedSql}
+              ${notRejectedQuoteSql}
+              ${divisionSql}
+
+            UNION ALL
+
+            SELECT
+                CAST(NULL AS INT) AS QuoteId,
+                s.DraftQuoteId,
+                s.ID AS StepId,
+                s.ApproverSequence,
+                s.RequestNo,
+                s.LeadJobName,
+                s.OwnJob,
+                s.CustomerName,
+                s.QuoteNo,
+                s.RevisionNo,
+                s.QuoteRef,
+                COALESCE(NULLIF(LTRIM(RTRIM(s.QuoteNumber)), N''), d.QuoteNumber) AS QuoteNumber,
+                d.Subject AS Subject,
+                d.QuoteDate AS QuoteDate,
+                s.WorkflowNo AS WorkflowNo,
+                em.ProjectName,
+                em.DueDate,
+                em.ConsultantName,
+                em.CustomerName AS EnquiryCustomerName,
+                d.ReasonForRevision AS ReasonForRevision,
+                d.TotalAmount AS TotalAmount,
+                ROW_NUMBER() OVER (
+                    PARTITION BY CONCAT(N'D:', CAST(s.DraftQuoteId AS NVARCHAR(20)))
+                    ORDER BY s.ApproverSequence ASC, s.ID ASC
+                ) AS rn
+            FROM QuoteApprovalSteps s
+            INNER JOIN EnquiryQuotesDraft d ON d.ID = s.DraftQuoteId
+            LEFT JOIN EnquiryMaster em ON LTRIM(RTRIM(em.RequestNo)) = LTRIM(RTRIM(s.RequestNo))
+            WHERE s.DraftQuoteId IS NOT NULL
+              AND s.DraftQuoteId > 0
+              AND (s.QuoteId IS NULL OR s.QuoteId = 0)
+              AND LOWER(LTRIM(RTRIM(ISNULL(s.ApproverEmail, N'')))) = LOWER(LTRIM(RTRIM(@approverEmail)))
+              ${actionableSql}
+              ${notRejectedDraftSql}
               ${divisionSql}
         ) ranked
         WHERE ranked.rn = 1
-        ORDER BY ranked.QuoteDate DESC, ranked.QuoteId DESC
+        ORDER BY ranked.QuoteDate DESC, ranked.QuoteId DESC, ranked.DraftQuoteId DESC
     `);
     return enrichPendingApprovalRows(result.recordset || []);
 }
@@ -1090,29 +1199,39 @@ function buildApprovedByMeListFilterSql(qRaw, dateFrom, dateTo, division = '') {
         parts.push(`AND CAST(COALESCE(s.ApprovedAt, q.QuoteDate) AS DATE) <= '${lit(d2)}'`);
     }
     if (div) {
-        const dv = lit(div);
-        parts.push(`AND (
+        const tokens = parseUserDepartments(div);
+        if (tokens.length) {
+            const orParts = tokens.map((tok) => {
+                const dv = lit(tok);
+                return `(
               LTRIM(RTRIM(ISNULL(s.CreatedByDivisionName, N''))) = N'${dv}'
               OR LTRIM(RTRIM(ISNULL(s.OwnJob, N''))) = N'${dv}'
               OR LTRIM(RTRIM(ISNULL(s.LeadJobName, N''))) = N'${dv}'
-            )`);
+            )`;
+            });
+            parts.push(`AND (${orParts.join('\n              OR ')})`);
+        }
     }
     return parts.join('\n              ');
 }
 
+/** Multi-select CSV â†’ OR across CreatedByDivisionName / OwnJob / LeadJobName. */
 function buildApprovalDivisionFilterSql(division = '', alias = 's') {
-    const div = String(division || '').trim();
-    if (!div) return '';
+    const tokens = parseUserDepartments(division);
+    if (!tokens.length) return '';
     const lit = (s) => String(s || '').replace(/'/g, "''");
-    const dv = lit(div);
-    return `AND (
+    const orParts = tokens.map((tok) => {
+        const dv = lit(tok);
+        return `(
               LTRIM(RTRIM(ISNULL(${alias}.CreatedByDivisionName, N''))) = N'${dv}'
               OR LTRIM(RTRIM(ISNULL(${alias}.OwnJob, N''))) = N'${dv}'
               OR LTRIM(RTRIM(ISNULL(${alias}.LeadJobName, N''))) = N'${dv}'
             )`;
+    });
+    return `AND (${orParts.join('\n              OR ')})`;
 }
 
-/** Quotes this user approved — filtered to accessible division when provided. */
+/** Quotes this user approved â€” filtered to accessible division when provided. */
 async function fetchApprovedApprovalsByUser(userEmail, { q = '', dateFrom = '', dateTo = '', division = '' } = {}) {
     const email = normalizeApprovalEmail(userEmail);
     if (!email) return [];
@@ -1141,7 +1260,8 @@ async function fetchApprovedApprovalsByUser(userEmail, { q = '', dateFrom = '', 
             ranked.DueDate,
             ranked.ConsultantName,
             ranked.EnquiryCustomerName,
-            ranked.ReasonForRevision
+            ranked.ReasonForRevision,
+            ranked.TotalAmount
         FROM (
             SELECT
                 s.QuoteId,
@@ -1165,6 +1285,7 @@ async function fetchApprovedApprovalsByUser(userEmail, { q = '', dateFrom = '', 
                 em.ConsultantName,
                 em.CustomerName AS EnquiryCustomerName,
                 q.ReasonForRevision AS ReasonForRevision,
+                q.TotalAmount AS TotalAmount,
                 ROW_NUMBER() OVER (
                     PARTITION BY s.QuoteId
                     ORDER BY s.ApprovedAt DESC, s.ID DESC
@@ -1184,7 +1305,7 @@ async function fetchApprovedApprovalsByUser(userEmail, { q = '', dateFrom = '', 
     return enrichPendingApprovalRows(result.recordset || []);
 }
 
-/** Quotes this user rejected — filtered to accessible division when provided. */
+/** Quotes this user rejected â€” filtered to accessible division when provided. */
 async function fetchRejectedApprovalsByUser(userEmail, { q = '', dateFrom = '', dateTo = '', division = '' } = {}) {
     const email = normalizeApprovalEmail(userEmail);
     if (!email) return [];
@@ -1213,7 +1334,8 @@ async function fetchRejectedApprovalsByUser(userEmail, { q = '', dateFrom = '', 
             ranked.DueDate,
             ranked.ConsultantName,
             ranked.EnquiryCustomerName,
-            ranked.ReasonForRevision
+            ranked.ReasonForRevision,
+            ranked.TotalAmount
         FROM (
             SELECT
                 s.QuoteId,
@@ -1237,6 +1359,7 @@ async function fetchRejectedApprovalsByUser(userEmail, { q = '', dateFrom = '', 
                 em.ConsultantName,
                 em.CustomerName AS EnquiryCustomerName,
                 q.ReasonForRevision AS ReasonForRevision,
+                q.TotalAmount AS TotalAmount,
                 ROW_NUMBER() OVER (
                     PARTITION BY s.QuoteId
                     ORDER BY s.ApprovedAt DESC, s.ID DESC
@@ -1256,7 +1379,156 @@ async function fetchRejectedApprovalsByUser(userEmail, { q = '', dateFrom = '', 
     return enrichPendingApprovalRows(result.recordset || []);
 }
 
-/** Quotes submitted for approval workflow — visible to approver, CC teammates, or ConcernedSE on enquiry. */
+/**
+ * Quotes/drafts where this user requested a correction (latest request per quote/draft).
+ */
+async function fetchCorrectionsRequestedByUser(userEmail, { q = '', dateFrom = '', dateTo = '', division = '' } = {}) {
+    const email = normalizeApprovalEmail(userEmail);
+    if (!email) return [];
+    const lit = (s) => String(s || '').replace(/'/g, "''");
+    const qq = (q || '').trim().toLowerCase();
+    const d1 = (dateFrom || '').trim();
+    const d2 = (dateTo || '').trim();
+    const divTokens = parseUserDepartments(division);
+    const textFilter = qq
+        ? `AND (
+              CHARINDEX(N'${lit(qq)}', LOWER(CAST(c.RequestNo AS NVARCHAR(100)))) > 0
+              OR CHARINDEX(N'${lit(qq)}', LOWER(LTRIM(RTRIM(ISNULL(em.ProjectName, N''))))) > 0
+              OR CHARINDEX(N'${lit(qq)}', LOWER(LTRIM(RTRIM(ISNULL(em.CustomerName, N''))))) > 0
+              OR CHARINDEX(N'${lit(qq)}', LOWER(LTRIM(RTRIM(ISNULL(em.ConsultantName, N''))))) > 0
+              OR CHARINDEX(N'${lit(qq)}', LOWER(LTRIM(RTRIM(ISNULL(src.QuoteNumber, N''))))) > 0
+              OR CHARINDEX(N'${lit(qq)}', LOWER(LTRIM(RTRIM(ISNULL(src.ToName, N''))))) > 0
+              OR CHARINDEX(N'${lit(qq)}', LOWER(LTRIM(RTRIM(ISNULL(c.WorkflowNo, N''))))) > 0
+              OR CHARINDEX(N'${lit(qq)}', LOWER(LTRIM(RTRIM(ISNULL(c.Reason, N''))))) > 0
+            )`
+        : '';
+    const dateFilterParts = [];
+    if (d1) dateFilterParts.push(`AND CAST(c.CreatedAt AS DATE) >= '${lit(d1)}'`);
+    if (d2) dateFilterParts.push(`AND CAST(c.CreatedAt AS DATE) <= '${lit(d2)}'`);
+    const dateFilter = dateFilterParts.join('\n              ');
+    let divisionFilter = '';
+    if (divTokens.length) {
+        const orParts = divTokens.map((tok) => {
+            const dv = lit(tok);
+            return `(
+              LTRIM(RTRIM(ISNULL(src.OwnJob, N''))) = N'${dv}'
+              OR LTRIM(RTRIM(ISNULL(src.LeadJob, N''))) = N'${dv}'
+            )`;
+        });
+        divisionFilter = `AND (${orParts.join('\n              OR ')})`;
+    }
+
+    const request = new sql.Request();
+    request.input('requesterEmail', sql.NVarChar, email);
+    const result = await request.query(`
+        SELECT
+            ranked.QuoteId,
+            ranked.DraftQuoteId,
+            ranked.StepId,
+            ranked.ApproverSequence,
+            ranked.RequestNo,
+            ranked.LeadJobName,
+            ranked.OwnJob,
+            ranked.CustomerName,
+            ranked.QuoteNo,
+            ranked.RevisionNo,
+            ranked.QuoteRef,
+            ranked.QuoteNumber,
+            ranked.Subject,
+            ranked.QuoteDate,
+            ranked.ApprovedAt,
+            ranked.WorkflowNo,
+            ranked.ProjectName,
+            ranked.DueDate,
+            ranked.ConsultantName,
+            ranked.EnquiryCustomerName,
+            ranked.ReasonForRevision,
+            ranked.TotalAmount
+        FROM (
+            SELECT
+                c.QuoteId,
+                c.DraftQuoteId,
+                c.ID AS StepId,
+                CAST(1 AS INT) AS ApproverSequence,
+                c.RequestNo,
+                src.LeadJob AS LeadJobName,
+                src.OwnJob,
+                src.ToName AS CustomerName,
+                src.QuoteNo,
+                src.RevisionNo,
+                CAST(NULL AS NVARCHAR(100)) AS QuoteRef,
+                COALESCE(NULLIF(LTRIM(RTRIM(src.QuoteNumber)), N''), N'') AS QuoteNumber,
+                src.Subject AS Subject,
+                src.QuoteDate AS QuoteDate,
+                c.CreatedAt AS ApprovedAt,
+                c.WorkflowNo AS WorkflowNo,
+                em.ProjectName,
+                em.DueDate,
+                em.ConsultantName,
+                em.CustomerName AS EnquiryCustomerName,
+                src.ReasonForRevision AS ReasonForRevision,
+                src.TotalAmount AS TotalAmount,
+                ROW_NUMBER() OVER (
+                    PARTITION BY CONCAT(N'Q:', CAST(c.QuoteId AS NVARCHAR(20)))
+                    ORDER BY c.CreatedAt DESC, c.ID DESC
+                ) AS rn
+            FROM QuoteApprovalCorrections c
+            INNER JOIN EnquiryQuotes src ON src.ID = c.QuoteId
+            LEFT JOIN EnquiryMaster em ON LTRIM(RTRIM(em.RequestNo)) = LTRIM(RTRIM(c.RequestNo))
+            WHERE c.QuoteId IS NOT NULL
+              AND c.QuoteId > 0
+              AND LOWER(LTRIM(RTRIM(ISNULL(c.RequestedByEmail, N'')))) = LOWER(LTRIM(RTRIM(@requesterEmail)))
+              ${textFilter}
+              ${dateFilter}
+              ${divisionFilter}
+
+            UNION ALL
+
+            SELECT
+                CAST(NULL AS INT) AS QuoteId,
+                c.DraftQuoteId,
+                c.ID AS StepId,
+                CAST(1 AS INT) AS ApproverSequence,
+                c.RequestNo,
+                src.LeadJob AS LeadJobName,
+                src.OwnJob,
+                src.ToName AS CustomerName,
+                src.QuoteNo,
+                src.RevisionNo,
+                CAST(NULL AS NVARCHAR(100)) AS QuoteRef,
+                COALESCE(NULLIF(LTRIM(RTRIM(src.QuoteNumber)), N''), N'') AS QuoteNumber,
+                src.Subject AS Subject,
+                src.QuoteDate AS QuoteDate,
+                c.CreatedAt AS ApprovedAt,
+                c.WorkflowNo AS WorkflowNo,
+                em.ProjectName,
+                em.DueDate,
+                em.ConsultantName,
+                em.CustomerName AS EnquiryCustomerName,
+                src.ReasonForRevision AS ReasonForRevision,
+                src.TotalAmount AS TotalAmount,
+                ROW_NUMBER() OVER (
+                    PARTITION BY CONCAT(N'D:', CAST(c.DraftQuoteId AS NVARCHAR(20)))
+                    ORDER BY c.CreatedAt DESC, c.ID DESC
+                ) AS rn
+            FROM QuoteApprovalCorrections c
+            INNER JOIN EnquiryQuotesDraft src ON src.ID = c.DraftQuoteId
+            LEFT JOIN EnquiryMaster em ON LTRIM(RTRIM(em.RequestNo)) = LTRIM(RTRIM(c.RequestNo))
+            WHERE c.DraftQuoteId IS NOT NULL
+              AND c.DraftQuoteId > 0
+              AND (c.QuoteId IS NULL OR c.QuoteId = 0)
+              AND LOWER(LTRIM(RTRIM(ISNULL(c.RequestedByEmail, N'')))) = LOWER(LTRIM(RTRIM(@requesterEmail)))
+              ${textFilter}
+              ${dateFilter}
+              ${divisionFilter}
+        ) ranked
+        WHERE ranked.rn = 1
+        ORDER BY ranked.ApprovedAt DESC, ranked.QuoteDate DESC, ranked.QuoteId DESC, ranked.DraftQuoteId DESC
+    `);
+    return enrichPendingApprovalRows(result.recordset || []);
+}
+
+/** Quotes submitted for approval workflow â€” visible to approver, CC teammates, or ConcernedSE on enquiry. */
 async function fetchApprovalWorkflowSearch(userEmail, { q = '', dateFrom = '', dateTo = '', division = '' } = {}) {
     const email = normalizeApprovalEmail(userEmail);
     if (!email) return [];
@@ -1287,7 +1559,8 @@ async function fetchApprovalWorkflowSearch(userEmail, { q = '', dateFrom = '', d
             ranked.DueDate,
             ranked.ConsultantName,
             ranked.EnquiryCustomerName,
-            ranked.ReasonForRevision
+            ranked.ReasonForRevision,
+            ranked.TotalAmount
         FROM (
             SELECT
                 s.QuoteId,
@@ -1311,6 +1584,7 @@ async function fetchApprovalWorkflowSearch(userEmail, { q = '', dateFrom = '', d
                 em.ConsultantName,
                 em.CustomerName AS EnquiryCustomerName,
                 q.ReasonForRevision AS ReasonForRevision,
+                q.TotalAmount AS TotalAmount,
                 ROW_NUMBER() OVER (
                     PARTITION BY s.QuoteId
                     ORDER BY q.QuoteDate DESC, s.ID DESC
@@ -1334,7 +1608,7 @@ async function userHasActionableDraftApprovalStep(draftQuoteId, userEmail) {
     const email = normalizeApprovalEmail(userEmail);
     const id = Number(draftQuoteId);
     if (!email || !Number.isFinite(id)) return false;
-    const actionableSql = buildActionablePendingStepSql('s', 'draft');
+    const actionableSql = buildActionablePendingStepSql('s');
     const notRejectedSql = buildDraftWorkflowNotRejectedSql('s');
     const request = new sql.Request();
     request.input('approverEmail', sql.NVarChar, email);
@@ -1348,14 +1622,37 @@ async function userHasActionableDraftApprovalStep(draftQuoteId, userEmail) {
           ${actionableSql}
           ${notRejectedSql}
     `);
-    return (result.recordset || []).length > 0;
+    if ((result.recordset || []).length > 0) return true;
+
+    // Draft already promoted after final approval — remaining pending steps live on QuoteId.
+    const linkedQuoteId = await resolveLinkedQuoteIdFromDraft(id);
+    if (linkedQuoteId) {
+        return userHasActionableQuoteApprovalStep(linkedQuoteId, email);
+    }
+    return false;
+}
+
+/** QuoteId linked from a draft after final-approver promotion (if any). */
+async function resolveLinkedQuoteIdFromDraft(draftQuoteId) {
+    const id = Number(draftQuoteId);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    const linked = await sql.query`
+        SELECT TOP 1 QuoteId
+        FROM QuoteApprovalSteps
+        WHERE DraftQuoteId = ${id}
+          AND QuoteId IS NOT NULL
+          AND QuoteId > 0
+        ORDER BY ID DESC
+    `;
+    const qid = Number(linked.recordset?.[0]?.QuoteId);
+    return Number.isFinite(qid) && qid > 0 ? qid : null;
 }
 
 async function userHasActionableQuoteApprovalStep(quoteId, userEmail) {
     const email = normalizeApprovalEmail(userEmail);
     const id = Number(quoteId);
     if (!email || !Number.isFinite(id)) return false;
-    const actionableSql = buildActionablePendingStepSql('s', 'quote');
+    const actionableSql = buildActionablePendingStepSql('s');
     const notRejectedSql = buildQuoteWorkflowNotRejectedSql('s');
     const request = new sql.Request();
     request.input('approverEmail', sql.NVarChar, email);
@@ -1509,8 +1806,13 @@ async function fetchEnquiryDivisionStakeholderEmails(requestNo, ownJob, approval
         for (const row of seRes.recordset || []) {
             const em = normalizeApprovalEmail(row.EmailId);
             if (!em) continue;
-            const dept = String(row.Department || '').trim().toLowerCase();
-            if (!ownJobNorm || !dept || dept === ownJobNorm || dept.includes(ownJobNorm) || ownJobNorm.includes(dept)) {
+            const dept = String(row.Department || '').trim();
+            if (
+                !ownJobNorm ||
+                !dept ||
+                userHasDepartment(dept, ownJobNorm) ||
+                anyDepartmentTokenMatchesJobName(dept, ownJobNorm)
+            ) {
                 emails.add(em);
             }
         }
@@ -1636,10 +1938,38 @@ async function fetchApprovalStepsApiPayload({ quoteId = null, draftQuoteId = nul
 
     if (quoteId && Number.isFinite(Number(quoteId))) {
         steps = await fetchApprovalStepsByQuoteId(Number(quoteId));
+        if (!steps.length) {
+            const quoteRes = await sql.query`
+                SELECT TOP 1 ApprovalWorkflowJson
+                FROM EnquiryQuotes
+                WHERE ID = ${Number(quoteId)}
+            `;
+            steps = parseApprovalWorkflowJson(quoteRes.recordset?.[0]?.ApprovalWorkflowJson);
+        }
         wf = await fetchExistingWorkflowMeta({ quoteId: Number(quoteId) });
         workflowNo = String(wf.workflowNo || '').trim();
     } else if (draftQuoteId && Number.isFinite(Number(draftQuoteId))) {
         steps = await fetchApprovalStepsByDraftId(Number(draftQuoteId));
+        if (!steps.length) {
+            // Also include rows already linked to a quote id for this draft (post-promote / edge cases).
+            const anyDraftSteps = await sql.query`
+                SELECT *
+                FROM QuoteApprovalSteps
+                WHERE DraftQuoteId = ${Number(draftQuoteId)}
+                ORDER BY ApproverSequence ASC, ID ASC
+            `;
+            steps = coerceFinalApproverFlags(
+                (anyDraftSteps.recordset || []).map(mapDbRowToStep).filter(Boolean)
+            );
+        }
+        if (!steps.length) {
+            const draftRes = await sql.query`
+                SELECT TOP 1 ApprovalWorkflowJson
+                FROM EnquiryQuotesDraft
+                WHERE ID = ${Number(draftQuoteId)}
+            `;
+            steps = parseApprovalWorkflowJson(draftRes.recordset?.[0]?.ApprovalWorkflowJson);
+        }
         wf = await fetchExistingWorkflowMeta({ draftQuoteId: Number(draftQuoteId) });
         workflowNo = String(wf.workflowNo || '').trim();
     } else {
@@ -1741,17 +2071,20 @@ async function userHasApprovalWorkflowDivisionStakeholderAccess(userEmail, reque
 
     try {
         if (Number.isFinite(qid) && qid > 0) {
-            const byQuote = await sql.query`
+            const byQuoteReq = new sql.Request();
+            byQuoteReq.input('qid', sql.Int, qid);
+            byQuoteReq.input('rn', sql.NVarChar, rn);
+            byQuoteReq.input('email', sql.NVarChar, email);
+            const byQuote = await byQuoteReq.query(`
                 SELECT TOP 1 1 AS ok
                 FROM ConcernedSE cs
                 INNER JOIN Master_ConcernedSE m
                   ON UPPER(LTRIM(RTRIM(ISNULL(m.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(cs.SEName, N''))))
-                INNER JOIN QuoteApprovalSteps ap ON ap.QuoteId = ${qid}
+                INNER JOIN QuoteApprovalSteps ap ON ap.QuoteId = @qid
                 INNER JOIN Master_EnquiryFor mef
-                  ON LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))) = LTRIM(RTRIM(ISNULL(m.Department, N'')))
-                WHERE LTRIM(RTRIM(cs.RequestNo)) = LTRIM(RTRIM(${rn}))
-                  AND LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(m.EmailId, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com')))) = ${email}
-                  AND LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))) = ${userDept}
+                  ON ${SQL_MEF_DEPT_IN_MASTER_DEPT}
+                WHERE LTRIM(RTRIM(cs.RequestNo)) = LTRIM(RTRIM(@rn))
+                  AND LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(m.EmailId, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com')))) = @email
                   AND (
                     REPLACE(',' + REPLACE(ISNULL(mef.CCMailIds, ''), ' ', '') + ',', '@almcg.com', '@almoayyedcg.com')
                       LIKE '%,' + LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(ap.ApproverEmail, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com')))) + ',%'
@@ -1765,11 +2098,14 @@ async function userHasApprovalWorkflowDivisionStakeholderAccess(userEmail, reque
                           )))) + ',%'
                     )
                   )
-            `;
+            `);
             return (byQuote.recordset || []).length > 0;
         }
 
-        const byEnquiry = await sql.query`
+        const byEnqReq = new sql.Request();
+        byEnqReq.input('rn', sql.NVarChar, rn);
+        byEnqReq.input('email', sql.NVarChar, email);
+        const byEnquiry = await byEnqReq.query(`
             SELECT TOP 1 1 AS ok
             FROM ConcernedSE cs
             INNER JOIN Master_ConcernedSE m
@@ -1779,10 +2115,9 @@ async function userHasApprovalWorkflowDivisionStakeholderAccess(userEmail, reque
              AND ap.QuoteId IS NOT NULL
              AND ap.QuoteId > 0
             INNER JOIN Master_EnquiryFor mef
-              ON LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))) = LTRIM(RTRIM(ISNULL(m.Department, N'')))
-            WHERE LTRIM(RTRIM(cs.RequestNo)) = LTRIM(RTRIM(${rn}))
-              AND LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(m.EmailId, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com')))) = ${email}
-              AND LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))) = ${userDept}
+              ON ${SQL_MEF_DEPT_IN_MASTER_DEPT}
+            WHERE LTRIM(RTRIM(cs.RequestNo)) = LTRIM(RTRIM(@rn))
+              AND LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(m.EmailId, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com')))) = @email
               AND (
                 REPLACE(',' + REPLACE(ISNULL(mef.CCMailIds, ''), ' ', '') + ',', '@almcg.com', '@almoayyedcg.com')
                   LIKE '%,' + LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(ap.ApproverEmail, N''), N' ', N''), '@almcg.com', '@almoayyedcg.com')))) + ',%'
@@ -1796,7 +2131,7 @@ async function userHasApprovalWorkflowDivisionStakeholderAccess(userEmail, reque
                       )))) + ',%'
                 )
               )
-        `;
+        `);
         return (byEnquiry.recordset || []).length > 0;
     } catch (err) {
         if (isMissingQuoteApprovalStepsTableError(err.message)) return false;
@@ -2009,6 +2344,256 @@ async function fetchApprovalWorkflowVisibleQuotesByRequest(userEmail, requestNos
     }
 }
 
+function isMissingQuoteApprovalCorrectionsTableError(message) {
+    const m = String(message || '');
+    return /Invalid object name/i.test(m) && /QuoteApprovalCorrections/i.test(m);
+}
+
+function mapCorrectionRow(row) {
+    if (!row) return null;
+    return {
+        id: row.ID,
+        quoteId: row.QuoteId || null,
+        draftQuoteId: row.DraftQuoteId || null,
+        requestNo: String(row.RequestNo || '').trim(),
+        reason: String(row.Reason || '').trim(),
+        requestedByEmail: String(row.RequestedByEmail || '').trim(),
+        requestedByName: String(row.RequestedByName || '').trim(),
+        requestedByDesignation: String(row.RequestedByDesignation || '').trim(),
+        workflowNo: String(row.WorkflowNo || '').trim(),
+        createdAt: row.CreatedAt ? new Date(row.CreatedAt).toISOString() : null,
+    };
+}
+
+async function fetchQuoteCorrectionHistory({ quoteId = null, draftQuoteId = null } = {}) {
+    const qId = quoteId && Number.isFinite(Number(quoteId)) ? Number(quoteId) : null;
+    const dId = draftQuoteId && Number.isFinite(Number(draftQuoteId)) ? Number(draftQuoteId) : null;
+    if (!qId && !dId) return [];
+
+    let result;
+    if (qId && dId) {
+        result = await sql.query`
+            SELECT *
+            FROM QuoteApprovalCorrections
+            WHERE QuoteId = ${qId} OR DraftQuoteId = ${dId}
+            ORDER BY CreatedAt DESC, ID DESC
+        `;
+    } else if (qId) {
+        // Corrections are often saved against DraftQuoteId before promote; include those
+        // drafts linked via QuoteApprovalSteps and via the quote's QuoteNo/RevisionNo.
+        result = await sql.query`
+            SELECT *
+            FROM QuoteApprovalCorrections
+            WHERE QuoteId = ${qId}
+               OR (
+                    DraftQuoteId IS NOT NULL
+                    AND DraftQuoteId > 0
+                    AND DraftQuoteId IN (
+                        SELECT DISTINCT s.DraftQuoteId
+                        FROM QuoteApprovalSteps s
+                        WHERE s.QuoteId = ${qId}
+                          AND s.DraftQuoteId IS NOT NULL
+                          AND s.DraftQuoteId > 0
+                    )
+               )
+               OR (
+                    DraftQuoteId IS NOT NULL
+                    AND DraftQuoteId > 0
+                    AND DraftQuoteId IN (
+                        SELECT DISTINCT d.ID
+                        FROM EnquiryQuotesDraft d
+                        INNER JOIN EnquiryQuotes q ON q.ID = ${qId}
+                        WHERE d.QuoteNo = q.QuoteNo
+                          AND ISNULL(d.RevisionNo, 0) = ISNULL(q.RevisionNo, 0)
+                          AND LTRIM(RTRIM(ISNULL(d.RequestNo, ''))) = LTRIM(RTRIM(ISNULL(q.RequestNo, '')))
+                    )
+               )
+            ORDER BY CreatedAt DESC, ID DESC
+        `;
+    } else {
+        result = await sql.query`
+            SELECT *
+            FROM QuoteApprovalCorrections
+            WHERE DraftQuoteId = ${dId}
+            ORDER BY CreatedAt DESC, ID DESC
+        `;
+    }
+    return (result.recordset || []).map(mapCorrectionRow).filter(Boolean);
+}
+
+/**
+ * Record correction request, reset approval steps to pending, unlock draft for initiator edits.
+ */
+async function recordQuoteCorrectionRequired({
+    quoteId = null,
+    draftQuoteId = null,
+    reason = '',
+    actor = {},
+}) {
+    const reasonText = String(reason || '').trim();
+    if (!reasonText) throw new Error('Reason for correction is required');
+
+    const qId = quoteId && Number.isFinite(Number(quoteId)) ? Number(quoteId) : null;
+    const dId = draftQuoteId && Number.isFinite(Number(draftQuoteId)) ? Number(draftQuoteId) : null;
+    if (!qId && !dId) throw new Error('quoteId or draftQuoteId is required');
+
+    // After final approval (quote committed), correction must go through a new revision — not this path.
+    if (qId && isFinalApproverApproved(await fetchApprovalStepsByQuoteId(qId))) {
+        throw new Error(
+            'This quote is already finalized. Use Send for Approval on a new draft to make changes after final approval.'
+        );
+    }
+
+    let meta = { requestNo: '', leadJobName: '', ownJob: '', customerName: '', quoteNumber: '' };
+    let steps = [];
+    let workflowNo = '';
+
+    if (dId) {
+        const draftRes = await sql.query`
+            SELECT ID, RequestNo, QuoteNumber, QuoteNo, RevisionNo, LeadJob, OwnJob, ToName, ApprovalWorkflowJson
+            FROM EnquiryQuotesDraft
+            WHERE ID = ${dId}
+        `;
+        const draft = draftRes.recordset?.[0];
+        if (!draft) throw new Error('Quote draft not found');
+        meta = normalizeQuoteMeta({
+            requestNo: draft.RequestNo,
+            leadJobName: draft.LeadJob,
+            ownJob: draft.OwnJob,
+            customerName: draft.ToName,
+            quoteNumber: draft.QuoteNumber,
+            quoteNo: draft.QuoteNo,
+            revisionNo: draft.RevisionNo,
+        });
+        steps = await fetchApprovalStepsByDraftId(dId);
+        if (!steps.length) steps = parseApprovalWorkflowJson(draft.ApprovalWorkflowJson);
+        const wfMeta = await fetchExistingWorkflowMeta({ draftQuoteId: dId, meta });
+        workflowNo = wfMeta?.workflowNo || '';
+    } else {
+        const quoteRes = await sql.query`
+            SELECT ID, RequestNo, QuoteNumber, QuoteNo, RevisionNo, LeadJob, OwnJob, ToName, ApprovalWorkflowJson
+            FROM EnquiryQuotes
+            WHERE ID = ${qId}
+        `;
+        const quote = quoteRes.recordset?.[0];
+        if (!quote) throw new Error('Quote not found');
+        meta = normalizeQuoteMeta({
+            requestNo: quote.RequestNo,
+            leadJobName: quote.LeadJob,
+            ownJob: quote.OwnJob,
+            customerName: quote.ToName,
+            quoteNumber: quote.QuoteNumber,
+            quoteNo: quote.QuoteNo,
+            revisionNo: quote.RevisionNo,
+        });
+        steps = await fetchApprovalStepsByQuoteId(qId);
+        if (!steps.length) steps = parseApprovalWorkflowJson(quote.ApprovalWorkflowJson);
+        const wfMeta = await fetchExistingWorkflowMeta({ quoteId: qId, meta });
+        workflowNo = wfMeta?.workflowNo || '';
+    }
+
+    if (!steps.length) throw new Error('No approval workflow found for this quote');
+
+    const actorEmail = normalizeApprovalEmail(actor.email);
+    const isAssigned = steps.some(
+        (s) => normalizeApprovalEmail(s.approverEmail) === actorEmail
+    );
+    if (!actorEmail || !isAssigned) {
+        throw new Error('Only an assigned approver can request a correction');
+    }
+
+    const resetSteps = coerceFinalApproverFlags(
+        steps.map((s) => ({
+            ...s,
+            status: 'pending',
+            actionAt: null,
+            comments: '',
+            digitalSignatureJson: null,
+        }))
+    );
+
+    const replaceResult = await replaceApprovalSteps({
+        quoteId: qId,
+        draftQuoteId: dId,
+        meta,
+        steps: resetSteps,
+    });
+    const savedSteps = replaceResult?.steps || resetSteps;
+    const jsonStr = stepsToJson(savedSteps);
+
+    if (dId) {
+        await sql.query`
+            UPDATE EnquiryQuotesDraft
+            SET ApprovalWorkflowJson = ${jsonStr}, Status = N'Draft', UpdatedAt = ${new Date()}
+            WHERE ID = ${dId}
+        `;
+    }
+    if (qId) {
+        await sql.query`
+            UPDATE EnquiryQuotes
+            SET ApprovalWorkflowJson = ${jsonStr}, UpdatedAt = ${new Date()}
+            WHERE ID = ${qId}
+        `;
+    }
+
+    const now = new Date();
+    const insertRes = await sql.query`
+        INSERT INTO QuoteApprovalCorrections (
+            QuoteId, DraftQuoteId, RequestNo, Reason,
+            RequestedByEmail, RequestedByName, RequestedByDesignation, WorkflowNo, CreatedAt
+        )
+        OUTPUT INSERTED.ID, INSERTED.CreatedAt
+        VALUES (
+            ${qId || null},
+            ${dId || null},
+            ${meta.requestNo},
+            ${reasonText},
+            ${actorEmail},
+            ${String(actor.name || '').trim() || null},
+            ${String(actor.designation || '').trim() || null},
+            ${workflowNo || null},
+            ${now}
+        )
+    `;
+
+    const createdByEmail = await fetchExistingCreatedByEmail({
+        quoteId: qId,
+        draftQuoteId: dId,
+        meta,
+    });
+
+    const recipientSet = new Set();
+    if (createdByEmail) recipientSet.add(createdByEmail);
+    for (const s of savedSteps) {
+        const em = normalizeApprovalEmail(s.approverEmail);
+        if (em) recipientSet.add(em);
+    }
+
+    const history = await fetchQuoteCorrectionHistory({ quoteId: qId, draftQuoteId: dId });
+
+    return {
+        steps: savedSteps,
+        correction: mapCorrectionRow({
+            ID: insertRes.recordset?.[0]?.ID,
+            QuoteId: qId,
+            DraftQuoteId: dId,
+            RequestNo: meta.requestNo,
+            Reason: reasonText,
+            RequestedByEmail: actorEmail,
+            RequestedByName: String(actor.name || '').trim(),
+            RequestedByDesignation: String(actor.designation || '').trim(),
+            WorkflowNo: workflowNo,
+            CreatedAt: insertRes.recordset?.[0]?.CreatedAt || now,
+        }),
+        corrections: history,
+        recipientEmails: Array.from(recipientSet),
+        createdByEmail,
+        meta,
+        workflowNo,
+        approvalUnlocked: true,
+    };
+}
+
 module.exports = {
     isMissingQuoteApprovalStepsTableError,
     mapDbRowToStep,
@@ -2018,10 +2603,12 @@ module.exports = {
     fetchPendingApprovalsForUser,
     fetchApprovedApprovalsByUser,
     fetchRejectedApprovalsByUser,
+    fetchCorrectionsRequestedByUser,
     fetchApprovalWorkflowSearch,
     enrichQuoteListRowsWithApprovalStatus,
     userHasActionableDraftApprovalStep,
     userHasActionableQuoteApprovalStep,
+    resolveLinkedQuoteIdFromDraft,
     replaceApprovalSteps,
     linkDraftStepsToQuote,
     recordQuoteApprovalAction,
@@ -2040,4 +2627,7 @@ module.exports = {
     userHasApprovalWorkflowDivisionStakeholderAccess,
     userHasApprovalWorkflowQuoteAccess,
     fetchApprovalWorkflowVisibleQuotesByRequest,
+    recordQuoteCorrectionRequired,
+    fetchQuoteCorrectionHistory,
+    isMissingQuoteApprovalCorrectionsTableError,
 };

@@ -4,6 +4,7 @@ const router = express.Router();
 const sql = require('mssql');
 const fs = require('fs');
 const path = require('path');
+const { resolveCompanyLogoPath } = require('../lib/resolveCompanyLogoPath');
 
 // Debug log file
 const debugLogPath = path.join(__dirname, 'pricing_debug.log');
@@ -220,9 +221,11 @@ async function notifyParentJobPricingUpdate({
         }
 
         const deptUsers = await sql.query`
-            SELECT EmailId FROM Master_ConcernedSE WHERE LTRIM(RTRIM(ISNULL(Department, N''))) = ${parentJobName}
+            SELECT EmailId, Department FROM Master_ConcernedSE
+            WHERE Status = N'Active' OR Status IS NULL OR LTRIM(RTRIM(ISNULL(Status, N''))) = N''
         `;
         for (const r of deptUsers.recordset || []) {
+            if (!userHasDepartment(r.Department, parentJobName)) continue;
             const em = String(r.EmailId || '').trim().toLowerCase();
             if (em) recipientEmails.add(em);
         }
@@ -294,6 +297,12 @@ function normalizePricingValueRow(r) {
         CustomerName: firstDefined(r, ['CustomerName', 'customerName', 'customername']),
         LeadJobName: firstDefined(r, ['LeadJobName', 'leadJobName', 'leadjobname']),
         Quotingornot: firstDefined(r, ['Quotingornot', 'quotingornot', 'QuotingOrNot', 'quotingOrNot']),
+        RevisionRequired: firstDefined(r, [
+            'RevisionRequired',
+            'revisionRequired',
+            'revisionrequired',
+            'Revisionrequired',
+        ]),
         MatchedEnquiryForId: firstDefined(r, ['MatchedEnquiryForId', 'matchedEnquiryForId', 'matchedenquiryforid']),
         MatchedItemName: firstDefined(r, ['MatchedItemName', 'matchedItemName', 'matcheditemname']),
         MatchedParentId: firstDefined(r, ['MatchedParentId', 'matchedParentId', 'matchedparentid']),
@@ -301,6 +310,7 @@ function normalizePricingValueRow(r) {
 }
 
 let quotingOrNotColumnAvailable = false;
+let revisionRequiredColumnAvailable = false;
 
 async function refreshQuotingOrNotColumnState() {
     try {
@@ -344,6 +354,81 @@ function normalizeQuotingOrNotValue(raw) {
     return 'No';
 }
 
+async function refreshRevisionRequiredColumnState() {
+    try {
+        const check = await sql.query`
+            SELECT 1 AS ok
+            FROM sys.columns
+            WHERE object_id = OBJECT_ID(N'dbo.EnquiryPricingValues')
+              AND name = N'RevisionRequired'
+        `;
+        revisionRequiredColumnAvailable = !!check.recordset?.length;
+    } catch (err) {
+        revisionRequiredColumnAvailable = false;
+        console.error('[pricing] check RevisionRequired column:', err.message || err);
+    }
+    return revisionRequiredColumnAvailable;
+}
+
+async function ensureRevisionRequiredColumn() {
+    await refreshRevisionRequiredColumnState();
+    if (revisionRequiredColumnAvailable) return true;
+    try {
+        await sql.query`
+            ALTER TABLE dbo.EnquiryPricingValues
+            ADD RevisionRequired NVARCHAR(8) NULL
+        `;
+        await refreshRevisionRequiredColumnState();
+    } catch (err) {
+        console.error('[pricing] ensure RevisionRequired column:', err.message || err);
+    }
+    return revisionRequiredColumnAvailable;
+}
+
+function epvRevisionRequiredSelectSql(alias = 'v') {
+    return revisionRequiredColumnAvailable ? `,\n            ${alias}.RevisionRequired` : '';
+}
+
+/** Persist as N'Yes' or SQL NULL (unchecked). */
+function normalizeRevisionRequiredValue(raw) {
+    if (raw === null || raw === undefined) return null;
+    const v = String(raw).trim().toLowerCase();
+    if (!v || v === 'no' || v === 'n' || v === '0' || v === 'false') return null;
+    if (v === 'yes' || v === 'y' || v === '1' || v === 'true') return 'Yes';
+    return null;
+}
+
+function isRevisionRequiredYes(raw) {
+    return normalizeRevisionRequiredValue(raw) === 'Yes';
+}
+
+/**
+ * Revision Required pending/badge only when Yes is on the user's own-job EPV row
+ * (EnquiryForID / EnquiryForItem), not parent lead, sibling, or subjob rows.
+ */
+function epvRevisionRequiredOnOwnJobs(enqPrices, ownJobRecs, jobIdOfFn) {
+    if (!Array.isArray(enqPrices) || !enqPrices.length) return false;
+    if (!Array.isArray(ownJobRecs) || !ownJobRecs.length) return false;
+    const ownIds = new Set();
+    const ownNames = new Set();
+    for (const j of ownJobRecs) {
+        const id = jobIdOfFn(j);
+        if (id != null && String(id) !== '' && String(id) !== 'undefined') {
+            ownIds.add(String(id));
+        }
+        const nm = normalizePricingJobName(j?.ItemName || j?.itemName || '');
+        if (nm) ownNames.add(nm);
+    }
+    if (!ownIds.size && !ownNames.size) return false;
+    return enqPrices.some((pr) => {
+        if (!isRevisionRequiredYes(pr?.RevisionRequired ?? pr?.revisionRequired)) return false;
+        const efId = pr.EnquiryForID ?? pr.enquiryForID ?? pr.EnquiryForId;
+        if (efId != null && ownIds.has(String(efId))) return true;
+        const item = normalizePricingJobName(pr.EnquiryForItem || pr.enquiryForItem || '');
+        return !!(item && ownNames.has(item));
+    });
+}
+
 const {
     resolvePricingAccessContext,
     fetchAllMasterDepartmentNames,
@@ -366,6 +451,13 @@ const {
     evaluatePendingPricingSummarySpec,
     departmentMatchesItemName,
 } = require('../lib/pendingPricingSummarySpec');
+const {
+    expandDivisionLabels,
+    userHasDepartment,
+    sqlMasterDepartmentContains,
+    anyDepartmentTokenMatchesJobName,
+    parseUserDepartments,
+} = require('../lib/userDepartments');
 
 /** `yyyy-MM-dd` only — used for latest price-update bounds on non-pending list searches */
 function parsePricingListYmd(s) {
@@ -503,6 +595,7 @@ function buildDetailPricingOptionsFromValuesRows(valuesRows) {
 // Helper to get Enquiry List with Pricing Tree
 async function getEnquiryPricingList(userEmail, search = null, pendingOnly = true, opts = {}) {
     await ensureQuotingOrNotColumn();
+    await ensureRevisionRequiredColumn();
     if (!userEmail) return [];
 
     const ctx = await resolvePricingAccessContext(userEmail);
@@ -510,13 +603,27 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
     const { isAdmin, isCcUser, normalizedEmail, userDepartment } = ctx;
 
     const divisionRaw = opts && opts.division != null ? String(opts.division) : '';
-    const divisionTrim = divisionRaw.trim();
+    /** Multi-select: comma-separated Division labels (same CSV style as Master_ConcernedSE.Department). */
+    let divisionList = parseUserDepartments(divisionRaw);
+    // SE: keep only divisions assigned on Master_ConcernedSE.Department. Admin/Management/CC use MEF lists.
+    if (
+        divisionList.length &&
+        !ctx.isAdmin &&
+        !ctx.isManagementDept &&
+        !ctx.isCcUser &&
+        ctx.userDepartment
+    ) {
+        divisionList = divisionList.filter((d) => userHasDepartment(ctx.userDepartment, d));
+        if (!divisionList.length) return [];
+    }
+    /** CSV string for JS helpers that already tokenize (anchors, label match, prune). */
+    const divisionTrim = divisionList.join(', ');
 
     // 2. Fetch Enquiries (SQL-scoped: CC coordinators vs assigned sales engineers only)
     const request = new sql.Request();
-    if (divisionTrim) {
-        request.input('divisionFilter', sql.NVarChar, divisionTrim);
-    }
+    divisionList.forEach((d, i) => {
+        request.input(`divisionFilter${i}`, sql.NVarChar, d);
+    });
     let baseQuery = `
         SELECT 
             E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName, E.DueDate, E.CreatedBy, E.EnquiryDate
@@ -559,22 +666,27 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
              * the enquiry if the user is CC on any master row for that same DepartmentName.
              */
             const ccDivisionCoordinatorSql =
-                divisionTrim
+                divisionList.length > 0
                     ? `
-                    OR EXISTS (
+                    OR (${divisionList
+                        .map(
+                            (_, i) => `
+                    EXISTS (
                         SELECT 1
                         FROM dbo.EnquiryFor efCcDiv
                         INNER JOIN dbo.Master_EnquiryFor mefCcDiv
                             ON (efCcDiv.ItemName = mefCcDiv.ItemName OR efCcDiv.ItemName LIKE N'% - ' + mefCcDiv.ItemName)
                         WHERE efCcDiv.RequestNo = E.RequestNo
-                          AND LTRIM(RTRIM(ISNULL(mefCcDiv.DepartmentName, N''))) = LTRIM(RTRIM(@divisionFilter))
+                          AND LTRIM(RTRIM(ISNULL(mefCcDiv.DepartmentName, N''))) = LTRIM(RTRIM(@divisionFilter${i}))
                           AND EXISTS (
                               SELECT 1
                               FROM dbo.Master_EnquiryFor mefTpl
-                              WHERE LTRIM(RTRIM(ISNULL(mefTpl.DepartmentName, N''))) = LTRIM(RTRIM(@divisionFilter))
+                              WHERE LTRIM(RTRIM(ISNULL(mefTpl.DepartmentName, N''))) = LTRIM(RTRIM(@divisionFilter${i}))
                                 AND ${ccMefMatch('mefTpl')}
                           )
-                    )
+                    )`
+                        )
+                        .join('\n                    OR ')})
                   `
                     : '';
             baseQuery += `
@@ -653,12 +765,24 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
         request.input('search', sql.NVarChar, `%${searchTrim}%`);
     }
 
-    if (divisionTrim) {
+    if (divisionList.length > 0) {
         /**
-         * Division dropdown: CC → Master_EnquiryFor.DepartmentName (CC rows); Concerned SE → Master_ConcernedSE.Department.
-         * Filtering only by Master_EnquiryFor.DepartmentName broke Pending Pricing for engineers when that label
-         * did not exactly match the master column (enquiries vanished even though their Concerned SE row matched).
+         * Division multi-select = own-job scope (any selected Master_EnquiryFor.DepartmentName on the enquiry).
+         * Concerned SE must also be assigned; selected labels are already filtered to Master_ConcernedSE.Department.
          */
+        const enquiryHasDivisionSql = `(${divisionList
+            .map(
+                (_, i) => `
+                EXISTS (
+                    SELECT 1
+                    FROM dbo.EnquiryFor efDiv
+                    INNER JOIN dbo.Master_EnquiryFor mefDiv
+                        ON (efDiv.ItemName = mefDiv.ItemName OR efDiv.ItemName LIKE N'% - ' + mefDiv.ItemName)
+                    WHERE efDiv.RequestNo = E.RequestNo
+                      AND LTRIM(RTRIM(ISNULL(mefDiv.DepartmentName, N''))) = LTRIM(RTRIM(@divisionFilter${i}))
+                )`
+            )
+            .join('\n                OR ')})`;
         if (!isAdmin && !isCcUser) {
             request.input('pricingDivisionUserEmail', sql.NVarChar, normalizedEmail);
             baseQuery += `
@@ -669,19 +793,15 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                         ON UPPER(LTRIM(RTRIM(ISNULL(m.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(c.SEName, N''))))
                     WHERE c.RequestNo = E.RequestNo
                       AND LOWER(LTRIM(RTRIM(ISNULL(m.EmailId, N'')))) = LOWER(LTRIM(@pricingDivisionUserEmail))
-                      AND LTRIM(RTRIM(ISNULL(m.Department, N''))) = LTRIM(RTRIM(@divisionFilter))
+                      AND (${divisionList
+                          .map((_, i) => sqlMasterDepartmentContains('m.Department', `divisionFilter${i}`))
+                          .join('\n                      OR ')})
                 )
+                AND ${enquiryHasDivisionSql}
             `;
         } else {
             baseQuery += `
-                AND EXISTS (
-                    SELECT 1
-                    FROM dbo.EnquiryFor efDiv
-                    INNER JOIN dbo.Master_EnquiryFor mefDiv
-                        ON (efDiv.ItemName = mefDiv.ItemName OR efDiv.ItemName LIKE N'% - ' + mefDiv.ItemName)
-                    WHERE efDiv.RequestNo = E.RequestNo
-                      AND LTRIM(RTRIM(ISNULL(mefDiv.DepartmentName, N''))) = LTRIM(RTRIM(@divisionFilter))
-                )
+                AND ${enquiryHasDivisionSql}
             `;
         }
     }
@@ -750,7 +870,7 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
             v.UpdatedBy,
             v.PriceOption,
             v.CustomerName,
-            v.LeadJobName${epvQuotingOrNotSelectSql('v')},
+            v.LeadJobName${epvQuotingOrNotSelectSql('v')}${epvRevisionRequiredSelectSql('v')},
             m.MatchedEnquiryForId,
             m.MatchedItemName,
             m.MatchedParentId
@@ -804,7 +924,8 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
             ctx.userFullName.toLowerCase().trim() === String(enq.CreatedBy).toLowerCase().trim();
         const isConcernedSE = concernedRequestNos.has(String(enq.RequestNo));
 
-        const effDeptList = (divisionTrim || ctx.userDepartment || '').toLowerCase().trim();
+        // Prefer selected Division; else keep full Master CSV so hierarchy can match any assigned token.
+        const effDeptList = (divisionTrim || ctx.userDepartment || '').trim();
         const hierarchyScopedJobs = filterJobsByDepartment(enqJobs, {
             userDepartment: effDeptList,
             isAdmin,
@@ -824,16 +945,22 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
         let myJobs = anchorCandidates;
         if (!isAdmin) {
             if (isConcernedSE) {
-                // Assigned SE is already limited to enquiries they appear on (SQL list gate). Do not intersect
-                // with filterJobsByDepartment — a partial match (e.g. only BMS) would drop HVAC anchors while
-                // another division still has prices, and pending would miss missing HVAC base prices.
-                // If Master.Department / CC anchors resolve to nothing (common with blank Department), use every
-                // job on the enquiry so pending can still see missing HVAC base rows.
-                myJobs = anchorCandidates.length > 0 ? [...anchorCandidates] : [...enqJobs];
+                // Division selected: stay on that division's anchors only — never fall back to every job
+                // on the enquiry (that leaked HVAC/Electrical into BMS Project search results).
+                if (divisionTrim) {
+                    myJobs = [...anchorCandidates];
+                } else {
+                    // Assigned SE is already limited to enquiries they appear on (SQL list gate). Do not intersect
+                    // with filterJobsByDepartment — a partial match (e.g. only BMS) would drop HVAC anchors while
+                    // another division still has prices, and pending would miss missing HVAC base prices.
+                    // If Master.Department / CC anchors resolve to nothing (common with blank Department), use every
+                    // job on the enquiry so pending can still see missing HVAC base rows.
+                    myJobs = anchorCandidates.length > 0 ? [...anchorCandidates] : [...enqJobs];
+                }
             } else if (isCcUser && divisionTrim) {
                 // CC + Division: dropdown is the own-job scope (like SE + department). Hierarchy intersection
                 // uses profile/CC line mails and often drops all anchors for coordinators listed only on master.
-                myJobs = anchorCandidates.length > 0 ? [...anchorCandidates] : [...enqJobs];
+                myJobs = [...anchorCandidates];
             } else {
                 myJobs = myJobs.filter((j) => hierarchyJobIdSet.has(String(jobIdOf(j))));
             }
@@ -846,12 +973,14 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
          * Fall back to hierarchy-visible jobs, or all jobs on the enquiry for these roles.
          *
          * ConcernedSE: if anchors are still empty, prefer full anchors when any exist; else hierarchy/enquiry jobs.
+         * When Division is selected, do not widen beyond division anchors.
          */
         if (
             !isAdmin &&
             myJobs.length === 0 &&
             enqJobs.length > 0 &&
-            (isConcernedSE || isCreator || isCcUser)
+            (isConcernedSE || isCreator || isCcUser) &&
+            !divisionTrim
         ) {
             if (isConcernedSE && anchorCandidates.length > 0) {
                 myJobs = [...anchorCandidates];
@@ -2335,29 +2464,49 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
             rootKeyOrder.push(k);
         }
         const pricingJobForestDeduped = rootKeyOrder.map((k) => bestRootByKey.get(k).node);
+        /**
+         * Pricing list Division dropdown = ownjob. When that ownjob is a subjob (has ParentID), "Customer Name &
+         * Total Price" should show the **parent** job name (same pattern as compactMixedAnchorsSummary / subjob-only
+         * summary columns), not the subjob ItemName.
+         */
+        const divAnchorIdsForCustomerTotals = (() => {
+            const d = String(divisionTrim || '').trim();
+            if (!d) return new Set();
+            return new Set(
+                getDepartmentPricingAnchors(enqJobs, d)
+                    .map((j) => String(jobIdOf(j)))
+                    .filter((id) => id && id !== 'undefined')
+            );
+        })();
         const pricingJobForestScoped = (() => {
             if (!divisionTrim) return pricingJobForestDeduped;
-            const keepNodeByLabel = (label) => {
-                const lbl = String(label || '').trim();
-                if (!lbl) return false;
-                if (departmentMatchesItemName(divisionTrim.trim(), lbl)) return true;
-                const ck = normPricingCustomerKey(lbl);
-                if (ck && listCustomerKeyIsEnquiryExternal(ck)) return true;
-                return false;
-            };
+            const divLabel = divisionTrim.trim();
+            const matchesDiv = (label) => departmentMatchesItemName(divLabel, label);
             const prune = (node) => {
                 if (!node) return null;
                 const children = Array.isArray(node.children)
                     ? node.children.map((c) => prune(c)).filter(Boolean)
                     : [];
-                // Keep non-division internal subjobs when they already carry a real priced value.
-                // This avoids hiding priced subjob lines in "Individual & Subjob Base prices".
-                const keepSelf =
-                    keepNodeByLabel(node.label) ||
-                    (node.hasPrice && parsePriceNum(node.price) > 0.01) ||
-                    !!node.declinedToQuote;
-                if (!keepSelf && children.length === 0) return null;
-                return { ...node, children };
+                const labelMatch = matchesDiv(node.label);
+                const jid = String(node.jobId ?? '').trim();
+                const isDivAnchor =
+                    !!jid && jid !== 'undefined' && divAnchorIdsForCustomerTotals.has(jid);
+
+                // Strict division scope: keep matching / anchor jobs; keep ancestors only as shells
+                // (no price) when a child survived. Do NOT keep other divisions just because they are priced.
+                if (labelMatch || isDivAnchor) {
+                    return { ...node, children };
+                }
+                if (children.length > 0) {
+                    return {
+                        ...node,
+                        children,
+                        hasPrice: false,
+                        price: null,
+                        declinedToQuote: false,
+                    };
+                }
+                return null;
             };
             return pricingJobForestDeduped.map((n) => prune(n)).filter(Boolean);
         })();
@@ -2377,20 +2526,6 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
             return { sum: sumCents / 100, maxAt };
         };
 
-        /**
-         * Pricing list Division dropdown = ownjob. When that ownjob is a subjob (has ParentID), "Customer Name &
-         * Total Price" should show the **parent** job name (same pattern as compactMixedAnchorsSummary / subjob-only
-         * summary columns), not the subjob ItemName.
-         */
-        const divAnchorIdsForCustomerTotals = (() => {
-            const d = String(divisionTrim || '').trim();
-            if (!d) return new Set();
-            return new Set(
-                getDepartmentPricingAnchors(enqJobs, d)
-                    .map((j) => String(jobIdOf(j)))
-                    .filter((id) => id && id !== 'undefined')
-            );
-        })();
         const customerTotalLabelOverrideForDivisionSubjob = (rootNode, currentLabel) => {
             if (!divisionTrim || !rootNode) return null;
             const jid = String(rootNode.jobId ?? '').trim();
@@ -2814,6 +2949,27 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
             hasPendingItems = legacyPending;
         }
 
+        // Revision Required = Yes on this user's own job only (not parent / sibling / subjob).
+        const ownJobsForRevisionRequired = (() => {
+            if (divisionTrim) {
+                const divNorm = normalizePricingJobName(String(divisionTrim).trim());
+                const divAnchorsRaw = getDepartmentPricingAnchors(enqJobs, String(divisionTrim).trim());
+                let divAnchors = (divAnchorsRaw || []).filter((jobRec) => {
+                    const nm = normalizePricingJobName(jobRec?.ItemName || '');
+                    return !!divNorm && nm === divNorm;
+                });
+                if (divAnchors.length === 0) divAnchors = divAnchorsRaw || [];
+                return divAnchors;
+            }
+            if (Array.isArray(myJobs) && myJobs.length) return myJobs;
+            const dept = String(userDepartment || '').trim();
+            if (dept) return getDepartmentPricingAnchors(enqJobs, dept) || [];
+            return [];
+        })();
+        if (epvRevisionRequiredOnOwnJobs(enqPrices, ownJobsForRevisionRequired, jobIdOf)) {
+            hasPendingItems = true;
+        }
+
         if (hasPendingItems) {
             const specNote =
                 userSpecPricingSummary && userSpecPricingSummary.enabled && specSlotCount > 0
@@ -2857,7 +3013,21 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
             pricedBy = pricedRows[0].by;
         }
 
-        const subJobPriceLines = displayItems.length > 0 ? displayItems : displayItemsRaw;
+        const subJobPriceLines = (() => {
+            const lines = displayItems.length > 0 ? displayItems : displayItemsRaw;
+            if (!divisionTrim) return lines;
+            // Search / list: Individual & Subjob column must not show other divisions' priced lines.
+            return lines.filter((item) => displayLineMatchesDivision(item));
+        })();
+
+        if (
+            divisionTrim &&
+            pricingJobForestScoped.length === 0 &&
+            subJobPriceLines.length === 0 &&
+            (!myJobs || myJobs.length === 0)
+        ) {
+            return null;
+        }
 
         /**
          * List status under Enquiry No. must be based **only on own-job pricing**:
@@ -2898,6 +3068,11 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
                 else unpriced += 1;
             }
             displaySpecStatus = ownJobResolutionStatusFromCounts(priced, declined, unpriced);
+        }
+
+        // Prefer Revision Required badge only when Yes is on this user's own-job row(s).
+        if (epvRevisionRequiredOnOwnJobs(enqPrices, ownJobsForRevisionRequired, jobIdOf)) {
+            displaySpecStatus = 'Revision Required';
         }
 
         return {
@@ -2974,16 +3149,21 @@ router.get('/list/divisions', async (req, res) => {
             const divisions = [...new Set((dr.recordset || []).map((r) => String(r.DivisionLabel || '').trim()).filter(Boolean))];
             return res.json({ isCcUser: true, divisions });
         }
+        // Concerned SE: Division dropdown = Master_ConcernedSE.Department only (CSV expanded).
+        // Do NOT union enquiry ConcernedSE→Master_EnquiryFor.DepartmentName — assignment on a multi-job
+        // enquiry would surface unassigned divisions (e.g. HVAC/Electrical for a BMS-only SE).
         const req2 = new sql.Request();
         req2.input('em', sql.NVarChar, ctx.normalizedEmail);
         const dr2 = await req2.query(`
             SELECT DISTINCT LTRIM(RTRIM(ISNULL(Department, N''))) AS DivisionLabel
             FROM dbo.Master_ConcernedSE
             WHERE LTRIM(RTRIM(ISNULL(Department, N''))) <> N''
-              AND LOWER(LTRIM(RTRIM(ISNULL(EmailId, N'')))) = LOWER(LTRIM(@em))
+              AND LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(EmailId, N''), N'@almcg.com', N'@almoayyedcg.com'), N'@ALMCG.COM', N'@almoayyedcg.com')))) = LOWER(LTRIM(@em))
             ORDER BY DivisionLabel
         `);
-        const divisions = [...new Set((dr2.recordset || []).map((r) => String(r.DivisionLabel || '').trim()).filter(Boolean))];
+        const divisions = expandDivisionLabels(
+            (dr2.recordset || []).map((r) => String(r.DivisionLabel || '').trim()).filter(Boolean)
+        ).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
         return res.json({ isCcUser: false, divisions });
     } catch (err) {
         console.error('Error fetching pricing list divisions:', err);
@@ -3087,6 +3267,7 @@ function sqlStripPricingName(col) {
  */
 async function fetchQuoteScopedPricingValues(requestNo, scope) {
     await ensureQuotingOrNotColumn();
+    await ensureRevisionRequiredColumn();
     const { pricingScope, leadJobClean, firstTab, activeTab, customerDropdown, parentJobName, userEmail } = scope || {};
     if (!leadJobClean || !firstTab) return null;
     if (pricingScope !== 'own' && pricingScope !== 'sub') return null;
@@ -3116,7 +3297,7 @@ async function fetchQuoteScopedPricingValues(requestNo, scope) {
             v.UpdatedAt,
             v.CustomerName,
             v.LeadJobName,
-            v.PriceOption${epvQuotingOrNotSelectSql('v')},
+            v.PriceOption${epvQuotingOrNotSelectSql('v')}${epvRevisionRequiredSelectSql('v')},
             m.MatchedEnquiryForId,
             m.MatchedItemName,
             m.MatchedParentId
@@ -3495,40 +3676,44 @@ router.get('/:requestNo', async (req, res) => {
         let values = [];
         try {
             await ensureQuotingOrNotColumn();
-            const valuesResult = quotingOrNotColumnAvailable
-                ? await sql.query`
+            await ensureRevisionRequiredColumn();
+            let valuesResult;
+            if (quotingOrNotColumnAvailable && revisionRequiredColumnAvailable) {
+                valuesResult = await sql.query`
                 SELECT
-                    ID,
-                    RequestNo,
-                    OptionID,
-                    EnquiryForItem,
-                    EnquiryForID,
-                    Price,
-                    UpdatedBy,
-                    UpdatedAt,
-                    CustomerName,
-                    LeadJobName,
-                    PriceOption,
-                    Quotingornot
-                FROM EnquiryPricingValues
-                WHERE RequestNo = ${requestNo}
-            `
-                : await sql.query`
-                SELECT
-                    ID,
-                    RequestNo,
-                    OptionID,
-                    EnquiryForItem,
-                    EnquiryForID,
-                    Price,
-                    UpdatedBy,
-                    UpdatedAt,
-                    CustomerName,
-                    LeadJobName,
-                    PriceOption
+                    ID, RequestNo, OptionID, EnquiryForItem, EnquiryForID, Price,
+                    UpdatedBy, UpdatedAt, CustomerName, LeadJobName, PriceOption,
+                    Quotingornot, RevisionRequired
                 FROM EnquiryPricingValues
                 WHERE RequestNo = ${requestNo}
             `;
+            } else if (quotingOrNotColumnAvailable) {
+                valuesResult = await sql.query`
+                SELECT
+                    ID, RequestNo, OptionID, EnquiryForItem, EnquiryForID, Price,
+                    UpdatedBy, UpdatedAt, CustomerName, LeadJobName, PriceOption,
+                    Quotingornot
+                FROM EnquiryPricingValues
+                WHERE RequestNo = ${requestNo}
+            `;
+            } else if (revisionRequiredColumnAvailable) {
+                valuesResult = await sql.query`
+                SELECT
+                    ID, RequestNo, OptionID, EnquiryForItem, EnquiryForID, Price,
+                    UpdatedBy, UpdatedAt, CustomerName, LeadJobName, PriceOption,
+                    RevisionRequired
+                FROM EnquiryPricingValues
+                WHERE RequestNo = ${requestNo}
+            `;
+            } else {
+                valuesResult = await sql.query`
+                SELECT
+                    ID, RequestNo, OptionID, EnquiryForItem, EnquiryForID, Price,
+                    UpdatedBy, UpdatedAt, CustomerName, LeadJobName, PriceOption
+                FROM EnquiryPricingValues
+                WHERE RequestNo = ${requestNo}
+            `;
+            }
             values = (valuesResult.recordset || []).map(normalizePricingValueRow);
             console.log('Pricing API: Found', values.length, 'values (total)');
         } catch (err) {
@@ -3626,16 +3811,15 @@ router.get('/:requestNo', async (req, res) => {
                     userFullName = userRows[0].FullName || '';
                     userRole = userRows[0].Roles || '';
                     userDepartmentRaw = userRows[0].Department ? userRows[0].Department.toString().trim() : '';
-                    userDepartment = userDepartmentRaw ? userDepartmentRaw.toLowerCase().trim() : '';
+                    userDepartment = userDepartmentRaw;
                 }
             } catch (err) {
                 console.error('Error getting user name:', err);
             }
 
-            // Prefer Pricing "Division" dropdown (session) for own-job/department name matching vs EnquiryFor.ItemName
-            const effectiveDeptForJobMatch = sessionDivision
-                ? String(sessionDivision).toLowerCase().trim()
-                : userDepartment;
+            // Prefer Pricing "Division" dropdown; else match any Master_ConcernedSE.Department token (CSV OK).
+            const sessionDivForMatch = sessionDivision ? String(sessionDivision).trim() : '';
+            const deptCsvForMatch = sessionDivForMatch || userDepartment;
 
             // Check if user is the creator (Lead Job owner) or Admin
             const isAdmin = userRole === 'Admin';
@@ -3651,11 +3835,10 @@ router.get('/:requestNo', async (req, res) => {
                 const allMails = [...commonMails, ...ccMails];
 
                 const userEmailUsername = userEmail.split('@')[0].toLowerCase();
-                const jobNameLower = job.ItemName.toLowerCase().trim();
 
                 let isMatch = allMails.includes(userEmail.toLowerCase()) ||
                     allMails.some(e => e.split('@')[0] === userEmailUsername) ||
-                    (effectiveDeptForJobMatch && jobNameLower.includes(effectiveDeptForJobMatch)) ||
+                    (deptCsvForMatch && anyDepartmentTokenMatchesJobName(deptCsvForMatch, job.ItemName)) ||
                     (userFullName && allMails.some(e => e.includes(userFullName.toLowerCase())));
 
                 if (isMatch) {
@@ -4011,7 +4194,7 @@ router.get('/:requestNo', async (req, res) => {
                     parentId: j.ParentID,
                     itemName: j.ItemName,
                     leadJobCode: j.LeadJobCode,
-                    companyLogo: j.CompanyLogo ? j.CompanyLogo.replace(/\\/g, '/') : null,
+                    companyLogo: j.CompanyLogo ? resolveCompanyLogoPath(String(j.CompanyLogo).replace(/\\/g, '/')) : null,
                     departmentName: j.DepartmentName,
                     companyName: j.CompanyName,
                     address: j.Address,
@@ -4228,6 +4411,7 @@ router.post('/option', async (req, res) => {
 router.put('/value', async (req, res) => {
     try {
         await ensureQuotingOrNotColumn();
+        await ensureRevisionRequiredColumn();
         const {
             requestNo,
             optionId,
@@ -4528,6 +4712,64 @@ router.put('/value', async (req, res) => {
 });
 
 /**
+ * PUT /api/pricing/revision-required
+ * Set RevisionRequired = 'Yes' or NULL for all EPV rows matching enquiry + lead job + customer.
+ */
+router.put('/revision-required', async (req, res) => {
+    try {
+        await ensureRevisionRequiredColumn();
+        if (!revisionRequiredColumnAvailable) {
+            return res.status(500).json({ error: 'RevisionRequired column is not available' });
+        }
+        const { requestNo, leadJobName, customerName, revisionRequired } = req.body || {};
+        if (!requestNo) {
+            return res.status(400).json({ error: 'requestNo is required' });
+        }
+        const lead = String(leadJobName || '').trim();
+        const leadStripped = lead.replace(/^(L\d+|Sub Job)\s*-\s*/i, '').trim();
+        const leadLikeSuffix = leadStripped ? `% - ${leadStripped}` : '';
+        const cust = String(customerName || '').trim();
+        const flag = normalizeRevisionRequiredValue(revisionRequired);
+        const result = await sql.query`
+            UPDATE EnquiryPricingValues
+            SET RevisionRequired = ${flag}
+            WHERE RequestNo = ${String(requestNo)}
+              AND UPPER(LTRIM(RTRIM(ISNULL(CustomerName, N'')))) = UPPER(LTRIM(RTRIM(${cust})))
+              AND (
+                    UPPER(LTRIM(RTRIM(ISNULL(LeadJobName, N'')))) = UPPER(LTRIM(RTRIM(${lead})))
+                 OR (
+                        ${leadStripped} <> N''
+                    AND UPPER(LTRIM(RTRIM(ISNULL(LeadJobName, N'')))) = UPPER(LTRIM(RTRIM(${leadStripped})))
+                    )
+                 OR (
+                        ${leadLikeSuffix} <> N''
+                    AND UPPER(LTRIM(RTRIM(ISNULL(LeadJobName, N'')))) LIKE UPPER(${leadLikeSuffix})
+                    )
+                  )
+              AND (
+                    UPPER(LTRIM(RTRIM(ISNULL(EnquiryForItem, N'')))) = UPPER(LTRIM(RTRIM(${lead})))
+                 OR (
+                        ${leadStripped} <> N''
+                    AND UPPER(LTRIM(RTRIM(ISNULL(EnquiryForItem, N'')))) = UPPER(LTRIM(RTRIM(${leadStripped})))
+                    )
+                 OR (
+                        ${leadLikeSuffix} <> N''
+                    AND UPPER(LTRIM(RTRIM(ISNULL(EnquiryForItem, N'')))) LIKE UPPER(${leadLikeSuffix})
+                    )
+                  )
+        `;
+        res.json({
+            success: true,
+            revisionRequired: flag,
+            rowsAffected: result?.rowsAffected?.[0] ?? 0,
+        });
+    } catch (err) {
+        console.error('Error updating RevisionRequired:', err);
+        res.status(500).json({ error: 'Failed to update RevisionRequired' });
+    }
+});
+
+/**
  * DELETE /api/pricing/value/base-price
  * Delete Base Price(s) for a single grid cell.
  *
@@ -4587,11 +4829,24 @@ router.delete('/option/:id', async (req, res) => {
     }
 });
 
-// PUT /api/pricing/option/:id - Rename an option
+// PUT /api/pricing/option/:id - Rename an option (also sync PriceOption on value rows)
 router.put('/option/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { optionName } = req.body;
+        const optionName = String(req.body?.optionName ?? req.body?.OptionName ?? '').trim();
+        if (!optionName) {
+            return res.status(400).json({ error: 'optionName is required' });
+        }
+
+        const existing = await sql.query`
+            SELECT TOP 1 ID, OptionName, RequestNo
+            FROM EnquiryPricingOptions
+            WHERE ID = ${id}
+        `;
+        if (!existing.recordset?.length) {
+            return res.status(404).json({ error: 'Option not found' });
+        }
+        const oldName = String(existing.recordset[0].OptionName || '').trim();
 
         await sql.query`
             UPDATE EnquiryPricingOptions 
@@ -4599,7 +4854,15 @@ router.put('/option/:id', async (req, res) => {
             WHERE ID = ${id}
         `;
 
-        res.json({ success: true });
+        if (oldName && oldName !== optionName) {
+            await sql.query`
+                UPDATE EnquiryPricingValues
+                SET PriceOption = ${optionName}
+                WHERE OptionID = ${id}
+            `;
+        }
+
+        res.json({ success: true, optionName });
 
     } catch (err) {
         console.error('Error renaming option:', err);

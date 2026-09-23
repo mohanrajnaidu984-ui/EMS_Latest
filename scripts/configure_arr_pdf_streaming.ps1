@@ -10,8 +10,13 @@
 
   This script:
   - Enables ARR proxy
-  - Sets proxy timeout to 180s (Puppeteer PDF)
+  - Sets proxy timeout to 300s (Puppeteer PDF / long reports; was 180s and caused 502s)
   - Sets responseBufferLimit = 0 (stream immediately to client)
+
+  IMPORTANT (ChatBox / Socket.IO):
+  Node HTTP_KEEP_ALIVE_TIMEOUT_MS on EMS-API must be GREATER than this ARR timeout
+  (use 310000+). If Node closes keep-alive first, ARR reuses a dead socket → intermittent
+  502 and the UI reports "backend disconnected".
 
   Run once on the EMS web server after installing ARR + URL Rewrite.
 #>
@@ -21,9 +26,9 @@ Write-Host "Enabling ARR proxy..."
 Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `
   -Filter 'system.webServer/proxy' -Name 'enabled' -Value $true
 
-Write-Host "Setting ARR proxy timeout to 00:03:00..."
+Write-Host "Setting ARR proxy timeout to 00:05:00..."
 Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `
-  -Filter 'system.webServer/proxy' -Name 'timeout' -Value '00:03:00'
+  -Filter 'system.webServer/proxy' -Name 'timeout' -Value '00:05:00'
 
 Write-Host "Setting ARR responseBufferLimit = 0 (stream PDF / large responses)..."
 try {

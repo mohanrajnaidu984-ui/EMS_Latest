@@ -130,8 +130,44 @@ async function notifyQuoteApprovedForSubmissionInApp({
     });
 }
 
+/** In-app bell when an approver requests a correction. */
+async function notifyQuoteCorrectionRequiredInApp({
+    recipientEmails = [],
+    requestNo = '',
+    projectName = '',
+    quoteNumber = '',
+    quoteId = null,
+    draftQuoteId = null,
+    triggerUserName = '',
+    reason = '',
+}) {
+    const rn = String(requestNo || '').trim();
+    if (!rn) return { inserted: 0 };
+    const project = String(projectName || '').trim() || '—';
+    const qRef = String(quoteNumber || '').trim();
+    const reasonShort = String(reason || '').trim().slice(0, 80);
+    const message = reasonShort
+        ? `Quote correction required — ${rn}, ${project}: ${reasonShort}`
+        : `Quote correction required — ${rn}, ${project}`;
+    const linkPayload = buildQuoteApprovalLinkPayload({
+        tab: quoteId ? 'Approvals' : 'Quote B2B',
+        requestNo: rn,
+        quoteId: quoteId || (draftQuoteId ? `d-${draftQuoteId}` : ''),
+        quoteNumber: qRef,
+    });
+    const createdBy = String(triggerUserName || 'System').trim() || 'System';
+    return insertInAppNotificationsForEmails({
+        recipientEmails,
+        type: 'Quote Correction',
+        message,
+        linkPayload,
+        createdBy,
+    });
+}
+
 module.exports = {
     buildQuoteApprovalLinkPayload,
     notifyQuoteAssignedForApprovalInApp,
     notifyQuoteApprovedForSubmissionInApp,
+    notifyQuoteCorrectionRequiredInApp,
 };

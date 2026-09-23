@@ -13,17 +13,10 @@ const {
 } = require('./enquiryNotifyEmailHtml');
 const { tomorrowYmdInSchedulerTz, getSchedulerTimeZone } = require('./schedulerTime');
 const { getSmtpFromEmail } = require('./smtpTransport');
+const { escapeHtml } = require('./htmlEscape');
 
 function siteVisitReminderFromEmail() {
     return String(process.env.EMS_SITE_VISIT_REMINDER_FROM || getSmtpFromEmail()).trim();
-}
-
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
 }
 
 function getApiPublicBase() {

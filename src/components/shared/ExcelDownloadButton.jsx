@@ -42,7 +42,6 @@ export default function ExcelDownloadButton({
 }) {
     const iconSize = Number(size) || EMS_EXCEL_ICON_SIZE;
     const hit = Math.max(28, Math.round(iconSize + 8));
-    const { width: _w, height: _h, minWidth: _mw, minHeight: _mh, ...restStyle } = style || {};
     return (
         <button
             type="button"
@@ -68,7 +67,8 @@ export default function ExcelDownloadButton({
                 opacity: disabled ? 0.45 : 1,
                 flexShrink: 0,
                 lineHeight: 0,
-                ...restStyle,
+                boxSizing: 'border-box',
+                ...style,
             }}
         >
             <ExcelIcon size={iconSize} />

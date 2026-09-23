@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { format } from 'date-fns';
 import { useAuth } from '../../context/AuthContext';
 import DashboardQuoteSummaryTable, { getQuoteListRowKey } from '../Dashboard/DashboardQuoteSummaryTable';
@@ -11,8 +12,16 @@ import {
     EMS_LIST_CLEAR_STYLE,
 } from '../../constants/emsSearchButtons';
 import { EMS_PENDING_APPROVALS_CHANGED } from '../../constants/approvalEvents';
+import SalesReportMultiSelect from '../SalesReport/SalesReportMultiSelect';
+import { parseUserDepartments, formatUserDepartments } from '../../utils/userDepartments';
 
 const API_BASE = String(import.meta.env?.VITE_API_BASE ?? '').replace(/\/+$/, '');
+
+/** Empty selection = All divisions (no server filter). Selected → CSV for OR filter. */
+function approvalDivisionQueryValue(selectedCsvOrList) {
+    const list = parseUserDepartments(selectedCsvOrList);
+    return list.length ? formatUserDepartments(list) : '';
+}
 
 /** Approvals list column — 30% narrower than the original 624px cap (≈437px). */
 const APPROVAL_LIST_PANEL_DEFAULT_WIDTH = Math.round(624 * 0.7);
@@ -22,8 +31,7 @@ const APPROVAL_LIST_PANEL_MAX_WIDTH = 680;
 const LIST_TAB = {
     PENDING: 'pending',
     APPROVED: 'approved',
-    REJECTED: 'rejected',
-    SEARCH: 'search',
+    CORRECTION: 'correction',
 };
 
 const APPROVAL_FILTERS_SESSION_KEY = 'ems_approvalListFilters';
@@ -95,23 +103,30 @@ function mapPendingApprovalToTableRow(row) {
     const textLine = ref
         ? `${cust || '—'} — ${ref}${dateStr ? ` (${dateStr})` : ''}`
         : cust || '—';
+    // After final approval, steps keep DraftQuoteId but QuoteId is set — prefer the saved quote.
     const quoteId = row.quoteId || null;
+    const draftQuoteId = quoteId ? null : row.draftQuoteId || null;
+    const totalRaw = row.totalAmount ?? row.TotalAmount;
+    const bdTotal = Number(totalRaw);
+    const amount = Number.isFinite(bdTotal) && bdTotal > 0 ? bdTotal : null;
     return {
         RequestNo: row.requestNo,
         ProjectName: row.projectName || '—',
         DueDate: row.dueDate,
         ConsultantName: row.consultantName,
-        ListQuoteDetailLines: [{ textLine }],
+        ListQuoteDetailLines: [{ textLine, bdTotal: amount }],
+        ListQuoteUnderRefTotal: amount,
         ListQuoteRef: ref,
         ListQuoteDate: row.quoteDate,
         ListQuoteDetailToName: cust,
         ListWorkflowNo: String(row.workflowNo || '').trim(),
         ListApprovalStatus: String(row.approvalStatus || '').trim(),
         ListReasonForRevision: String(row.reasonForRevision || '').trim(),
-        ListPendingPvId: quoteId ? String(quoteId) : '',
-        QuoteListKind: ref || (quoteId ? `q-${quoteId}` : ''),
+        ListPendingPvId: quoteId ? String(quoteId) : draftQuoteId ? `d-${draftQuoteId}` : '',
+        QuoteListKind: ref || (quoteId ? `q-${quoteId}` : draftQuoteId ? `d-${draftQuoteId}` : ''),
         _approvalSelection: {
             quoteId,
+            draftQuoteId,
             quoteNumber: row.quoteNumber || ref,
             requestNo: row.requestNo,
             customerName: cust,
@@ -121,6 +136,37 @@ function mapPendingApprovalToTableRow(row) {
             revisionNo: row.revisionNo ?? null,
         },
     };
+}
+
+/** Stable keys used to drop a pending row from the left list (and keep refetch from restoring it). */
+function pendingRowDismissalKeys(rowOrSel) {
+    const sel = rowOrSel?._approvalSelection || rowOrSel || {};
+    const keys = new Set();
+    const qid = String(sel.quoteId ?? '').trim();
+    const did = String(sel.draftQuoteId ?? '').trim();
+    const rn = String(sel.requestNo ?? rowOrSel?.RequestNo ?? '').trim();
+    const pv = String(rowOrSel?.ListPendingPvId ?? '').trim();
+    const qn = String(sel.quoteNumber ?? rowOrSel?.ListQuoteRef ?? '').trim().toLowerCase();
+    if (qid) {
+        keys.add(`q:${qid}`);
+        keys.add(qid);
+    }
+    if (did) {
+        keys.add(`d:${did}`);
+        keys.add(`d-${did}`);
+    }
+    if (pv) keys.add(`pv:${pv}`);
+    if (rn && qn) keys.add(`rnqn:${rn.toLowerCase()}|${qn}`);
+    if (rn && (qid || did)) keys.add(`rn:${rn.toLowerCase()}:${qid || `d-${did}`}`);
+    return keys;
+}
+
+function pendingRowMatchesDismissal(row, dismissed) {
+    if (!dismissed?.size) return false;
+    for (const k of pendingRowDismissalKeys(row)) {
+        if (dismissed.has(k)) return true;
+    }
+    return false;
 }
 
 function parseQuoteRefFromListRow(row) {
@@ -188,15 +234,39 @@ function mapQuoteListRowToApprovalSelection(row) {
 async function resolveQuoteSelectionFromListRow(row, userEmail) {
     const mapped = row?._approvalSelection ? row : mapQuoteListRowToApprovalSelection(row);
     const sel = mapped?._approvalSelection || {};
+    const draftQuoteId = sel.draftQuoteId
+        ? Number(sel.draftQuoteId)
+        : String(mapped?.ListPendingPvId || '').startsWith('d-')
+          ? Number(String(mapped.ListPendingPvId).slice(2))
+          : null;
     const quoteId =
         sel.quoteId ||
-        (String(mapped?.ListPendingPvId || '').trim() ? Number(mapped.ListPendingPvId) : null);
+        (String(mapped?.ListPendingPvId || '').trim() &&
+        !String(mapped.ListPendingPvId).startsWith('d-')
+            ? Number(mapped.ListPendingPvId)
+            : null);
     const quoteNumber = String(sel.quoteNumber || parseQuoteRefFromListRow(mapped) || '').trim();
     const requestNo = String(sel.requestNo || mapped?.RequestNo || '').trim();
 
+    // Prefer saved quote when both ids exist (draft was promoted after final approval).
     if (quoteId && requestNo) {
         return {
             quoteId,
+            draftQuoteId: null,
+            quoteNumber,
+            requestNo,
+            customerName: String(sel.customerName || mapped?.ListQuoteDetailToName || '').trim(),
+            leadJobName: sel.leadJobName || '',
+            ownJob: sel.ownJob || '',
+            projectName: sel.projectName || mapped?.ProjectName || '',
+            revisionNo: sel.revisionNo ?? null,
+        };
+    }
+
+    if (draftQuoteId && Number.isFinite(draftQuoteId) && requestNo) {
+        return {
+            quoteId: null,
+            draftQuoteId,
             quoteNumber,
             requestNo,
             customerName: String(sel.customerName || mapped?.ListQuoteDetailToName || '').trim(),
@@ -227,6 +297,7 @@ async function resolveQuoteSelectionFromListRow(row, userEmail) {
 
     return {
         quoteId: match.ID ?? match.id,
+        draftQuoteId: null,
         quoteNumber: match.QuoteNumber || match.quoteNumber || quoteNumber,
         requestNo,
         customerName: cust || match.ToName,
@@ -252,10 +323,8 @@ export default function QuoteApprovalPage({ openContext = null }) {
     const [pendingLoading, setPendingLoading] = useState(false);
     const [approvedRows, setApprovedRows] = useState([]);
     const [approvedLoading, setApprovedLoading] = useState(false);
-    const [rejectedRows, setRejectedRows] = useState([]);
-    const [rejectedLoading, setRejectedLoading] = useState(false);
-    const [searchRows, setSearchRows] = useState([]);
-    const [searchLoading, setSearchLoading] = useState(false);
+    const [correctionRows, setCorrectionRows] = useState([]);
+    const [correctionLoading, setCorrectionLoading] = useState(false);
 
     const [selectedPreview, setSelectedPreview] = useState(null);
     const [resolvingPreview, setResolvingPreview] = useState(false);
@@ -298,117 +367,9 @@ export default function QuoteApprovalPage({ openContext = null }) {
     const restoreListRanRef = useRef(false);
     const pendingFetchSeqRef = useRef(0);
     const pendingAbortRef = useRef(null);
-
-    const runQuoteSearch = useCallback(
-        async (criteria, from, to, div) => {
-            if (!userEmail) {
-                setSearchRows([]);
-                return;
-            }
-            const q = String(criteria || '').trim();
-            const df = String(from || '').trim();
-            const dt = String(to || '').trim();
-            if (!q && !(df && dt)) {
-                setSearchRows([]);
-                return;
-            }
-            setSearchLoading(true);
-            try {
-                const params = new URLSearchParams();
-                params.set('userEmail', userEmail);
-                params.set('q', q);
-                if (df) params.set('dateFrom', df);
-                if (dt) params.set('dateTo', dt);
-                if (String(div || '').trim()) params.set('division', String(div).trim());
-                const res = await fetch(`${API_BASE}/api/quotes/list/approval-search?${params.toString()}`, {
-                    cache: 'no-store',
-                });
-                const data = res.ok ? await res.json() : [];
-                setSearchRows(
-                    (Array.isArray(data) ? data : []).map(mapPendingApprovalToTableRow)
-                );
-            } catch (e) {
-                console.warn('[QuoteApprovalPage] search', e);
-                setSearchRows([]);
-            } finally {
-                setSearchLoading(false);
-            }
-        },
-        [userEmail]
-    );
-
-    const displayRows =
-        listTab === LIST_TAB.SEARCH
-            ? searchRows
-            : listTab === LIST_TAB.APPROVED
-              ? approvedRows
-              : listTab === LIST_TAB.REJECTED
-                ? rejectedRows
-                : pendingRows;
-    const listLoading =
-        listTab === LIST_TAB.SEARCH
-            ? searchLoading
-            : listTab === LIST_TAB.APPROVED
-              ? approvedLoading
-              : listTab === LIST_TAB.REJECTED
-                ? rejectedLoading
-                : pendingLoading;
-
-    const notifyPendingApprovalsChanged = useCallback(() => {
-        window.dispatchEvent(new CustomEvent(EMS_PENDING_APPROVALS_CHANGED));
-    }, []);
-
-    const refetchPending = useCallback(async () => {
-        if (!userEmail) {
-            setPendingRows([]);
-            return;
-        }
-        pendingAbortRef.current?.abort();
-        const ac = new AbortController();
-        pendingAbortRef.current = ac;
-        const seq = ++pendingFetchSeqRef.current;
-        setPendingLoading(true);
-        try {
-            const params = new URLSearchParams();
-            params.set('userEmail', userEmail);
-            if (division.trim()) params.set('division', division.trim());
-            const res = await fetch(
-                `${API_BASE}/api/quotes/list/pending-approvals?${params.toString()}`,
-                { cache: 'no-store', signal: ac.signal }
-            );
-            if (seq !== pendingFetchSeqRef.current) return;
-            const data = res.ok ? await res.json() : [];
-            setPendingRows(
-                (Array.isArray(data) ? data : []).map(mapPendingApprovalToTableRow)
-            );
-        } catch (e) {
-            if (e?.name === 'AbortError') return;
-            console.warn('[QuoteApprovalPage] pending list', e);
-            if (seq !== pendingFetchSeqRef.current) return;
-            setPendingRows([]);
-        } finally {
-            if (seq === pendingFetchSeqRef.current && !ac.signal.aborted) {
-                setPendingLoading(false);
-            }
-        }
-    }, [userEmail, division]);
-
-    const handleApprovalActionComplete = useCallback(() => {
-        const qid = selectedPreview?.quoteId;
-        if (qid) {
-            const qidStr = String(qid);
-            setPendingRows((prev) =>
-                prev.filter(
-                    (r) =>
-                        String(r._approvalSelection?.quoteId ?? r.ListPendingPvId ?? '').trim() !==
-                        qidStr
-                )
-            );
-            setSelectedPreview(null);
-        }
-        notifyPendingApprovalsChanged();
-        void refetchPending();
-    }, [refetchPending, selectedPreview, notifyPendingApprovalsChanged]);
+    /** Keys of rows dismissed on Approve — blocks refetch from putting them back before SQL catches up. */
+    const dismissedPendingKeysRef = useRef(new Set());
+    const dismissedPendingTimerRef = useRef(null);
 
     const fetchApprovedList = useCallback(
         async (withFilters = false) => {
@@ -428,7 +389,8 @@ export default function QuoteApprovalPage({ openContext = null }) {
                     if (df) params.set('dateFrom', df);
                     if (dt) params.set('dateTo', dt);
                 }
-                if (division.trim()) params.set('division', division.trim());
+                const divCsv = approvalDivisionQueryValue(division);
+                if (divCsv) params.set('division', divCsv);
                 const res = await fetch(
                     `${API_BASE}/api/quotes/list/approved-by-me?${params.toString()}`,
                     { cache: 'no-store' }
@@ -449,13 +411,13 @@ export default function QuoteApprovalPage({ openContext = null }) {
 
     const refetchApproved = useCallback(() => fetchApprovedList(false), [fetchApprovedList]);
 
-    const fetchRejectedList = useCallback(
+    const fetchCorrectionList = useCallback(
         async (withFilters = false) => {
             if (!userEmail) {
-                setRejectedRows([]);
+                setCorrectionRows([]);
                 return;
             }
-            setRejectedLoading(true);
+            setCorrectionLoading(true);
             try {
                 const params = new URLSearchParams();
                 params.set('userEmail', userEmail);
@@ -467,26 +429,154 @@ export default function QuoteApprovalPage({ openContext = null }) {
                     if (df) params.set('dateFrom', df);
                     if (dt) params.set('dateTo', dt);
                 }
-                if (division.trim()) params.set('division', division.trim());
+                const divCsv = approvalDivisionQueryValue(division);
+                if (divCsv) params.set('division', divCsv);
                 const res = await fetch(
-                    `${API_BASE}/api/quotes/list/rejected-by-me?${params.toString()}`,
+                    `${API_BASE}/api/quotes/list/corrections-requested-by-me?${params.toString()}`,
                     { cache: 'no-store' }
                 );
                 const data = res.ok ? await res.json() : [];
-                setRejectedRows(
+                setCorrectionRows(
                     (Array.isArray(data) ? data : []).map(mapPendingApprovalToTableRow)
                 );
             } catch (e) {
-                console.warn('[QuoteApprovalPage] rejected list', e);
-                setRejectedRows([]);
+                console.warn('[QuoteApprovalPage] correction list', e);
+                setCorrectionRows([]);
             } finally {
-                setRejectedLoading(false);
+                setCorrectionLoading(false);
             }
         },
         [userEmail, searchCriteria, dateFrom, dateTo, division]
     );
 
-    const refetchRejected = useCallback(() => fetchRejectedList(false), [fetchRejectedList]);
+    const refetchCorrections = useCallback(() => fetchCorrectionList(false), [fetchCorrectionList]);
+
+    const displayRows =
+        listTab === LIST_TAB.APPROVED
+            ? approvedRows
+            : listTab === LIST_TAB.CORRECTION
+              ? correctionRows
+              : pendingRows;
+    const listLoading =
+        listTab === LIST_TAB.APPROVED
+            ? approvedLoading
+            : listTab === LIST_TAB.CORRECTION
+              ? correctionLoading
+              : pendingLoading;
+
+    const notifyPendingApprovalsChanged = useCallback(() => {
+        window.dispatchEvent(new CustomEvent(EMS_PENDING_APPROVALS_CHANGED));
+    }, []);
+
+    const refetchPending = useCallback(async () => {
+        if (!userEmail) {
+            setPendingRows([]);
+            return;
+        }
+        pendingAbortRef.current?.abort();
+        const ac = new AbortController();
+        pendingAbortRef.current = ac;
+        const seq = ++pendingFetchSeqRef.current;
+        setPendingLoading(true);
+        try {
+            const params = new URLSearchParams();
+            params.set('userEmail', userEmail);
+            const divCsv = approvalDivisionQueryValue(division);
+            if (divCsv) params.set('division', divCsv);
+            const res = await fetch(
+                `${API_BASE}/api/quotes/list/pending-approvals?${params.toString()}`,
+                { cache: 'no-store', signal: ac.signal }
+            );
+            if (seq !== pendingFetchSeqRef.current) return;
+            const data = res.ok ? await res.json() : [];
+            const mapped = (Array.isArray(data) ? data : []).map(mapPendingApprovalToTableRow);
+            const dismissed = dismissedPendingKeysRef.current;
+            const filtered = dismissed.size
+                ? mapped.filter((r) => !pendingRowMatchesDismissal(r, dismissed))
+                : mapped;
+            /* Drop dismissal keys that are no longer on the server list. */
+            if (dismissed.size) {
+                const stillPresent = new Set();
+                for (const r of mapped) {
+                    for (const k of pendingRowDismissalKeys(r)) {
+                        if (dismissed.has(k)) stillPresent.add(k);
+                    }
+                }
+                if (stillPresent.size === 0) {
+                    dismissed.clear();
+                } else {
+                    for (const k of [...dismissed]) {
+                        if (!stillPresent.has(k)) dismissed.delete(k);
+                    }
+                }
+            }
+            setPendingRows(filtered);
+        } catch (e) {
+            if (e?.name === 'AbortError') return;
+            console.warn('[QuoteApprovalPage] pending list', e);
+            if (seq !== pendingFetchSeqRef.current) return;
+            setPendingRows([]);
+        } finally {
+            if (seq === pendingFetchSeqRef.current && !ac.signal.aborted) {
+                setPendingLoading(false);
+            }
+        }
+    }, [userEmail, division]);
+
+    const handleApprovalActionComplete = useCallback(
+        (meta = {}) => {
+            if (meta?.action === 'rollback') {
+                dismissedPendingKeysRef.current.clear();
+                void refetchPending();
+                return;
+            }
+
+            const qid = meta?.quoteId || selectedPreview?.quoteId || null;
+            const did = meta?.draftQuoteId || selectedPreview?.draftQuoteId || null;
+            const rn = String(meta?.requestNo || selectedPreview?.requestNo || '').trim();
+            const qn = String(meta?.quoteNumber || selectedPreview?.quoteNumber || '')
+                .trim()
+                .toLowerCase();
+            const qidStr = qid != null && String(qid).trim() !== '' ? String(qid).trim() : '';
+            const didStr = did != null && String(did).trim() !== '' ? String(did).trim() : '';
+
+            const dismissKeys = pendingRowDismissalKeys({
+                quoteId: qidStr || null,
+                draftQuoteId: didStr || null,
+                requestNo: rn,
+                quoteNumber: qn,
+                ListPendingPvId: qidStr || (didStr ? `d-${didStr}` : ''),
+            });
+            for (const k of dismissKeys) dismissedPendingKeysRef.current.add(k);
+
+            if (dismissedPendingTimerRef.current) {
+                clearTimeout(dismissedPendingTimerRef.current);
+            }
+            dismissedPendingTimerRef.current = setTimeout(() => {
+                dismissedPendingKeysRef.current.clear();
+                dismissedPendingTimerRef.current = null;
+            }, 20000);
+
+            /* Same paint: drop left-list row and clear right preview together. */
+            flushSync(() => {
+                setPendingRows((prev) =>
+                    prev.filter((r) => !pendingRowMatchesDismissal(r, dismissedPendingKeysRef.current))
+                );
+                setSelectedPreview(null);
+            });
+
+            /* Optimistic path: do not refetch yet (would restore the row before SQL commits). */
+            if (meta?.optimistic) {
+                return;
+            }
+
+            notifyPendingApprovalsChanged();
+            window.setTimeout(() => {
+                void refetchPending();
+            }, 600);
+        },
+        [refetchPending, selectedPreview, notifyPendingApprovalsChanged]
+    );
 
     useEffect(() => {
         if (!userEmail) {
@@ -499,6 +589,8 @@ export default function QuoteApprovalPage({ openContext = null }) {
         if (saved) {
             if (saved.listTab && Object.values(LIST_TAB).includes(saved.listTab)) {
                 setListTab(saved.listTab);
+            } else if (saved.listTab === 'rejected' || saved.listTab === 'search') {
+                setListTab(LIST_TAB.PENDING);
             }
             if (typeof saved.searchCriteria === 'string') setSearchCriteria(saved.searchCriteria);
             if (typeof saved.dateFrom === 'string') setDateFrom(saved.dateFrom);
@@ -534,17 +626,7 @@ export default function QuoteApprovalPage({ openContext = null }) {
         if (!userEmail || !filtersHydratedRef.current || restoreListRanRef.current) return;
         if (divisionsLoading) return;
         restoreListRanRef.current = true;
-        const saved = loadApprovalFilters(userEmail);
-        const tab = saved?.listTab || LIST_TAB.PENDING;
-        if (tab === LIST_TAB.SEARCH) {
-            void runQuoteSearch(
-                saved?.searchCriteria ?? searchCriteria,
-                saved?.dateFrom ?? dateFrom,
-                saved?.dateTo ?? dateTo,
-                saved?.division ?? division
-            );
-        }
-    }, [userEmail, divisionsLoading, division, searchCriteria, dateFrom, dateTo, runQuoteSearch]);
+    }, [userEmail, divisionsLoading]);
 
     useEffect(() => {
         if (listTab !== LIST_TAB.PENDING) return;
@@ -556,7 +638,7 @@ export default function QuoteApprovalPage({ openContext = null }) {
         if (listTab !== LIST_TAB.PENDING || !userEmail || divisionsLoading) return;
         const interval = setInterval(() => {
             void refetchPending();
-        }, 20000);
+        }, 60000);
         return () => clearInterval(interval);
     }, [listTab, userEmail, divisionsLoading, refetchPending]);
 
@@ -584,8 +666,8 @@ export default function QuoteApprovalPage({ openContext = null }) {
     }, [listTab, refetchApproved]);
 
     useEffect(() => {
-        if (listTab === LIST_TAB.REJECTED) refetchRejected();
-    }, [listTab, refetchRejected]);
+        if (listTab === LIST_TAB.CORRECTION) refetchCorrections();
+    }, [listTab, refetchCorrections]);
 
     useEffect(() => {
         if (!userEmail) {
@@ -606,9 +688,11 @@ export default function QuoteApprovalPage({ openContext = null }) {
                 setDivisions(list);
                 setDivision((prev) => {
                     if (!list.length) return '';
-                    const sessionDiv = sessionDivisionRef.current;
-                    if (sessionDiv && list.includes(sessionDiv)) return sessionDiv;
-                    if (prev && list.includes(prev)) return prev;
+                    const sessionCsv = sessionDivisionRef.current;
+                    const fromSession = parseUserDepartments(sessionCsv).filter((s) => list.includes(s));
+                    if (fromSession.length) return formatUserDepartments(fromSession);
+                    const fromPrev = parseUserDepartments(prev).filter((s) => list.includes(s));
+                    if (fromPrev.length) return formatUserDepartments(fromPrev);
                     return '';
                 });
             } catch {
@@ -629,22 +713,18 @@ export default function QuoteApprovalPage({ openContext = null }) {
             await fetchApprovedList(true);
             return;
         }
-        if (listTab === LIST_TAB.REJECTED) {
-            await fetchRejectedList(true);
-            return;
+        if (listTab === LIST_TAB.CORRECTION) {
+            await fetchCorrectionList(true);
         }
-        if (listTab !== LIST_TAB.SEARCH) return;
-        await runQuoteSearch(searchCriteria, dateFrom, dateTo, division);
-    }, [listTab, searchCriteria, dateFrom, dateTo, division, fetchApprovedList, fetchRejectedList, runQuoteSearch]);
+    }, [listTab, fetchApprovedList, fetchCorrectionList]);
 
     const handleClear = useCallback(() => {
         summaryClearColFiltersRef.current?.();
         setSearchCriteria('');
         setDateFrom('');
         setDateTo('');
-        setSearchRows([]);
         setApprovedRows([]);
-        setRejectedRows([]);
+        setCorrectionRows([]);
         setSelectedPreview(null);
         setListTab(LIST_TAB.PENDING);
         clearApprovalFilters(userEmail);
@@ -700,12 +780,15 @@ export default function QuoteApprovalPage({ openContext = null }) {
             tab: QUOTE_TAB_B2B,
             requestNo: selectedPreview.requestNo,
             quoteId: selectedPreview.quoteId ? String(selectedPreview.quoteId) : '',
+            draftQuoteId: selectedPreview.draftQuoteId ? String(selectedPreview.draftQuoteId) : '',
             quoteNumber: selectedPreview.quoteNumber ? String(selectedPreview.quoteNumber) : '',
             leadJobName: selectedPreview.leadJobName ? String(selectedPreview.leadJobName) : '',
             ownJob: selectedPreview.ownJob ? String(selectedPreview.ownJob) : '',
+            /** Approvals Division toolbar selection — CSV multi-select; empty = All. */
+            listDivision: approvalDivisionQueryValue(division),
             customerName: selectedPreview.customerName ? String(selectedPreview.customerName) : '',
         };
-    }, [selectedPreview]);
+    }, [selectedPreview, division]);
 
     const previewKey = previewOpenContext
         ? [
@@ -731,24 +814,21 @@ export default function QuoteApprovalPage({ openContext = null }) {
     }, [selectedPreview, displayRows]);
 
     const emptyTableLabel =
-        listTab === LIST_TAB.SEARCH
-            ? 'No quotes submitted for approval match this search. Try different text or quote dates (both required when search text is empty).'
-            : listTab === LIST_TAB.APPROVED
-              ? approvedLoading
-                  ? 'Loading quotes you approved…'
-                  : 'No approved quotes found. Adjust search criteria or dates and try again.'
-              : listTab === LIST_TAB.REJECTED
-                ? rejectedLoading
-                    ? 'Loading quotes you rejected…'
-                    : 'No rejected quotes found. Adjust search criteria or dates and try again.'
-                : pendingLoading
-                  ? 'Loading pending approvals…'
-                  : 'No quotes pending your approval. Use Approved by Me, Rejected by Me, or Quote Search to find quotes.';
+        listTab === LIST_TAB.APPROVED
+            ? approvedLoading
+                ? 'Loading quotes you approved…'
+                : 'No approved quotes found. Adjust search criteria or dates and try again.'
+            : listTab === LIST_TAB.CORRECTION
+              ? correctionLoading
+                  ? 'Loading correction requests…'
+                  : 'No correction requests found. Adjust search criteria or dates and try again.'
+              : pendingLoading
+                ? 'Loading pending approvals…'
+                : 'No quotes pending your approval. Use Approved by Me or Correction requested to find quotes.';
 
-    const isSearchMode = listTab === LIST_TAB.SEARCH;
     const isApprovedMode = listTab === LIST_TAB.APPROVED;
-    const isRejectedMode = listTab === LIST_TAB.REJECTED;
-    const criteriaEnabled = isSearchMode || isApprovedMode || isRejectedMode;
+    const isCorrectionMode = listTab === LIST_TAB.CORRECTION;
+    const criteriaEnabled = isApprovedMode || isCorrectionMode;
     const divisionEnabled = divisions.length > 0 && !divisionsLoading;
     const toolbarLabelStyle = {
         fontSize: '10px',
@@ -804,13 +884,8 @@ export default function QuoteApprovalPage({ openContext = null }) {
                         setSelectedPreview(null);
                         if (v === LIST_TAB.PENDING) refetchPending();
                         if (v === LIST_TAB.APPROVED && approvedRows.length === 0) refetchApproved();
-                        if (v === LIST_TAB.REJECTED && rejectedRows.length === 0) refetchRejected();
-                        if (
-                            v === LIST_TAB.SEARCH &&
-                            searchRows.length === 0 &&
-                            (searchCriteria.trim() || (dateFrom.trim() && dateTo.trim()))
-                        ) {
-                            void runQuoteSearch(searchCriteria, dateFrom, dateTo, division);
+                        if (v === LIST_TAB.CORRECTION && correctionRows.length === 0) {
+                            refetchCorrections();
                         }
                     }}
                         style={{
@@ -821,54 +896,25 @@ export default function QuoteApprovalPage({ openContext = null }) {
                     >
                         <option value={LIST_TAB.PENDING}>Pending for Approval</option>
                         <option value={LIST_TAB.APPROVED}>Approved by Me</option>
-                        <option value={LIST_TAB.REJECTED}>Rejected by Me</option>
-                        <option value={LIST_TAB.SEARCH}>Quote Search</option>
+                        <option value={LIST_TAB.CORRECTION}>Correction requested</option>
                     </select>
                 </div>
-                <div style={toolbarFieldStackStyle}>
-                    <span style={toolbarLabelStyle}>Division</span>
-                    <select
-                        value={division}
-                        disabled={!divisionEnabled}
-                        onChange={(e) => {
-                            const next = e.target.value;
+                <div style={{ ...toolbarFieldStackStyle, minWidth: 160, flex: '1 1 160px', overflow: 'visible', position: 'relative', zIndex: 20 }}>
+                    <SalesReportMultiSelect
+                        label="Division"
+                        ariaLabel="Division"
+                        minWidth={160}
+                        options={divisions}
+                        value={parseUserDepartments(division)}
+                        onChange={(picked) => {
+                            const next = formatUserDepartments(picked || []);
                             setDivision(next);
                             sessionDivisionRef.current = next;
                             setSelectedPreview(null);
                         }}
-                        title={
-                            divisionEnabled
-                                ? 'Your accessible divisions'
-                                : divisionsLoading
-                                  ? 'Loading divisions…'
-                                  : 'No division assigned'
-                        }
-                        style={{
-                            ...toolbarFieldStyle,
-                            background: divisionEnabled ? '#fff' : '#f1f5f9',
-                            color: '#334155',
-                            cursor: divisionEnabled ? 'pointer' : 'not-allowed',
-                        }}
-                    >
-                        {divisionsLoading && !divisions.length ? (
-                            <option value="" disabled>
-                                Loading…
-                            </option>
-                        ) : null}
-                        {!divisionsLoading && !divisions.length ? (
-                            <option value="" disabled>
-                                No division
-                            </option>
-                        ) : null}
-                        {divisions.length > 0 ? (
-                            <option value="">All Divisions</option>
-                        ) : null}
-                        {divisions.map((d) => (
-                            <option key={d} value={d}>
-                                {d}
-                            </option>
-                        ))}
-                    </select>
+                        disabled={!divisionEnabled}
+                        allLabel="All divisions"
+                    />
                 </div>
             </div>
 
@@ -882,18 +928,14 @@ export default function QuoteApprovalPage({ openContext = null }) {
                     onKeyDown={(e) => {
                         if (e.key !== 'Enter' || !criteriaEnabled) return;
                         e.preventDefault();
-                        if (searchLoading || approvedLoading || rejectedLoading) return;
+                        if (approvedLoading || correctionLoading) return;
                         handleSearch();
                     }}
                     disabled={!criteriaEnabled}
                     placeholder={
-                        isApprovedMode
+                        isApprovedMode || isCorrectionMode
                             ? 'Filter enquiry, project, workflow no, customer…'
-                            : isRejectedMode
-                              ? 'Filter enquiry, project, workflow no, customer…'
-                            : isSearchMode
-                              ? 'Enquiry, project, workflow no, customer, quote ref (approval quotes only)…'
-                              : 'Use Approved, Rejected, or Search'
+                            : 'Use Approved by Me or Correction requested'
                     }
                     style={{
                         ...toolbarFieldStyle,
@@ -965,9 +1007,9 @@ export default function QuoteApprovalPage({ openContext = null }) {
                 <button
                     type="button"
                     onClick={handleSearch}
-                    disabled={!criteriaEnabled || searchLoading || approvedLoading || rejectedLoading}
+                    disabled={!criteriaEnabled || approvedLoading || correctionLoading}
                     style={{
-                        ...(criteriaEnabled && !searchLoading && !approvedLoading && !rejectedLoading
+                        ...(criteriaEnabled && !approvedLoading && !correctionLoading
                             ? EMS_LIST_SEARCH_ENABLED_STYLE
                             : EMS_LIST_SEARCH_DISABLED_STYLE),
                         padding: '3px 8px',
@@ -978,13 +1020,13 @@ export default function QuoteApprovalPage({ openContext = null }) {
                         height: '28px',
                         flexShrink: 0,
                         cursor:
-                            criteriaEnabled && !searchLoading && !approvedLoading && !rejectedLoading
+                            criteriaEnabled && !approvedLoading && !correctionLoading
                                 ? 'pointer'
                                 : 'not-allowed',
                         whiteSpace: 'nowrap',
                     }}
                 >
-                    {searchLoading || approvedLoading ? '…' : 'Search'}
+                    {approvedLoading || correctionLoading ? '…' : 'Search'}
                 </button>
                 <button
                     type="button"
@@ -1067,16 +1109,12 @@ export default function QuoteApprovalPage({ openContext = null }) {
                             showWorkflowNoColumn
                             selectedRowKey={selectedListRowKey}
                             defaultSortConfig={
-                                listTab === LIST_TAB.SEARCH ||
-                                listTab === LIST_TAB.APPROVED ||
-                                listTab === LIST_TAB.REJECTED
+                                listTab === LIST_TAB.APPROVED || listTab === LIST_TAB.CORRECTION
                                     ? { field: 'LatestQuoteDate', direction: 'desc' }
                                     : { field: 'DueDate', direction: 'asc' }
                             }
                             resetSortOnRowsChange={
-                                listTab === LIST_TAB.SEARCH ||
-                                listTab === LIST_TAB.APPROVED ||
-                                listTab === LIST_TAB.REJECTED
+                                listTab === LIST_TAB.APPROVED || listTab === LIST_TAB.CORRECTION
                             }
                             onRegisterClearColumnFilters={(fn) => {
                                 summaryClearColFiltersRef.current = fn;
@@ -1154,7 +1192,7 @@ export default function QuoteApprovalPage({ openContext = null }) {
                     >
                         <span>Select a quote from the list to preview it here.</span>
                         <span style={{ fontSize: '12px' }}>
-                            Use Approved by Me, Rejected by Me, or Quote Search when you have no pending approvals.
+                            Use Approved by Me or Correction requested when you have no pending approvals.
                         </span>
                     </div>
                 )}

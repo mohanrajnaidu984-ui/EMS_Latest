@@ -8,7 +8,10 @@ import {
 import { Printer, Mail, Maximize2, Minimize2, FilterX } from 'lucide-react';
 import { downloadJobsTableXlsx } from './salesReportJobsExcel';
 import ExcelDownloadButton from '../shared/ExcelDownloadButton';
+import SalesReportMultiSelect from './SalesReportMultiSelect';
 import './SalesReport.css';
+import { useMasterCurrency } from '../../hooks/useMasterCurrency';
+import MasterCurrencyBadge from '../shared/MasterCurrencyBadge';
 
 /** A4 landscape printable area (mm margins each side). */
 const SR_PRINT_PAGE_MM = { width: 297, height: 210, margin: 6 };
@@ -23,10 +26,10 @@ const defaultReport = () => ({
         { name: 'Q4', target: 0, actual: 0 }
     ],
     grossMarginTargetVsActual: [
-        { name: 'Q1', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0 },
-        { name: 'Q2', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0 },
-        { name: 'Q3', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0 },
-        { name: 'Q4', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0 }
+        { name: 'Q1', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0, actualAvgGpPct: null },
+        { name: 'Q2', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0, actualAvgGpPct: null },
+        { name: 'Q3', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0, actualAvgGpPct: null },
+        { name: 'Q4', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0, actualAvgGpPct: null }
     ],
     /** Mean of each won job's booked GrossMargin% (same Probability snapshot as summary); null = use blended fallback. */
     avgWonBookedGpPct: null,
@@ -38,7 +41,7 @@ const defaultReport = () => ({
     topJobBooked: []
 });
 
-/** BHD: up to 999 direct; 1,000–999,999 as k; 1,000,000+ as M (entire report). */
+/** Compact sales amounts: up to 999 direct; 1,000–999,999 as k; 1,000,000+ as M (entire report). */
 const SR_ONE_MILLION = 1_000_000;
 const SR_ONE_THOUSAND = 1_000;
 
@@ -270,6 +273,39 @@ function writeSrPref(email, name, value) {
     if (legacyKey) localStorage.setItem(legacyKey, stored);
 }
 
+function parseSrFilterListPref(raw) {
+    if (raw == null || raw === '' || raw === 'All') return [];
+    if (Array.isArray(raw)) return raw.filter(Boolean);
+    const s = String(raw).trim();
+    if (!s || s === 'All') return [];
+    if (s.startsWith('[')) {
+        try {
+            const parsed = JSON.parse(s);
+            return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+        } catch {
+            return [];
+        }
+    }
+    if (s.includes('|||')) return s.split('|||').map((x) => x.trim()).filter(Boolean);
+    return [s];
+}
+
+function serializeSrFilterListPref(values) {
+    if (!Array.isArray(values) || values.length === 0) return 'All';
+    return JSON.stringify(values);
+}
+
+function appendSrFilterParams(params, key, values) {
+    const list = Array.isArray(values) ? values.filter(Boolean) : [];
+    list.forEach((v) => params.append(key, v));
+}
+
+function srFilterListsEqual(a, b) {
+    if (a === b) return true;
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((v, i) => v === b[i]);
+}
+
 function readSrTableFilters(email, topJobStatus) {
     const key = email
         ? `reports_table_filters_${email}_${topJobStatus}`
@@ -451,11 +487,12 @@ function renderTopJobEnquiryGroupCell(isContinuation, rowSpan, className, conten
 /** Default Jobs table column widths (px) — shared across all status dropdown options; user-resizable. */
 const DEFAULT_TOP_JOB_COL_WIDTHS = {
     slNo: 44,
-    requestNo: 90,
-    projectName: 250,
-    customerName: 250,
-    jobValue: 120,
-    chart: 150,
+    requestNo: 48,
+    division: 104,
+    projectName: 184,
+    customerName: 138,
+    jobValue: 96,
+    chart: 113,
     grossMargin: 120,
     metric: 110,
     quoteDate: 95,
@@ -473,6 +510,7 @@ const DEFAULT_TOP_JOB_COL_WIDTHS = {
 
 const TOP_JOB_CLIP_COLS = new Set([
     'requestNo',
+    'division',
     'projectName',
     'customerName',
     'metric',
@@ -485,20 +523,25 @@ const TOP_JOB_CLIP_COLS = new Set([
     'extra',
 ]);
 
+const TOP_JOB_COL_WIDTHS_VERSION = 5;
+
 function readTopJobColWidths() {
+    // Always use current code defaults. Stale localStorage was blocking width tweaks (HMR + merge).
     try {
-        const raw = localStorage.getItem('reports_topJobColWidths');
-        if (!raw) return { ...DEFAULT_TOP_JOB_COL_WIDTHS };
-        const parsed = JSON.parse(raw);
-        if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_TOP_JOB_COL_WIDTHS };
-        return { ...DEFAULT_TOP_JOB_COL_WIDTHS, ...parsed };
+        localStorage.setItem('reports_topJobColWidths_v', String(TOP_JOB_COL_WIDTHS_VERSION));
+        localStorage.setItem(
+            'reports_topJobColWidths',
+            JSON.stringify(DEFAULT_TOP_JOB_COL_WIDTHS)
+        );
     } catch {
-        return { ...DEFAULT_TOP_JOB_COL_WIDTHS };
+        /* ignore */
     }
+    return { ...DEFAULT_TOP_JOB_COL_WIDTHS };
 }
 
 function writeTopJobColWidths(widths) {
     try {
+        localStorage.setItem('reports_topJobColWidths_v', String(TOP_JOB_COL_WIDTHS_VERSION));
         localStorage.setItem('reports_topJobColWidths', JSON.stringify(widths || {}));
     } catch {
         /* ignore */
@@ -683,6 +726,8 @@ const SalesReport = () => {
     const prefsHydratedForEmail = useRef('');
     const tableFiltersHydratedKey = useRef('');
     const [tableFiltersReady, setTableFiltersReady] = useState(false);
+    const [prefsHydrated, setPrefsHydrated] = useState(false);
+    const [accessResolved, setAccessResolved] = useState(false);
 
     const [filterLocks, setFilterLocks] = useState({
         company: false,
@@ -691,15 +736,19 @@ const SalesReport = () => {
     });
 
     const [year, setYear] = useState(() => readSrPref('', 'year', '2026'));
-    const [company, setCompany] = useState(() => {
-        const s = readSrPref('', 'company', '');
-        return s && s !== 'All' ? s : '';
+    const [selectedCompanies, setSelectedCompanies] = useState(() =>
+        parseSrFilterListPref(readSrPref('', 'company', ''))
+    );
+    const [selectedDivisions, setSelectedDivisions] = useState(() =>
+        parseSrFilterListPref(readSrPref('', 'division', ''))
+    );
+    const { currencyCode: salesReportCurrencyCode } = useMasterCurrency({
+        division: selectedDivisions?.[0] || '',
+        companyName: selectedCompanies?.[0] || '',
     });
-    const [division, setDivision] = useState(() => {
-        const s = readSrPref('', 'division', '');
-        return s && s !== 'All' ? s : '';
-    });
-    const [role, setRole] = useState(() => readSrPref('', 'role', 'All'));
+    const [selectedRoles, setSelectedRoles] = useState(() =>
+        parseSrFilterListPref(readSrPref('', 'role', 'All'))
+    );
     const [topJobStatus, setTopJobStatus] = useState(() => {
         const saved = readSrPref('', 'topJobStatus', '');
         if (saved && TOP_JOB_STATUS_OPTIONS.some((x) => x.value === saved)) return saved;
@@ -721,6 +770,13 @@ const SalesReport = () => {
     const topJobColWidthsRef = useRef(topJobColWidths);
     topJobColWidthsRef.current = topJobColWidths;
     const topJobColResizeRef = useRef({ key: null, startX: 0, startWidth: 0 });
+
+    // Re-apply defaults whenever the version/constants change (incl. Vite HMR).
+    useEffect(() => {
+        const next = readTopJobColWidths();
+        setTopJobColWidths(next);
+        topJobColWidthsRef.current = next;
+    }, [TOP_JOB_COL_WIDTHS_VERSION, DEFAULT_TOP_JOB_COL_WIDTHS.projectName, DEFAULT_TOP_JOB_COL_WIDTHS.customerName]);
     const [activeHeaderFilter, setActiveHeaderFilter] = useState(null);
     const [headerFilterSearch, setHeaderFilterSearch] = useState('');
     const [headerFilterDraft, setHeaderFilterDraft] = useState([]);
@@ -743,63 +799,94 @@ const SalesReport = () => {
      * Assigned-only SE (locked): fetch only `email`. CC-mail / Admin: pass company+division for cascading lists.
      */
     React.useEffect(() => {
-        const loadFilters = async () => {
+        if (!accessResolved) return undefined;
+
+        const ac = new AbortController();
+        const timer = window.setTimeout(async () => {
             try {
                 const email = (currentUser?.EmailId || currentUser?.email || storedLoginEmail || '').trim();
                 const params = new URLSearchParams();
                 if (email) params.append('email', email);
                 if (!filterLocks.company) {
-                    if (company) params.append('company', company);
-                    if (division) params.append('division', division);
+                    appendSrFilterParams(params, 'company', selectedCompanies);
+                    appendSrFilterParams(params, 'division', selectedDivisions);
                 }
 
-                const response = await fetch(`/api/sales-report/filters?${params.toString()}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    const companies = data.companies || [];
-                    const divisions = data.divisions || [];
-                    const roles = data.roles || [];
-                    setFilterOptions((prev) => ({
-                        ...prev,
-                        years: data.years || [],
-                        companies,
-                        divisions,
-                        roles
-                    }));
-                    setCompany((prev) => {
-                        if (!companies.length) return prev;
-                        if (prev && companies.includes(prev)) return prev;
-                        return prev || companies[0];
-                    });
-                    setDivision((prev) => {
-                        if (prev === 'All') return 'All';
-                        if (!divisions.length) return prev;
-                        if (prev && divisions.includes(prev)) return prev;
-                        return 'All';
-                    });
-                }
+                const response = await fetch(`/api/sales-report/filters?${params.toString()}`, {
+                    signal: ac.signal,
+                });
+                if (!response.ok || ac.signal.aborted) return;
+
+                const data = await response.json();
+                const companies = data.companies || [];
+                const divisions = data.divisions || [];
+                const roles = data.roles || [];
+                const years = data.years || [];
+
+                setFilterOptions((prev) => {
+                    if (
+                        srFilterListsEqual(prev.years, years) &&
+                        srFilterListsEqual(prev.companies, companies) &&
+                        srFilterListsEqual(prev.divisions, divisions) &&
+                        srFilterListsEqual(prev.roles, roles)
+                    ) {
+                        return prev;
+                    }
+                    return { years, companies, divisions, roles };
+                });
+                setSelectedCompanies((prev) => {
+                    if (!prev.length) return prev;
+                    const next = prev.filter((c) => companies.includes(c));
+                    if (!next.length || srFilterListsEqual(prev, next)) return prev;
+                    return next;
+                });
+                setSelectedDivisions((prev) => {
+                    if (!prev.length) return prev;
+                    const next = prev.filter((d) => divisions.includes(d));
+                    if (!next.length || srFilterListsEqual(prev, next)) return prev;
+                    return next;
+                });
             } catch (error) {
+                if (error?.name === 'AbortError') return;
                 console.error('Failed to fetch sales report filters', error);
             }
+        }, 300);
+
+        return () => {
+            window.clearTimeout(timer);
+            ac.abort();
         };
-        loadFilters();
-    }, [company, division, filterLocks.company, currentUser, storedLoginEmail]);
+    }, [
+        selectedCompanies,
+        selectedDivisions,
+        filterLocks.company,
+        currentUser,
+        storedLoginEmail,
+        accessResolved,
+    ]);
 
     useEffect(() => {
-        if (!userEmailNorm || prefsHydratedForEmail.current === userEmailNorm) return;
+        if (!userEmailNorm) {
+            setPrefsHydrated(true);
+            return;
+        }
+        if (prefsHydratedForEmail.current === userEmailNorm) {
+            setPrefsHydrated(true);
+            return;
+        }
         prefsHydratedForEmail.current = userEmailNorm;
 
         const savedYear = readSrPref(userEmailNorm, 'year', '');
         if (savedYear) setYear(savedYear);
 
         const savedCompany = readSrPref(userEmailNorm, 'company', '');
-        if (savedCompany && savedCompany !== 'All') setCompany(savedCompany);
+        setSelectedCompanies(parseSrFilterListPref(savedCompany));
 
         const savedDivision = readSrPref(userEmailNorm, 'division', '');
-        if (savedDivision && savedDivision !== 'All') setDivision(savedDivision);
+        setSelectedDivisions(parseSrFilterListPref(savedDivision));
 
         const savedRole = readSrPref(userEmailNorm, 'role', '');
-        if (savedRole) setRole(savedRole);
+        setSelectedRoles(parseSrFilterListPref(savedRole));
 
         const savedStatus = readSrPref(userEmailNorm, 'topJobStatus', '');
         if (savedStatus && TOP_JOB_STATUS_OPTIONS.some((x) => x.value === savedStatus)) {
@@ -807,16 +894,17 @@ const SalesReport = () => {
         }
 
         if (readSrPref(userEmailNorm, 'tableExpanded', '') === '1') setTableExpanded(true);
+        setPrefsHydrated(true);
     }, [userEmailNorm]);
 
     useEffect(() => {
         writeSrPref(userEmailNorm, 'year', year);
-        if (company) writeSrPref(userEmailNorm, 'company', company);
-        if (division) writeSrPref(userEmailNorm, 'division', division);
-        writeSrPref(userEmailNorm, 'role', role);
+        writeSrPref(userEmailNorm, 'company', serializeSrFilterListPref(selectedCompanies));
+        writeSrPref(userEmailNorm, 'division', serializeSrFilterListPref(selectedDivisions));
+        writeSrPref(userEmailNorm, 'role', serializeSrFilterListPref(selectedRoles));
         writeSrPref(userEmailNorm, 'topJobStatus', topJobStatus);
         writeSrPref(userEmailNorm, 'tableExpanded', tableExpanded ? '1' : '0');
-    }, [userEmailNorm, year, company, division, role, topJobStatus, tableExpanded]);
+    }, [userEmailNorm, year, selectedCompanies, selectedDivisions, selectedRoles, topJobStatus, tableExpanded]);
 
     useEffect(() => {
         const token = `${userEmailNorm}|${topJobStatus}`;
@@ -851,10 +939,13 @@ const SalesReport = () => {
 
     useEffect(() => {
         if (filterLocks.role || !filterOptions.roles.length) return;
-        if (role !== 'All' && !filterOptions.roles.includes(role)) {
-            setRole('All');
-        }
-    }, [filterOptions.roles, role, filterLocks.role]);
+        setSelectedRoles((prev) => {
+            if (!prev.length) return prev;
+            const next = prev.filter((r) => filterOptions.roles.includes(r));
+            if (srFilterListsEqual(prev, next)) return prev;
+            return next;
+        });
+    }, [filterOptions.roles, filterLocks.role]);
 
     const fetchSummary = useCallback(async (signal) => {
         setSummaryLoading(true);
@@ -862,9 +953,9 @@ const SalesReport = () => {
         try {
             const params = new URLSearchParams();
             params.append('year', year);
-            if (company) params.append('company', company);
-            if (division) params.append('division', division);
-            if (role && role !== 'All') params.append('role', role);
+            appendSrFilterParams(params, 'company', selectedCompanies);
+            appendSrFilterParams(params, 'division', selectedDivisions);
+            appendSrFilterParams(params, 'role', selectedRoles);
             const email = (currentUser?.EmailId || currentUser?.email || storedLoginEmail || '').trim();
             if (email) params.append('email', email);
 
@@ -901,7 +992,7 @@ const SalesReport = () => {
         } finally {
             if (!signal.aborted) setSummaryLoading(false);
         }
-    }, [year, company, division, role, filterLocks.company, currentUser, storedLoginEmail]);
+    }, [year, selectedCompanies, selectedDivisions, selectedRoles, filterLocks.company, currentUser, storedLoginEmail]);
 
     /** Heavy Pending/10% pipeline bucket — does not block chart loading. */
     const fetchPipelinePending = useCallback(async (signal) => {
@@ -909,9 +1000,9 @@ const SalesReport = () => {
         try {
             const params = new URLSearchParams();
             params.append('year', year);
-            if (company) params.append('company', company);
-            if (division) params.append('division', division);
-            if (role && role !== 'All') params.append('role', role);
+            appendSrFilterParams(params, 'company', selectedCompanies);
+            appendSrFilterParams(params, 'division', selectedDivisions);
+            appendSrFilterParams(params, 'role', selectedRoles);
             const email = (currentUser?.EmailId || currentUser?.email || storedLoginEmail || '').trim();
             if (email) params.append('email', email);
 
@@ -927,16 +1018,16 @@ const SalesReport = () => {
             if (e?.name === 'AbortError') return;
             console.error('Failed to fetch pipeline pending', e);
         }
-    }, [year, company, division, role, filterLocks.company, currentUser, storedLoginEmail]);
+    }, [year, selectedCompanies, selectedDivisions, selectedRoles, filterLocks.company, currentUser, storedLoginEmail]);
 
     const fetchTopJobBooked = useCallback(async (signal) => {
         setTopJobsLoading(true);
         try {
             const params = new URLSearchParams();
             params.append('year', year);
-            if (company) params.append('company', company);
-            if (division) params.append('division', division);
-            if (role && role !== 'All') params.append('role', role);
+            appendSrFilterParams(params, 'company', selectedCompanies);
+            appendSrFilterParams(params, 'division', selectedDivisions);
+            appendSrFilterParams(params, 'role', selectedRoles);
             params.append('topJobStatus', topJobStatus);
             const email = (currentUser?.EmailId || currentUser?.email || storedLoginEmail || '').trim();
             if (email) params.append('email', email);
@@ -955,84 +1046,114 @@ const SalesReport = () => {
         } finally {
             if (!signal.aborted) setTopJobsLoading(false);
         }
-    }, [year, company, division, role, topJobStatus, filterLocks.company, currentUser, storedLoginEmail]);
+    }, [year, selectedCompanies, selectedDivisions, selectedRoles, topJobStatus, filterLocks.company, currentUser, storedLoginEmail]);
+
+    const reportReady = year && prefsHydrated && accessResolved;
 
     useEffect(() => {
-        if (!year) return;
-        if (!filterLocks.company && !company) return;
+        if (!reportReady) return;
         const ac = new AbortController();
         fetchSummary(ac.signal);
         return () => ac.abort();
-    }, [fetchSummary]);
+    }, [fetchSummary, reportReady]);
 
     useEffect(() => {
-        if (!year) return;
-        if (!filterLocks.company && !company) return;
+        if (!reportReady) return;
         const ac = new AbortController();
         fetchPipelinePending(ac.signal);
         return () => ac.abort();
-    }, [fetchPipelinePending]);
+    }, [fetchPipelinePending, reportReady]);
 
     useEffect(() => {
-        if (!year) return;
-        if (!filterLocks.company && !company) return;
+        if (!reportReady) return;
         const ac = new AbortController();
         fetchTopJobBooked(ac.signal);
         return () => ac.abort();
-    }, [fetchTopJobBooked]);
+    }, [fetchTopJobBooked, reportReady]);
 
     useEffect(() => {
         const email = (currentUser?.EmailId || currentUser?.email || storedLoginEmail || '').trim();
-        if (email) {
-            fetch(`/api/sales-report/user-access-details?email=${encodeURIComponent(email)}`)
-                .then(res => {
-                    if (!res.ok) throw new Error('Network response was not ok');
-                    return res.json();
-                })
-                .then(data => {
-                    const shouldLockCompanyDivision = !!data.lockCompanyDivisionRole;
-                    const shouldLockRole =
-                        data.lockRole !== undefined ? !!data.lockRole : shouldLockCompanyDivision;
-                    setFilterLocks({
-                        company: shouldLockCompanyDivision,
-                        division: shouldLockCompanyDivision,
-                        role: shouldLockRole
-                    });
-                    if (shouldLockCompanyDivision) {
-                        if (data.company) setCompany(data.company);
-                        if (data.division) setDivision(data.division);
-                        if (data.role) setRole(data.role);
-                        setFilterOptions(prev => ({
-                            ...prev,
-                            companies: data.company ? [data.company] : prev.companies,
-                            divisions: data.division ? [data.division] : prev.divisions,
-                            roles: data.role ? [data.role] : prev.roles
-                        }));
-                    } else if (data.scopedCcFilters) {
-                        const savedRole = readSrPref(email, 'role', 'All');
-                        if (savedRole && savedRole !== 'All') {
-                            setRole(savedRole);
-                        }
-                    }
-                })
-                .catch(err => {
-                    console.error('Failed to fetch user access details', err);
-                    setFilterLocks({ company: false, division: false, role: false });
-                });
+        if (!email) {
+            setAccessResolved(true);
+            return;
         }
+        let cancelled = false;
+        fetch(`/api/sales-report/user-access-details?email=${encodeURIComponent(email)}`)
+            .then(res => {
+                if (!res.ok) throw new Error('Network response was not ok');
+                return res.json();
+            })
+            .then(data => {
+                if (cancelled) return;
+                const shouldLockCompanyDivision = !!data.lockCompanyDivisionRole;
+                const shouldLockRole =
+                    data.lockRole !== undefined ? !!data.lockRole : shouldLockCompanyDivision;
+                setFilterLocks({
+                    company: shouldLockCompanyDivision,
+                    division: shouldLockCompanyDivision,
+                    role: shouldLockRole
+                });
+                if (shouldLockCompanyDivision) {
+                    const assignedDivisions =
+                        Array.isArray(data.divisions) && data.divisions.length
+                            ? data.divisions.map((d) => String(d || '').trim()).filter(Boolean)
+                            : data.division
+                              ? [String(data.division).trim()].filter(Boolean)
+                              : [];
+                    if (data.company) setSelectedCompanies([data.company]);
+                    setSelectedDivisions((prev) => {
+                        const fromPrev = (Array.isArray(prev) ? prev : []).filter((d) =>
+                            assignedDivisions.includes(d)
+                        );
+                        if (fromPrev.length) return fromPrev;
+                        const saved = parseSrFilterListPref(readSrPref(email, 'division', '')).filter(
+                            (d) => assignedDivisions.includes(d)
+                        );
+                        // Empty = All assigned divisions (multi-select UX)
+                        if (saved.length === assignedDivisions.length) return [];
+                        return saved;
+                    });
+                    if (data.role) setSelectedRoles([data.role]);
+                    setFilterOptions((prev) => ({
+                        ...prev,
+                        companies: data.company ? [data.company] : prev.companies,
+                        divisions: assignedDivisions.length ? assignedDivisions : prev.divisions,
+                        roles: data.role ? [data.role] : prev.roles,
+                    }));
+                    // Company + SE locked; Division multi-select enabled when SE has 2+ assigned divisions
+                    setFilterLocks({
+                        company: true,
+                        division: assignedDivisions.length <= 1,
+                        role: true,
+                    });
+                } else if (data.scopedCcFilters) {
+                    const savedRole = readSrPref(email, 'role', 'All');
+                    setSelectedRoles(parseSrFilterListPref(savedRole));
+                }
+            })
+            .catch(err => {
+                if (cancelled) return;
+                console.error('Failed to fetch user access details', err);
+                setFilterLocks({ company: false, division: false, role: false });
+            })
+            .finally(() => {
+                if (!cancelled) setAccessResolved(true);
+            });
+        return () => {
+            cancelled = true;
+        };
     }, [currentUser, storedLoginEmail]);
 
-    const handleCompanyChange = (e) => {
-        const val = e.target.value;
-        setCompany(val);
-        setDivision('All');
-        setRole('All');
+    const handleCompaniesChange = (next) => {
+        setSelectedCompanies(next);
+        setSelectedDivisions([]);
+        setSelectedRoles([]);
     };
 
-    const handleDivisionChange = (e) => {
-        const val = e.target.value;
-        setDivision(val);
-        setRole('All');
+    const handleDivisionsChange = (next) => {
+        setSelectedDivisions(next);
+        // Keep locked SE name; clearing roles would flip the control to "All SEs".
+        if (!filterLocks.role) setSelectedRoles([]);
     };
 
     /** Full-precision string for hover/tooltips. */
@@ -1122,8 +1243,28 @@ const SalesReport = () => {
     /** Actual GP% in GM summary: mean of each won job's booked GrossMargin% when API provides it; else blended GP/booking. */
     const blendedActualGpPct = totalActual > 0 ? (gmTotalActual / totalActual) * 100 : 0;
     const apiAvgGp = reportData.avgWonBookedGpPct;
+    const quarterAvgGpValues = grossMarginData
+        .map((row) => row.actualAvgGpPct)
+        .filter((v) => v != null && Number.isFinite(Number(v)));
+    const meanQuarterAvgGp =
+        quarterAvgGpValues.length > 0
+            ? quarterAvgGpValues.reduce((acc, v) => acc + Number(v), 0) / quarterAvgGpValues.length
+            : null;
     const gmOverallActualGpPct =
-        apiAvgGp != null && Number.isFinite(Number(apiAvgGp)) ? Number(apiAvgGp) : blendedActualGpPct;
+        apiAvgGp != null && Number.isFinite(Number(apiAvgGp))
+            ? Number(apiAvgGp)
+            : meanQuarterAvgGp != null
+              ? meanQuarterAvgGp
+              : blendedActualGpPct;
+
+    const resolveQuarterActualGpPct = (row, qi) => {
+        if (row.actualAvgGpPct != null && Number.isFinite(Number(row.actualAvgGpPct))) {
+            return Math.round(Number(row.actualAvgGpPct));
+        }
+        const gpAmt = Number(row.actual) || 0;
+        const booking = Number(targetVsActualData[qi]?.actual) || 0;
+        return booking > 0 ? Math.round((gpAmt / booking) * 100) : 0;
+    };
 
     const wl = reportData.winLoss || defaultReport().winLoss;
     /** Winning/Losing % = Won/Lost value over Quoted value (floor — no round-up). */
@@ -1240,6 +1381,7 @@ const SalesReport = () => {
             return `${day}-${mon}-${yy}`;
         };
         if (key === 'requestNo') return String(row.RequestNo || row.EnquiryNo || '—');
+        if (key === 'division') return String(row.Division || row.OwnJob || '—');
         if (key === 'projectName') return String(row.ProjectName || '—');
         if (key === 'customerName') return String(row.CustomerName || '—');
         if (key === 'jobValue') return String(Number(row.JobValue) || 0);
@@ -1269,9 +1411,10 @@ const SalesReport = () => {
 
     const filterableTopJobColumns = useMemo(() => {
         const cols = [
-            { key: 'requestNo', label: 'Enquiry No.' },
+            { key: 'requestNo', label: 'Enq No.' },
             { key: 'projectName', label: 'Project Name' },
-            { key: 'customerName', label: 'Customer Name' },
+            { key: 'division', label: 'Division' },
+            { key: 'customerName', label: 'Quoted to - Customer Name' },
             { key: 'metric', label: topJobStatus === 'Quoted' ? 'Quote Ref' : 'Metric' },
             { key: 'clientName', label: 'Client Name' },
             { key: 'consultantName', label: 'Consultant Name' },
@@ -1734,7 +1877,12 @@ const SalesReport = () => {
                 topJobStatus,
                 tableConfig: topJobsTableConfig,
                 headingLabel: topJobsHeadingWord,
-                meta: { year, company, division, role }
+                meta: {
+                    year,
+                    company: selectedCompanies,
+                    division: selectedDivisions,
+                    role: selectedRoles,
+                }
             });
         } catch (err) {
             console.error('Jobs Excel export failed', err);
@@ -2125,51 +2273,42 @@ const SalesReport = () => {
                                 ))}
                             </select>
                         </div>
-                        <div className="sr-filter-field">
-                            <label className="sr-filter-label">Company Name</label>
-                            <select
-                                className="form-select form-select-sm"
-                                aria-label="Company Name"
-                                style={{ minWidth: 260 }}
-                                value={company}
-                                onChange={handleCompanyChange}
-                                disabled={filterLocks.company || filterOptions.companies.length === 0}
-                            >
-                                {filterOptions.companies.map((c) => (
-                                    <option key={c} value={c}>{c}</option>
-                                ))}
-                            </select>
-                        </div>
-                        <div className="sr-filter-field">
-                            <label className="sr-filter-label">Division Name</label>
-                            <select
-                                className="form-select form-select-sm"
-                                aria-label="Division Name"
-                                style={{ minWidth: 160 }}
-                                value={division || 'All'}
-                                onChange={handleDivisionChange}
-                                disabled={filterLocks.division || filterOptions.divisions.length === 0}
-                            >
-                                {!filterLocks.division && (
-                                    <option value="All">All</option>
-                                )}
-                                {filterOptions.divisions.map((d) => (
-                                    <option key={d} value={d}>{d}</option>
-                                ))}
-                            </select>
-                        </div>
-                        <div className="sr-filter-field">
-                            <label className="sr-filter-label">SE / QS / EE / TE / SM</label>
-                            <select className="form-select form-select-sm" aria-label="Role" style={{ minWidth: 180 }} value={role} onChange={(e) => setRole(e.target.value)} disabled={filterLocks.role}>
-                                <option value="All">All</option>
-                                {filterOptions.roles.map((r) => (
-                                    <option key={r} value={r}>{r}</option>
-                                ))}
-                            </select>
-                        </div>
+                        <SalesReportMultiSelect
+                            label="Company Name"
+                            ariaLabel="Company Name"
+                            minWidth={338}
+                            options={filterOptions.companies}
+                            value={selectedCompanies}
+                            onChange={handleCompaniesChange}
+                            disabled={filterLocks.company || filterOptions.companies.length === 0}
+                            allLabel="All companies"
+                        />
+                        <SalesReportMultiSelect
+                            label="Division Name"
+                            ariaLabel="Division Name"
+                            minWidth={200}
+                            options={filterOptions.divisions}
+                            value={selectedDivisions}
+                            onChange={handleDivisionsChange}
+                            disabled={filterLocks.division || filterOptions.divisions.length === 0}
+                            allLabel="All divisions"
+                        />
+                        <SalesReportMultiSelect
+                            label="SE / QS / EE / TE / SM"
+                            ariaLabel="Role"
+                            minWidth={200}
+                            options={filterOptions.roles}
+                            value={selectedRoles}
+                            onChange={setSelectedRoles}
+                            disabled={filterLocks.role}
+                            allLabel="All SEs"
+                        />
                     </div>
                     <div className="d-flex align-items-center gap-2 flex-wrap">
-                        <span className="text-muted small mb-0" style={{ fontSize: '0.7rem' }}>* All values in BHD</span>
+                        <MasterCurrencyBadge
+                            currencyCode={salesReportCurrencyCode}
+                            division={selectedDivisions?.[0] || ''}
+                        />
                         <div className="d-flex gap-2 no-print">
                             <button
                                 type="button"
@@ -2477,8 +2616,7 @@ const SalesReport = () => {
                                     <div className="sr-q-matrix__lab sr-q-matrix__lab--actual">Actual</div>
                                     {grossMarginData.map((row, qi) => {
                                         const a = Number(row.actual) || 0;
-                                        const quarterActualBooking = Number(targetVsActualData[qi]?.actual) || 0;
-                                        const pct = quarterActualBooking > 0 ? Math.round((a / quarterActualBooking) * 100) : 0;
+                                        const pct = resolveQuarterActualGpPct(row, qi);
                                         const vsep = qi < 3 ? ' sr-q-matrix__cell--vsep' : '';
                                         return (
                                             <div key={`gm-qa-${row.name}`} className={`sr-q-matrix__actual sr-quarter-gp-line text-center${vsep}`}>
@@ -2647,9 +2785,10 @@ const SalesReport = () => {
                                 <thead className="table-secondary">
                                     <tr>
                                         {renderPlainHeader('slNo', 'Sl.No.')}
-                                        {renderFilterableHeader('requestNo', 'Enquiry No.')}
+                                        {renderFilterableHeader('requestNo', 'Enq No.')}
                                         {renderFilterableHeader('projectName', 'Project Name')}
-                                        {renderFilterableHeader('customerName', 'Customer Name')}
+                                        {renderFilterableHeader('division', 'Division')}
+                                        {renderFilterableHeader('customerName', 'Quoted to - Customer Name')}
                                         {renderValueFilterHeader(topJobsTableConfig.valueHeader)}
                                         {renderPlainHeader(
                                             'chart',
@@ -2713,7 +2852,7 @@ const SalesReport = () => {
                                         <tr>
                                             <td
                                                 colSpan={
-                                                    9 +
+                                                    10 +
                                                     (topJobStatus === 'Quoted' ? 2 : 0) +
                                                     (topJobStatus === 'Won' || topJobStatus === 'Lost' || topJobStatus === 'Follow Up' ? 1 : 0) +
                                                     (topJobStatus === 'Follow Up' ? 1 : 0) +
@@ -2745,6 +2884,7 @@ const SalesReport = () => {
                                                       }`
                                                     : ''}
                                             </td>
+                                            <td style={getTopJobColStyle('division')} />
                                             <td className="text-end fw-semibold sr-detail-table__clip" style={getTopJobColStyle('customerName')}>
                                                 Total
                                             </td>
@@ -2862,6 +3002,13 @@ const SalesReport = () => {
                                                         </span>,
                                                         getTopJobColStyle('projectName')
                                                     )}
+                                                    <td
+                                                        className="sr-detail-table__clip"
+                                                        style={getTopJobColStyle('division')}
+                                                        title={String(row.Division || row.OwnJob || '').trim() || undefined}
+                                                    >
+                                                        {row.Division || row.OwnJob || '—'}
+                                                    </td>
                                                     <td
                                                         className="sr-detail-table__clip"
                                                         style={getTopJobColStyle('customerName')}

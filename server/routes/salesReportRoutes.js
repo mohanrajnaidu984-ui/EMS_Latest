@@ -8,6 +8,24 @@ const {
     userHasUnlockedReportFilters,
     userIsCcMailReportScoped,
 } = require('../lib/quotePricingAccess');
+const {
+    parseUserDepartments,
+    sqlMasterDepartmentContains,
+} = require('../lib/userDepartments');
+const {
+    parseReportFilterList,
+    hasReportFilterList,
+    bindReportFilterList,
+    sqlOrTrimMatch,
+    sqlOrUpperTrimMatch,
+    sqlMatchAllowedDivisions,
+    bindSalesReportAllowedDivisions,
+    resolveSalesReportFilterLists,
+    buildConcernedSeNameExistsClause,
+    buildSalesTargetsSeClause,
+    buildSalesTargetsDivisionClause,
+    buildMefCompanyExistsClause,
+} = require('../lib/salesReportFilterLists');
 
 const sanitizeInput = (input) => {
     if (input === undefined || input === null || input === 'null' || input === 'undefined') return null;
@@ -69,20 +87,29 @@ async function fetchCcMailScopedPairs(email) {
 function clampSalesReportQueryToCcPairs(req, pairs) {
     if (!pairs || pairs.length === 0) return;
     const allowedCompanies = [...new Set(pairs.map((p) => p.company).filter(Boolean))];
-    let qCompany = normalizeReportFilterValue(req.query.company);
-    if (allowedCompanies.length > 0 && (!qCompany || !allowedCompanies.includes(qCompany))) {
-        req.query.company = allowedCompanies[0];
-        qCompany = allowedCompanies[0];
+    let qCompanies = parseReportFilterList(req.query.company);
+    if (qCompanies && qCompanies.length) {
+        qCompanies = qCompanies.filter((c) => allowedCompanies.includes(c));
     }
-    const divisionSource = qCompany ? pairs.filter((p) => p.company === qCompany) : pairs;
+    if (!qCompanies || !qCompanies.length) {
+        qCompanies = allowedCompanies;
+    }
+    req.query.company = qCompanies.length === 1 ? qCompanies[0] : qCompanies;
+
+    const divisionSource = qCompanies.length
+        ? pairs.filter((p) => qCompanies.includes(p.company))
+        : pairs;
     const allowedDivisions = [...new Set(divisionSource.map((p) => p.division).filter(Boolean))];
     req.salesReportAllowedDivisions = allowedDivisions;
-    const qDivision = normalizeReportFilterValue(req.query.division);
-    /* Division=All → all CC-allowed divisions for this company (never other company departments). */
-    if (qDivision && allowedDivisions.length > 0 && !allowedDivisions.includes(qDivision)) {
-        req.query.division = allowedDivisions[0];
-    } else if (!qDivision) {
+
+    let qDivisions = parseReportFilterList(req.query.division);
+    if (qDivisions && qDivisions.length) {
+        qDivisions = qDivisions.filter((d) => allowedDivisions.includes(d));
+    }
+    if (!qDivisions || !qDivisions.length) {
         req.query.division = 'All';
+    } else {
+        req.query.division = qDivisions.length === 1 ? qDivisions[0] : qDivisions;
     }
 }
 
@@ -93,8 +120,8 @@ const SQL_EF_MEF_ITEM_JOIN =
  * When Division=All for a CC-scoped user, restrict to their CCMailIds departments for the company.
  * Returns null for Admin/Management (all company divisions), or a non-empty string[] of allowed names.
  */
-function resolveSalesReportDivisionAllowList(req, safeDivision) {
-    if (safeDivision && safeDivision !== 'All') return null;
+function resolveSalesReportDivisionAllowList(req, divisions) {
+    if (hasReportFilterList(divisions)) return null;
     if (req.salesReportCcScope !== true) return null;
     const list = Array.isArray(req.salesReportAllowedDivisions)
         ? req.salesReportAllowedDivisions.map((d) => String(d || '').trim()).filter(Boolean)
@@ -102,65 +129,47 @@ function resolveSalesReportDivisionAllowList(req, safeDivision) {
     return list.length ? list : null;
 }
 
-function bindSalesReportAllowedDivisions(request, allowList) {
-    if (!allowList || !allowList.length) return;
-    allowList.forEach((name, i) => {
-        bindInputIfMissing(request, `srDiv${i}`, sql.NVarChar, name);
-    });
-}
-
-/** SQL fragment: department/OwnJob expression must match one of @srDiv0..N */
-function sqlMatchAllowedDivisions(deptExpr, allowList) {
-    if (!allowList || !allowList.length) return '';
-    const parts = allowList.map(
-        (_, i) => `UPPER(LTRIM(RTRIM(${deptExpr}))) = UPPER(LTRIM(RTRIM(ISNULL(@srDiv${i}, N''))))`
-    );
-    return ` AND (${parts.join(' OR ')}) `;
-}
-
 /**
  * Hard company (+ optional division) scope on the same EnquiryFor / Master_EnquiryFor row.
  * Division=All + CC allow-list → only those departments. Division=All + unlocked → all company depts.
  */
-function sqlEnquiryForCompanyDivisionExists(safeCompany, safeDivision, allowList = null) {
-    if (!safeCompany || safeCompany === 'All') {
-        return ' AND 1=0 ';
+function sqlEnquiryForCompanyDivisionExists(request, companies, divisions, allowList = null) {
+    const companyCount = hasReportFilterList(companies)
+        ? bindReportFilterList(request, 'srCo', companies)
+        : 0;
+    const divisionCount = hasReportFilterList(divisions)
+        ? bindReportFilterList(request, 'srDept', divisions)
+        : 0;
+
+    if (!companyCount && !divisionCount && !(allowList && allowList.length)) {
+        return '';
     }
-    if (safeDivision && safeDivision !== 'All') {
-        return ` AND EXISTS (
-                    SELECT 1
-                    FROM EnquiryFor ef
-                    JOIN Master_EnquiryFor mef ON ${SQL_EF_MEF_ITEM_JOIN}
-                    WHERE ef.RequestNo = E.RequestNo
-                      AND LTRIM(RTRIM(mef.CompanyName)) = @company
-                      AND LTRIM(RTRIM(mef.DepartmentName)) = @division
-                ) `;
+
+    let inner = '';
+    if (companyCount) {
+        inner += ` AND ${sqlOrTrimMatch('mef.CompanyName', 'srCo', companyCount)} `;
     }
-    if (allowList && allowList.length) {
-        return ` AND EXISTS (
-                    SELECT 1
-                    FROM EnquiryFor ef
-                    JOIN Master_EnquiryFor mef ON ${SQL_EF_MEF_ITEM_JOIN}
-                    WHERE ef.RequestNo = E.RequestNo
-                      AND LTRIM(RTRIM(mef.CompanyName)) = @company
-                      ${sqlMatchAllowedDivisions('mef.DepartmentName', allowList)}
-                ) `;
+    if (divisionCount) {
+        inner += ` AND ${sqlOrTrimMatch('mef.DepartmentName', 'srDept', divisionCount)} `;
+    } else if (allowList && allowList.length) {
+        inner += sqlMatchAllowedDivisions('mef.DepartmentName', allowList);
     }
+
     return ` AND EXISTS (
                     SELECT 1
                     FROM EnquiryFor ef
                     JOIN Master_EnquiryFor mef ON ${SQL_EF_MEF_ITEM_JOIN}
                     WHERE ef.RequestNo = E.RequestNo
-                      AND LTRIM(RTRIM(mef.CompanyName)) = @company
+                      ${inner}
                 ) `;
 }
 
-function bindSalesReportCompanyDivision(request, safeCompany, safeDivision, allowList = null) {
-    if (safeCompany && safeCompany !== 'All') {
-        bindInputIfMissing(request, 'company', sql.NVarChar, safeCompany);
+function bindSalesReportCompanyDivision(request, companies, divisions, allowList = null) {
+    if (hasReportFilterList(companies)) {
+        bindReportFilterList(request, 'srCo', companies);
     }
-    if (safeDivision && safeDivision !== 'All') {
-        bindInputIfMissing(request, 'division', sql.NVarChar, safeDivision);
+    if (hasReportFilterList(divisions)) {
+        bindReportFilterList(request, 'srDept', divisions);
     }
     bindSalesReportAllowedDivisions(request, allowList);
 }
@@ -207,18 +216,39 @@ async function applySalesReportEmailScope(req) {
     req.salesReportNonCcScope = true;
     req.salesReportUserEmail = email;
 
-    const dept = String(user.Department || '').trim();
+    const deptTokens = parseUserDepartments(user.Department || '');
     let company = '';
-    if (dept) {
-        const cReq = new sql.Request();
-        cReq.input('dept', sql.NVarChar, dept);
-        const cRes = await cReq.query(`
-            SELECT TOP 1 CompanyName FROM Master_EnquiryFor WHERE DepartmentName = @dept
-        `);
-        company = String(cRes.recordset?.[0]?.CompanyName || '').trim();
+    if (deptTokens.length) {
+        for (const dept of deptTokens) {
+            const cReq = new sql.Request();
+            cReq.input('dept', sql.NVarChar, dept);
+            const cRes = await cReq.query(`
+                SELECT TOP 1 CompanyName FROM Master_EnquiryFor WHERE DepartmentName = @dept
+            `);
+            company = String(cRes.recordset?.[0]?.CompanyName || '').trim();
+            if (company) break;
+        }
     }
     if (company) req.query.company = company;
-    if (dept) req.query.division = dept;
+    // Clamp division to assigned departments (multi-select). Empty/All → all assigned.
+    const deptNorm = (s) => String(s || '').trim().toLowerCase();
+    let qDivisions = parseReportFilterList(req.query.division);
+    if (qDivisions && qDivisions.length) {
+        qDivisions = [
+            ...new Set(
+                qDivisions
+                    .map((d) => deptTokens.find((t) => deptNorm(t) === deptNorm(d)) || '')
+                    .filter(Boolean)
+            ),
+        ];
+    }
+    if (!qDivisions || !qDivisions.length) {
+        if (deptTokens.length === 1) req.query.division = deptTokens[0];
+        else if (deptTokens.length > 1) req.query.division = deptTokens;
+        else delete req.query.division;
+    } else {
+        req.query.division = qDivisions.length === 1 ? qDivisions[0] : qDivisions;
+    }
     const fn = String(user.FullName || '').trim();
     if (!fn) {
         req.salesReportNonCcBlock = true;
@@ -306,7 +336,11 @@ function sqlCseOwnJobDivisionMatch(cseAlias, divisionParam = '@division') {
                 SELECT 1
                 FROM Master_ConcernedSE msD
                 WHERE UPPER(LTRIM(RTRIM(ISNULL(msD.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(${cseAlias}.SEName, N''))))
-                  AND UPPER(LTRIM(RTRIM(ISNULL(msD.Department, N'')))) = ${divNorm}
+                  AND (
+                    UPPER(LTRIM(RTRIM(ISNULL(msD.Department, N'')))) = ${divNorm}
+                    OR N',' + REPLACE(UPPER(LTRIM(RTRIM(ISNULL(msD.Department, N'')))), N' ', N'') + N','
+                       LIKE N'%,' + REPLACE(${divNorm}, N' ', N'') + N',%'
+                  )
             )
         )
     )`;
@@ -355,19 +389,18 @@ COALESCE(
  * When Probability row P is in scope: achievement counts only if selected SE is the
  * accountable assignee for that enquiry + job line (ConcernedSE.ownjob + leadjobcode).
  */
-function buildSalesReportProbAccountableSeClause(effectiveSe, seInputName = 'quotedSe') {
-    if (!effectiveSe) return '';
+function buildSalesReportProbAccountableSeClauseForName(seParamName) {
     const leadJobCodeExpr = sqlProbLeadJobCodeExpr();
     const probOwnJobNorm = `UPPER(LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))))`;
     const cseOwnJobNorm = sqlCseOwnJob('c0');
 
     return `
-      AND EXISTS (
+      EXISTS (
         SELECT 1
         FROM ConcernedSE c0
         WHERE c0.RequestNo = E.RequestNo
           AND ${sqlCseAccountabilityYes('c0')}
-          AND UPPER(LTRIM(RTRIM(ISNULL(c0.SEName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(@${seInputName}, N''))))
+          AND UPPER(LTRIM(RTRIM(ISNULL(c0.SEName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(@${seParamName}, N''))))
           AND (
             (
               ${probOwnJobNorm} <> N''
@@ -380,7 +413,11 @@ function buildSalesReportProbAccountableSeClause(effectiveSe, seInputName = 'quo
                 SELECT 1
                 FROM Master_ConcernedSE ms0
                 WHERE UPPER(LTRIM(RTRIM(ISNULL(ms0.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(c0.SEName, N''))))
-                  AND UPPER(LTRIM(RTRIM(ISNULL(ms0.Department, N'')))) = ${probOwnJobNorm}
+                  AND (
+                    UPPER(LTRIM(RTRIM(ISNULL(ms0.Department, N'')))) = ${probOwnJobNorm}
+                    OR N',' + REPLACE(UPPER(LTRIM(RTRIM(ISNULL(ms0.Department, N'')))), N' ', N'') + N','
+                       LIKE N'%,' + REPLACE(${probOwnJobNorm}, N' ', N'') + N',%'
+                  )
               )
             )
             OR (
@@ -403,12 +440,21 @@ function buildSalesReportProbAccountableSeClause(effectiveSe, seInputName = 'quo
       )`;
 }
 
+function buildSalesReportProbAccountableSeClause(request, effectiveSeList, seInputPrefix = 'srSeAcct') {
+    if (!hasReportFilterList(effectiveSeList)) return '';
+    const parts = effectiveSeList.map((name, i) => {
+        bindInputIfMissing(request, `${seInputPrefix}${i}`, sql.NVarChar, name);
+        return buildSalesReportProbAccountableSeClauseForName(`${seInputPrefix}${i}`);
+    });
+    return ` AND (${parts.join(' OR ')}) `;
+}
+
 function buildSalesReportEnquiryScopeClause({
+    request,
     nonCcBlock,
-    safeCompany,
-    safeDivision,
-    effectiveSe,
-    seInputName = 'quotedSe',
+    companies,
+    divisions,
+    effectiveSeList,
     accountableSeOnly = false,
     allowList = null,
 }) {
@@ -416,18 +462,12 @@ function buildSalesReportEnquiryScopeClause({
     if (nonCcBlock) {
         clause += ' AND 1=0 ';
     } else {
-        /* Company is mandatory — Division=All still stays inside allowed / company departments. */
-        clause += sqlEnquiryForCompanyDivisionExists(safeCompany, safeDivision, allowList);
-        if (effectiveSe) {
+        clause += sqlEnquiryForCompanyDivisionExists(request, companies, divisions, allowList);
+        if (hasReportFilterList(effectiveSeList)) {
             if (accountableSeOnly) {
-                clause += buildSalesReportProbAccountableSeClause(effectiveSe, seInputName);
+                clause += buildSalesReportProbAccountableSeClause(request, effectiveSeList);
             } else {
-                clause += ` AND EXISTS (
-                    SELECT 1
-                    FROM ConcernedSE cse
-                    WHERE cse.RequestNo = E.RequestNo
-                      AND LTRIM(RTRIM(ISNULL(cse.SEName, ''))) = LTRIM(RTRIM(ISNULL(@${seInputName}, '')))
-                ) `;
+                clause += buildConcernedSeNameExistsClause(request, effectiveSeList);
             }
         }
     }
@@ -438,31 +478,35 @@ function buildSalesReportEnquiryScopeClause({
  * Quote OwnJob must belong to the selected company (and division / CC allow-list when set).
  */
 function buildSalesReportQuoteOwnJobDivisionClause(
-    safeDivision,
+    request,
+    divisions,
     eqAlias = 'EQ',
-    safeCompany = null,
+    companies = null,
     allowList = null
 ) {
-    if (!safeCompany || safeCompany === 'All') {
-        return ' AND 1=0 ';
+    const companyCount = hasReportFilterList(companies)
+        ? bindReportFilterList(request, 'srCo', companies)
+        : 0;
+    if (!companyCount && !(allowList && allowList.length)) {
+        return '';
     }
     const ownExpr = `UPPER(LTRIM(RTRIM(ISNULL(${eqAlias}.OwnJob, N''))))`;
-    if (safeDivision && safeDivision !== 'All') {
-        return ` AND EXISTS (
-                    SELECT 1
-                    FROM Master_EnquiryFor mefOJ
-                    WHERE LTRIM(RTRIM(ISNULL(mefOJ.CompanyName, N''))) = LTRIM(RTRIM(ISNULL(@company, N'')))
-                      AND UPPER(LTRIM(RTRIM(ISNULL(mefOJ.DepartmentName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, N''))))
-                      AND ${ownExpr} = UPPER(LTRIM(RTRIM(mefOJ.DepartmentName)))
-                )`;
+    let divFilter = '';
+    if (hasReportFilterList(divisions)) {
+        const divCount = bindReportFilterList(request, 'srDept', divisions);
+        divFilter = ` AND ${sqlOrUpperTrimMatch('mefOJ.DepartmentName', 'srDept', divCount)} `;
+    } else if (allowList && allowList.length) {
+        divFilter = sqlMatchAllowedDivisions('mefOJ.DepartmentName', allowList);
     }
-    const allowFilter = sqlMatchAllowedDivisions('mefOJ.DepartmentName', allowList);
+    const companyMatch = companyCount
+        ? ` AND ${sqlOrTrimMatch('mefOJ.CompanyName', 'srCo', companyCount)} `
+        : '';
     return ` AND EXISTS (
                     SELECT 1
                     FROM Master_EnquiryFor mefOJ
-                    WHERE LTRIM(RTRIM(ISNULL(mefOJ.CompanyName, N''))) = LTRIM(RTRIM(ISNULL(@company, N'')))
-                      AND LTRIM(RTRIM(ISNULL(mefOJ.DepartmentName, N''))) <> N''
-                      ${allowFilter}
+                    WHERE LTRIM(RTRIM(ISNULL(mefOJ.DepartmentName, N''))) <> N''
+                      ${companyMatch}
+                      ${divFilter}
                       AND ${ownExpr} = UPPER(LTRIM(RTRIM(mefOJ.DepartmentName)))
                 )`;
 }
@@ -472,18 +516,20 @@ function buildSalesReportQuoteOwnJobDivisionClause(
  * @param {string} [quoteSeAccountableClause] — optional OwnJob-accountable SE filter on EQ.
  */
 function buildQuotedMaxPerEnquiryKpiSql(
+    request,
     filterClause,
-    safeDivision,
+    divisions,
     safeQuarter,
-    safeCompany = null,
+    companies = null,
     allowList = null,
     quoteSeAccountableClause = ''
 ) {
     const quotedEqOwnJobExpr = `LTRIM(RTRIM(ISNULL(EQ.OwnJob, N'')))`;
     const quotedOwnJobDivisionClause = buildSalesReportQuoteOwnJobDivisionClause(
-        safeDivision,
+        request,
+        divisions,
         'EQ',
-        safeCompany,
+        companies,
         allowList
     );
     const yearDateExpr = `COALESCE(LQ.QuoteDate, E.EnquiryDate)`;
@@ -544,17 +590,16 @@ function buildQuotedMaxPerEnquiryKpiSql(
 /**
  * Accountable SE for quote rows (no Probability alias) — matches ConcernedSE to EnquiryQuotes.OwnJob.
  */
-function buildSalesReportQuoteAccountableSeClause(effectiveSe, seInputName = 'pendingSe', eqAlias = 'EQ') {
-    if (!effectiveSe) return '';
+function buildSalesReportQuoteAccountableSeClauseForName(seParamName, eqAlias = 'EQ') {
     const eqOwnJobNorm = `UPPER(LTRIM(RTRIM(ISNULL(${eqAlias}.OwnJob, N''))))`;
     const cseOwnJobNorm = sqlCseOwnJob('c0');
     return `
-      AND EXISTS (
+      EXISTS (
         SELECT 1
         FROM ConcernedSE c0
         WHERE c0.RequestNo = E.RequestNo
           AND ${sqlCseAccountabilityYes('c0')}
-          AND UPPER(LTRIM(RTRIM(ISNULL(c0.SEName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(@${seInputName}, N''))))
+          AND UPPER(LTRIM(RTRIM(ISNULL(c0.SEName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(@${seParamName}, N''))))
           AND (
             (
               ${eqOwnJobNorm} <> N''
@@ -574,20 +619,29 @@ function buildSalesReportQuoteAccountableSeClause(effectiveSe, seInputName = 'pe
       )`;
 }
 
+function buildSalesReportQuoteAccountableSeClause(request, effectiveSeList, seInputPrefix = 'srSeQ', eqAlias = 'EQ') {
+    if (!hasReportFilterList(effectiveSeList)) return '';
+    const parts = effectiveSeList.map((name, i) => {
+        bindInputIfMissing(request, `${seInputPrefix}${i}`, sql.NVarChar, name);
+        return buildSalesReportQuoteAccountableSeClauseForName(`${seInputPrefix}${i}`, eqAlias);
+    });
+    return ` AND (${parts.join(' OR ')}) `;
+}
+
 /** Company + division only (no SE) — for pending outer query when P may be NULL. */
 function buildSalesReportPendingEnquiryScopeClause({
+    request,
     nonCcBlock,
-    safeCompany,
-    safeDivision,
-    seInputName = 'pendingSe',
+    companies,
+    divisions,
     allowList = null,
 }) {
     return buildSalesReportEnquiryScopeClause({
+        request,
         nonCcBlock,
-        safeCompany,
-        safeDivision,
-        effectiveSe: null,
-        seInputName,
+        companies,
+        divisions,
+        effectiveSeList: null,
         accountableSeOnly: false,
         allowList,
     });
@@ -598,19 +652,19 @@ function buildSalesReportPendingEnquiryScopeClause({
  * Used for Jobs (Pending) table and Sales Pipeline “Pending” (10% quoted) bucket.
  */
 function buildSalesReportPendingScopeClause({
+    request,
     nonCcBlock,
-    safeCompany,
-    safeDivision,
-    effectiveSe,
-    seInputName = 'pendingSe',
+    companies,
+    divisions,
+    effectiveSeList,
     allowList = null,
 }) {
     return buildSalesReportEnquiryScopeClause({
+        request,
         nonCcBlock,
-        safeCompany,
-        safeDivision,
-        effectiveSe,
-        seInputName,
+        companies,
+        divisions,
+        effectiveSeList,
         accountableSeOnly: true,
         allowList,
     });
@@ -618,23 +672,23 @@ function buildSalesReportPendingScopeClause({
 
 /** Pending scope for quoted rows without a Probability record (uses EnquiryQuotes.OwnJob). */
 function buildSalesReportPendingQuoteScopeClause({
+    request,
     nonCcBlock,
-    safeCompany,
-    safeDivision,
-    effectiveSe,
-    seInputName = 'pendingSe',
+    companies,
+    divisions,
+    effectiveSeList,
     allowList = null,
 }) {
     let clause = buildSalesReportPendingEnquiryScopeClause({
+        request,
         nonCcBlock,
-        safeCompany,
-        safeDivision,
-        seInputName,
+        companies,
+        divisions,
         allowList,
     });
     if (nonCcBlock) return clause;
-    if (effectiveSe) {
-        clause += buildSalesReportQuoteAccountableSeClause(effectiveSe, seInputName, 'EQ');
+    if (hasReportFilterList(effectiveSeList)) {
+        clause += buildSalesReportQuoteAccountableSeClause(request, effectiveSeList, 'srSePend', 'EQ');
     }
     return clause;
 }
@@ -789,19 +843,28 @@ FROM (
 }
 
 /** Probability job line must belong to selected company (and division / CC allow-list when set). */
-function buildSalesReportProbOwnJobClause(safeDivision, safeCompany = null, allowList = null) {
-    if (!safeCompany || safeCompany === 'All') {
-        return ' AND 1=0 ';
+function buildSalesReportProbOwnJobClause(request, divisions, companies = null, allowList = null) {
+    const companyCount = hasReportFilterList(companies)
+        ? bindReportFilterList(request, 'srCo', companies)
+        : 0;
+    if (!companyCount && !(allowList && allowList.length)) {
+        return '';
     }
-    const divFilter =
-        safeDivision && safeDivision !== 'All'
-            ? `AND UPPER(LTRIM(RTRIM(ISNULL(mefOJ.DepartmentName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, N''))))`
-            : sqlMatchAllowedDivisions('mefOJ.DepartmentName', allowList);
+    let divFilter = '';
+    if (hasReportFilterList(divisions)) {
+        const divCount = bindReportFilterList(request, 'srDept', divisions);
+        divFilter = ` AND ${sqlOrUpperTrimMatch('mefOJ.DepartmentName', 'srDept', divCount)} `;
+    } else if (allowList && allowList.length) {
+        divFilter = sqlMatchAllowedDivisions('mefOJ.DepartmentName', allowList);
+    }
+    const companyMatch = companyCount
+        ? ` AND ${sqlOrTrimMatch('mefOJ.CompanyName', 'srCo', companyCount)} `
+        : '';
     return ` AND EXISTS (
                 SELECT 1
                 FROM Master_EnquiryFor mefOJ
-                WHERE LTRIM(RTRIM(ISNULL(mefOJ.CompanyName, N''))) = LTRIM(RTRIM(ISNULL(@company, N'')))
-                  AND LTRIM(RTRIM(ISNULL(mefOJ.DepartmentName, N''))) <> N''
+                WHERE LTRIM(RTRIM(ISNULL(mefOJ.DepartmentName, N''))) <> N''
+                  ${companyMatch}
                   ${divFilter}
                   AND (
                     UPPER(LTRIM(RTRIM(ISNULL(P.OwnJobName, N'')))) = UPPER(LTRIM(RTRIM(mefOJ.DepartmentName)))
@@ -893,6 +956,13 @@ WITH LatestProb AS (
     ) __lp WHERE __lp.__rn = 1
 )
 `;
+
+/** Jobs table Division column — Probability OwnJobName, else QuoteOwnJob. */
+const SQL_TOPJOB_OWNJOB_DIVISION = `LTRIM(RTRIM(COALESCE(
+    NULLIF(LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))), N''),
+    NULLIF(LTRIM(RTRIM(ISNULL(P.QuoteOwnJob, N''))), N''),
+    N''
+)))`;
 
 /** Parse money stored as NVARCHAR on Probability (handles commas, BD prefix). */
 const SQL_PROB_JOB_VALUE = `
@@ -1048,11 +1118,49 @@ function getTopJobProbValueExpr(topJobStatus) {
 }
 
 /** Selected / logged-in SE for report widgets (ConcernedSE on enquiry — not quote/probability PreparedBy). */
-function getSalesReportAssignedSe(req, safeRole) {
-    return (
-        (req.salesReportForceSeName && String(req.salesReportForceSeName).trim()) ||
-        (safeRole && safeRole !== 'All' ? safeRole : null)
-    );
+function getSalesReportAssignedSeList(req, roles) {
+    const forced = req.salesReportForceSeName && String(req.salesReportForceSeName).trim();
+    if (forced) return [forced];
+    if (hasReportFilterList(roles)) return roles;
+    return null;
+}
+
+function sqlCseOwnJobDivisionMatchList(cseAlias, divisions, paramPrefix = 'srDept') {
+    if (!hasReportFilterList(divisions)) return '1=1';
+    const parts = divisions.map((_, i) => sqlCseOwnJobDivisionMatch(cseAlias, `@${paramPrefix}${i}`));
+    return `(${parts.join(' OR ')})`;
+}
+
+function hasSalesReportJobDivisionScope(divisions, allowList) {
+    return hasReportFilterList(divisions) || !!(allowList && allowList.length);
+}
+
+/** Limit EnquiryFor job rows to selected division(s) or CC-mail allow-list. */
+function buildSalesReportJobHierarchyDivisionWhere(request, divisions, allowList, efAlias = 'EF') {
+    const joinOn = `(${efAlias}.ItemName = mef.ItemName OR ${efAlias}.ItemName LIKE '%- ' + mef.ItemName OR ${efAlias}.ItemName LIKE '%-' + mef.ItemName)`;
+    if (hasReportFilterList(divisions)) {
+        const divCount = bindReportFilterList(request, 'srJobDiv', divisions);
+        return `
+            AND EXISTS (
+                SELECT 1
+                FROM Master_EnquiryFor mef
+                WHERE ${joinOn}
+                AND ${sqlOrTrimMatch('mef.DepartmentName', 'srJobDiv', divCount)}
+            )
+        `;
+    }
+    if (allowList && allowList.length) {
+        bindSalesReportAllowedDivisions(request, allowList);
+        return `
+            AND EXISTS (
+                SELECT 1
+                FROM Master_EnquiryFor mef
+                WHERE ${joinOn}
+                ${sqlMatchAllowedDivisions('mef.DepartmentName', allowList)}
+            )
+        `;
+    }
+    return '';
 }
 
 /**
@@ -1065,16 +1173,16 @@ function getSalesReportAssignedSe(req, safeRole) {
  * @param {boolean} [opts.omitSeForQuoteOwnJob] — Jobs (Quoted) / quoted KPI: SE is applied on quote OwnJob
  *   via buildSalesReportQuoteAccountableSeClause (not enquiry-wide ConcernedSE).
  */
-function appendSalesReportEnquiryFilters(req, request, safeCompany, safeDivision, safeRole, opts = {}) {
+function appendSalesReportEnquiryFilters(req, request, companies, divisions, roles, opts = {}) {
     let filterClause = '';
     const isNonCcSalesScope = req.salesReportNonCcScope === true;
     const srUserEmail = req.salesReportUserEmail ? String(req.salesReportUserEmail).trim() : '';
     const omitMasterDivision =
         opts && opts.omitEnquiryMasterDivisionForQuoteOwnJob === true;
     const omitSeForQuoteOwnJob = opts && opts.omitSeForQuoteOwnJob === true;
-    const allowList = resolveSalesReportDivisionAllowList(req, safeDivision);
+    const allowList = resolveSalesReportDivisionAllowList(req, divisions);
 
-    bindSalesReportCompanyDivision(request, safeCompany, safeDivision, allowList);
+    bindSalesReportCompanyDivision(request, companies, divisions, allowList);
 
     if (isNonCcSalesScope) {
         if (srUserEmail) {
@@ -1085,23 +1193,15 @@ function appendSalesReportEnquiryFilters(req, request, safeCompany, safeDivision
         } else if (!srUserEmail) {
             filterClause += ' AND 1=0 ';
         } else {
-            /* Always company (+ division when set) on the same EnquiryFor master row. */
             if (!omitMasterDivision) {
-                filterClause += sqlEnquiryForCompanyDivisionExists(safeCompany, safeDivision, allowList);
-            } else if (!safeCompany || safeCompany === 'All') {
+                filterClause += sqlEnquiryForCompanyDivisionExists(request, companies, divisions, allowList);
+            } else if (!hasReportFilterList(companies)) {
                 filterClause += ' AND 1=0 ';
             } else {
-                /* Quoted path: company on EnquiryFor; OwnJob clause applies division / CC allow-list. */
-                filterClause += ` AND EXISTS (
-                    SELECT 1
-                    FROM EnquiryFor ef
-                    JOIN Master_EnquiryFor mef ON ${SQL_EF_MEF_ITEM_JOIN}
-                    WHERE ef.RequestNo = E.RequestNo
-                      AND LTRIM(RTRIM(mef.CompanyName)) = @company
-                ) `;
+                filterClause += sqlEnquiryForCompanyDivisionExists(request, companies, null, null);
             }
-            if (safeDivision && safeDivision !== 'All' && !omitMasterDivision) {
-                /* Extra: latest Probability OwnJob must match selected division (legacy non-CC grain). */
+            if (hasReportFilterList(divisions) && !omitMasterDivision) {
+                const divCount = bindReportFilterList(request, 'srProbDiv', divisions);
                 filterClause += `
                   AND EXISTS (
                     SELECT 1
@@ -1112,7 +1212,7 @@ function appendSalesReportEnquiryFilters(req, request, safeCompany, safeDivision
                     ) lp
                     WHERE lp.__rn = 1
                       AND lp.RequestNo = E.RequestNo
-                      AND UPPER(LTRIM(RTRIM(ISNULL(lp.OwnJobName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
+                      AND ${sqlOrUpperTrimMatch('ISNULL(lp.OwnJobName, N\'\')', 'srProbDiv', divCount)}
                   ) `;
             }
             if (!omitSeForQuoteOwnJob) {
@@ -1125,52 +1225,30 @@ function appendSalesReportEnquiryFilters(req, request, safeCompany, safeDivision
                       AND LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(m.EmailId, N''), N'@almcg.com', N'@almoayyedcg.com'), N'@ALMCG.COM', N'@almoayyedcg.com'))))
                        = LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(@srUserEmail, N''), N'@almcg.com', N'@almoayyedcg.com'), N'@ALMCG.COM', N'@almoayyedcg.com'))))
                   ) `;
-                if (safeRole && safeRole !== 'All') {
-                    bindInputIfMissing(request, 'seRole', sql.NVarChar, safeRole);
-                    filterClause += `
-                  AND EXISTS (
-                    SELECT 1
-                    FROM ConcernedSE cse
-                    WHERE cse.RequestNo = E.RequestNo
-                      AND LTRIM(RTRIM(ISNULL(cse.SEName, N''))) = LTRIM(RTRIM(ISNULL(@seRole, N'')))
-                  ) `;
-                }
+                filterClause += buildConcernedSeNameExistsClause(request, roles, 'srSeRole');
             }
         }
     } else {
-        /* CC / Admin / Management: company mandatory; CC Division=All → allow-list only. */
         if (omitMasterDivision) {
-            if (!safeCompany || safeCompany === 'All') {
+            if (!hasReportFilterList(companies) && !(allowList && allowList.length)) {
                 filterClause += ' AND 1=0 ';
             } else {
-                filterClause += ` AND EXISTS (
-                    SELECT 1
-                    FROM EnquiryFor ef
-                    JOIN Master_EnquiryFor mef ON ${SQL_EF_MEF_ITEM_JOIN}
-                    WHERE ef.RequestNo = E.RequestNo
-                      AND LTRIM(RTRIM(mef.CompanyName)) = @company
-                ) `;
+                filterClause += sqlEnquiryForCompanyDivisionExists(request, companies, null, null);
             }
         } else {
-            filterClause += sqlEnquiryForCompanyDivisionExists(safeCompany, safeDivision, allowList);
+            filterClause += sqlEnquiryForCompanyDivisionExists(request, companies, divisions, allowList);
         }
 
         if (req.salesReportNonCcBlock === true) {
             filterClause += ' AND 1=0 ';
         } else if (!omitSeForQuoteOwnJob) {
             if (req.salesReportForceSeName) {
-                const seF = String(req.salesReportForceSeName).trim();
-                bindInputIfMissing(request, 'se', sql.NVarChar, seF);
+                bindInputIfMissing(request, 'se', sql.NVarChar, String(req.salesReportForceSeName).trim());
                 filterClause += ` AND EXISTS (SELECT 1 FROM ConcernedSE cse WHERE cse.RequestNo = E.RequestNo AND LTRIM(RTRIM(cse.SEName)) = LTRIM(RTRIM(@se))) `;
-            } else if (safeRole && safeRole !== 'All') {
-                bindInputIfMissing(request, 'se', sql.NVarChar, safeRole);
-                filterClause += ` AND EXISTS (SELECT 1 FROM ConcernedSE cse WHERE cse.RequestNo = E.RequestNo AND LTRIM(RTRIM(cse.SEName)) = LTRIM(RTRIM(@se))) `;
+            } else {
+                filterClause += buildConcernedSeNameExistsClause(request, roles, 'srSe');
             }
         }
-    }
-
-    if (omitMasterDivision && safeDivision && safeDivision !== 'All') {
-        bindInputIfMissing(request, 'division', sql.NVarChar, safeDivision);
     }
 
     return filterClause;
@@ -1181,14 +1259,12 @@ function appendSalesReportEnquiryFilters(req, request, safeCompany, safeDivision
  * @returns {object|null}
  */
 function buildSalesReportItemValueContext(req, enquiryScopeOpts) {
-    const { year, company, division, role } = req.query;
+    const { year } = req.query;
     if (!year) return null;
 
+    const { companies, divisions, roles } = resolveSalesReportFilterLists(req);
     const request = new sql.Request();
     const safeYear = year ? parseInt(year, 10) : null;
-    const safeCompany = normalizeReportFilterValue(company);
-    const safeDivision = normalizeReportFilterValue(division);
-    const safeRole = normalizeReportFilterValue(role);
     const safeQuarter = (req.query.quarter && req.query.quarter !== 'All') ? String(req.query.quarter).trim() : null;
     let quarterNum = null;
     if (safeQuarter) quarterNum = parseInt(safeQuarter.replace('Q', ''), 10);
@@ -1202,20 +1278,16 @@ function buildSalesReportItemValueContext(req, enquiryScopeOpts) {
     const filterClause = appendSalesReportEnquiryFilters(
         req,
         request,
-        safeCompany,
-        safeDivision,
-        safeRole,
+        companies,
+        divisions,
+        roles,
         enquiryScopeOpts || {}
     );
-    const allowList = resolveSalesReportDivisionAllowList(req, safeDivision);
+    const allowList = resolveSalesReportDivisionAllowList(req, divisions);
 
-    const effectiveSeForTarget =
-        (req.salesReportForceSeName && String(req.salesReportForceSeName).trim())
-        || safeRole;
-
-    /** SalesTargets filters use @se — bind for CC and non-CC when an SE is selected. */
-    if (effectiveSeForTarget) {
-        bindInputIfMissing(request, 'se', sql.NVarChar, effectiveSeForTarget);
+    const effectiveSeForTargetList = getSalesReportAssignedSeList(req, roles);
+    if (hasReportFilterList(effectiveSeForTargetList)) {
+        bindReportFilterList(request, 'srSe', effectiveSeForTargetList);
     }
 
     const selectedCustomerApply = `
@@ -1230,7 +1302,8 @@ function buildSalesReportItemValueContext(req, enquiryScopeOpts) {
         `;
 
     let itemValueSQL = '';
-    if (safeDivision && safeDivision !== 'All') {
+    if (hasReportFilterList(divisions)) {
+        const divCount = bindReportFilterList(request, 'srIvDiv', divisions);
         itemValueSQL = `
                  OUTER APPLY (
                      SELECT SUM(ISNULL(EPV.Price, 0)) as Total
@@ -1244,10 +1317,13 @@ function buildSalesReportItemValueContext(req, enquiryScopeOpts) {
                            AND (EPV.CustomerName = SC.ToName OR SC.ToName IS NULL)
                      ) EPV
                      WHERE EF_Inner.RequestNo = E.RequestNo
-                       AND LTRIM(RTRIM(MEF_Inner.DepartmentName)) = @division
+                       AND ${sqlOrTrimMatch('MEF_Inner.DepartmentName', 'srIvDiv', divCount)}
                  ) ItemValue
              `;
     } else if (allowList && allowList.length) {
+        const companyClause = hasReportFilterList(companies)
+            ? ` AND ${sqlOrTrimMatch('MEF_Inner.CompanyName', 'srCo', bindReportFilterList(request, 'srCo', companies))} `
+            : '';
         itemValueSQL = `
                  OUTER APPLY (
                      SELECT SUM(ISNULL(EPV.Price, 0)) as Total
@@ -1261,7 +1337,7 @@ function buildSalesReportItemValueContext(req, enquiryScopeOpts) {
                            AND (EPV.CustomerName = SC.ToName OR SC.ToName IS NULL)
                      ) EPV
                      WHERE EF_Inner.RequestNo = E.RequestNo
-                       AND LTRIM(RTRIM(MEF_Inner.CompanyName)) = @company
+                       ${companyClause}
                        ${sqlMatchAllowedDivisions('MEF_Inner.DepartmentName', allowList)}
                  ) ItemValue
              `;
@@ -1291,15 +1367,15 @@ function buildSalesReportItemValueContext(req, enquiryScopeOpts) {
         itemValueApply,
         itemValueCol,
         safeYear,
-        safeCompany,
-        safeDivision,
-        safeRole,
+        companies,
+        divisions,
+        roles,
         allowList,
-        effectiveSeForTarget,
+        effectiveSeForTargetList,
         nonCcBlock: req.salesReportNonCcBlock === true,
         salesReportNonCcScope: req.salesReportNonCcScope === true,
         safeQuarter,
-        quarterNum
+        quarterNum,
     };
 }
 
@@ -1349,7 +1425,8 @@ router.get('/user-access-details', async (req, res) => {
         }
 
         const user = userRes.recordset[0];
-        const userDepartment = (user.Department || '').trim();
+        const userDepartmentCsv = (user.Department || '').trim();
+        const userDeptTokens = parseUserDepartments(userDepartmentCsv);
         const userFullName = (user.FullName || '').trim();
 
         const ccReq = new sql.Request();
@@ -1366,10 +1443,10 @@ router.get('/user-access-details', async (req, res) => {
         const scopedCcFilters = userIsCcMailReportScoped(accessCtx) || (isCcMailMember && !filtersUnlocked);
 
         let company = '';
-        let departmentName = userDepartment;
-        if (userDepartment) {
+        let departmentName = userDeptTokens[0] || '';
+        for (const dept of userDeptTokens) {
             const companyReq = new sql.Request();
-            companyReq.input('dept', sql.NVarChar, userDepartment);
+            companyReq.input('dept', sql.NVarChar, dept);
             const companyRes = await companyReq.query(`
                  SELECT TOP 1 CompanyName, DepartmentName
                  FROM Master_EnquiryFor
@@ -1377,7 +1454,8 @@ router.get('/user-access-details', async (req, res) => {
             `);
             if (companyRes.recordset.length > 0) {
                 company = (companyRes.recordset[0].CompanyName || '').trim();
-                departmentName = (companyRes.recordset[0].DepartmentName || userDepartment).trim();
+                departmentName = (companyRes.recordset[0].DepartmentName || dept).trim();
+                if (company) break;
             }
         }
 
@@ -1390,6 +1468,7 @@ router.get('/user-access-details', async (req, res) => {
             isCcMember: isCcMailMember,
             company: company || '',
             division: departmentName || '',
+            divisions: userDeptTokens,
             role: userFullName || ''
         });
 
@@ -1427,30 +1506,40 @@ router.get('/filters', async (req, res) => {
                 WHERE CompanyName IS NOT NULL AND CompanyName <> ''
                 ORDER BY CompanyName ASC
             `;
+            const qCompanies = parseReportFilterList(company);
+            const qDivisions = parseReportFilterList(division);
             let divisionSQL = `
                 SELECT DISTINCT DepartmentName 
                 FROM Master_EnquiryFor 
                 WHERE DepartmentName IS NOT NULL AND DepartmentName <> ''
             `;
-            if (company && company !== 'All') {
-                divisionSQL += ` AND CompanyName = @company `;
-                request.input('company', sql.NVarChar, company);
+            if (hasReportFilterList(qCompanies)) {
+                const coCount = bindReportFilterList(request, 'fCo', qCompanies);
+                divisionSQL += ` AND ${sqlOrTrimMatch('CompanyName', 'fCo', coCount)} `;
             }
             divisionSQL += ` ORDER BY DepartmentName ASC`;
 
-            // SE list: match company (when set) and division (when set) via Master_EnquiryFor → Department
             let roleSQL = `
                 SELECT DISTINCT SE.FullName 
                 FROM Master_ConcernedSE SE
-                INNER JOIN Master_EnquiryFor M ON LTRIM(RTRIM(M.DepartmentName)) = LTRIM(RTRIM(SE.Department))
+                INNER JOIN Master_EnquiryFor M ON (
+                    LTRIM(RTRIM(M.DepartmentName)) = LTRIM(RTRIM(SE.Department))
+                    OR N',' + REPLACE(LTRIM(RTRIM(ISNULL(SE.Department, N''))), N' ', N'') + N','
+                       LIKE N'%,' + REPLACE(LTRIM(RTRIM(ISNULL(M.DepartmentName, N''))), N' ', N'') + N',%'
+                )
                 WHERE SE.FullName IS NOT NULL AND SE.FullName <> ''
             `;
-            if (company && company !== 'All') {
-                roleSQL += ` AND M.CompanyName = @company `;
+            if (hasReportFilterList(qCompanies)) {
+                const coCount = bindReportFilterList(request, 'fCo', qCompanies);
+                roleSQL += ` AND ${sqlOrTrimMatch('M.CompanyName', 'fCo', coCount)} `;
             }
-            if (division && division !== 'All') {
-                roleSQL += ` AND SE.Department = @division `;
-                request.input('division', sql.NVarChar, division);
+            if (hasReportFilterList(qDivisions)) {
+                const divCount = bindReportFilterList(request, 'fDiv', qDivisions);
+                const divParts = [];
+                for (let i = 0; i < divCount; i++) {
+                    divParts.push(sqlMasterDepartmentContains('SE.Department', `fDiv${i}`));
+                }
+                roleSQL += ` AND (${divParts.join(' OR ')}) `;
             }
             roleSQL += ` ORDER BY SE.FullName ASC`;
 
@@ -1476,7 +1565,7 @@ router.get('/filters', async (req, res) => {
             WHERE LOWER(LTRIM(RTRIM(ISNULL(EmailId, '')))) = LOWER(LTRIM(RTRIM(@email)))
         `);
         const user = (userRes.recordset || [])[0] || { FullName: '', Department: '' };
-        const userDepartment = (user.Department || '').trim();
+        const userDeptTokens = parseUserDepartments(user.Department || '');
         const userFullName = (user.FullName || '').trim();
 
         const scopedPairs = await fetchCcMailScopedPairs(scopedEmail);
@@ -1484,44 +1573,41 @@ router.get('/filters', async (req, res) => {
 
         if (!isCcMember) {
             let lockedCompany = '';
-            if (userDepartment) {
+            for (const dept of userDeptTokens) {
                 const cReq = new sql.Request();
-                cReq.input('dept', sql.NVarChar, userDepartment);
+                cReq.input('dept', sql.NVarChar, dept);
                 const cRes = await cReq.query(`
                     SELECT TOP 1 CompanyName
                     FROM Master_EnquiryFor
                     WHERE DepartmentName = @dept
                 `);
                 lockedCompany = ((cRes.recordset || [])[0]?.CompanyName || '').trim();
+                if (lockedCompany) break;
             }
             return res.json({
                 years: years.recordset.map(r => r.Year),
                 companies: lockedCompany ? [lockedCompany] : [],
-                divisions: userDepartment ? [userDepartment] : [],
+                divisions: userDeptTokens,
                 roles: userFullName ? [userFullName] : []
             });
         }
 
-        const safeQCompany = normalizeReportFilterValue(company);
-        const safeQDivision = normalizeReportFilterValue(division);
+        const qCompanies = parseReportFilterList(company);
+        const qDivisions = parseReportFilterList(division);
 
-        // Always return every company the user can access (CC list from master).
         const companies = [...new Set(scopedPairs.map(r => r.company).filter(Boolean))].sort();
 
-        // Divisions: only those for the selected company; if no company, all CC-scoped divisions.
-        const divisionSource = safeQCompany
-            ? scopedPairs.filter((p) => p.company === safeQCompany)
+        const divisionSource = hasReportFilterList(qCompanies)
+            ? scopedPairs.filter((p) => qCompanies.includes(p.company))
             : scopedPairs;
         const divisions = [...new Set(divisionSource.map((r) => r.division).filter(Boolean))].sort();
 
-        // SE names: Master_ConcernedSE in the relevant department(s) for the selected company/division.
         let departmentsForRoles = [];
-        if (safeQDivision) {
-            const okPair = scopedPairs.some(
-                (p) => p.division === safeQDivision && (!safeQCompany || p.company === safeQCompany)
+        if (hasReportFilterList(qDivisions)) {
+            departmentsForRoles = qDivisions.filter((d) =>
+                divisionSource.some((p) => p.division === d)
             );
-            if (okPair) departmentsForRoles = [safeQDivision];
-        } else if (safeQCompany) {
+        } else if (hasReportFilterList(qCompanies)) {
             departmentsForRoles = [...new Set(divisionSource.map((r) => r.division).filter(Boolean))];
         } else {
             departmentsForRoles = [...new Set(scopedPairs.map((r) => r.division).filter(Boolean))];
@@ -1572,11 +1658,11 @@ router.get('/summary', async (req, res) => {
             itemValueApply,
             itemValueCol,
             safeYear,
-            safeCompany,
-            safeDivision,
-            safeRole,
+            companies,
+            divisions,
+            roles,
             allowList,
-            effectiveSeForTarget,
+            effectiveSeForTargetList,
             nonCcBlock,
             safeQuarter,
             quarterNum
@@ -1584,43 +1670,40 @@ router.get('/summary', async (req, res) => {
 
         const probDateExpr =
             'COALESCE(P.BookedDate, P.ExpectedDate, P.UpdatedDateTime, E.EnquiryDate)';
-        const effectiveQuotedSe = getSalesReportAssignedSe(req, safeRole);
-        if (safeCompany && safeCompany !== 'All') {
-            bindInputIfMissing(request, 'company', sql.NVarChar, safeCompany);
-        }
-        if (safeDivision && safeDivision !== 'All') {
-            bindInputIfMissing(request, 'division', sql.NVarChar, safeDivision);
-        }
-        bindSalesReportAllowedDivisions(request, allowList);
-        if (effectiveQuotedSe) {
-            request.input('quotedSe', sql.NVarChar, effectiveQuotedSe);
-        }
+        const effectiveQuotedSeList = getSalesReportAssignedSeList(req, roles);
+        bindSalesReportCompanyDivision(request, companies, divisions, allowList);
         const quotedFilterClause = buildSalesReportEnquiryScopeClause({
+            request,
             nonCcBlock,
-            safeCompany,
-            safeDivision,
-            effectiveSe: effectiveQuotedSe,
-            seInputName: 'quotedSe',
+            companies,
+            divisions,
+            effectiveSeList: effectiveQuotedSeList,
+            accountableSeOnly: false,
             allowList,
         });
         /** Won / Lost / Follow-up KPIs: only the accountable SE per enquiry + ownjob (+ leadjob) counts. */
         const quotedAchievementScopeClause = buildSalesReportEnquiryScopeClause({
+            request,
             nonCcBlock,
-            safeCompany,
-            safeDivision,
-            effectiveSe: effectiveQuotedSe,
-            seInputName: 'quotedSe',
+            companies,
+            divisions,
+            effectiveSeList: effectiveQuotedSeList,
             accountableSeOnly: true,
             allowList,
         });
 
         /** SE scope on enquiry (ConcernedSE) is in quotedFilterClause — not Probability.PreparedBy. */
         const wonPreparedByClause = '';
-        const probDivisionScopeClause = buildSalesReportProbOwnJobClause(safeDivision, safeCompany, allowList);
-        const probPartitionByExpr = effectiveQuotedSe
+        const probDivisionScopeClause = buildSalesReportProbOwnJobClause(
+            request,
+            divisions,
+            companies,
+            allowList
+        );
+        const probPartitionByExpr = hasReportFilterList(effectiveQuotedSeList)
             ? `P.RequestNo, LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))), LTRIM(RTRIM(ISNULL(P.LeadJobName, N'')))`
             : `P.RequestNo, LTRIM(RTRIM(ISNULL(P.PreparedBy, '')))`;
-        const quotePartitionByExpr = effectiveQuotedSe
+        const quotePartitionByExpr = hasReportFilterList(effectiveQuotedSeList)
             ? `EQ.RequestNo`
             : `EQ.RequestNo, LTRIM(RTRIM(ISNULL(EQ.PreparedBy, '')))`;
 
@@ -1646,40 +1729,47 @@ WITH LatestProbByUpdate AS (
         let targetFilter = ' WHERE FinancialYear = @year ';
         if (nonCcBlock) {
             targetFilter += ' AND 1=0 ';
-        } else if (!safeCompany) {
-            targetFilter += ' AND 1=0 ';
         } else {
-            targetFilter += ` AND EXISTS (
+            if (hasReportFilterList(companies)) {
+                bindReportFilterList(request, 'srTgtCo', companies);
+                targetFilter += ` AND EXISTS (
                     SELECT 1
                     FROM Master_EnquiryFor mefT
-                    WHERE LTRIM(RTRIM(ISNULL(mefT.CompanyName, ''))) = LTRIM(RTRIM(ISNULL(@company, '')))
+                    WHERE ${sqlOrTrimMatch('mefT.CompanyName', 'srTgtCo', companies.length)}
                       AND (
                         LTRIM(RTRIM(ISNULL(mefT.DepartmentName, ''))) = LTRIM(RTRIM(ISNULL(SalesTargets.Division, '')))
                         OR LTRIM(RTRIM(ISNULL(mefT.ItemName, ''))) = LTRIM(RTRIM(ISNULL(SalesTargets.Division, '')))
                       )
                 ) `;
-            if (safeDivision) targetFilter += ' AND Division = @division ';
-            else if (allowList && allowList.length) {
+            }
+            if (hasReportFilterList(divisions)) {
+                bindReportFilterList(request, 'srTgtDiv', divisions);
+                targetFilter += buildSalesTargetsDivisionClause(divisions, 'srTgtDiv');
+            } else if (allowList && allowList.length) {
                 targetFilter += sqlMatchAllowedDivisions('SalesTargets.Division', allowList);
             }
-            if (effectiveSeForTarget) targetFilter += ' AND SalesEngineer = @se ';
+            if (hasReportFilterList(effectiveSeForTargetList)) {
+                bindReportFilterList(request, 'srTgtSe', effectiveSeForTargetList);
+                targetFilter += buildSalesTargetsSeClause(effectiveSeForTargetList, 'srTgtSe');
+            }
         }
         if (safeQuarter) targetFilter += ' AND Quarter = @quarterStrs ';
 
         const quotedTableFilterClause = appendSalesReportEnquiryFilters(
             req,
             request,
-            safeCompany,
-            safeDivision,
-            safeRole,
+            companies,
+            divisions,
+            roles,
             { omitEnquiryMasterDivisionForQuoteOwnJob: true, omitSeForQuoteOwnJob: true }
         );
-        const quotedSeAccountableClause = effectiveQuotedSe
-            ? buildSalesReportQuoteAccountableSeClause(effectiveQuotedSe, 'quotedSe', 'EQ')
+        const quotedSeAccountableClause = hasReportFilterList(effectiveQuotedSeList)
+            ? buildSalesReportQuoteAccountableSeClause(request, effectiveQuotedSeList, 'srSeQ', 'EQ')
             : '';
         const funnelProbScopeClause = buildSalesReportProbOwnJobClause(
-            safeDivision,
-            safeCompany,
+            request,
+            divisions,
+            companies,
             allowList
         );
         const funnelLatestProbCte = buildSalesReportFunnelLatestProbCte(
@@ -1747,7 +1837,7 @@ SELECT
     CAST(NULL AS DECIMAL(18, 2)),
     CAST(NULL AS INT),
     CAST(NULL AS DECIMAL(18, 2)),
-    CAST(NULL AS DECIMAL(18, 4)),
+    AVG(GrossMarginPct) AS AvgBookedGpPct,
     SUM(WonValue) AS TotalActual,
     SUM(WonValue * GrossMarginPct / 100.0) AS GmActual,
     CAST(NULL AS INT),
@@ -1766,7 +1856,7 @@ SELECT
     CAST(NULL AS DECIMAL(18, 4)),
     CAST(NULL AS DECIMAL(18, 2)),
     CAST(NULL AS DECIMAL(18, 2)),
-    COUNT(*) AS FuCnt,
+    CAST(NULL AS INT) AS FuCnt,
     SUM(ISNULL(ScopedValue, 0)) AS FuTotal
 FROM FuScoped;
         `;
@@ -1792,10 +1882,11 @@ FROM FuScoped;
             }),
             cloneMssqlRequest(request).query(
                 buildQuotedMaxPerEnquiryKpiSql(
+                    request,
                     quotedTableFilterClause,
-                    safeDivision,
+                    divisions,
                     safeQuarter,
-                    safeCompany,
+                    companies,
                     allowList,
                     quotedSeAccountableClause
                 )
@@ -1851,7 +1942,7 @@ FROM FuScoped;
             }
             const qRows = bundleRows.filter((r) => r.Section === 'QTR');
             actualRes = { recordset: qRows.map((r) => ({ Q: r.Q, TotalActual: r.TotalActual })) };
-            gmActualRes = { recordset: qRows.map((r) => ({ Q: r.Q, TotalActual: r.GmActual })) };
+            gmActualRes = { recordset: qRows.map((r) => ({ Q: r.Q, TotalActual: r.GmActual, AvgGpPct: r.AvgBookedGpPct })) };
             const fuRow = bundleRows.find((r) => r.Section === 'FOLLOWUP') || {};
             followUpKpiRes = {
                 recordset: [{ Cnt: Number(fuRow.FuCnt) || 0, TotalValue: Number(fuRow.FuTotal) || 0 }]
@@ -1887,10 +1978,10 @@ FROM FuScoped;
         });
 
         const gmQuarters = [
-            { name: 'Q1', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0 },
-            { name: 'Q2', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0 },
-            { name: 'Q3', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0 },
-            { name: 'Q4', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0 }
+            { name: 'Q1', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0, actualAvgGpPct: null },
+            { name: 'Q2', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0, actualAvgGpPct: null },
+            { name: 'Q3', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0, actualAvgGpPct: null },
+            { name: 'Q4', target: 0, actual: 0, targetSalesBase: 0, targetGpPct: 0, actualAvgGpPct: null }
         ];
         (gmTargetRes.recordset || []).forEach(r => {
             const idx = parseInt(String(r.Quarter || '').replace('Q', ''), 10) - 1;
@@ -1902,7 +1993,12 @@ FROM FuScoped;
             gmQuarters[idx].targetGpPct = salesBase > 0 ? (gpMoney / salesBase) * 100 : 0;
         });
         (gmActualRes.recordset || []).forEach(r => {
-            if (gmQuarters[r.Q - 1]) gmQuarters[r.Q - 1].actual = r.TotalActual;
+            const idx = r.Q - 1;
+            if (!gmQuarters[idx]) return;
+            gmQuarters[idx].actual = r.TotalActual;
+            if (r.AvgGpPct != null && Number.isFinite(Number(r.AvgGpPct))) {
+                gmQuarters[idx].actualAvgGpPct = Number(r.AvgGpPct);
+            }
         });
 
         const winLoss = {
@@ -1952,49 +2048,46 @@ router.get('/pipeline-pending', async (req, res) => {
 
         const {
             request,
-            safeCompany,
-            safeDivision,
-            safeRole,
+            companies,
+            divisions,
+            roles,
             allowList,
             nonCcBlock,
             safeQuarter,
         } = ctx;
-        const effectiveQuotedSe = getSalesReportAssignedSe(req, safeRole);
-        if (safeCompany && safeCompany !== 'All') {
-            bindInputIfMissing(request, 'company', sql.NVarChar, safeCompany);
-        }
-        if (safeDivision && safeDivision !== 'All') {
-            bindInputIfMissing(request, 'division', sql.NVarChar, safeDivision);
-        }
-        bindSalesReportAllowedDivisions(request, allowList);
-        if (effectiveQuotedSe) {
-            bindInputIfMissing(request, 'quotedSe', sql.NVarChar, effectiveQuotedSe);
-        }
+        const effectiveQuotedSeList = getSalesReportAssignedSeList(req, roles);
+        bindSalesReportCompanyDivision(request, companies, divisions, allowList);
 
         const pendingAggregateSql = buildSalesReportPendingQuotedAggregateSql({
             probDateExpr: SQL_PENDING_EVENT_DATE_EXPR,
             safeQuarter,
             pendingScopeClause: buildSalesReportPendingScopeClause({
+                request,
                 nonCcBlock,
-                safeCompany,
-                safeDivision,
-                effectiveSe: effectiveQuotedSe,
-                seInputName: 'quotedSe',
+                companies,
+                divisions,
+                effectiveSeList: effectiveQuotedSeList,
                 allowList,
             }),
             pendingQuoteScopeClause: buildSalesReportPendingQuoteScopeClause({
+                request,
                 nonCcBlock,
-                safeCompany,
-                safeDivision,
-                effectiveSe: effectiveQuotedSe,
-                seInputName: 'quotedSe',
+                companies,
+                divisions,
+                effectiveSeList: effectiveQuotedSeList,
                 allowList,
             }),
-            probOwnJobClause: buildSalesReportProbOwnJobClause(safeDivision, safeCompany, allowList),
+            probOwnJobClause: buildSalesReportProbOwnJobClause(
+                request,
+                divisions,
+                companies,
+                allowList
+            ),
             quoteOwnJobClause: buildSalesReportQuoteOwnJobDivisionClause(
-                safeDivision,
+                request,
+                divisions,
                 'EQ',
-                safeCompany,
+                companies,
                 allowList
             ),
         });
@@ -2028,25 +2121,14 @@ router.get('/top-job-booked', async (req, res) => {
         );
         if (!ctx) return res.status(400).json({ error: 'Year is required' });
 
-        const { request, filterClause, itemValueApply, itemValueCol, safeQuarter, safeCompany, safeDivision, safeRole, allowList, nonCcBlock } = ctx;
+        const { request, filterClause, itemValueApply, itemValueCol, safeQuarter, companies, divisions, roles, allowList, nonCcBlock } = ctx;
         const probDateExpr =
             'COALESCE(P.BookedDate, P.ExpectedDate, P.UpdatedDateTime, E.EnquiryDate)';
         const topJobProbWhere = getTopJobProbStatusWhere(req.query.topJobStatus, req);
         const topJobValueExpr = getTopJobProbValueExpr(req.query.topJobStatus);
         const topJobDateExpr = `COALESCE(P.BookedDate, P.ExpectedDate, P.UpdatedDateTime, ${SQL_LATEST_QUOTE_DATE_PER_ENQUIRY}, E.EnquiryDate)`;
-        const effectiveQuotedSe = getSalesReportAssignedSe(req, safeRole);
-        if (safeCompany && safeCompany !== 'All') {
-            bindInputIfMissing(request, 'company', sql.NVarChar, safeCompany);
-        }
-        if (safeDivision && safeDivision !== 'All') {
-            bindInputIfMissing(request, 'division', sql.NVarChar, safeDivision);
-        }
-        bindSalesReportAllowedDivisions(request, allowList);
-        if (effectiveQuotedSe) {
-            bindInputIfMissing(request, 'wonSe', sql.NVarChar, effectiveQuotedSe);
-            bindInputIfMissing(request, 'statusSe', sql.NVarChar, effectiveQuotedSe);
-            bindInputIfMissing(request, 'pendingSe', sql.NVarChar, effectiveQuotedSe);
-        }
+        const effectiveQuotedSeList = getSalesReportAssignedSeList(req, roles);
+        bindSalesReportCompanyDivision(request, companies, divisions, allowList);
         if (req.salesReportNonCcScope && req.salesReportUserEmail) {
             bindInputIfMissing(request, 'srUserEmail', sql.NVarChar, req.salesReportUserEmail);
         }
@@ -2061,35 +2143,36 @@ router.get('/top-job-booked', async (req, res) => {
                 wonTopJobFilterClause += ' AND 1=0 ';
             } else {
                 wonTopJobFilterClause += sqlEnquiryForCompanyDivisionExists(
-                    safeCompany,
-                    safeDivision,
+                    request,
+                    companies,
+                    divisions,
                     allowList
                 );
-                if (effectiveQuotedSe) {
-                    wonTopJobFilterClause += buildSalesReportProbAccountableSeClause(effectiveQuotedSe, 'wonSe');
+                if (hasReportFilterList(effectiveQuotedSeList)) {
+                    wonTopJobFilterClause += buildSalesReportProbAccountableSeClause(
+                        request,
+                        effectiveQuotedSeList
+                    );
                 }
             }
         }
         let statusTopJobFilterClause = '';
         if (isLostTopJob || isFollowUpTopJob) {
             statusTopJobFilterClause = buildSalesReportEnquiryScopeClause({
+                request,
                 nonCcBlock,
-                safeCompany,
-                safeDivision,
-                effectiveSe: effectiveQuotedSe,
-                seInputName: 'statusSe',
+                companies,
+                divisions,
+                effectiveSeList: effectiveQuotedSeList,
                 accountableSeOnly: true,
                 allowList,
             });
         }
-        /**
-         * Pending table + funnel “Pending” bucket: EnquiryFor company/division and accountable SE per job line.
-         * Never use generic `filterClause` here — it scopes by latest Probability per enquiry and drops job lines.
-         */
         const pendingQuoteOwnJobClause = buildSalesReportQuoteOwnJobDivisionClause(
-            safeDivision,
+            request,
+            divisions,
             'EQ',
-            safeCompany,
+            companies,
             allowList
         );
         let pendingTopJobProbScopeClause = '';
@@ -2097,22 +2180,22 @@ router.get('/top-job-booked', async (req, res) => {
         let pendingTopJobQuoteAccountableClause = '';
         if (isPendingTopJob) {
             pendingTopJobProbScopeClause = buildSalesReportPendingScopeClause({
+                request,
                 nonCcBlock,
-                safeCompany,
-                safeDivision,
-                effectiveSe: effectiveQuotedSe,
-                seInputName: 'pendingSe',
+                companies,
+                divisions,
+                effectiveSeList: effectiveQuotedSeList,
                 allowList,
             });
             pendingTopJobEnquiryScopeClause = buildSalesReportPendingEnquiryScopeClause({
+                request,
                 nonCcBlock,
-                safeCompany,
-                safeDivision,
-                seInputName: 'pendingSe',
+                companies,
+                divisions,
                 allowList,
             });
-            pendingTopJobQuoteAccountableClause = effectiveQuotedSe
-                ? buildSalesReportQuoteAccountableSeClause(effectiveQuotedSe, 'pendingSe', 'EQ')
+            pendingTopJobQuoteAccountableClause = hasReportFilterList(effectiveQuotedSeList)
+                ? buildSalesReportQuoteAccountableSeClause(request, effectiveQuotedSeList, 'srSePend', 'EQ')
                 : '';
         }
         const topJobScopeClause = isPendingTopJob ? pendingTopJobProbScopeClause : filterClause;
@@ -2129,17 +2212,15 @@ router.get('/top-job-booked', async (req, res) => {
                  */
                 const quotedEqOwnJobExpr = `LTRIM(RTRIM(ISNULL(EQ.OwnJob, N'')))`;
                 const quotedOwnJobDivisionClause = buildSalesReportQuoteOwnJobDivisionClause(
-                    safeDivision,
+                    request,
+                    divisions,
                     'EQ',
-                    safeCompany,
+                    companies,
                     allowList
                 );
-                const quotedSeAccountableClause = effectiveQuotedSe
-                    ? buildSalesReportQuoteAccountableSeClause(effectiveQuotedSe, 'quotedSe', 'EQ')
+                const quotedSeAccountableClause = hasReportFilterList(effectiveQuotedSeList)
+                    ? buildSalesReportQuoteAccountableSeClause(request, effectiveQuotedSeList, 'srSeQ', 'EQ')
                     : '';
-                if (effectiveQuotedSe) {
-                    bindInputIfMissing(request, 'quotedSe', sql.NVarChar, effectiveQuotedSe);
-                }
                 topJobBookedRes = await request.query(`
             WITH LatestQuoted AS (
                 SELECT * FROM (
@@ -2183,6 +2264,7 @@ router.get('/top-job-booked', async (req, res) => {
                 x.RequestNo,
                 x.ProjectName,
                 x.LeadJob,
+                x.Division,
                 x.JobValue,
                 x.WonGrossProfit,
                 x.Status,
@@ -2204,6 +2286,7 @@ router.get('/top-job-booked', async (req, res) => {
                     E.RequestNo,
                     E.ProjectName,
                     LQ.LeadJob,
+                    LTRIM(RTRIM(ISNULL(LQ.LeadJob, N''))) AS Division,
                     LQ.NetQuotedValue AS JobValue,
                     CAST(NULL AS DECIMAL(10,2)) AS WonGrossProfit,
                     'Quoted' AS Status,
@@ -2230,7 +2313,7 @@ router.get('/top-job-booked', async (req, res) => {
             } else if (isWonTopJob) {
                 const wonProbWhere = getProbWonMetricsSql(req);
                 const wonPreparedByClause = '';
-                const wonOwnJobClause = buildSalesReportProbOwnJobClause(safeDivision, safeCompany, allowList);
+                const wonOwnJobClause = buildSalesReportProbOwnJobClause(request, divisions, companies, allowList);
                 topJobBookedRes = await request.query(`
             WITH LatestProbWonScope AS (
                 SELECT * FROM (
@@ -2253,6 +2336,7 @@ router.get('/top-job-booked', async (req, res) => {
                 x.RequestNo,
                 x.ProjectName,
                 x.LeadJob,
+                x.Division,
                 x.JobValue,
                 x.WonGrossProfit,
                 x.Status,
@@ -2280,6 +2364,7 @@ router.get('/top-job-booked', async (req, res) => {
                         N''
                     ))) AS LeadJob,
                     ${sqlProbLeadJobCodeExpr()} AS LeadJobCode,
+                    ${SQL_TOPJOB_OWNJOB_DIVISION} AS Division,
                     ${SQL_PROB_WON_VALUE} AS JobValue,
                     P.GrossMargin AS WonGrossProfit,
                     P.Status,
@@ -2313,13 +2398,14 @@ router.get('/top-job-booked', async (req, res) => {
             } else if (isLostTopJob || isFollowUpTopJob) {
                 const followUpStatusWhere = `(LOWER(LTRIM(RTRIM(ISNULL(P.Status, '')))) LIKE '%follow%')`;
                 const statusPreparedByClause = '';
-                const statusOwnJobClause = buildSalesReportProbOwnJobClause(safeDivision, safeCompany, allowList);
+                const statusOwnJobClause = buildSalesReportProbOwnJobClause(request, divisions, companies, allowList);
                 topJobBookedRes = await request.query(`
             ${buildSalesReportFunnelLatestProbCte(statusPreparedByClause, statusOwnJobClause, statusTopJobFilterClause, 'LatestProbStatusScope')}
             SELECT
                 x.RequestNo,
                 x.ProjectName,
                 x.LeadJob,
+                x.Division,
                 x.JobValue,
                 x.WonGrossProfit,
                 x.Status,
@@ -2347,6 +2433,7 @@ router.get('/top-job-booked', async (req, res) => {
                         N''
                     ))) AS LeadJob,
                     ${sqlProbLeadJobCodeExpr()} AS LeadJobCode,
+                    ${SQL_TOPJOB_OWNJOB_DIVISION} AS Division,
                     ${topJobValueExpr} AS JobValue,
                     P.GrossMargin AS WonGrossProfit,
                     P.Status,
@@ -2390,7 +2477,7 @@ router.get('/top-job-booked', async (req, res) => {
                     FROM dbo.Probability P
                     INNER JOIN EnquiryMaster E ON E.RequestNo = P.RequestNo
                     WHERE 1 = 1
-                      ${buildSalesReportProbOwnJobClause(safeDivision, safeCompany, allowList)}
+                      ${buildSalesReportProbOwnJobClause(request, divisions, companies, allowList)}
                       ${topJobScopeClause}
                 ) __lp
                 WHERE __lp.__rn = 1
@@ -2399,6 +2486,7 @@ router.get('/top-job-booked', async (req, res) => {
                 x.RequestNo,
                 x.ProjectName,
                 x.LeadJob,
+                x.Division,
                 x.JobValue,
                 x.WonGrossProfit,
                 x.Status,
@@ -2423,6 +2511,7 @@ router.get('/top-job-booked', async (req, res) => {
                         NULLIF(LTRIM(RTRIM(ISNULL(P.LeadJobName, N''))), N''),
                         N''
                     ))) AS LeadJob,
+                    ${SQL_TOPJOB_OWNJOB_DIVISION} AS Division,
                     COALESCE(
                         NULLIF(pendingQ.QuoteAmount, 0),
                         ${SQL_PROB_NETQUOTED_PARSED},
@@ -2460,7 +2549,7 @@ router.get('/top-job-booked', async (req, res) => {
                         ) AS QuoteAmount
                     FROM EnquiryQuotes Q
                     WHERE Q.RequestNo = E.RequestNo
-                      ${buildSalesReportQuoteOwnJobDivisionClause(safeDivision, 'Q', safeCompany, allowList)}
+                      ${buildSalesReportQuoteOwnJobDivisionClause(request, divisions, 'Q', companies, allowList)}
                       AND (
                             P.RequestNo IS NULL
                             OR (
@@ -2510,6 +2599,7 @@ router.get('/top-job-booked', async (req, res) => {
                 x.RequestNo,
                 x.ProjectName,
                 x.LeadJob,
+                x.Division,
                 x.JobValue,
                 x.WonGrossProfit,
                 x.Status,
@@ -2532,6 +2622,7 @@ router.get('/top-job-booked', async (req, res) => {
                         NULLIF(LTRIM(RTRIM(ISNULL(P.LeadJobName, N''))), N''),
                         N''
                     ))) AS LeadJob,
+                    ${SQL_TOPJOB_OWNJOB_DIVISION} AS Division,
                     ${topJobValueExpr} AS JobValue,
                     P.GrossMargin AS WonGrossProfit,
                     P.Status,
@@ -2562,6 +2653,7 @@ router.get('/top-job-booked', async (req, res) => {
                 x.RequestNo,
                 x.ProjectName,
                 x.JobValue,
+                x.Division,
                 x.WonGrossProfit,
                 x.Status,
                 x.ProbabilityChance,
@@ -2578,6 +2670,7 @@ router.get('/top-job-booked', async (req, res) => {
                 SELECT
                     E.RequestNo,
                     E.ProjectName,
+                    CAST(N'' AS NVARCHAR(200)) AS Division,
                     ${itemValueCol} AS JobValue,
                     E.WonGrossProfit AS WonGrossProfit,
                     E.Status,
@@ -2612,9 +2705,12 @@ router.get('/top-job-booked', async (req, res) => {
                 seReq.input(key, sql.NVarChar, rn);
                 return `@${key}`;
             });
-            if (safeDivision && safeDivision !== 'All') {
-                seReq.input('division', sql.NVarChar, safeDivision);
+            if (hasReportFilterList(divisions)) {
+                bindReportFilterList(seReq, 'srSeDiv', divisions);
             }
+            const seDivClause = hasReportFilterList(divisions)
+                ? `AND ${sqlCseOwnJobDivisionMatchList('cse', divisions, 'srSeDiv')}`
+                : '';
             const seRowsRes = await seReq.query(`
                 SELECT
                     cse.RequestNo,
@@ -2623,9 +2719,7 @@ router.get('/top-job-booked', async (req, res) => {
                     LTRIM(RTRIM(ISNULL(cse.ownjob, ISNULL(cse.OwnJob, N'')))) AS OwnJob
                 FROM ConcernedSE cse
                 WHERE cse.RequestNo IN (${inParams.join(', ')})
-                  ${safeDivision && safeDivision !== 'All'
-                    ? `AND ${sqlCseOwnJobDivisionMatch('cse')}`
-                    : ''}
+                  ${seDivClause}
             `);
             (seRowsRes.recordset || []).forEach((row) => {
                 const k = String(row.RequestNo || '').trim();
@@ -2645,9 +2739,7 @@ router.get('/top-job-booked', async (req, res) => {
                 FROM ConcernedSE cse
                 WHERE cse.RequestNo IN (${inParams.join(', ')})
                   AND ${sqlCseAccountabilityYes('cse')}
-                  ${safeDivision && safeDivision !== 'All'
-                    ? `AND ${sqlCseOwnJobDivisionMatch('cse')}`
-                    : ''}
+                  ${seDivClause}
             `);
             concernSeAccountableMap = (accountableRowsRes.recordset || []).reduce((acc, row) => {
                 const rn = String(row.RequestNo || '').trim();
@@ -2682,6 +2774,7 @@ router.get('/top-job-booked', async (req, res) => {
                 RequestNo: r.RequestNo,
                 ProjectName: r.ProjectName,
                 LeadJob: r.LeadJob,
+                Division: r.Division,
                 JobValue: r.JobValue,
                 WonGrossProfit: r.WonGrossProfit,
                 GrossMargin: r.GrossMargin != null ? r.GrossMargin : r.WonGrossProfit,
@@ -2712,16 +2805,13 @@ router.get('/top-job-booked', async (req, res) => {
 router.get('/item-wise-stats', async (req, res) => {
     try {
         await applySalesReportEmailScope(req);
-        const { year, company, division, role, quarter } = req.query;
+        const { year, quarter } = req.query;
         if (!year) return res.status(400).json({ error: 'Year is required' });
 
+        const { companies, divisions, roles } = resolveSalesReportFilterLists(req);
         const request = new sql.Request();
 
-        // Sanitize inputs
         const safeYear = parseInt(year);
-        const safeCompany = normalizeReportFilterValue(company);
-        const safeDivision = normalizeReportFilterValue(division);
-        const safeRole = normalizeReportFilterValue(role);
         const safeQuarter = (quarter && quarter !== 'All') ? String(quarter).trim() : null;
         let quarterNums = null;
         if (safeQuarter) quarterNums = parseInt(safeQuarter.replace('Q', ''));
@@ -2732,30 +2822,27 @@ router.get('/item-wise-stats', async (req, res) => {
             request.input('quarterStrs', sql.NVarChar, safeQuarter);
         }
 
-        const allowList = resolveSalesReportDivisionAllowList(req, safeDivision);
-        const filterClause = appendSalesReportEnquiryFilters(req, request, safeCompany, safeDivision, safeRole);
+        const allowList = resolveSalesReportDivisionAllowList(req, divisions);
+        const filterClause = appendSalesReportEnquiryFilters(req, request, companies, divisions, roles);
 
-        const effectiveSeForItemWise =
-            (req.salesReportForceSeName && String(req.salesReportForceSeName).trim())
-            || safeRole;
+        const effectiveSeForItemWiseList = getSalesReportAssignedSeList(req, roles);
 
-        // Determine Grouping
         let itemWiseGroupBy = 'mef.DepartmentName';
         let itemWiseSelect = 'mef.DepartmentName as ItemName';
         let itemWiseWhere = '';
 
-        if (effectiveSeForItemWise) {
+        if (hasReportFilterList(effectiveSeForItemWiseList)) {
             itemWiseGroupBy = 'mef.ItemName';
             itemWiseSelect = 'mef.ItemName as ItemName';
         }
 
-        if (safeCompany && safeCompany !== 'All') {
-            itemWiseWhere += ` AND LTRIM(RTRIM(mef.CompanyName)) = @company `;
-        } else {
-            itemWiseWhere += ` AND 1=0 `;
+        if (hasReportFilterList(companies)) {
+            const coCount = bindReportFilterList(request, 'srIwCo', companies);
+            itemWiseWhere += ` AND ${sqlOrTrimMatch('mef.CompanyName', 'srIwCo', coCount)} `;
         }
-        if (safeDivision && safeDivision !== 'All') {
-            itemWiseWhere += ` AND mef.DepartmentName = @division `;
+        if (hasReportFilterList(divisions)) {
+            const divCount = bindReportFilterList(request, 'srIwDiv', divisions);
+            itemWiseWhere += ` AND ${sqlOrTrimMatch('mef.DepartmentName', 'srIwDiv', divCount)} `;
         } else if (allowList && allowList.length) {
             itemWiseWhere += sqlMatchAllowedDivisions('mef.DepartmentName', allowList);
         }
@@ -2799,58 +2886,48 @@ router.get('/item-wise-stats', async (req, res) => {
         if (safeQuarter) {
             requestTarget.input('quarterStr', sql.NVarChar, safeQuarter);
         }
-        if (safeCompany) {
-            requestTarget.input('company', sql.NVarChar, safeCompany);
-        }
-        if (effectiveSeForItemWise) requestTarget.input('se', sql.NVarChar, effectiveSeForItemWise);
         bindSalesReportAllowedDivisions(requestTarget, allowList);
 
         let targetQuery = '';
+        const companyTargetExists = hasReportFilterList(companies)
+            ? ` AND EXISTS (
+                    SELECT 1
+                    FROM Master_EnquiryFor mefT
+                    WHERE ${sqlOrTrimMatch('mefT.CompanyName', 'srIwTgtCo', bindReportFilterList(requestTarget, 'srIwTgtCo', companies))}
+                      AND (
+                        LTRIM(RTRIM(ISNULL(mefT.DepartmentName, ''))) = LTRIM(RTRIM(ISNULL(SalesTargets.Division, '')))
+                        OR LTRIM(RTRIM(ISNULL(mefT.ItemName, ''))) = LTRIM(RTRIM(ISNULL(SalesTargets.Division, '')))
+                      )
+                ) `
+            : '';
         if (req.salesReportNonCcBlock === true) {
             targetQuery = `
                 SELECT Division as Name, CAST(0 AS DECIMAL(18,2)) as Target
                 FROM SalesTargets WHERE 1=0
             `;
-        } else if (effectiveSeForItemWise) {
+        } else if (hasReportFilterList(effectiveSeForItemWiseList)) {
+            bindReportFilterList(requestTarget, 'srIwTgtSe', effectiveSeForItemWiseList);
             targetQuery = `
                 SELECT ItemName as Name, SUM(ISNULL(TargetValue, 0)) as Target
                 FROM SalesTargets
-                WHERE FinancialYear = @year AND SalesEngineer = @se
-                ${safeCompany ? `AND EXISTS (
-                    SELECT 1
-                    FROM Master_EnquiryFor mefT
-                    WHERE LTRIM(RTRIM(ISNULL(mefT.CompanyName, ''))) = LTRIM(RTRIM(ISNULL(@company, '')))
-                      AND (
-                        LTRIM(RTRIM(ISNULL(mefT.DepartmentName, ''))) = LTRIM(RTRIM(ISNULL(SalesTargets.Division, '')))
-                        OR LTRIM(RTRIM(ISNULL(mefT.ItemName, ''))) = LTRIM(RTRIM(ISNULL(SalesTargets.Division, '')))
-                      )
-                ) ` : ''}
+                WHERE FinancialYear = @year ${buildSalesTargetsSeClause(effectiveSeForItemWiseList, 'srIwTgtSe')}
+                ${companyTargetExists}
                 ${safeQuarter ? 'AND Quarter = @quarterStr ' : ''}
                 GROUP BY ItemName
             `;
         } else {
-            if (safeDivision && safeDivision !== 'All') {
-                requestTarget.input('division', sql.NVarChar, safeDivision);
+            let targetDivAllow = '';
+            if (hasReportFilterList(divisions)) {
+                bindReportFilterList(requestTarget, 'srIwTgtDiv', divisions);
+                targetDivAllow = buildSalesTargetsDivisionClause(divisions, 'srIwTgtDiv');
+            } else if (allowList && allowList.length) {
+                targetDivAllow = sqlMatchAllowedDivisions('SalesTargets.Division', allowList);
             }
-            const targetDivAllow =
-                safeDivision && safeDivision !== 'All'
-                    ? 'AND Division = @division '
-                    : allowList && allowList.length
-                      ? sqlMatchAllowedDivisions('SalesTargets.Division', allowList)
-                      : '';
             targetQuery = `
                 SELECT Division as Name, SUM(ISNULL(TargetValue, 0)) as Target
                 FROM SalesTargets
                 WHERE FinancialYear = @year
-                ${safeCompany ? `AND EXISTS (
-                    SELECT 1
-                    FROM Master_EnquiryFor mefT
-                    WHERE LTRIM(RTRIM(ISNULL(mefT.CompanyName, ''))) = LTRIM(RTRIM(ISNULL(@company, '')))
-                      AND (
-                        LTRIM(RTRIM(ISNULL(mefT.DepartmentName, ''))) = LTRIM(RTRIM(ISNULL(SalesTargets.Division, '')))
-                        OR LTRIM(RTRIM(ISNULL(mefT.ItemName, ''))) = LTRIM(RTRIM(ISNULL(SalesTargets.Division, '')))
-                      )
-                ) ` : ''}
+                ${companyTargetExists}
                 ${targetDivAllow}
                 ${safeQuarter ? 'AND Quarter = @quarterStr ' : ''}
                 GROUP BY Division
@@ -2888,79 +2965,28 @@ router.get('/item-wise-stats', async (req, res) => {
 router.get('/funnel-details', async (req, res) => {
     try {
         await applySalesReportEmailScope(req);
-        const { year, company, division, role, probabilityName, quarter } = req.query;
-        if (!year || !probabilityName) return res.status(400).json({ error: 'Year and Probability Name are required' });
+        const { probabilityName } = req.query;
+        if (!req.query.year || !probabilityName) {
+            return res.status(400).json({ error: 'Year and Probability Name are required' });
+        }
 
-        const request = new sql.Request();
-        request.input('year', sql.Int, year);
+        const ctx = buildSalesReportItemValueContext(req);
+        if (!ctx) return res.status(400).json({ error: 'Year is required' });
+
+        const {
+            request,
+            filterClause,
+            itemValueApply,
+            itemValueCol,
+            divisions,
+            allowList,
+            safeQuarter,
+            quarterNum,
+        } = ctx;
         request.input('probName', sql.NVarChar, probabilityName);
-
-        const safeQuarter = (quarter && quarter !== 'All') ? String(quarter).trim() : null;
-        let quarterNum = null;
         if (safeQuarter) {
-            quarterNum = parseInt(safeQuarter.replace('Q', ''));
-            request.input('quarterNum', sql.Int, quarterNum);
+            bindInputIfMissing(request, 'quarterNum', sql.Int, quarterNum);
         }
-
-        const safeCompanyFd = normalizeReportFilterValue(company);
-        const safeDivisionFd = normalizeReportFilterValue(division);
-        const safeRoleFd = normalizeReportFilterValue(role);
-        if (safeCompanyFd) {
-            request.input('company', sql.NVarChar, safeCompanyFd);
-        }
-        if (safeDivisionFd) {
-            request.input('division', sql.NVarChar, safeDivisionFd);
-        }
-        const filterClause = appendSalesReportEnquiryFilters(req, request, safeCompanyFd, safeDivisionFd, safeRoleFd);
-
-        // Define required SQL snippets locally (these are not in scope from /summary)
-        const localSelectedCustomerApply = `
-            OUTER APPLY (
-                SELECT TOP 1 ToName
-                FROM EnquiryQuotes
-                WHERE RequestNo = E.RequestNo
-                ORDER BY
-                    CASE WHEN QuoteNumber = E.WonQuoteRef THEN 0 ELSE 1 END,
-                    UpdatedAt DESC
-            ) SC
-        `;
-        let localItemValueSQL = '';
-        if (division && division !== 'All') {
-            localItemValueSQL = `
-                OUTER APPLY (
-                    SELECT SUM(ISNULL(EPV.Price, 0)) as Total
-                    FROM EnquiryFor EF_Inner
-                    JOIN Master_EnquiryFor MEF_Inner ON (EF_Inner.ItemName = MEF_Inner.ItemName OR EF_Inner.ItemName LIKE '%- ' + MEF_Inner.ItemName OR EF_Inner.ItemName LIKE '%-' + MEF_Inner.ItemName)
-                    OUTER APPLY (
-                        SELECT SUM(ISNULL(Price, 0)) as Price
-                        FROM EnquiryPricingValues EPV
-                        WHERE EPV.RequestNo = EF_Inner.RequestNo
-                          AND (EPV.EnquiryForID = EF_Inner.ID OR EPV.EnquiryForItem = EF_Inner.ItemName)
-                          AND (EPV.CustomerName = SC.ToName OR SC.ToName IS NULL)
-                    ) EPV
-                    WHERE EF_Inner.RequestNo = E.RequestNo
-                      AND LTRIM(RTRIM(MEF_Inner.DepartmentName)) = @division
-                ) ItemValue
-            `;
-        } else {
-            localItemValueSQL = `
-                OUTER APPLY (
-                    SELECT SUM(ISNULL(Price, 0)) as Total
-                    FROM EnquiryFor EF_Inner
-                    OUTER APPLY (
-                        SELECT SUM(ISNULL(Price, 0)) as Price
-                        FROM EnquiryPricingValues EPV
-                        WHERE EPV.RequestNo = EF_Inner.RequestNo
-                          AND (EPV.EnquiryForID = EF_Inner.ID OR EPV.EnquiryForItem = EF_Inner.ItemName)
-                          AND (EPV.CustomerName = SC.ToName OR SC.ToName IS NULL)
-                    ) EPV
-                    WHERE EF_Inner.RequestNo = E.RequestNo
-                          AND (EF_Inner.ParentID IS NULL OR EF_Inner.ParentID = 0)
-                ) ItemValue
-            `;
-        }
-        const localItemValueApply = localSelectedCustomerApply + localItemValueSQL;
-        const localItemValueCol = 'ISNULL(ItemValue.Total, 0)';
 
         // 1. Fetch Enquiries
         const enquiriesRes = await request.query(`
@@ -2968,11 +2994,11 @@ router.get('/funnel-details', async (req, res) => {
                 E.RequestNo,
                 E.ProjectName,
                 E.CustomerName,
-                ${localItemValueCol} as TotalPrice,
+                ${itemValueCol} as TotalPrice,
                 Q.QuoteRef,
                 Q.QuoteDate
             FROM EnquiryMaster E
-            ${localItemValueApply}
+            ${itemValueApply}
             OUTER APPLY (
                 SELECT TOP 1 QuoteNumber as QuoteRef, QuoteDate
                 FROM EnquiryQuotes QM
@@ -2998,18 +3024,7 @@ router.get('/funnel-details', async (req, res) => {
 
         const jobsRequest = new sql.Request();
         let jobWhere = `WHERE EF.RequestNo IN (${requestNos})`;
-
-        if (division && division !== 'All') {
-            jobsRequest.input('div', sql.NVarChar, division);
-            jobWhere += ` 
-                AND EXISTS (
-                    SELECT 1 
-                    FROM Master_EnquiryFor mef 
-                    WHERE (EF.ItemName = mef.ItemName OR EF.ItemName LIKE '%- ' + mef.ItemName OR EF.ItemName LIKE '%-' + mef.ItemName)
-                    AND mef.DepartmentName = @div
-                )
-            `;
-        }
+        jobWhere += buildSalesReportJobHierarchyDivisionWhere(jobsRequest, divisions, allowList);
 
         const jobsRes = await jobsRequest.query(`
             SELECT 
@@ -3036,6 +3051,7 @@ router.get('/funnel-details', async (req, res) => {
         `);
 
         const allJobs = jobsRes.recordset;
+        const divisionScoped = hasSalesReportJobDivisionScope(divisions, allowList);
 
         // 3. Structure Data
         const result = enquiries.map(e => {
@@ -3066,9 +3082,8 @@ router.get('/funnel-details', async (req, res) => {
             else if (s === 'lost') totalPrice = e.LostValue;
             else totalPrice = e.TotalPrice; // For funnel-details, query returns TotalPrice alias
 
-            // Recalculate if Division filter is active
-            if (division && division !== 'All') {
-                // Sum up NetPrice of visible jobs to get Division Total
+            // Recalculate when division scope is active (single or multiple divisions)
+            if (divisionScoped) {
                 totalPrice = myJobs.reduce((acc, curr) => acc + (curr.NetPrice || 0), 0);
             }
 
@@ -3097,18 +3112,18 @@ router.get('/drilldown-details', async (req, res) => {
         const { year, company, division, role, metric, label, status, quarter } = req.query;
         if (!year || !metric) return res.status(400).json({ error: 'Year and Metric are required' });
 
+        const safeLabel = label ? String(label).trim() : null;
+
         // Sanitize inputs
         const safeYear = year ? parseInt(year) : null;
-        const safeCompany = normalizeReportFilterValue(company);
-        const safeDivision = normalizeReportFilterValue(division);
-        const safeRole = normalizeReportFilterValue(role);
-        const safeLabel = label ? String(label).trim() : null;
+        const { companies, divisions, roles } = resolveSalesReportFilterLists(req);
+        const allowList = resolveSalesReportDivisionAllowList(req, divisions);
 
         const request = new sql.Request();
         request.input('year', sql.Int, safeYear);
         if (safeLabel) request.input('label', sql.NVarChar, safeLabel);
         if (status) request.input('status', sql.NVarChar, status);
-        bindSalesReportCompanyDivision(request, safeCompany, safeDivision);
+        bindSalesReportCompanyDivision(request, companies, divisions);
 
         const safeQuarter = (quarter && quarter !== 'All') ? String(quarter).trim() : null;
         let quarterNum = null;
@@ -3117,7 +3132,7 @@ router.get('/drilldown-details', async (req, res) => {
             request.input('quarterNum', sql.Int, quarterNum);
         }
 
-        const filterClause = appendSalesReportEnquiryFilters(req, request, safeCompany, safeDivision, safeRole);
+        const filterClause = appendSalesReportEnquiryFilters(req, request, companies, divisions, roles);
 
         let baseQuery = `
             SELECT 
@@ -3190,7 +3205,7 @@ router.get('/drilldown-details', async (req, res) => {
 
             // Check if label is Division or Item based on Role
             let itemFilter = '';
-            if (role && role !== 'All') itemFilter = `(mef.ItemName = @label)`;
+            if (hasReportFilterList(roles)) itemFilter = `(mef.ItemName = @label)`;
             else itemFilter = `(mef.DepartmentName = @label)`;
 
             baseQuery += `
@@ -3224,18 +3239,7 @@ router.get('/drilldown-details', async (req, res) => {
         // Use a chunked query if too many request nos, but for top 10/quarterly it fits.
         const jobsRequest = new sql.Request();
         let jobWhere = `WHERE EF.RequestNo IN (${requestNos})`;
-
-        if (division && division !== 'All') {
-            jobsRequest.input('div', sql.NVarChar, division);
-            jobWhere += ` 
-                AND EXISTS (
-                    SELECT 1 
-                    FROM Master_EnquiryFor mef 
-                    WHERE (EF.ItemName = mef.ItemName OR EF.ItemName LIKE '%- ' + mef.ItemName OR EF.ItemName LIKE '%-' + mef.ItemName)
-                    AND mef.DepartmentName = @div
-                )
-            `;
-        }
+        jobWhere += buildSalesReportJobHierarchyDivisionWhere(jobsRequest, divisions, allowList);
 
         const jobsRes = await jobsRequest.query(`
             SELECT 
@@ -3317,25 +3321,15 @@ router.get('/quoted-enquiry-values', async (req, res) => {
         const ctx = buildSalesReportItemValueContext(req);
         if (!ctx) return res.status(400).json({ error: 'Year is required' });
 
-        const { request, safeQuarter, safeCompany, safeDivision, allowList, nonCcBlock } = ctx;
-        const effectiveQuotedSe = getSalesReportAssignedSe(req, ctx.safeRole);
-        if (effectiveQuotedSe) {
-            request.input('quotedSe', sql.NVarChar, effectiveQuotedSe);
-        }
+        const { request, safeQuarter, companies, divisions, roles, allowList, nonCcBlock } = ctx;
+        const effectiveQuotedSeList = getSalesReportAssignedSeList(req, roles);
         bindSalesReportAllowedDivisions(request, allowList);
         let quotedFilterClause = '';
         if (nonCcBlock) {
             quotedFilterClause += ' AND 1=0 ';
         } else {
-            quotedFilterClause += sqlEnquiryForCompanyDivisionExists(safeCompany, safeDivision, allowList);
-            if (effectiveQuotedSe) {
-                quotedFilterClause += ` AND EXISTS (
-                    SELECT 1
-                    FROM ConcernedSE cse
-                    WHERE cse.RequestNo = E.RequestNo
-                      AND LTRIM(RTRIM(ISNULL(cse.SEName, ''))) = LTRIM(RTRIM(ISNULL(@quotedSe, '')))
-                ) `;
-            }
+            quotedFilterClause += sqlEnquiryForCompanyDivisionExists(request, companies, divisions, allowList);
+            quotedFilterClause += buildConcernedSeNameExistsClause(request, effectiveQuotedSeList, 'srSeQev');
         }
 
         const rowsRes = await request.query(`

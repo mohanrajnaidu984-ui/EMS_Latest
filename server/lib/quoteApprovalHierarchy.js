@@ -1,5 +1,10 @@
 const sql = require('mssql');
-const { normalizeApprovalEmail } = require('./approvalWorkflowJson');
+const {
+    normalizeApprovalEmail,
+    coerceFinalApproverFlags,
+    assertFinalApproverRules,
+    truthyFinalFlag,
+} = require('./approvalWorkflowJson');
 
 function isMissingQuoteApprovalHierarchyTableError(message) {
     const m = String(message || '');
@@ -15,6 +20,7 @@ function mapHierarchyStepRow(row) {
         approverEmail: String(row.ApproverEmail || '').trim(),
         approverName: String(row.ApproverName || '').trim(),
         approverDesignation: String(row.ApproverDesignation || '').trim(),
+        isFinalApprover: !!row.IsFinalApprover,
     };
 }
 
@@ -24,7 +30,7 @@ async function fetchApprovalHierarchiesForUser(userEmail) {
 
     const res = await sql.query`
         SELECT h.ID, h.HierarchyName, h.UpdatedAt,
-               s.ApproverSequence, s.ApproverEmail, s.ApproverName, s.ApproverDesignation
+               s.ApproverSequence, s.ApproverEmail, s.ApproverName, s.ApproverDesignation, s.IsFinalApprover
         FROM QuoteApprovalHierarchy h
         LEFT JOIN QuoteApprovalHierarchyStep s ON s.HierarchyId = h.ID
         WHERE LOWER(LTRIM(RTRIM(ISNULL(h.OwnerEmail, N'')))) = ${owner}
@@ -49,7 +55,7 @@ async function fetchApprovalHierarchiesForUser(userEmail) {
 
     return Array.from(byId.values()).map((h) => ({
         ...h,
-        steps: h.steps.sort((a, b) => a.sequence - b.sequence),
+        steps: coerceFinalApproverFlags(h.steps.sort((a, b) => a.sequence - b.sequence)),
     }));
 }
 
@@ -60,20 +66,24 @@ async function saveApprovalHierarchy(userEmail, hierarchyName, steps = [], hiera
     if (!owner) throw new Error('userEmail is required');
     if (!name) throw new Error('Hierarchy name is required');
 
-    const normalizedSteps = (Array.isArray(steps) ? steps : [])
-        .map((s, i) => ({
-            sequence: Number(s.sequence ?? i + 1),
-            approverEmail: normalizeApprovalEmail(s.approverEmail ?? s.email),
-            approverName: String(s.approverName ?? s.name ?? '').trim(),
-            approverDesignation: String(s.approverDesignation ?? s.designation ?? '').trim(),
-        }))
-        .filter((s) => s.approverName || s.approverEmail)
-        .sort((a, b) => a.sequence - b.sequence)
-        .map((s, i) => ({ ...s, sequence: i + 1 }));
+    const normalizedSteps = coerceFinalApproverFlags(
+        (Array.isArray(steps) ? steps : [])
+            .map((s, i) => ({
+                sequence: Number(s.sequence ?? i + 1),
+                approverEmail: normalizeApprovalEmail(s.approverEmail ?? s.email),
+                approverName: String(s.approverName ?? s.name ?? '').trim(),
+                approverDesignation: String(s.approverDesignation ?? s.designation ?? '').trim(),
+                isFinalApprover: truthyFinalFlag(s.isFinalApprover ?? s.IsFinalApprover),
+            }))
+            .filter((s) => s.approverName || s.approverEmail)
+            .sort((a, b) => a.sequence - b.sequence)
+            .map((s, i) => ({ ...s, sequence: i + 1 }))
+    );
 
     if (!normalizedSteps.length) {
         throw new Error('Add at least one approver to the hierarchy');
     }
+    assertFinalApproverRules(normalizedSteps);
 
     const now = new Date();
     let resolvedId = idArg;
@@ -133,14 +143,15 @@ async function saveApprovalHierarchy(userEmail, hierarchyName, steps = [], hiera
     for (const step of normalizedSteps) {
         await sql.query`
             INSERT INTO QuoteApprovalHierarchyStep (
-                HierarchyId, ApproverSequence, ApproverEmail, ApproverName, ApproverDesignation
+                HierarchyId, ApproverSequence, ApproverEmail, ApproverName, ApproverDesignation, IsFinalApprover
             )
             VALUES (
                 ${resolvedId},
                 ${step.sequence},
                 ${step.approverEmail || null},
                 ${step.approverName},
-                ${step.approverDesignation || null}
+                ${step.approverDesignation || null},
+                ${step.isFinalApprover ? 1 : 0}
             )
         `;
     }

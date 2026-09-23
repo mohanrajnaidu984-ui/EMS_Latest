@@ -717,7 +717,12 @@ const isNarrowOfficeListGutterCell = (cell) => {
 
 const isOfficePseudoListTable = (table, { plainText = '' } = {}) => {
     if (!table || table.nodeName !== 'TABLE') return false;
-    if (table.id === 'ems-auto-price-summary-table') return false;
+    if (
+        table.id === 'ems-auto-price-summary-table' ||
+        String(table.id || '').startsWith('ems-auto-price-summary-table--')
+    ) {
+        return false;
+    }
     if (table.classList?.contains?.('ems-pricing-summary-table')) return false;
     if (isEmsPricingSummaryTable(table)) return false;
     if (plainText && plainTextLooksLikeExcelGrid(plainText)) return false;
@@ -3778,9 +3783,9 @@ const ClauseEditor = ({
                     width: auto;
                     max-width: none !important;
                 }
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-col-widths],
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights],
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights-custom] {
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-col-widths]:not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]),
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights]:not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]),
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights-custom]:not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]) {
                     /* Let inline px width from paste/resize win. */
                     width: auto;
                 }
@@ -3788,10 +3793,19 @@ const ClauseEditor = ({
                 ${EMS_QUOTE_PRICING_TABLE_COLUMN_SYNC_CSS.replace(
                     /table#ems-auto-price-summary-table/g,
                     '.clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table'
+                ).replace(
+                    /table\[id\^="ems-auto-price-summary-table"\]/g,
+                    '.clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"]'
+                ).replace(
+                    /table\[data-ems-pricing-cols="fixed"\]/g,
+                    '.clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"]'
                 )}
                 ${EMS_QUOTE_PRICING_TABLE_PRESENTATION_CSS.replace(
                     /table#ems-auto-price-summary-table/g,
                     '.clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table'
+                ).replace(
+                    /table\[id\^="ems-auto-price-summary-table"\]/g,
+                    '.clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"]'
                 ).replace(
                     /table\[data-ems-pricing-cols="fixed"\]/g,
                     '.clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"]'
@@ -3800,10 +3814,15 @@ const ClauseEditor = ({
                     /table#ems-auto-price-summary-table/g,
                     '.clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table'
                 ).replace(
+                    /table\[id\^="ems-auto-price-summary-table"\]/g,
+                    '.clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"]'
+                ).replace(
                     /table\[data-ems-pricing-cols="fixed"\]/g,
                     '.clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"]'
                 )}
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table {
+                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table,
+                .clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"],
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] {
                     border-collapse: collapse !important;
                     margin-top: 12px !important;
                     margin-bottom: 6px !important;
@@ -3812,9 +3831,15 @@ const ClauseEditor = ({
                     border: 1px solid #cbd5e1 !important;
                     width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
                     max-width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
+                    table-layout: fixed !important;
+                    box-sizing: border-box !important;
                 }
                 .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table th,
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table td {
+                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table td,
+                .clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"] th,
+                .clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"] td,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] th,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] td {
                     border: 0.5px solid #cbd5e1 !important;
                     font-size: 11px !important;
                     color: #0f172a !important;
@@ -3822,13 +3847,25 @@ const ClauseEditor = ({
                 .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="total"] td,
                 .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="vat"] td,
                 .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="grand-vat"] td,
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="grand"] td {
+                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="grand"] td,
+                .clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"] tr[data-ems-row="total"] td,
+                .clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"] tr[data-ems-row="vat"] td,
+                .clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand-vat"] td,
+                .clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand"] td,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="total"] td,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="vat"] td,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand-vat"] td,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand"] td {
                     background: ${EMS_QUOTE_PRICING_TABLE_TOTAL_BG} !important;
                     font-weight: 700 !important;
                     border-top: 1px solid #94a3b8 !important;
                 }
                 .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="discount"] td,
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td {
+                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td,
+                .clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"] tr[data-ems-row="discount"] td,
+                .clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"] tr[data-ems-row="final-discounted"] td,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="discount"] td,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="final-discounted"] td {
                     background: ${EMS_QUOTE_PRICING_TABLE_DISCOUNT_BG} !important;
                     font-weight: 700 !important;
                     border-top: 1px solid #94a3b8 !important;
@@ -3841,7 +3878,16 @@ const ClauseEditor = ({
                 .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td:first-child,
                 .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="vat"] td:first-child,
                 .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="grand-vat"] td:first-child,
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="grand"] td:first-child {
+                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="grand"] td:first-child,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] th:nth-child(2),
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] td:nth-child(2),
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] td[data-ems-amount],
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="total"] td:first-child,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="discount"] td:first-child,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="final-discounted"] td:first-child,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="vat"] td:first-child,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand-vat"] td:first-child,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand"] td:first-child {
                     text-align: right !important;
                 }
                 .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table[data-ems-row-heights] tr,
@@ -3884,32 +3930,32 @@ const ClauseEditor = ({
                 }
                 .clause-editor-wrapper .jodit-wysiwyg table[data-ems-paste-source="office"] tr td,
                 .clause-editor-wrapper .jodit-wysiwyg table[data-ems-paste-source="office"] tr th,
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-col-widths] tr td,
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-col-widths] tr th,
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights] tr td,
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights] tr th,
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights-custom] tr td,
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights-custom] tr th,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-col-widths]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) tr td,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-col-widths]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) tr th,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) tr td,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) tr th,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights-custom]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) tr td,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights-custom]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) tr th,
                 .clause-editor-external-toolbar .jodit-wysiwyg table[data-ems-paste-source="office"] tr td,
                 .clause-editor-external-toolbar .jodit-wysiwyg table[data-ems-paste-source="office"] tr th,
-                .clause-editor-external-toolbar .jodit-wysiwyg table[data-ems-col-widths] tr td,
-                .clause-editor-external-toolbar .jodit-wysiwyg table[data-ems-col-widths] tr th,
-                .clause-editor-external-toolbar .jodit-wysiwyg table[data-ems-row-heights] tr td,
-                .clause-editor-external-toolbar .jodit-wysiwyg table[data-ems-row-heights] tr th,
-                .clause-editor-external-toolbar .jodit-wysiwyg table[data-ems-row-heights-custom] tr td,
-                .clause-editor-external-toolbar .jodit-wysiwyg table[data-ems-row-heights-custom] tr th {
+                .clause-editor-external-toolbar .jodit-wysiwyg table[data-ems-col-widths]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) tr td,
+                .clause-editor-external-toolbar .jodit-wysiwyg table[data-ems-col-widths]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) tr th,
+                .clause-editor-external-toolbar .jodit-wysiwyg table[data-ems-row-heights]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) tr td,
+                .clause-editor-external-toolbar .jodit-wysiwyg table[data-ems-row-heights]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) tr th,
+                .clause-editor-external-toolbar .jodit-wysiwyg table[data-ems-row-heights-custom]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) tr td,
+                .clause-editor-external-toolbar .jodit-wysiwyg table[data-ems-row-heights-custom]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) tr th {
                     padding: 0 3px !important;
                     line-height: 1.1 !important;
                     vertical-align: middle !important;
                 }
                 .clause-editor-wrapper .jodit-wysiwyg table[data-ems-paste-source="office"] td:not([data-ems-valign]),
                 .clause-editor-wrapper .jodit-wysiwyg table[data-ems-paste-source="office"] th:not([data-ems-valign]),
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-col-widths] td:not([data-ems-valign]),
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-col-widths] th:not([data-ems-valign]),
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights] td:not([data-ems-valign]),
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights] th:not([data-ems-valign]),
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights-custom] td:not([data-ems-valign]),
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights-custom] th:not([data-ems-valign]) {
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-col-widths]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) td:not([data-ems-valign]),
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-col-widths]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) th:not([data-ems-valign]),
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) td:not([data-ems-valign]),
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) th:not([data-ems-valign]),
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights-custom]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) td:not([data-ems-valign]),
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights-custom]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) th:not([data-ems-valign]) {
                     box-sizing: border-box !important;
                     vertical-align: top !important;
                     white-space: normal !important;

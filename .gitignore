@@ -50,3 +50,7 @@ deployment_package/
 server/data/Download/
 server/data/Audio New/
 server/uploads/
+
+# PowerPoint decks (keep local; often large)
+*.ppt
+*.pptx

@@ -15,7 +15,15 @@ module.exports = {
             instances: 1,
             exec_mode: 'fork',
             autorestart: true,
-            max_memory_restart: '2500M',
+            // Prefer staying up; ChatBox + PDF must not thrash the API offline.
+            // Chrome RSS can still grow — restart only at a high ceiling.
+            max_memory_restart: '4000M',
+            kill_timeout: 10000,
+            min_uptime: '30s',
+            // Avoid permanent "errored" stop after a Chrome crash storm.
+            max_restarts: 80,
+            restart_delay: 5000,
+            exp_backoff_restart_delay: 2000,
             node_args: '--no-watch',
             env: {
                 NODE_ENV: 'production',

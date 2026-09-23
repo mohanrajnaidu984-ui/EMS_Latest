@@ -4,7 +4,8 @@ import { isQuoteModuleTab } from '../../utils/quoteNav';
 
 const MainLayout = ({ children, activeTab, onNavigate, onOpenEnquiry }) => {
     const isQuoteTab = isQuoteModuleTab(activeTab);
-    const isFullHeightTab = isQuoteTab || activeTab === 'Probability' || activeTab === 'Approvals';
+    const isFullHeightTab =
+        isQuoteTab || activeTab === 'Probability' || activeTab === 'Approvals' || activeTab === 'ChatBox';
     return (
         <div style={{ height: '100vh', overflow: 'hidden' }}>
             {/* Header Self-Managed */}
@@ -13,7 +14,11 @@ const MainLayout = ({ children, activeTab, onNavigate, onOpenEnquiry }) => {
             {/* Content Wrapper: 100% for Dashboard, 83% for others */}
             <div
                 className={`container-fluid ${
-                    activeTab === 'Dashboard' || isQuoteTab || activeTab === 'Reports' || activeTab === 'Approvals'
+                    activeTab === 'Dashboard' ||
+                    isQuoteTab ||
+                    activeTab === 'Reports' ||
+                    activeTab === 'Approvals' ||
+                    activeTab === 'ChatBox'
                         ? 'px-0'
                         : activeTab === 'Probability'
                           ? 'px-1'
@@ -32,8 +37,10 @@ const MainLayout = ({ children, activeTab, onNavigate, onOpenEnquiry }) => {
                 {isFullHeightTab ? (
                     <div
                         style={{
-                            paddingLeft: activeTab === 'Probability' ? 0 : '4px',
-                            paddingRight: activeTab === 'Probability' ? 0 : '4px',
+                            paddingLeft:
+                                activeTab === 'Probability' || activeTab === 'ChatBox' ? 0 : '4px',
+                            paddingRight:
+                                activeTab === 'Probability' || activeTab === 'ChatBox' ? 0 : '4px',
                             boxSizing: 'border-box',
                             width: '100%',
                             minHeight: 0,

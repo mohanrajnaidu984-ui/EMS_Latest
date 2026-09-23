@@ -1,3 +1,5 @@
+import { parseUserDepartments, userHasDepartment } from './userDepartments';
+
 /**
  * Resolves SE/EE/QS names for one Enquiry For row: explicit assignedSEs first, then
  * Concerned SE list + Master users (department match), then fuzzy match, then trust saved seList.
@@ -29,14 +31,23 @@ export function inferAssignedSEsForEnquiryForItem(item, seList, users) {
     const selectedSet = new Set(seList.map((n) => normalize(n)).filter(Boolean));
     const dept = itemBase(item?.itemName || item?.name || '');
 
+    // Trust names already saved on ConcernedSE — do not shrink to department match only.
+    const verified = seList
+        .map((n) => String(n || '').trim())
+        .filter((n) => n && userList.some((u) => normalize(u?.FullName) === normalize(n)));
+    if (verified.length > 0) return [...new Set(verified)];
+
     const exact = userList
-        .filter((u) => dept && normalize(u?.Department) === dept && selectedSet.has(normalize(u?.FullName)))
+        .filter(
+            (u) =>
+                dept &&
+                (userHasDepartment(u?.Department, dept) ||
+                    parseUserDepartments(u?.Department).some((d) => normalize(d) === dept)) &&
+                selectedSet.has(normalize(u?.FullName))
+        )
         .map((u) => String(u?.FullName || '').trim())
         .filter(Boolean);
     if (exact.length > 0) return [...new Set(exact)];
-
-    const verified = seList.filter((n) => userList.some((u) => normalize(u?.FullName) === normalize(n)));
-    if (verified.length > 0) return verified;
 
     return seList.map((n) => String(n || '').trim()).filter(Boolean);
 }

@@ -56,10 +56,53 @@ function getListOpenTag(listEl) {
     return m ? m[0] : `<${tag}>`;
 }
 
-/** One packable segment: full list shell + single &lt;li&gt; (preserves bullet/number styling). */
-function wrapSingleListItem(listEl, li) {
+/** 1-based start index from an &lt;ol&gt; (respects existing start attribute). */
+function getListBaseStartIndex(listEl) {
+    if (!listEl || listEl.tagName !== 'OL') return 1;
+    const startAttr = parseInt(listEl.getAttribute('start') || '1', 10);
+    return Number.isFinite(startAttr) && startAttr > 0 ? startAttr : 1;
+}
+
+/** CSS counter used by EMS numbered list presets (clauseEditorListPresets.js). */
+function resolveEmsListCounterName(listEl) {
+    if (!listEl?.classList) return null;
+    if (listEl.classList.contains('ems-num-decimal')) return 'ems-decimal';
+    if ([...listEl.classList].some((c) => c.startsWith('ems-num-'))) return 'emsol';
+    return null;
+}
+
+/** Preserve serial numbering when a paginated segment contains a single &lt;li&gt;. */
+function buildListOpenTagWithContinuation(listEl, itemNumber) {
     const tag = listEl.tagName.toLowerCase();
-    return `${getListOpenTag(listEl)}${li.outerHTML}</${tag}>`;
+    if (tag !== 'ol' || itemNumber <= 1) return getListOpenTag(listEl);
+
+    const shell = listEl.cloneNode(false);
+    shell.setAttribute('start', String(itemNumber));
+
+    const counterName = resolveEmsListCounterName(shell);
+    if (counterName) {
+        const existingStyle = String(shell.getAttribute('style') || '').trim();
+        const counterReset = `counter-reset: ${counterName} ${itemNumber - 1}`;
+        shell.setAttribute(
+            'style',
+            existingStyle ? `${existingStyle.replace(/;\s*$/, '')}; ${counterReset}` : counterReset
+        );
+    }
+
+    const wrap = listEl.ownerDocument.createElement('div');
+    wrap.appendChild(shell);
+    const m = wrap.innerHTML.match(new RegExp(`^<${tag}[^>]*>`, 'i'));
+    return m ? m[0] : `<${tag}>`;
+}
+
+/** One packable segment: full list shell + single &lt;li&gt; (preserves bullet/number styling). */
+function wrapSingleListItem(listEl, li, itemNumber = 1) {
+    const tag = listEl.tagName.toLowerCase();
+    const openTag =
+        tag === 'ol' && itemNumber > 1
+            ? buildListOpenTagWithContinuation(listEl, itemNumber)
+            : getListOpenTag(listEl);
+    return `${openTag}${li.outerHTML}</${tag}>`;
 }
 
 /**
@@ -471,8 +514,9 @@ export function splitClauseHtmlToSegments(html, options = {}) {
             push(listEl.outerHTML);
             return;
         }
-        items.forEach((li) => {
-            push(wrapSingleListItem(listEl, li));
+        items.forEach((li, idx) => {
+            const itemNumber = getListBaseStartIndex(listEl) + idx;
+            push(wrapSingleListItem(listEl, li, itemNumber));
         });
     };
 
@@ -574,7 +618,10 @@ function splitListsInHtmlParts(htmlParts, options = {}) {
                 if (items.length < minItems) {
                     out.push(listEl.outerHTML);
                 } else if (items.length) {
-                    items.forEach((li) => out.push(wrapSingleListItem(listEl, li)));
+                    items.forEach((li, idx) => {
+                        const itemNumber = getListBaseStartIndex(listEl) + idx;
+                        out.push(wrapSingleListItem(listEl, li, itemNumber));
+                    });
                 } else {
                     out.push(listEl.outerHTML);
                 }

@@ -2,6 +2,7 @@ const sql = require('mssql');
 const { normalizeUserEmail } = require('./digitalSignaturesJson');
 const { parseMailCsv } = require('./enquiryOutlookEmailFields');
 const { isExcludedNotificationEmail } = require('./notificationEmailExclusions');
+const { parseUserDepartments, userDepartmentMatchesAny } = require('./userDepartments');
 
 const WEAK_DEPT_LABELS = new Set([
     'project', 'projects', 'general', 'gen', 'sales', 'all', 'na', 'n/a', 'tbd',
@@ -26,38 +27,44 @@ function stripJobPrefix(name) {
 }
 
 function departmentMatchesDivisionStrict(masterDept, labels) {
-    const deptNorm = normDeptLabel(masterDept);
-    if (!deptNorm) return false;
-    return labels.some((label) => normDeptLabel(label) === deptNorm);
+    return userDepartmentMatchesAny(masterDept, labels, normDeptLabel);
 }
 
 function departmentMatchesSelectedCustomer(masterDept, customerLabel) {
-    const a = String(masterDept || '').toLowerCase().trim();
-    const c = String(customerLabel || '').toLowerCase().trim();
-    if (!a || !c) return false;
-    if (a === c) return true;
-    const nkA = normKey(a);
-    const nkC = normKey(c);
-    if (nkA.length >= 3 && nkC.length >= 3) {
-        if (nkA === nkC || nkA.includes(nkC) || nkC.includes(nkA)) return true;
+    const depts = parseUserDepartments(masterDept);
+    if (!depts.length) {
+        // Legacy whole-string path when somehow empty after parse
+        return false;
     }
-    if (a.includes(c) || c.includes(a)) {
-        if (a !== c) {
-            const shorter = a.length <= c.length ? a : c;
-            const longer = a.length <= c.length ? c : a;
-            if (WEAK_DEPT_LABELS.has(shorter) && longer.includes(shorter)) return false;
+    return depts.some((dept) => {
+        const a = String(dept || '').toLowerCase().trim();
+        const c = String(customerLabel || '').toLowerCase().trim();
+        if (!a || !c) return false;
+        if (a === c) return true;
+        const nkA = normKey(a);
+        const nkC = normKey(c);
+        if (nkA.length >= 3 && nkC.length >= 3) {
+            if (nkA === nkC || nkA.includes(nkC) || nkC.includes(nkA)) return true;
         }
-        return true;
-    }
-    const custTok = c.split(/[^a-z0-9]+/).filter((p) => p.length > 2 && !WEAK_DEPT_LABELS.has(p));
-    const deptTok = a.split(/[^a-z0-9]+/).filter((p) => p.length > 2 && !WEAK_DEPT_LABELS.has(p));
-    if (custTok.length && custTok.some((t) => a.includes(t))) return true;
-    if (deptTok.length && deptTok.some((t) => c.includes(t))) return true;
-    return false;
+        if (a.includes(c) || c.includes(a)) {
+            if (a !== c) {
+                const shorter = a.length <= c.length ? a : c;
+                const longer = a.length <= c.length ? c : a;
+                if (WEAK_DEPT_LABELS.has(shorter) && longer.includes(shorter)) return false;
+            }
+            return true;
+        }
+        const custTok = c.split(/[^a-z0-9]+/).filter((p) => p.length > 2 && !WEAK_DEPT_LABELS.has(p));
+        const deptTok = a.split(/[^a-z0-9]+/).filter((p) => p.length > 2 && !WEAK_DEPT_LABELS.has(p));
+        if (custTok.length && custTok.some((t) => a.includes(t))) return true;
+        if (deptTok.length && deptTok.some((t) => c.includes(t))) return true;
+        return false;
+    });
 }
 
 function departmentMatchesAnyLabel(masterDept, labels) {
     const uniq = [...new Set((labels || []).map((s) => String(s || '').trim()).filter(Boolean))];
+    // Also try each user department token against each label
     return uniq.some((lab) => departmentMatchesSelectedCustomer(masterDept, lab));
 }
 

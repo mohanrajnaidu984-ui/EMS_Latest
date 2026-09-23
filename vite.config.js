@@ -34,9 +34,18 @@ export default defineConfig(({ mode }) => {
           target: apiTarget,
           changeOrigin: true,
           secure: false,
+          ws: true,
           /** Quote PDF (Puppeteer) can run longer than the default proxy timeout */
           timeout: 600000,
           proxyTimeout: 600000,
+        },
+        // Legacy path only — ChatBox now uses /api/socket.io (covered by /api above)
+        '/socket.io': {
+          target: apiTarget,
+          changeOrigin: true,
+          secure: false,
+          ws: true,
+          rewrite: (p) => p.replace(/^\/socket\.io/, '/api/socket.io'),
         },
         '/uploads': {
           target: apiTarget,

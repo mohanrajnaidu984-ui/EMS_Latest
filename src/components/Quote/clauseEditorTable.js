@@ -1475,8 +1475,10 @@ export const EMS_TABLE_ROW_HEIGHT_LOCKED_SELECTOR =
 
 export function buildEmsOfficePasteTablePresentationCss(scope) {
     const s = scope || '.clause-content';
-    const officeTable = `${s} ${EMS_OFFICE_PASTE_TABLE_SELECTOR.split(', ').join(`, ${s} `)}`;
-    const officeTableFluidRows = `${officeTable}:not([data-ems-row-heights]):not([data-ems-row-heights-custom]):not(#${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}):not([data-ems-pricing-cols="fixed"])`;
+    const officeTableRaw = `${s} ${EMS_OFFICE_PASTE_TABLE_SELECTOR.split(', ').join(`, ${s} `)}`;
+    // Pricing option tables must stay at EMS_QUOTE_PRICING_TABLE_WIDTH — never treat as office fluid.
+    const officeTable = `${officeTableRaw}:not([id^="${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}"]):not([data-ems-pricing-cols="fixed"])`;
+    const officeTableFluidRows = `${officeTable}:not([data-ems-row-heights]):not([data-ems-row-heights-custom])`;
     const officeCell = `${officeTable} th:not([data-ems-valign]), ${officeTable} td:not([data-ems-valign])`;
     const officeInner = `${officeTable} td *, ${officeTable} th *`;
     const officeP = `${officeTable} td p, ${officeTable} th p`;
@@ -1570,7 +1572,7 @@ export function buildEmsOfficePasteTableNormalModeCss(scope) {
     const s = scope || '.clause-content';
     /* Live Jodit body also uses .clause-content — keep full Excel formatting while editing. */
     const scoped = `${s}:not(.jodit-wysiwyg)`;
-    const officeTable = `${scoped} table[data-ems-paste-source="office"], ${scoped} table[data-ems-col-widths]`;
+    const officeTable = `${scoped} table[data-ems-paste-source="office"]:not([id^="${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}"]):not([data-ems-pricing-cols="fixed"]), ${scoped} table[data-ems-col-widths]:not([id^="${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}"]):not([data-ems-pricing-cols="fixed"])`;
     return `
     ${officeTable} tr {
         background: transparent !important;
@@ -1605,9 +1607,12 @@ export const EMS_OFFICE_PASTE_TABLE_PREVIEW_EDIT_CSS = buildEmsOfficePasteTableP
 );
 
 export function isEmsPricingSummaryTable(table) {
+    if (!table) return false;
+    const id = String(table.id || '');
     return (
-        table?.id === EMS_AUTO_PRICE_SUMMARY_TABLE_ID ||
-        table?.getAttribute?.('data-ems-pricing-cols') === 'fixed'
+        id === EMS_AUTO_PRICE_SUMMARY_TABLE_ID ||
+        id.startsWith(`${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}--`) ||
+        table.getAttribute?.('data-ems-pricing-cols') === 'fixed'
     );
 }
 
@@ -1639,6 +1644,10 @@ function normalizeEmsPricingSummaryTableCellPadding(table) {
         cell.style.setProperty('padding', EMS_QUOTE_PRICING_TABLE_CELL_PADDING, 'important');
         cell.style.setProperty('line-height', '1.25', 'important');
         cell.style.setProperty('vertical-align', 'middle', 'important');
+        /* Prevent Excel/Word row-height CSS from top-aligning discount caret. */
+        if (!cell.getAttribute('data-ems-valign')) {
+            cell.setAttribute('data-ems-valign', 'middle');
+        }
     });
 }
 
@@ -1683,8 +1692,8 @@ export function initializeEmsPricingSummaryTableColumns(table) {
     applyTableLayoutDefaults(table);
 
     if (!table.getAttribute('data-ems-col-widths')) {
-        table.style.width = EMS_QUOTE_PRICING_TABLE_WIDTH;
-        table.style.maxWidth = EMS_QUOTE_PRICING_TABLE_WIDTH;
+        table.style.setProperty('width', EMS_QUOTE_PRICING_TABLE_WIDTH, 'important');
+        table.style.setProperty('max-width', EMS_QUOTE_PRICING_TABLE_WIDTH, 'important');
         bootstrapEmsPricingSummaryTableRowHeights(table);
         return;
     }
@@ -1696,9 +1705,13 @@ export function initializeEmsPricingSummaryTableColumns(table) {
 
 export function initializeAllEmsPricingSummaryTableColumns(root) {
     if (!root?.querySelectorAll) return;
-    root.querySelectorAll(`#${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}`).forEach((table) => {
-        initializeEmsPricingSummaryTableColumns(table);
-    });
+    root
+        .querySelectorAll(
+            `table#${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}, table[id^="${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}"], table[data-ems-pricing-cols="fixed"]`
+        )
+        .forEach((table) => {
+            initializeEmsPricingSummaryTableColumns(table);
+        });
 }
 
 function applyTableLayoutDefaults(table) {
@@ -1706,8 +1719,8 @@ function applyTableLayoutDefaults(table) {
     table.style.tableLayout = 'fixed';
     if (isEmsPricingSummaryTable(table)) {
         if (!table.getAttribute('data-ems-col-widths')) {
-            table.style.width = EMS_QUOTE_PRICING_TABLE_WIDTH;
-            table.style.maxWidth = EMS_QUOTE_PRICING_TABLE_WIDTH;
+            table.style.setProperty('width', EMS_QUOTE_PRICING_TABLE_WIDTH, 'important');
+            table.style.setProperty('max-width', EMS_QUOTE_PRICING_TABLE_WIDTH, 'important');
         }
         return;
     }
@@ -2524,8 +2537,8 @@ export function applyTableRowHeightModelInHtmlString(html) {
                 return;
             }
             if (isEmsPricingSummaryTable(table)) {
-                table.style.width = EMS_QUOTE_PRICING_TABLE_WIDTH;
-                table.style.maxWidth = EMS_QUOTE_PRICING_TABLE_WIDTH;
+                table.style.setProperty('width', EMS_QUOTE_PRICING_TABLE_WIDTH, 'important');
+                table.style.setProperty('max-width', EMS_QUOTE_PRICING_TABLE_WIDTH, 'important');
                 const rows = getTableRows(table);
                 if (!rows.length) return;
                 if (table.hasAttribute('data-ems-row-heights-custom')) {
@@ -2618,8 +2631,8 @@ function applyColumnWidths(table, rows, widths) {
     if (sum > 0) {
         const w = `${sum}px`;
         if (isEmsPricingSummaryTable(table)) {
-            table.style.width = EMS_QUOTE_PRICING_TABLE_WIDTH;
-            table.style.maxWidth = EMS_QUOTE_PRICING_TABLE_WIDTH;
+            table.style.setProperty('width', EMS_QUOTE_PRICING_TABLE_WIDTH, 'important');
+            table.style.setProperty('max-width', EMS_QUOTE_PRICING_TABLE_WIDTH, 'important');
             table.style.minWidth = '';
         } else {
             table.style.width = w;

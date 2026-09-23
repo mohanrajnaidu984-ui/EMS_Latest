@@ -6,19 +6,13 @@ const { resolveEnquiryOutlookEmailFields } = require('./enquiryOutlookEmailField
 const { isExcludedNotificationEmail } = require('./notificationEmailExclusions');
 const { sendEnquiryNotificationViaSmtp } = require('./enquiryNotifySmtp');
 const { formatEnquiryDate, formatShortDate, FONT_FAMILY } = require('./enquiryNotifyEmailHtml');
+const { escapeHtml } = require('./htmlEscape');
 const { tomorrowYmdInSchedulerTz } = require('./schedulerTime');
 const { getSmtpFromEmail } = require('./smtpTransport');
+const { resolveCreatedByDivisionLabel } = require('./enquiryLeadDivisions');
 
 function dueSubmissionReminderFromEmail() {
     return String(process.env.EMS_DUE_SUBMISSION_REMINDER_FROM || getSmtpFromEmail()).trim();
-}
-
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
 }
 
 function displayCustomerName(row) {
@@ -71,6 +65,7 @@ function buildDueEnquiryListTableHtml(rows) {
     const headers = [
         'Sl. No.',
         'Enquiry No',
+        'Division name',
         'Enquiry Date',
         'Project Name',
         'Customer Name',
@@ -78,7 +73,7 @@ function buildDueEnquiryListTableHtml(rows) {
         'Consultant Name',
         'Due Date',
         'Enquiry Details',
-        'Enquiry Created By',
+        'Enquiry Created by',
     ];
 
     const headRow = headers.map((h) => `<th style="${thStyle}">${escapeHtml(h)}</th>`).join('');
@@ -87,6 +82,7 @@ function buildDueEnquiryListTableHtml(rows) {
             const cells = [
                 String(idx + 1),
                 row.requestNo,
+                row.division,
                 row.enquiryDate,
                 row.projectName,
                 row.customerName,
@@ -97,7 +93,7 @@ function buildDueEnquiryListTableHtml(rows) {
                 row.enquiryCreatedBy,
             ];
             return `<tr>${cells
-                .map((c) => `<td style="${tdStyle}">${escapeHtml(c)}</td>`)
+                .map((c) => `<td style="${tdStyle}">${escapeHtml(String(c ?? '')).replace(/\n/g, '<br>')}</td>`)
                 .join('')}</tr>`;
         })
         .join('\n');
@@ -164,9 +160,10 @@ async function fetchDueEnquiriesOn(dueYmd) {
     return (res.recordset || []).map((r) => String(r.RequestNo || '').trim()).filter(Boolean);
 }
 
-function mapRowToListEntry(row) {
+function mapRowToListEntry(row, divisionName) {
     return {
         requestNo: String(row.RequestNo || '').trim(),
+        division: String(divisionName || '').trim(),
         enquiryDate: formatEnquiryDate(row.EnquiryDate),
         projectName: String(row.ProjectName || '').trim(),
         customerName: displayCustomerName(row),
@@ -174,7 +171,8 @@ function mapRowToListEntry(row) {
         consultantName: displayConsultantName(row),
         dueDate: formatShortDate(row.DueDate),
         enquiryDetails: String(row.EnquiryDetails || '').trim(),
-        enquiryCreatedBy: String(row.CreatedBy || '').trim(),
+        // EnquiryMaster.CreatedBy (full name of enquiry creator)
+        enquiryCreatedBy: String(row.CreatedBy ?? row.createdBy ?? '').trim(),
     };
 }
 
@@ -209,7 +207,8 @@ async function buildRecipientBundles(dueYmd) {
             continue;
         }
 
-        const listEntry = mapRowToListEntry(row);
+        const divisionLabel = await resolveCreatedByDivisionLabel(row.CreatedBy);
+        const listEntry = mapRowToListEntry(row, divisionLabel);
         for (const seEmail of toList || []) {
             addEnquiryToBundle(bundles, seEmail, listEntry);
         }
@@ -227,6 +226,11 @@ async function buildRecipientBundles(dueYmd) {
     return bundles;
 }
 
+function isSqlUniqueViolation(err) {
+    const num = Number(err?.number || err?.originalError?.info?.number || 0);
+    return num === 2627 || num === 2601;
+}
+
 async function wasDueSubmissionReminderSent(recipientEmail, dueYmd) {
     const res = await sql.query`
         SELECT TOP 1 1 AS sent
@@ -237,30 +241,59 @@ async function wasDueSubmissionReminderSent(recipientEmail, dueYmd) {
     return (res.recordset || []).length > 0;
 }
 
-async function markDueSubmissionReminderSent(recipientEmail, dueYmd) {
+/** Reserve send slot before SMTP — blocks duplicate senders (prod + local / old + new). */
+async function tryClaimDueSubmissionReminderSlot(recipientEmail, dueYmd) {
+    try {
+        await sql.query`
+            INSERT INTO DueSubmissionReminderLog (RecipientEmail, DueDate)
+            VALUES (${recipientEmail}, ${dueYmd})
+        `;
+        return true;
+    } catch (err) {
+        if (isSqlUniqueViolation(err)) return false;
+        throw err;
+    }
+}
+
+async function releaseDueSubmissionReminderClaim(recipientEmail, dueYmd) {
     await sql.query`
-        INSERT INTO DueSubmissionReminderLog (RecipientEmail, DueDate)
-        VALUES (${recipientEmail}, ${dueYmd})
+        DELETE FROM DueSubmissionReminderLog
+        WHERE LOWER(LTRIM(RTRIM(RecipientEmail))) = ${recipientEmail}
+          AND CONVERT(VARCHAR(10), DueDate, 23) = ${dueYmd}
     `;
 }
 
-async function sendDueSubmissionReminderToRecipient(bundle, dueYmd) {
+async function sendDueSubmissionReminderToRecipient(bundle, dueYmd, options = {}) {
     if (!bundle?.enquiries?.length) {
         return { sent: false, reason: 'empty' };
+    }
+
+    let claimed = true;
+    if (!options.force) {
+        claimed = await tryClaimDueSubmissionReminderSlot(bundle.toEmail, dueYmd);
+        if (!claimed) {
+            return { sent: false, reason: 'already-sent' };
+        }
     }
 
     const subject = buildDueSubmissionReminderSubject(dueYmd);
     const html = buildDueSubmissionReminderEmailHtml(dueYmd, bundle.enquiries);
 
-    await sendEnquiryNotificationViaSmtp({
-        fromEmail: dueSubmissionReminderFromEmail(),
-        to: bundle.toEmail,
-        cc: '',
-        subject,
-        html,
-    });
+    try {
+        await sendEnquiryNotificationViaSmtp({
+            fromEmail: dueSubmissionReminderFromEmail(),
+            to: bundle.toEmail,
+            cc: '',
+            subject,
+            html,
+        });
+    } catch (err) {
+        if (claimed && !options.force) {
+            await releaseDueSubmissionReminderClaim(bundle.toEmail, dueYmd).catch(() => {});
+        }
+        throw err;
+    }
 
-    await markDueSubmissionReminderSent(bundle.toEmail, dueYmd);
     console.log(
         `[due-submission-reminder] Sent to ${bundle.toEmail} (${bundle.enquiries.length} enquiry row(s), due ${dueYmd})`,
     );
@@ -291,11 +324,7 @@ async function runDueSubmissionReminders(options = {}) {
 
     for (const bundle of bundles.values()) {
         try {
-            if (!options.force && (await wasDueSubmissionReminderSent(bundle.toEmail, dueYmd))) {
-                skipped += 1;
-                continue;
-            }
-            const result = await sendDueSubmissionReminderToRecipient(bundle, dueYmd);
+            const result = await sendDueSubmissionReminderToRecipient(bundle, dueYmd, options);
             if (result.sent) sent += 1;
             else skipped += 1;
         } catch (err) {

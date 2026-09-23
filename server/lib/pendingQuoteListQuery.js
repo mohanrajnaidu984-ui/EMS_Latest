@@ -1,7 +1,13 @@
 'use strict';
 
 const { resolvePricingAccessContext, normalizePricingJobName } = require('./quotePricingAccess');
-const { buildEnquiryMasterDepartmentExistsSql, buildMefDepartmentNameEqualsSql } = require('./quoteListDivisionFilter');
+const {
+    buildEnquiryMasterDepartmentExistsSql,
+    buildMefDepartmentNameEqualsSql,
+    buildStrictPvOwnJobDivisionSql,
+} = require('./quoteListDivisionFilter');
+const { buildMultiDeptItemNameLikeSql } = require('./userDepartments');
+const { ensurePricingRevisionRequiredColumn } = require('./pricingRevisionRequired');
 
 /**
  * Strip trailing " (L12)" / " (l1)" from customer / ToName so grid labels still match saved quotes.
@@ -64,31 +70,101 @@ function sqlTupleCustomerMatch(eqAlias, pvAlias = 'PV') {
  * - Step 1: EnquiryPricingValues for the enquiry has Price > 0 on a row keyed by
  *   RequestNo + EnquiryForItem (own job) + LeadJobName + CustomerName (latest row per tuple).
  * - Step 2: No EnquiryQuotes row yet for the same RequestNo + OwnJob + LeadJob + ToName (any revision / draft counts
- *   as “quote created” per business rule). LeadJob / OwnJob use tolerant matching vs pricing labels (see sqlTuple*Match).
+ *   as “quote created” per business rule), OR own-job RevisionRequired = Yes (stays pending until next quote
+ *   clears the flag). LeadJob / OwnJob use tolerant matching vs pricing labels (see sqlTuple*Match).
  */
-async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '', divisionFilter = '') {
+/** Optional list columns — omitted in slim mode; mapQuoteListingRows loads quotes/prices in bulk instead. */
+function buildPendingListHeavySelectColumns(quoteMatchesPvTupleSql, slim) {
+    if (slim) {
+        return `
+                    CAST(NULL AS NVARCHAR(MAX)) AS ListQuoteRef,
+                    CAST(NULL AS DATETIME) AS ListQuoteDate,
+                    CAST(N'' AS NVARCHAR(255)) AS ListPreparedBy,
+                    CAST(N'' AS NVARCHAR(255)) AS ListQuoteOwnJob,
+                    CAST(0 AS DECIMAL(18,2)) AS ListQuoteTotalAmount,
+                    CAST(NULL AS NVARCHAR(MAX)) AS QuotedCustomers,
+                    CAST(NULL AS NVARCHAR(MAX)) AS PricingCustomerDetails,`;
+    }
+    return `
+                    (
+                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtRef.QuoteNumber, N'')))
+                        FROM EnquiryQuotes qtRef
+                        WHERE qtRef.RequestNo = E.RequestNo
+                          AND ${quoteMatchesPvTupleSql('qtRef')}
+                        ORDER BY qtRef.QuoteNo DESC, qtRef.RevisionNo DESC
+                    ) AS ListQuoteRef,
+                    (
+                        SELECT TOP 1 qtDt.QuoteDate
+                        FROM EnquiryQuotes qtDt
+                        WHERE qtDt.RequestNo = E.RequestNo
+                          AND ${quoteMatchesPvTupleSql('qtDt')}
+                        ORDER BY qtDt.QuoteNo DESC, qtDt.RevisionNo DESC
+                    ) AS ListQuoteDate,
+                    (
+                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtPb.PreparedBy, N'')))
+                        FROM EnquiryQuotes qtPb
+                        WHERE qtPb.RequestNo = E.RequestNo
+                          AND ${quoteMatchesPvTupleSql('qtPb')}
+                        ORDER BY qtPb.QuoteNo DESC, qtPb.RevisionNo DESC
+                    ) AS ListPreparedBy,
+                    (
+                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtOj.OwnJob, N'')))
+                        FROM EnquiryQuotes qtOj
+                        WHERE qtOj.RequestNo = E.RequestNo
+                          AND ${quoteMatchesPvTupleSql('qtOj')}
+                        ORDER BY qtOj.QuoteNo DESC, qtOj.RevisionNo DESC
+                    ) AS ListQuoteOwnJob,
+                    (
+                        SELECT TOP 1 ISNULL(qtTa.TotalAmount, 0)
+                        FROM EnquiryQuotes qtTa
+                        WHERE qtTa.RequestNo = E.RequestNo
+                          AND ${quoteMatchesPvTupleSql('qtTa')}
+                        ORDER BY qtTa.QuoteNo DESC, qtTa.RevisionNo DESC
+                    ) AS ListQuoteTotalAmount,
+                    (
+                        SELECT STUFF((
+                            SELECT DISTINCT ';;' + qt.ToName + '|' + FORMAT(ISNULL(qt.TotalAmount, 0), 'N2')
+                            FROM EnquiryQuotes qt
+                            WHERE qt.RequestNo = E.RequestNo
+                            AND ISNULL(qt.TotalAmount, 0) > 0
+                            AND qt.RevisionNo = (
+                                SELECT MAX(rx.RevisionNo)
+                                FROM EnquiryQuotes rx
+                                WHERE rx.QuoteNo = qt.QuoteNo
+                            )
+                            FOR XML PATH(''), TYPE
+                        ).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+                    ) AS QuotedCustomers,
+                    (
+                        SELECT STUFF((
+                            SELECT ';;' + CustomerName + '|' + CAST(SUM(LatestPrice) AS VARCHAR)
+                            FROM (
+                                SELECT
+                                    po2.CustomerName,
+                                    pv2.Price AS LatestPrice,
+                                    ROW_NUMBER() OVER (
+                                        PARTITION BY po2.CustomerName, ISNULL(CAST(pv2.EnquiryForID AS VARCHAR), pv2.EnquiryForItem)
+                                        ORDER BY pv2.UpdatedAt DESC
+                                    ) AS rn
+                                FROM EnquiryPricingOptions po2
+                                JOIN EnquiryPricingValues pv2 ON po2.ID = pv2.OptionID
+                                WHERE po2.RequestNo = E.RequestNo
+                            ) t
+                            WHERE rn = 1
+                            GROUP BY CustomerName
+                            HAVING SUM(LatestPrice) > 0
+                            FOR XML PATH(''), TYPE
+                        ).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+                    ) AS PricingCustomerDetails,`;
+}
+
+async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '', divisionFilter = '', options = {}) {
+        const slim = options.slim !== false;
+        await ensurePricingRevisionRequiredColumn();
         const divisionClause = buildEnquiryMasterDepartmentExistsSql(divisionFilter);
         const divisionMefDeptSql = buildMefDepartmentNameEqualsSql(divisionFilter, 'MEF');
         const divisionMef2DeptSql = buildMefDepartmentNameEqualsSql(divisionFilter, 'MEF2');
-        const divisionTrimEsc = (divisionFilter || '').toString().trim().replace(/'/g, "''");
-        const strictPvOwnJobDivisionSql = divisionTrimEsc
-            ? `
-                AND EXISTS (
-                    SELECT 1
-                    FROM dbo.EnquiryFor efOwn
-                    INNER JOIN dbo.Master_EnquiryFor mefOwn
-                        ON (efOwn.ItemName = mefOwn.ItemName)
-                    WHERE efOwn.RequestNo = E.RequestNo
-                      AND (
-                            (PV.EnquiryForID IS NOT NULL AND PV.EnquiryForID <> 0 AND PV.EnquiryForID = efOwn.ID)
-                         OR (
-                                (PV.EnquiryForID IS NULL OR PV.EnquiryForID = 0)
-                            AND LTRIM(RTRIM(ISNULL(PV.EnquiryForItem, N''))) = LTRIM(RTRIM(ISNULL(efOwn.ItemName, N'')))
-                            )
-                      )
-                      AND LTRIM(RTRIM(ISNULL(mefOwn.DepartmentName, N''))) = LTRIM(RTRIM(N'${divisionTrimEsc}'))
-                )`
-            : '';
+        const strictPvOwnJobDivisionSql = buildStrictPvOwnJobDivisionSql(divisionFilter);
         let userEmail = rawUserEmail;
         if (userEmail) {
             userEmail = userEmail.toLowerCase().replace(/@almcg\.com/g, '@almoayyedcg.com').trim();
@@ -107,27 +183,26 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
 
         const uEsc = (userEmail || '').replace(/'/g, "''");
         const uLocalEsc = ((userEmail || '').split('@')[0] || '').trim().replace(/'/g, "''");
-        // Department scope: normal users use their Master_ConcernedSE.Department.
+        // Department scope: normal users use their Master_ConcernedSE.Department (CSV → OR of tokens).
         // Management users are division proxies, so DO NOT scope by Department="Management" (it would hide all real divisions).
         let trimmedDept = (userDepartment || '').trim();
-        let deptEsc = trimmedDept.replace(/'/g, "''");
-        // Match getPricingAnchorJobs: strip "L1 - " / "Sub Job - " from Department so SQL scope aligns with pricing UI.
-        let deptNormEsc = (normalizePricingJobName(trimmedDept) || '').replace(/'/g, "''");
-        let hasDeptScope = deptEsc.length > 0 || deptNormEsc.length > 0;
+        let hasDeptScope = trimmedDept.length > 0;
         if (isManagementDept) {
             trimmedDept = '';
-            deptEsc = '';
-            deptNormEsc = '';
             hasDeptScope = false;
         }
         // CRITICAL: when a Division filter is selected in the UI, pending list scoping must follow ONLY that division,
         // not fuzzy matches to the user's own Department. Disable department-based LIKE matching in this case.
         if (divisionFilter && divisionFilter.toString().trim()) {
             trimmedDept = '';
-            deptEsc = '';
-            deptNormEsc = '';
             hasDeptScope = false;
         }
+        const deptLikeMefEf = hasDeptScope
+            ? buildMultiDeptItemNameLikeSql(trimmedDept, 'MEF.ItemName', 'EF.ItemName', normalizePricingJobName)
+            : '';
+        const deptLikeMef2Ef2 = hasDeptScope
+            ? buildMultiDeptItemNameLikeSql(trimmedDept, 'MEF2.ItemName', 'EF2.ItemName', normalizePricingJobName)
+            : '';
         /** CC + Division toolbar: same MEF/job row predicates as non-CC (division-only); enquiry gate still requires CC or ConcernedSE (below). */
         const unifyCcWithDivision =
             isCcUser && !isManagementDept && (divisionFilter || '').toString().trim();
@@ -147,20 +222,14 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
                 ${
                     hasDeptScope
                         ? `AND (
-                    LOWER(LTRIM(RTRIM(MEF.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR LOWER(LTRIM(RTRIM(EF.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR (${deptNormEsc ? `LOWER(LTRIM(RTRIM(MEF.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'
-                    OR LOWER(LTRIM(RTRIM(EF.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'` : '1=0'})
+                    ${deptLikeMefEf}
                 )`
                         : ''
                 }
             )`
             : hasDeptScope
                 ? `(
-                    LOWER(LTRIM(RTRIM(MEF.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR LOWER(LTRIM(RTRIM(EF.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR (${deptNormEsc ? `LOWER(LTRIM(RTRIM(MEF.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'
-                    OR LOWER(LTRIM(RTRIM(EF.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'` : '1=0'})
+                    ${deptLikeMefEf}
                 )`
                 : `1 = 1`;
 
@@ -177,10 +246,7 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
                 ${
                     hasDeptScope
                         ? `AND (
-                    LOWER(LTRIM(RTRIM(MEF2.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR LOWER(LTRIM(RTRIM(EF2.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR (${deptNormEsc ? `LOWER(LTRIM(RTRIM(MEF2.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'
-                    OR LOWER(LTRIM(RTRIM(EF2.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'` : '1=0'})
+                    ${deptLikeMef2Ef2}
                 )`
                         : ''
                 }
@@ -188,10 +254,7 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
             )`
             : hasDeptScope
                 ? `(
-                    LOWER(LTRIM(RTRIM(MEF2.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR LOWER(LTRIM(RTRIM(EF2.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR (${deptNormEsc ? `LOWER(LTRIM(RTRIM(MEF2.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'
-                    OR LOWER(LTRIM(RTRIM(EF2.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'` : '1=0'})
+                    ${deptLikeMef2Ef2}
                 )${divisionMef2DeptSql}`
                 : `1 = 1${divisionMef2DeptSql}`;
 
@@ -225,7 +288,7 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
                         )
                   )
             )`;
-        // Pending: Step-1 tuple exists and no EnquiryQuotes row yet for that tuple (draft counts as created).
+        // Pending: no quote for tuple yet, OR own-job RevisionRequired=Yes (until next quote clears the flag).
         const noCompletedQuoteForSameTupleSql = `
             NOT EXISTS (
                 SELECT 1
@@ -235,12 +298,19 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
                 AND ${sqlTupleLeadJobMatch('EQ', 'PV')}
                 AND ${sqlTupleCustomerMatch('EQ', 'PV')}
             )`;
+        const pvRevisionRequiredYesSql = `
+            UPPER(LTRIM(RTRIM(ISNULL(PV.RevisionRequired, N'')))) = N'YES'`;
+        const pendingTupleOrRevisionSql = `(
+            ${noCompletedQuoteForSameTupleSql}
+            OR ${pvRevisionRequiredYesSql}
+        )`;
 
         // List columns: same four-key match as Step 2 so Quote ref / date align with the pending PV row.
         const quoteMatchesPvTupleSql = (alias) => `
             ${sqlTupleOwnJobMatch(alias, 'PV')}
             AND ${sqlTupleLeadJobMatch(alias, 'PV')}
             AND ${sqlTupleCustomerMatch(alias, 'PV')}`;
+        const heavySelectCols = buildPendingListHeavySelectColumns(quoteMatchesPvTupleSql, slim);
 
         let query;
         if (userEmail && !isAdmin) {
@@ -290,55 +360,8 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
                     LTRIM(RTRIM(ISNULL(PV.LeadJobName, N''))) AS ListPendingLeadJobName,
                     LTRIM(RTRIM(ISNULL(PV.CustomerName, N''))) AS ListPendingCustomerName,
                     ISNULL(PV.ID, 0) AS ListPendingPvId,
-                    (
-                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtRef.QuoteNumber, N'')))
-                        FROM EnquiryQuotes qtRef
-                        WHERE qtRef.RequestNo = E.RequestNo
-                          AND ${quoteMatchesPvTupleSql('qtRef')}
-                        ORDER BY qtRef.QuoteNo DESC, qtRef.RevisionNo DESC
-                    ) as ListQuoteRef,
-                    (
-                        SELECT TOP 1 qtDt.QuoteDate
-                        FROM EnquiryQuotes qtDt
-                        WHERE qtDt.RequestNo = E.RequestNo
-                          AND ${quoteMatchesPvTupleSql('qtDt')}
-                        ORDER BY qtDt.QuoteNo DESC, qtDt.RevisionNo DESC
-                    ) as ListQuoteDate,
-                    (
-                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtPb.PreparedBy, N'')))
-                        FROM EnquiryQuotes qtPb
-                        WHERE qtPb.RequestNo = E.RequestNo
-                          AND ${quoteMatchesPvTupleSql('qtPb')}
-                        ORDER BY qtPb.QuoteNo DESC, qtPb.RevisionNo DESC
-                    ) as ListPreparedBy,
-                    (
-                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtOj.OwnJob, N'')))
-                        FROM EnquiryQuotes qtOj
-                        WHERE qtOj.RequestNo = E.RequestNo
-                          AND ${quoteMatchesPvTupleSql('qtOj')}
-                        ORDER BY qtOj.QuoteNo DESC, qtOj.RevisionNo DESC
-                    ) as ListQuoteOwnJob,
-                    (
-                        SELECT TOP 1 ISNULL(qtTa.TotalAmount, 0)
-                        FROM EnquiryQuotes qtTa
-                        WHERE qtTa.RequestNo = E.RequestNo
-                          AND ${quoteMatchesPvTupleSql('qtTa')}
-                        ORDER BY qtTa.QuoteNo DESC, qtTa.RevisionNo DESC
-                    ) as ListQuoteTotalAmount,
-                    (
-                        SELECT STUFF((
-                            SELECT DISTINCT ';;' + qt.ToName + '|' + FORMAT(ISNULL(qt.TotalAmount, 0), 'N2')
-                            FROM EnquiryQuotes qt
-                            WHERE qt.RequestNo = E.RequestNo
-                            AND ISNULL(qt.TotalAmount, 0) > 0
-                            AND qt.RevisionNo = (
-                                SELECT MAX(rx.RevisionNo) 
-                                FROM EnquiryQuotes rx 
-                                WHERE rx.QuoteNo = qt.QuoteNo
-                            )
-                            FOR XML PATH(''), TYPE
-                        ).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-                    ) as QuotedCustomers,
+                    LTRIM(RTRIM(ISNULL(PV.RevisionRequired, N''))) AS ListPendingRevisionRequired,
+                    ${heavySelectCols}
                     (
                         SELECT STUFF((
                             SELECT ', ' + ItemName 
@@ -347,27 +370,6 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
                             FOR XML PATH('')
                         ), 1, 2, '')
                     ) as Divisions,
-                    (
-                        SELECT STUFF((
-                            SELECT ';;' + CustomerName + '|' + CAST(SUM(LatestPrice) AS VARCHAR)
-                            FROM (
-                                SELECT 
-                                    po2.CustomerName,
-                                    pv2.Price as LatestPrice,
-                                    ROW_NUMBER() OVER (
-                                        PARTITION BY po2.CustomerName, ISNULL(CAST(pv2.EnquiryForID AS VARCHAR), pv2.EnquiryForItem) 
-                                        ORDER BY pv2.UpdatedAt DESC
-                                    ) as rn
-                                FROM EnquiryPricingOptions po2
-                                JOIN EnquiryPricingValues pv2 ON po2.ID = pv2.OptionID
-                                WHERE po2.RequestNo = E.RequestNo
-                            ) t
-                            WHERE rn = 1
-                            GROUP BY CustomerName
-                            HAVING SUM(LatestPrice) > 0
-                            FOR XML PATH(''), TYPE
-                        ).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-                    ) as PricingCustomerDetails,
                     (
                         SELECT STUFF((
                             SELECT DISTINCT ',' + CAST(EF2.ID AS VARCHAR)
@@ -412,7 +414,7 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
                 AND ${pvMatchesEfJobSql}
                 ${strictPvOwnJobDivisionSql}
                 AND ${latestPvTupleOnlySql}
-                AND ${noCompletedQuoteForSameTupleSql}
+                AND ${pendingTupleOrRevisionSql}
                 ${divisionClause}
                 ${extraWhereSql}
                 ORDER BY E.DueDate DESC, E.RequestNo DESC
@@ -426,55 +428,8 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
                     LTRIM(RTRIM(ISNULL(PV.LeadJobName, N''))) AS ListPendingLeadJobName,
                     LTRIM(RTRIM(ISNULL(PV.CustomerName, N''))) AS ListPendingCustomerName,
                     ISNULL(PV.ID, 0) AS ListPendingPvId,
-                    (
-                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtRef.QuoteNumber, N'')))
-                        FROM EnquiryQuotes qtRef
-                        WHERE qtRef.RequestNo = E.RequestNo
-                          AND ${quoteMatchesPvTupleSql('qtRef')}
-                        ORDER BY qtRef.QuoteNo DESC, qtRef.RevisionNo DESC
-                    ) as ListQuoteRef,
-                    (
-                        SELECT TOP 1 qtDt.QuoteDate
-                        FROM EnquiryQuotes qtDt
-                        WHERE qtDt.RequestNo = E.RequestNo
-                          AND ${quoteMatchesPvTupleSql('qtDt')}
-                        ORDER BY qtDt.QuoteNo DESC, qtDt.RevisionNo DESC
-                    ) as ListQuoteDate,
-                    (
-                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtPb.PreparedBy, N'')))
-                        FROM EnquiryQuotes qtPb
-                        WHERE qtPb.RequestNo = E.RequestNo
-                          AND ${quoteMatchesPvTupleSql('qtPb')}
-                        ORDER BY qtPb.QuoteNo DESC, qtPb.RevisionNo DESC
-                    ) as ListPreparedBy,
-                    (
-                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtOj.OwnJob, N'')))
-                        FROM EnquiryQuotes qtOj
-                        WHERE qtOj.RequestNo = E.RequestNo
-                          AND ${quoteMatchesPvTupleSql('qtOj')}
-                        ORDER BY qtOj.QuoteNo DESC, qtOj.RevisionNo DESC
-                    ) as ListQuoteOwnJob,
-                    (
-                        SELECT TOP 1 ISNULL(qtTa.TotalAmount, 0)
-                        FROM EnquiryQuotes qtTa
-                        WHERE qtTa.RequestNo = E.RequestNo
-                          AND ${quoteMatchesPvTupleSql('qtTa')}
-                        ORDER BY qtTa.QuoteNo DESC, qtTa.RevisionNo DESC
-                    ) as ListQuoteTotalAmount,
-                    (
-                        SELECT STUFF((
-                            SELECT DISTINCT ';;' + qt.ToName + '|' + FORMAT(ISNULL(qt.TotalAmount, 0), 'N2')
-                            FROM EnquiryQuotes qt
-                            WHERE qt.RequestNo = E.RequestNo
-                            AND ISNULL(qt.TotalAmount, 0) > 0
-                            AND qt.RevisionNo = (
-                                SELECT MAX(rx.RevisionNo) 
-                                FROM EnquiryQuotes rx 
-                                WHERE rx.QuoteNo = qt.QuoteNo
-                            )
-                            FOR XML PATH(''), TYPE
-                        ).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-                    ) as QuotedCustomers,
+                    LTRIM(RTRIM(ISNULL(PV.RevisionRequired, N''))) AS ListPendingRevisionRequired,
+                    ${heavySelectCols}
                     (
                         SELECT STUFF((
                             SELECT ', ' + ItemName 
@@ -483,27 +438,6 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
                             FOR XML PATH('')
                         ), 1, 2, '')
                     ) as Divisions,
-                    (
-                        SELECT STUFF((
-                            SELECT ';;' + CustomerName + '|' + CAST(SUM(LatestPrice) AS VARCHAR)
-                            FROM (
-                                SELECT 
-                                    po2.CustomerName,
-                                    pv2.Price as LatestPrice,
-                                    ROW_NUMBER() OVER (
-                                        PARTITION BY po2.CustomerName, ISNULL(CAST(pv2.EnquiryForID AS VARCHAR), pv2.EnquiryForItem) 
-                                        ORDER BY pv2.UpdatedAt DESC
-                                    ) as rn
-                                FROM EnquiryPricingOptions po2
-                                JOIN EnquiryPricingValues pv2 ON po2.ID = pv2.OptionID
-                                WHERE po2.RequestNo = E.RequestNo
-                            ) t
-                            WHERE rn = 1
-                            GROUP BY CustomerName
-                            HAVING SUM(LatestPrice) > 0
-                            FOR XML PATH(''), TYPE
-                        ).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-                    ) as PricingCustomerDetails,
                     (
                         SELECT STUFF((
                             SELECT DISTINCT ',' + CAST(ID AS VARCHAR)
@@ -538,7 +472,7 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
                 AND ${pvMatchesEfJobSql}
                 ${strictPvOwnJobDivisionSql}
                 AND ${latestPvTupleOnlySql}
-                AND ${noCompletedQuoteForSameTupleSql}
+                AND ${pendingTupleOrRevisionSql}
                 ${divisionClause}
                 ${extraWhereSql}
                 ORDER BY E.DueDate DESC, E.RequestNo DESC

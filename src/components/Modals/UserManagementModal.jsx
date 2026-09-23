@@ -1,9 +1,65 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Modal from './Modal';
 import { useData } from '../../context/DataContext';
 import UserModal from './UserModal';
 import { useAuth } from '../../context/AuthContext';
+
+const API_BASE = import.meta.env.VITE_API_BASE || '';
+
+const COL_WIDTHS = {
+    status: 72,
+    action: 128,
+    prefix: 64,
+    name: 140,
+    email: 200,
+    mobile: 150,
+    designation: 180,
+    division: 180,
+    roles: 220,
+};
+
+const TABLE_MIN_WIDTH =
+    COL_WIDTHS.status +
+    COL_WIDTHS.action +
+    COL_WIDTHS.prefix +
+    COL_WIDTHS.name +
+    COL_WIDTHS.email +
+    COL_WIDTHS.mobile +
+    COL_WIDTHS.designation +
+    COL_WIDTHS.division +
+    COL_WIDTHS.roles;
+
+const colgroup = (
+    <colgroup>
+        <col style={{ width: COL_WIDTHS.status }} />
+        <col style={{ width: COL_WIDTHS.action }} />
+        <col style={{ width: COL_WIDTHS.prefix }} />
+        <col style={{ width: COL_WIDTHS.name }} />
+        <col style={{ width: COL_WIDTHS.email }} />
+        <col style={{ width: COL_WIDTHS.mobile }} />
+        <col style={{ width: COL_WIDTHS.designation }} />
+        <col style={{ width: COL_WIDTHS.division }} />
+        <col style={{ width: COL_WIDTHS.roles }} />
+    </colgroup>
+);
+
+const tableBaseStyle = {
+    fontSize: '13px',
+    minWidth: TABLE_MIN_WIDTH,
+    width: TABLE_MIN_WIDTH,
+    tableLayout: 'fixed',
+    marginBottom: 0,
+};
+
+const headerThStyle = {
+    backgroundColor: '#f1f5f9',
+    borderBottom: '1px solid #cbd5e1',
+    whiteSpace: 'nowrap',
+    verticalAlign: 'middle',
+    padding: '10px 8px',
+    fontWeight: 600,
+};
 
 const UserManagementModal = ({ show, onClose }) => {
     const { masters, addMaster, updateMaster, deleteMaster, updateMasters } = useData();
@@ -14,6 +70,25 @@ const UserManagementModal = ({ show, onClose }) => {
     const [editData, setEditData] = useState(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [userToDelete, setUserToDelete] = useState(null);
+    const [showResetConfirm, setShowResetConfirm] = useState(false);
+    const [userToReset, setUserToReset] = useState(null);
+    const [resetBusy, setResetBusy] = useState(false);
+    const headerScrollRef = useRef(null);
+    const bodyScrollRef = useRef(null);
+    const syncingScrollRef = useRef(false);
+
+    const syncHorizontalScroll = (source) => {
+        if (syncingScrollRef.current) return;
+        const headerEl = headerScrollRef.current;
+        const bodyEl = bodyScrollRef.current;
+        if (!headerEl || !bodyEl) return;
+        syncingScrollRef.current = true;
+        if (source === 'body') headerEl.scrollLeft = bodyEl.scrollLeft;
+        else bodyEl.scrollLeft = headerEl.scrollLeft;
+        requestAnimationFrame(() => {
+            syncingScrollRef.current = false;
+        });
+    };
 
     // List of Users
     const users = masters.users || [];
@@ -22,7 +97,8 @@ const UserManagementModal = ({ show, onClose }) => {
     const filteredUsers = users.filter(u =>
         (u.FullName && u.FullName.toLowerCase().includes(searchText.toLowerCase())) ||
         (u.EmailId && u.EmailId.toLowerCase().includes(searchText.toLowerCase())) ||
-        (u.MobileNumber && u.MobileNumber.toLowerCase().includes(searchText.toLowerCase()))
+        (u.MobileNumber && u.MobileNumber.toLowerCase().includes(searchText.toLowerCase())) ||
+        (u.Prefix && String(u.Prefix).toLowerCase().includes(searchText.toLowerCase()))
     );
 
     const handleAdd = () => {
@@ -42,6 +118,11 @@ const UserManagementModal = ({ show, onClose }) => {
         setShowDeleteConfirm(true);
     };
 
+    const confirmResetPassword = (user) => {
+        setUserToReset(user);
+        setShowResetConfirm(true);
+    };
+
     const handleDelete = async () => {
         if (!userToDelete) return;
 
@@ -58,6 +139,29 @@ const UserManagementModal = ({ show, onClose }) => {
         }
     };
 
+    const handleResetPassword = async () => {
+        if (!userToReset?.ID) return;
+        setResetBusy(true);
+        try {
+            const res = await fetch(`${API_BASE}/api/users/${userToReset.ID}/reset-password`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ModifiedBy: currentUser?.name || currentUser?.FullName || 'Admin' }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.message || 'Reset failed');
+            }
+            setShowResetConfirm(false);
+            setUserToReset(null);
+            alert(`Password cleared for ${userToReset.FullName || 'user'}. They must set a new password on next login.`);
+        } catch (e) {
+            alert(e.message || 'Failed to reset password.');
+        } finally {
+            setResetBusy(false);
+        }
+    };
+
     const handleUserSubmit = async (data) => {
         const payload = { ...data, ModifiedBy: currentUser?.name || 'Admin' };
 
@@ -65,7 +169,6 @@ const UserManagementModal = ({ show, onClose }) => {
             const result = await addMaster('user', payload);
             if (result) {
                 const newId = result.id;
-                // If ID is returned (from updated backend), use it. otherwise use payload or undefined (which is the bug source, but we fixed backend).
                 const newUser = { ...payload, ID: newId };
 
                 updateMasters(prev => ({
@@ -78,94 +181,140 @@ const UserManagementModal = ({ show, onClose }) => {
             if (success) {
                 updateMasters(prev => ({
                     ...prev,
-                    users: prev.users.map(u => u.ID === data.ID ? payload : u)
+                    users: prev.users.map(u => u.ID === data.ID ? { ...u, ...payload } : u)
                 }));
             }
         }
         setShowUserModal(false);
     };
 
+    const otherModalOpen = showDeleteConfirm || showResetConfirm;
+
     return (
         <>
             <Modal
-                show={show && !showDeleteConfirm}
+                show={show && !otherModalOpen}
                 title="User Management"
                 onClose={onClose}
-                width="800px" // Wider modal
+                maxWidth="min(1180px, 96vw)"
             >
                 {/* Search & Add */}
-                <div className="d-flex justify-content-between mb-3">
-                    <input
-                        type="text"
-                        className="form-control"
-                        placeholder="Search users..."
-                        value={searchText}
-                        onChange={(e) => setSearchText(e.target.value)}
-                        style={{ maxWidth: '300px', fontSize: '13px' }}
-                    />
+                <div className="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                    <div className="d-flex align-items-center gap-3 flex-wrap">
+                        <input
+                            type="text"
+                            className="form-control"
+                            placeholder="Search users..."
+                            value={searchText}
+                            onChange={(e) => setSearchText(e.target.value)}
+                            style={{ maxWidth: '300px', fontSize: '13px' }}
+                        />
+                        <span className="text-muted" style={{ fontSize: '12.5px', whiteSpace: 'nowrap' }}>
+                            {searchText.trim()
+                                ? <>Showing <strong>{filteredUsers.length}</strong> of <strong>{users.length}</strong></>
+                                : <>Total users: <strong>{users.length}</strong></>}
+                        </span>
+                    </div>
                     <button className="btn btn-primary btn-sm" onClick={handleAdd}>
                         <i className="bi bi-plus-lg me-1"></i> Add User
                     </button>
                 </div>
 
-                {/* Users Table */}
-                <div className="table-responsive" style={{ maxHeight: '400px', overflowY: 'auto' }}>
-                    <table className="table table-sm table-hover align-middle" style={{ fontSize: '13px' }}>
-                        <thead className="table-light">
-                            <tr>
-                                <th>Name</th>
-                                <th>Email</th>
-                                <th>Mobile</th>
-                                <th>Designation</th>
-                                <th>Department</th>
-                                <th>Roles</th>
-                                <th>Status</th>
-                                <th style={{ width: '100px', textAlign: 'center' }}>Action</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {filteredUsers.length === 0 ? (
-                                <tr><td colSpan="8" className="text-center text-muted">No users found.</td></tr>
-                            ) : (
-                                filteredUsers.map((u, idx) => (
-                                    <tr key={u.ID || idx}>
-                                        <td>{u.FullName}</td>
-                                        <td>{u.EmailId}</td>
-                                        <td>{u.MobileNumber}</td>
-                                        <td>{u.Designation}</td>
-                                        <td>{u.Department}</td>
-                                        <td>
-                                            {Array.isArray(u.Roles) ? u.Roles.join(', ') : u.Roles}
-                                        </td>
-                                        <td>
-                                            <span className={`badge ${u.Status === 'Active' ? 'bg-success' : 'bg-secondary'}`}>
-                                                {u.Status}
-                                            </span>
-                                        </td>
-                                        <td className="text-center">
-                                            <div className="d-flex justify-content-center">
-                                                <button
-                                                    className="btn btn-outline-primary btn-sm py-0 px-2 me-2"
-                                                    onClick={() => handleEdit(u)}
-                                                    title="Edit"
-                                                >
-                                                    <i className="bi bi-pencil"></i>
-                                                </button>
-                                                <button
-                                                    className="btn btn-outline-danger btn-sm py-0 px-2"
-                                                    onClick={() => confirmDelete(u)}
-                                                    title="Delete"
-                                                >
-                                                    <i className="bi bi-trash"></i>
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))
-                            )}
-                        </tbody>
-                    </table>
+                {/* Frozen header (outside body scroll) + scrollable rows — no sticky overlap */}
+                <div style={{ border: '1px solid #e2e8f0', borderRadius: '6px', overflow: 'hidden' }}>
+                    <div
+                        ref={headerScrollRef}
+                        onScroll={() => syncHorizontalScroll('header')}
+                        style={{
+                            overflowX: 'auto',
+                            overflowY: 'hidden',
+                            scrollbarWidth: 'none',
+                            msOverflowStyle: 'none',
+                        }}
+                        className="user-mgmt-header-scroll"
+                    >
+                        <table className="table table-sm mb-0" style={tableBaseStyle}>
+                            {colgroup}
+                            <thead>
+                                <tr>
+                                    <th style={{ ...headerThStyle, width: COL_WIDTHS.status }}>Status</th>
+                                    <th style={{ ...headerThStyle, width: COL_WIDTHS.action, textAlign: 'center' }}>Action</th>
+                                    <th style={{ ...headerThStyle, width: COL_WIDTHS.prefix }}>Prefix</th>
+                                    <th style={{ ...headerThStyle, width: COL_WIDTHS.name }}>Name</th>
+                                    <th style={{ ...headerThStyle, width: COL_WIDTHS.email }}>Email</th>
+                                    <th style={{ ...headerThStyle, width: COL_WIDTHS.mobile }}>Mobile</th>
+                                    <th style={{ ...headerThStyle, width: COL_WIDTHS.designation }}>Designation</th>
+                                    <th style={{ ...headerThStyle, width: COL_WIDTHS.division }}>Division</th>
+                                    <th style={{ ...headerThStyle, width: COL_WIDTHS.roles }}>Roles</th>
+                                </tr>
+                            </thead>
+                        </table>
+                    </div>
+                    <div
+                        ref={bodyScrollRef}
+                        onScroll={() => syncHorizontalScroll('body')}
+                        style={{ maxHeight: '380px', overflowX: 'auto', overflowY: 'auto' }}
+                    >
+                        <table className="table table-sm table-hover align-middle mb-0" style={tableBaseStyle}>
+                            {colgroup}
+                            <tbody>
+                                {filteredUsers.length === 0 ? (
+                                    <tr><td colSpan="9" className="text-center text-muted py-3">No users found.</td></tr>
+                                ) : (
+                                    filteredUsers.map((u, idx) => (
+                                        <tr key={u.ID || idx}>
+                                            <td>
+                                                <span className={`badge ${u.Status === 'Active' ? 'bg-success' : 'bg-secondary'}`}>
+                                                    {u.Status}
+                                                </span>
+                                            </td>
+                                            <td className="text-center" style={{ verticalAlign: 'middle', paddingTop: '8px', paddingBottom: '8px' }}>
+                                                <div className="d-flex justify-content-center gap-1">
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-outline-primary btn-sm py-0 px-2"
+                                                        onClick={() => handleEdit(u)}
+                                                        title="Edit"
+                                                    >
+                                                        <i className="bi bi-pencil"></i>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-outline-warning btn-sm py-0 px-2"
+                                                        onClick={() => confirmResetPassword(u)}
+                                                        title="Reset password (clear to null)"
+                                                    >
+                                                        <i className="bi bi-key"></i>
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-outline-danger btn-sm py-0 px-2"
+                                                        onClick={() => confirmDelete(u)}
+                                                        title="Delete"
+                                                    >
+                                                        <i className="bi bi-trash"></i>
+                                                    </button>
+                                                </div>
+                                            </td>
+                                            <td style={{ whiteSpace: 'nowrap' }}>{u.Prefix || '—'}</td>
+                                            <td style={{ wordBreak: 'break-word' }}>{u.FullName}</td>
+                                            <td style={{ wordBreak: 'break-word' }}>{u.EmailId}</td>
+                                            <td style={{ whiteSpace: 'nowrap' }}>{u.MobileNumber}</td>
+                                            <td style={{ wordBreak: 'break-word' }}>{u.Designation}</td>
+                                            <td style={{ wordBreak: 'break-word' }}>{u.Department}</td>
+                                            <td style={{ wordBreak: 'break-word' }}>
+                                                {Array.isArray(u.Roles) ? u.Roles.join(', ') : u.Roles}
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
+                <style>{`
+                    .user-mgmt-header-scroll::-webkit-scrollbar { display: none; }
+                `}</style>
             </Modal>
 
             {/* Reuse UserModal for Add/Edit */}
@@ -198,6 +347,35 @@ const UserManagementModal = ({ show, onClose }) => {
                             <div className="modal-footer">
                                 <button type="button" className="btn btn-secondary" onClick={() => setShowDeleteConfirm(false)}>Cancel</button>
                                 <button type="button" className="btn btn-danger" onClick={handleDelete}>Delete User</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>,
+                document.body
+            )}
+
+            {/* Reset Password Confirmation */}
+            {showResetConfirm && createPortal(
+                <div className="modal d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 10100 }}>
+                    <div className="modal-dialog modal-dialog-centered">
+                        <div className="modal-content shadow-lg">
+                            <div className="modal-header bg-warning">
+                                <h5 className="modal-title">Reset Password</h5>
+                                <button type="button" className="btn-close" onClick={() => !resetBusy && setShowResetConfirm(false)}></button>
+                            </div>
+                            <div className="modal-body">
+                                <p className="mb-2">
+                                    Clear password for <strong>{userToReset?.FullName}</strong> ({userToReset?.EmailId})?
+                                </p>
+                                <p className="text-muted small mb-0">
+                                    <code>LoginPassword</code> will be set to <strong>NULL</strong>. On next login they must set a new password (first-login flow).
+                                </p>
+                            </div>
+                            <div className="modal-footer">
+                                <button type="button" className="btn btn-secondary" disabled={resetBusy} onClick={() => setShowResetConfirm(false)}>Cancel</button>
+                                <button type="button" className="btn btn-warning" disabled={resetBusy} onClick={handleResetPassword}>
+                                    {resetBusy ? 'Resetting…' : 'Reset Password'}
+                                </button>
                             </div>
                         </div>
                     </div>

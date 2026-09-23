@@ -12,10 +12,13 @@ const { execSync } = require('child_process');
 const PROJECT_ROOT = __dirname;
 const skipNpmInstall = process.argv.includes('--skip-npm-install');
 const skipUploads = process.argv.includes('--skip-uploads');
-/** Pre-install node_modules on build machine (smoke test only â€” production must run npm ci on server). */
+/** Pre-install node_modules on build machine (smoke test only — production must run npm ci on server). */
 const withNodeModules = process.argv.includes('--with-node-modules');
-const BASELINE_VERSION = '2026-08-26-latest';
-const PDF_CSS_VERSION = '2026-08-26-latest';
+/** Optional: pin puppeteer@19.4.0 for Windows Server 2012 R2 (regenerates package-lock). Default: keep lock in sync. */
+const pinPuppeteer2012R2 = process.argv.includes('--ws2012');
+const BASELINE_VERSION = '2026-09-23-v1';
+/** Must match server/routes/quotePdf.js quotePdfCssVersion */
+const PDF_CSS_VERSION = '2026-09-13-v7';
 const FRONTEND_BUNDLE_MARKERS = [
     'data-ems-html2pdf',
     'margin-top: auto !important',
@@ -24,7 +27,9 @@ const FRONTEND_BUNDLE_MARKERS = [
     'f0f9ff',
 ];
 const dateStamp = new Date().toISOString().slice(0, 10);
-const DEPLOY_DIR = path.join(PROJECT_ROOT, `EMS_Deploy_${dateStamp}`);
+/** Unique folder name — use baseline so same-day rebuilds do not replace prior packages. */
+const PACKAGE_SLUG = BASELINE_VERSION;
+const DEPLOY_DIR = path.join(PROJECT_ROOT, `EMS_Deploy_${PACKAGE_SLUG}`);
 const FRONTEND_DIR = path.join(DEPLOY_DIR, 'frontend');
 const FRONTEND_DIST_DIR = path.join(FRONTEND_DIR, 'dist');
 const BACKEND_DIR = path.join(DEPLOY_DIR, 'backend');
@@ -112,14 +117,69 @@ function verifyFrontendBundle() {
     console.log(`âœ… Verified frontend PDF fix in assets/${mainJs}`);
 }
 
+/**
+ * Windows Server 2012 R2 only (--ws2012).
+ * Must regenerate package-lock after pinning or `npm ci` fails with
+ * "package.json and package-lock.json are out of sync" and deps like socket.io never install.
+ */
 function patchBackendPackageJsonFor2012R2() {
+    if (!pinPuppeteer2012R2) {
+        console.log('✅ backend/package.json left in sync with package-lock.json (use --ws2012 to pin puppeteer@19.4.0).');
+        return;
+    }
     const pkgPath = path.join(BACKEND_DIR, 'package.json');
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
     if (pkg.dependencies?.puppeteer) {
         pkg.dependencies.puppeteer = '19.4.0';
     }
     fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
-    console.log('âœ… backend/package.json pinned puppeteer@19.4.0 (Windows Server 2012 R2).');
+    console.log('✅ backend/package.json pinned puppeteer@19.4.0 (Windows Server 2012 R2).');
+    console.log('   Regenerating package-lock.json so npm ci stays in sync...');
+    try {
+        execSync('npm install --package-lock-only --ignore-scripts', {
+            cwd: BACKEND_DIR,
+            stdio: 'inherit',
+            env: { ...process.env, PUPPETEER_SKIP_DOWNLOAD: '1' },
+        });
+        console.log('✅ backend/package-lock.json regenerated for puppeteer@19.4.0.');
+    } catch (err) {
+        console.error('❌ Failed to regenerate package-lock after puppeteer pin:', err.message || err);
+        process.exit(1);
+    }
+}
+
+/** Fail packaging early if package.json / lockfile would break `npm ci` on the server. */
+function verifyBackendLockfileSync() {
+    const pkgPath = path.join(BACKEND_DIR, 'package.json');
+    const lockPath = path.join(BACKEND_DIR, 'package-lock.json');
+    if (!fs.existsSync(lockPath)) {
+        console.error('❌ backend/package-lock.json missing — run npm install in server/ before packaging.');
+        process.exit(1);
+    }
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    const lockDeps = lock.packages?.['']?.dependencies || {};
+    const pkgDeps = pkg.dependencies || {};
+    const mismatches = [];
+    for (const [name, range] of Object.entries(pkgDeps)) {
+        if (!(name in lockDeps)) {
+            mismatches.push(`${name} in package.json but missing from package-lock`);
+            continue;
+        }
+        if (String(lockDeps[name]) !== String(range)) {
+            mismatches.push(`${name}: package.json=${range} lock=${lockDeps[name]}`);
+        }
+    }
+    if (!('socket.io' in pkgDeps) || !('socket.io' in lockDeps)) {
+        mismatches.push('socket.io must be present in both package.json and package-lock.json');
+    }
+    if (mismatches.length) {
+        console.error('❌ backend package.json / package-lock.json out of sync:');
+        for (const m of mismatches) console.error(`   - ${m}`);
+        console.error('   Fix: cd server && npm install  (do not pin puppeteer without regenerating the lock)');
+        process.exit(1);
+    }
+    console.log('✅ Verified backend package-lock sync (includes socket.io).');
 }
 
 function writeEnvProduction2012R2() {
@@ -326,7 +386,7 @@ function copyDeployExtras() {
 function writeDeploymentGuide() {
     const guide = `# EMS IIS Deployment Guide
 
-Package: **EMS_Deploy_${dateStamp}**  
+Package: **EMS_Deploy_${PACKAGE_SLUG}**  
 Layout matches production reference \`EMS_Deploy_2026-06-03\`.
 
 ## Package contents
@@ -370,7 +430,7 @@ C:\\inetpub\\wwwroot\\EMS\\
   helpers\\
 \`\`\`
 
-Copy this entire \`EMS_Deploy_${dateStamp}\` folder contents to the server (or copy \`frontend\` + \`backend\` + \`helpers\` into your existing EMS site root).
+Copy this entire \`EMS_Deploy_${PACKAGE_SLUG}\` folder contents to the server (or copy \`frontend\` + \`backend\` + \`helpers\` into your existing EMS site root).
 
 This package includes \`backend\\uploads\` from dev (logos, quote files). On **fresh** IIS install, deploy as-is.
 
@@ -513,7 +573,7 @@ title EMS â€” One-click redeploy (PM2 restart)
 cd /d "%~dp0"
 echo ============================================================
 echo   EMS redeploy â€” site root: %CD%
-echo   Package: EMS_Deploy_${dateStamp}
+echo   Package: EMS_Deploy_${PACKAGE_SLUG}
 echo   Expected CSS: ${PDF_CSS_VERSION}
 echo ============================================================
 echo.
@@ -577,7 +637,7 @@ exit /b %VERIFY_ERR%
 }
 
 function writeOneClickDeployMd() {
-    const doc = `# EMS One-Click Redeploy (${dateStamp})
+    const doc = `# EMS One-Click Redeploy (${PACKAGE_SLUG})
 
 **Target:** \`C:\\inetpub\\wwwroot\\EMS\` on **151.50.1.38** (Windows Server 2012 R2)
 
@@ -704,10 +764,68 @@ pause
     fs.writeFileSync(
         path.join(HELPERS_DIR, 'install_dependencies.bat'),
         `@echo off
-title EMS Backend - First install (2012 R2)
-echo Windows Server 2012 R2: use fix_puppeteer_pdf_ws2012.bat instead of npx puppeteer browsers install chrome.
+title EMS Backend - npm ci (production)
+REM From site root: helpers\\install_dependencies.bat
+REM From backend:   .\\install_dependencies.bat
+cd /d "%~dp0"
+if exist "..\\backend\\package.json" (
+  cd /d "%~dp0..\\backend"
+) else if exist "package.json" (
+  rem already in backend
+) else (
+  echo ERROR: Cannot find backend\\package.json
+  echo Use: C:\\inetpub\\wwwroot\\EMS\\helpers\\install_dependencies.bat
+  echo Or:  C:\\inetpub\\wwwroot\\EMS\\backend\\install_dependencies.bat
+  pause
+  exit /b 1
+)
+echo ============================================================
+echo   EMS backend dependencies
+echo   Folder: %CD%
+echo ============================================================
+node -v
 echo.
-call "%~dp0fix_puppeteer_pdf_ws2012.bat"
+findstr /C:"\\"puppeteer\\": \\"19.4.0\\"" package.json >nul 2>&1
+if not errorlevel 1 (
+  echo ERROR: package.json still pins puppeteer@19.4.0 from an old deploy.
+  echo Replace BOTH backend\\package.json AND backend\\package-lock.json from EMS_Deploy_*-v5.
+  echo The error "lock puppeteer@24.x does not satisfy 19.4.0" means package.json was left on the old pin.
+  pause
+  exit /b 1
+)
+if not exist package-lock.json (
+  echo WARNING: package-lock.json missing — using npm install --omit=dev
+  call npm install --omit=dev
+  if errorlevel 1 exit /b 1
+  goto :done
+)
+echo Running: npm ci --omit=dev
+call npm ci --omit=dev
+if errorlevel 1 (
+  echo.
+  echo npm ci failed. Falling back to: npm install --omit=dev
+  call npm install --omit=dev
+  if errorlevel 1 (
+    echo ERROR: dependency install failed.
+    pause
+    exit /b 1
+  )
+)
+:done
+echo.
+if not exist node_modules\\socket.io (
+  echo ERROR: socket.io still missing after install.
+  pause
+  exit /b 1
+)
+if not exist node_modules\\puppeteer (
+  echo ERROR: puppeteer still missing after install.
+  pause
+  exit /b 1
+)
+echo OK: socket.io and puppeteer present.
+echo Restart: pm2 restart EMS-API --update-env
+pause
 `,
         'utf8'
     );
@@ -833,12 +951,16 @@ node quote-outlook-local-helper.cjs
     fs.writeFileSync(
         path.join(HELPERS_DIR, 'configure_arr.ps1'),
         `# Requires: Run as Administrator
-# Enables ARR reverse proxy and sets 180s timeout for quote PDF generation.
+# Enables ARR reverse proxy and sets timeout for quote PDF + Socket.IO (polling).
 Import-Module WebAdministration -ErrorAction Stop
 Write-Host "Enabling ARR proxy..."
 Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'enabled' -Value 'True'
-Write-Host "Setting proxy timeout to 180 seconds..."
-Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'timeout' -Value '00:03:00'
+Write-Host "Setting proxy timeout to 300 seconds..."
+Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'timeout' -Value '00:05:00'
+Write-Host ""
+Write-Host "WebSocket Protocol (optional — EMS ChatBox uses polling by default behind IIS):"
+Write-Host "  Install-WindowsFeature Web-WebSockets   # Server OS"
+Write-Host "  Or: Turn Windows features on — IIS — WWW Services — Application Development — WebSocket Protocol"
 Write-Host "ARR configured. Restart IIS if needed: iisreset"
 `,
         'utf8'
@@ -933,7 +1055,7 @@ function writeManifest(uploadsMeta) {
         /* ignore */
     }
     const manifest = {
-        package: `EMS_Deploy_${dateStamp}`,
+        package: `EMS_Deploy_${PACKAGE_SLUG}`,
         baselineVersion: BASELINE_VERSION,
         quotePdfCssVersion: PDF_CSS_VERSION,
         builtAt: new Date().toISOString(),
@@ -1037,9 +1159,15 @@ copyDeployExtras();
 writeEnvProductionExample();
 writeEnvProduction2012R2();
 patchBackendPackageJsonFor2012R2();
+verifyBackendLockfileSync();
 verifyRequiredFiles();
 verifyFrontendBundle();
 writeHelperScripts();
+/** Also ship install script inside backend so `.\\install_dependencies.bat` works from that folder. */
+fs.copyFileSync(
+    path.join(HELPERS_DIR, 'install_dependencies.bat'),
+    path.join(BACKEND_DIR, 'install_dependencies.bat')
+);
 writeReplaceAndRestartScripts();
 writeOneClickDeployMd();
 writeDeploymentGuide();

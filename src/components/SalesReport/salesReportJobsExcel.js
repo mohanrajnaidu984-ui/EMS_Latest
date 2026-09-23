@@ -54,9 +54,10 @@ export function getJobsExportColumns(topJobStatus, tableConfig) {
     const cfg = tableConfig || {};
     const cols = [
         { key: 'slNo', header: 'Sl.No.', width: 8, type: 'number' },
-        { key: 'requestNo', header: 'Enquiry No.', width: 12, type: 'text' },
+        { key: 'requestNo', header: 'Enq No.', width: 8, type: 'text' },
         { key: 'projectName', header: 'Project Name', width: 36, type: 'text' },
-        { key: 'customerName', header: 'Customer Name', width: 32, type: 'text' },
+        { key: 'division', header: 'Division', width: 18, type: 'text' },
+        { key: 'customerName', header: 'Quoted to - Customer Name', width: 32, type: 'text' },
         { key: 'jobValue', header: cfg.valueHeader || 'Value', width: 16, type: 'number' }
     ];
 
@@ -123,6 +124,8 @@ function cellValueForRow(col, row, idx, topJobStatus, headingLabel) {
             return idx + 1;
         case 'requestNo':
             return dash(row.RequestNo || row.EnquiryNo);
+        case 'division':
+            return dash(row.Division || row.OwnJob);
         case 'projectName':
             return dash(row.ProjectName);
         case 'customerName':

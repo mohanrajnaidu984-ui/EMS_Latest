@@ -31,9 +31,16 @@ import {
 import DashboardQuoteSummaryTable from '../Dashboard/DashboardQuoteSummaryTable';
 import ExcelDownloadButton from '../shared/ExcelDownloadButton';
 import { downloadQuoteListXlsx } from './quoteListExcel';
+import {
+    buildMultiOptionPricingTablesHtml,
+    mergeMultiOptionPricingTermsHtml,
+    formatPricingTotalRowLabel,
+    isPricingTotalRowLabel,
+    pricingOptionTableId,
+} from './pricingOptionTables';
 import '../../styles/emsTableColumnFilters.css';
 import CreatableSelect from 'react-select/creatable';
-import { format, parseISO, addDays } from 'date-fns';
+import { format, parseISO, addDays, parse, isValid } from 'date-fns';
 import DateInput from '../Enquiry/DateInput';
 import {
     EMS_LIST_SEARCH_ENABLED_STYLE,
@@ -111,6 +118,7 @@ import {
     stripSpellMarksFromHtml,
     subscribeSpellDictionaryReady,
 } from './clauseEditorSpellcheck';
+import { disconnectChatboxSocket } from '../../utils/chatboxSocket';
 import { stripClauseEditorSpuriousBlankRows, normalizeClauseListHtml } from './clauseEditorListPresets';
 import {
     CLAUSE_LIST_STYLES_CSS,
@@ -208,7 +216,21 @@ import {
     writeQuoteSessionSnapshot,
     clearQuoteSessionSnapshot,
 } from '../../utils/quoteSessionRestore';
-import { parseApprovalWorkflowJson, serializeApprovalWorkflowJson, buildCompanyApproverOptions, normalizeApprovalStepsFromApi } from '../../utils/quoteApprovalWorkflow';
+import { parseApprovalWorkflowJson, serializeApprovalWorkflowJson, buildCompanyApproverOptions, normalizeApprovalStepsFromApi, resetApprovalStepsForNewRound } from '../../utils/quoteApprovalWorkflow';
+import {
+    formatRuntimeCurrencyAmount,
+    numberToWordsRuntimeCurrency,
+    parseCurrencyAmount,
+    stripCurrencyNoise,
+    getRuntimeCurrency,
+    getCurrencyMeta,
+    runtimeCurrencySymbol,
+} from '../../utils/currency';
+import {
+    parseUserDepartments,
+    formatUserDepartments,
+    userHasDepartment,
+} from '../../utils/userDepartments';
 import html2pdf from 'html2pdf.js';
 
 /** Confirms this file is the bundle executed by Vite (Main.jsx → ./Quote/QuoteForm). Hard-refresh if missing. */
@@ -216,6 +238,26 @@ console.log("QUOTE FILE LOADED");
 
 /** Match Pricing/Probability: when set, all `/api/*` calls (including PDF) hit the Express host. */
 const API_BASE = String(import.meta.env?.VITE_API_BASE ?? '').replace(/\/+$/, '');
+
+/**
+ * Quote uses a single-select Division — empty only while options are still loading.
+ */
+function quoteEffectiveDivisions(selectedCsvOrList, allOptions = []) {
+    const selected = parseUserDepartments(selectedCsvOrList);
+    if (selected.length) return [selected[0]];
+    const all = parseUserDepartments(allOptions);
+    return all.length ? [all[0]] : [];
+}
+
+function quoteDivisionQueryParam(selectedCsvOrList, allOptions = []) {
+    const list = quoteEffectiveDivisions(selectedCsvOrList, allOptions);
+    if (!list.length) return '';
+    return `&division=${encodeURIComponent(formatUserDepartments(list))}`;
+}
+
+function quotePrimaryDivision(selectedCsvOrList, allOptions = []) {
+    return quoteEffectiveDivisions(selectedCsvOrList, allOptions)[0] || '';
+}
 
 /** Production IIS: Download PDF → browser Print / Save as PDF. Email still uses server Puppeteer. */
 const QUOTE_PDF_BROWSER_DOWNLOAD = isQuotePdfBrowserDownload();
@@ -1065,11 +1107,25 @@ function separateClauseSubNumberLines(html) {
 
 /** Preview/PDF body: only renumber clause majors for order; HTML structure mirrors the editor. */
 function getClauseDisplayBodyHtml(html, listKey, displayMajor, options = {}) {
+    let body = String(html || '');
+    // Normal/view/PDF: always force VAT = 10% of Total (DOM or regex) — edit mode recalcs live.
+    const isPricing =
+        listKey === 'showPricingTerms' ||
+        /data-ems-amount=["']vat["']/i.test(body) ||
+        /data-ems-row=["']vat["']/i.test(body) ||
+        /id=["']ems-auto-price-summary-table/i.test(body);
+    /* Skip DOMParser VAT reconcile while typing — it freezes the editor on every keystroke. */
+    if (isPricing && options.reconcile !== false) {
+        body = ensurePricingTableColgroupInHtml(reconcilePricingVatAmountCellsInHtml(body));
+    } else if (isPricing) {
+        body = ensurePricingTableColgroupInHtml(body);
+    }
     const canon = CLAUSE_MAJOR_BY_LIST_KEY[listKey];
-    const renumbered = renumberClauseMajorInHtml(html, canon, displayMajor);
+    const renumbered = renumberClauseMajorInHtml(body, canon, displayMajor);
     const normalized = normalizeClauseProseTextColorsInString(renumbered);
-    /* Spell decorate is expensive (full Hunspell). Skip while a clause editor is open / on demand. */
-    if (options.spell === false) return normalized;
+    /* Spell decorate is expensive (full Hunspell). Skip while a clause editor is open / on demand.
+       Also skip for Pricing tables — marks inside amount cells have caused stale/corrupt totals. */
+    if (options.spell === false || isPricing) return normalized;
     return decorateHtmlWithSpellMarks(stripSpellMarksFromHtml(normalized));
 }
 
@@ -1140,7 +1196,9 @@ const EMS_AUTO_PRICE_SUMMARY_TABLE_ID = 'ems-auto-price-summary-table';
 const EMS_PRICING_VAT_RATE = 0.1;
 
 function roundBhdAmount(n) {
-    return Math.round((Number(n) || 0) * 1000) / 1000;
+    const decimals = getCurrencyMeta(getRuntimeCurrency()).decimals;
+    const factor = 10 ** decimals;
+    return Math.round((Number(n) || 0) * factor) / factor;
 }
 
 /** @param {number} baseTotal sum of checked division Base Price rows */
@@ -1162,22 +1220,18 @@ function clauseHtmlHasEmsAutoPricingTable(html) {
     return (
         raw.includes(`id="${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}"`)
         || raw.includes(`id='${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}'`)
+        || /id=["']ems-auto-price-summary-table--/i.test(raw)
+        || /data-ems-pricing-cols=["']fixed["']/i.test(raw)
     );
 }
 
 function mergePricingTermsClauseHtml(prevHtml, tableFullHtml, proseFallback) {
-    const prev = String(prevHtml || '').trim();
-    const idAttr = EMS_AUTO_PRICE_SUMMARY_TABLE_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const idRe = new RegExp(`<table[^>]*id=["']${idAttr}["'][^>]*>[\\s\\S]*?<\\/table>\\s*`, 'i');
-    if (idRe.test(prev)) {
-        const rest = prev.replace(idRe, '').trim();
-        return `${tableFullHtml}\n${rest || String(proseFallback || '').trim()}`;
-    }
-    if (/^<table/i.test(prev)) {
-        const rest = prev.replace(/^<table[\s\S]*?<\/table>\s*/i, '').trim();
-        return `${tableFullHtml}\n${rest || String(proseFallback || '').trim()}`;
-    }
-    return `${tableFullHtml}\n${String(proseFallback || '').trim()}`;
+    return mergeMultiOptionPricingTermsHtml(
+        prevHtml,
+        tableFullHtml,
+        proseFallback,
+        clauseHtmlHasEmsAutoPricingTable
+    );
 }
 
 function buildClause41LumpSumString(grandTotalNum, numberToWordsFn) {
@@ -1186,11 +1240,12 @@ function buildClause41LumpSumString(grandTotalNum, numberToWordsFn) {
 }
 
 /**
- * Match `BD #,###.###` plus an optional plain-text `(…)` lump-sum.
+ * Match `BD/#,###.###` (any Master_EnquiryFor currency symbol/code) plus optional plain-text `(…)`.
  * Must NOT use `[\s\S]*?` inside parens — spell-mark CSS (`linear-gradient(...)`) contains `)`,
  * and matching that truncates the tag so style/`data-suggestions` tails leak as visible junk text.
  */
-const CLAUSE_41_BD_FIGURES = String.raw`-?BD(?:\s|&nbsp;)*-?[\d,]+\.\d{2,4}`;
+const CLAUSE_41_CUR_TOKEN = String.raw`(?:BHD|AED|SAR|USD|EUR|GBP|KWD|OMR|QAR|BD|KD)`;
+const CLAUSE_41_BD_FIGURES = String.raw`-?${CLAUSE_41_CUR_TOKEN}(?:\s|&nbsp;)*-?[\d,]+\.\d{2,4}`;
 const CLAUSE_41_PLAIN_PAREN = String.raw`\((?:[^<)]|&nbsp;)*\)`;
 const CLAUSE_41_LUMP_IN_HTML_RE = new RegExp(
     String.raw`(${CLAUSE_41_BD_FIGURES})(?:\s*${CLAUSE_41_PLAIN_PAREN})?`,
@@ -1305,11 +1360,98 @@ function parseGrandTotalWithVatFromPricingTableElement(table) {
 /**
  * Align clause 4.1 lump-sum prose with the auto-table total: replaces `[Amount in figures and words]` and
  * an already-filled `shall be BD … (…)` segment (e.g. from a loaded revision) so the table and 4.1 stay in sync.
+ * Multi-option tables use `data-ems-price-wording` paragraphs under each table.
  * @param {(n: number) => string} numberToWordsFn e.g. numberToWordsBHD
  */
+function syncAllPricingOptionWordingsInHtml(html, numberToWordsFn) {
+    const raw = String(html || '');
+    if (typeof DOMParser === 'undefined' || typeof numberToWordsFn !== 'function') {
+        return separateClauseSubNumberLines(raw);
+    }
+    try {
+        const doc = new DOMParser().parseFromString(`<div id="ems-pw-root">${raw}</div>`, 'text/html');
+        const root = doc.getElementById('ems-pw-root');
+        if (!root) return separateClauseSubNumberLines(raw);
+        const tables = [
+            ...root.querySelectorAll(
+                'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+            ),
+        ];
+        if (!tables.length) return separateClauseSubNumberLines(raw);
+        let changed = false;
+        tables.forEach((table) => {
+            const opt = String(table.getAttribute('data-ems-price-option') || '').trim() || 'Base Price';
+            const grand =
+                parseGrandTotalWithVatFromPricingTableElement(table)
+                ?? (() => {
+                    const base = parseBaseTotalFromPricingTableElement(table);
+                    return base != null ? calcPricingTotalsFromBase(base).grandWithVat : null;
+                })();
+            if (grand == null || !Number.isFinite(grand)) return;
+            const totalString = buildClause41LumpSumString(grand, numberToWordsFn);
+            const wording = [...root.querySelectorAll('p[data-ems-price-wording]')].find(
+                (p) => String(p.getAttribute('data-ems-price-wording') || '').trim() === opt
+            );
+            if (!wording) return;
+            const next = replaceClause41LumpSumInElementHtml(wording.innerHTML, totalString);
+            if (next !== wording.innerHTML) {
+                wording.innerHTML = next;
+                changed = true;
+            }
+        });
+        return separateClauseSubNumberLines(changed ? root.innerHTML : raw);
+    } catch (_e) {
+        return separateClauseSubNumberLines(raw);
+    }
+}
+
+function syncAllPricingOptionWordingsInWysiwyg(wys, numberToWordsFn) {
+    if (!wys || typeof numberToWordsFn !== 'function') return;
+    const tables = [
+        ...wys.querySelectorAll(
+            'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+        ),
+    ];
+    if (!tables.length) return;
+    const sel = wys.ownerDocument?.getSelection?.();
+    const anchor = sel?.anchorNode || null;
+    const anchorEl =
+        anchor?.nodeType === 3
+            ? anchor.parentElement
+            : anchor?.nodeType === 1
+              ? anchor
+              : null;
+
+    tables.forEach((table) => {
+        const opt = String(table.getAttribute('data-ems-price-option') || '').trim() || 'Base Price';
+        const grand =
+            parseGrandTotalWithVatFromPricingTableElement(table)
+            ?? (() => {
+                const base = parseBaseTotalFromPricingTableElement(table);
+                return base != null ? calcPricingTotalsFromBase(base).grandWithVat : null;
+            })();
+        if (grand == null || !Number.isFinite(grand)) return;
+        const totalString = buildClause41LumpSumString(grand, numberToWordsFn);
+        const wording = [...wys.querySelectorAll('p[data-ems-price-wording]')].find(
+            (p) => String(p.getAttribute('data-ems-price-wording') || '').trim() === opt
+        );
+        if (!wording) return;
+        if (anchorEl && wording.contains(anchorEl)) return;
+        const next = replaceClause41LumpSumInElementHtml(wording.innerHTML, totalString);
+        if (next !== wording.innerHTML) wording.innerHTML = next;
+    });
+}
+
 function syncPricingTerms41LumpSumProse(html, grandTotalNum, foundPricedOptional, numberToWordsFn) {
-    if (foundPricedOptional || !Number.isFinite(Number(grandTotalNum))) {
+    if (foundPricedOptional) {
         return separateClauseSubNumberLines(String(html || ''));
+    }
+    const raw = String(html || '');
+    if (/data-ems-price-wording=/i.test(raw)) {
+        return syncAllPricingOptionWordingsInHtml(raw, numberToWordsFn);
+    }
+    if (!Number.isFinite(Number(grandTotalNum))) {
+        return separateClauseSubNumberLines(raw);
     }
     return patchClause41LumpSumInHtml(html, grandTotalNum, numberToWordsFn);
 }
@@ -1375,9 +1517,10 @@ function ensureEmsAutoPricingTablePresentationInHtml(html) {
                     ),
                 ];
                 if (tables.length) {
-                    tables.forEach((table) => {
+                    tables.forEach((table, idx) => {
                         if (!table.getAttribute('id')) {
-                            table.setAttribute('id', EMS_AUTO_PRICE_SUMMARY_TABLE_ID);
+                            const opt = String(table.getAttribute('data-ems-price-option') || '').trim();
+                            table.setAttribute('id', pricingOptionTableId(opt || 'Base Price', idx));
                         }
                         if (!table.getAttribute('data-ems-pricing-cols')) {
                             table.setAttribute('data-ems-pricing-cols', 'fixed');
@@ -1423,12 +1566,8 @@ function ensurePricingTableColgroupInHtml(html) {
     ) {
         return out;
     }
-    const idAttr = EMS_AUTO_PRICE_SUMMARY_TABLE_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const tableOpenRe = new RegExp(
-        `(<table[^>]*id=["']${idAttr}["'][^>]*>)(\\s*<colgroup>[\\s\\S]*?<\\/colgroup>)?`,
-        'i'
-    );
-    if (!tableOpenRe.test(raw)) return raw;
+    const tableOpenRe =
+        /(<table[^>]*(?:id=["']ems-auto-price-summary-table(?:--[^"']*)?["']|data-ems-pricing-cols=["']fixed["'])[^>]*>)(\s*<colgroup>[\s\S]*?<\/colgroup>)?/gi;
     out = raw.replace(tableOpenRe, (full, openTag) => {
         const wAttr = openTag.match(/data-ems-col-widths=["']([^"']+)["']/i);
         const colgroup = wAttr
@@ -1439,72 +1578,42 @@ function ensurePricingTableColgroupInHtml(html) {
     return ensureEmsAutoPricingTablePresentationInHtml(out);
 }
 
-function buildEmsAutoPricingTableHtml(summary, activeJobs) {
-    const pad = EMS_QUOTE_PRICING_TABLE_CELL_PADDING;
-    const padGroup = EMS_QUOTE_PRICING_TABLE_CELL_PADDING;
-    const padIndent = '2px 10px 2px 16px';
-    const cellBorder = EMS_QUOTE_PRICING_TABLE_CELL_BORDER;
-    const fmtBhd = (n) =>
-        `BD ${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}`;
-    let tableHtml = `<table id="${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}" data-ems-pricing-cols="fixed" style="width:${EMS_QUOTE_PRICING_TABLE_WIDTH};table-layout:fixed;border-collapse:collapse;margin-top:${EMS_QUOTE_PRICING_TABLE_MARGIN_TOP};margin-bottom:6px;font-size:11px;line-height:1.25;border:${EMS_QUOTE_PRICING_TABLE_OUTER_BORDER};">`;
-    tableHtml += emsPricingTableColgroupHtml();
-    tableHtml +=
-        `<thead><tr><th style="padding:${pad};border:${cellBorder};text-align:left;font-size:11px;font-weight:600;background:${EMS_QUOTE_PRICING_TABLE_HEADER_BG};color:${EMS_QUOTE_PRICING_TABLE_HEADER_COLOR};">Description</th><th style="padding:${pad};border:${cellBorder};text-align:right;font-size:11px;font-weight:600;background:${EMS_QUOTE_PRICING_TABLE_HEADER_BG};color:${EMS_QUOTE_PRICING_TABLE_HEADER_COLOR};">Amount (BHD)</th></tr></thead>`;
-    tableHtml += '<tbody>';
-
-    let htmlGrandTotal = 0;
-    const checked = Array.isArray(activeJobs) ? activeJobs : [];
-
-    (summary || []).forEach((grp) => {
-        if (!grp?.name || !jobNameMatchesActiveJobsList(grp.name, checked)) return;
-
-        const cleanedName = String(grp.name).replace(/^(LEAD JOB |SUB JOB) \/ /, '');
-        const items = Array.isArray(grp.items) ? grp.items : [];
-        const baseItem = items.find((i) => i?.name === 'Base Price');
-        const otherItems = items.filter((i) => i?.name !== 'Base Price');
-        const basePrice = Number(baseItem?.total) || 0;
-        if (basePrice) htmlGrandTotal += basePrice;
-
-        // Division name now shares its row with the Base Price (single row when no other items).
-        // `data-ems-row` lets `parseLumpSumFromAutoTableHtml` find division-row amounts even after user edits.
-        tableHtml += `<tr data-ems-row="division"><td style="padding:${padGroup};border:${cellBorder};font-weight:600;font-size:11px;background:#ffffff;color:#0f172a;">${cleanedName}</td><td data-ems-amount="division" style="padding:${padGroup};border:${cellBorder};text-align:right;font-weight:600;font-size:11px;background:#ffffff;color:#0f172a;">${baseItem ? fmtBhd(basePrice) : ''}</td></tr>`;
-
-        otherItems.forEach((item) => {
-            const itemTotal = Number(item?.total) || 0;
-            htmlGrandTotal += itemTotal;
-            tableHtml += `<tr data-ems-row="item"><td style="padding:${padIndent};border:${cellBorder};font-size:11px;color:#0f172a;">${item.name}</td><td data-ems-amount="item" style="padding:${pad};border:${cellBorder};text-align:right;font-size:11px;color:#0f172a;">${fmtBhd(item.total)}</td></tr>`;
-        });
+function buildEmsAutoPricingTableHtml(summary, activeJobs, numberToWordsFn = null) {
+    return buildMultiOptionPricingTablesHtml({
+        summary,
+        activeJobs,
+        jobNameMatchesActiveJobsList,
+        calcPricingTotalsFromBase,
+        formatLumpSumFn:
+            typeof numberToWordsFn === 'function'
+                ? (n) => buildClause41LumpSumString(n, numberToWordsFn)
+                : null,
+        theme: {
+            EMS_QUOTE_PRICING_TABLE_CELL_PADDING,
+            EMS_QUOTE_PRICING_TABLE_CELL_BORDER,
+            EMS_QUOTE_PRICING_TABLE_HEADER_BG,
+            EMS_QUOTE_PRICING_TABLE_HEADER_COLOR,
+            EMS_QUOTE_PRICING_TABLE_TOTAL_BG,
+            EMS_QUOTE_PRICING_TABLE_WIDTH,
+            EMS_QUOTE_PRICING_TABLE_MARGIN_TOP,
+            EMS_QUOTE_PRICING_TABLE_DESC_COL_WIDTH,
+            EMS_QUOTE_PRICING_TABLE_AMOUNT_COL_WIDTH,
+            EMS_QUOTE_PRICING_TABLE_OUTER_BORDER,
+        },
     });
-
-    let htmlGrandTotalWithVat = 0;
-    if (htmlGrandTotal > 0) {
-        const { vat, grandWithVat } = calcPricingTotalsFromBase(htmlGrandTotal);
-        htmlGrandTotalWithVat = grandWithVat;
-        const footerStyle = `padding:${padGroup};border:${cellBorder};border-top:1px solid #94a3b8;text-align:right;font-size:11px;font-weight:700;background:${EMS_QUOTE_PRICING_TABLE_TOTAL_BG};color:#0f172a;`;
-        tableHtml += `<tr data-ems-row="total"><td style="${footerStyle}">Total (Base Price)</td><td data-ems-amount="total" style="${footerStyle}">${fmtBhd(htmlGrandTotal)}</td></tr>`;
-        tableHtml += `<tr data-ems-row="vat"><td style="${footerStyle}">VAT 10%</td><td data-ems-amount="vat" style="${footerStyle}">${fmtBhd(vat)}</td></tr>`;
-        tableHtml += `<tr data-ems-row="grand-vat"><td style="${footerStyle}">Grand Total with VAT 10%</td><td data-ems-amount="grand-vat" style="${footerStyle}">${fmtBhd(grandWithVat)}</td></tr>`;
-    }
-    tableHtml += '</tbody></table>';
-
-    return { tableHtml, htmlGrandTotal, htmlGrandTotalWithVat };
 }
 
-/** Format any number to "BD #,###.###" (3 decimals) for the auto table / lump-sum cells. */
+/** Format any number using Master_EnquiryFor currency for the active company/division. */
 function formatBhdAmount(n) {
-    const num = Number(n || 0);
-    if (!Number.isFinite(num)) return 'BD 0.000';
-    const absFmt = Math.abs(num).toLocaleString('en-US', {
-        minimumFractionDigits: 3,
-        maximumFractionDigits: 3,
-    });
-    return num < 0 ? `-BD ${absFmt}` : `BD ${absFmt}`;
+    return formatRuntimeCurrencyAmount(n);
 }
 
 const EMS_PRICING_FOOTER_LABEL_RE =
-    /^(Total \(Base Price\)|Discount(\s*\([\d.]+%\))?|Final Discounted Price|VAT\s*10%|Grand Total)/i;
+    /^(Total(\s*\([^)]*\))?|Discount(\s*\([\d.]+%\))?|Final Discounted Price|VAT\s*10%|Grand Total)/i;
 
-/** Parse BD cell text — supports negatives, commas, accounting parentheses, and "-BD". */
+const EMS_CUR_TOKEN_RE = String.raw`(?:BHD|AED|SAR|USD|EUR|GBP|KWD|OMR|QAR|BD|KD)`;
+
+/** Parse currency cell text — supports negatives, commas, accounting parentheses, and "-BD"/other codes. */
 function isIncompleteBhdAmountText(raw) {
     const txt = String(raw || '')
         .replace(/<[^>]*>/g, ' ')
@@ -1514,9 +1623,9 @@ function isIncompleteBhdAmountText(raw) {
     return (
         txt === '-'
         || /^-\s*$/.test(txt)
-        || /^-\s*BD\s*$/i.test(txt)
-        || /^BD\s*-\s*$/i.test(txt)
-        || /^-\s*BD\s*[.,]?\s*$/i.test(txt)
+        || new RegExp(`^-\\s*${EMS_CUR_TOKEN_RE}\\s*$`, 'i').test(txt)
+        || new RegExp(`^${EMS_CUR_TOKEN_RE}\\s*-\\s*$`, 'i').test(txt)
+        || new RegExp(`^-\\s*${EMS_CUR_TOKEN_RE}\\s*[.,]?\\s*$`, 'i').test(txt)
     );
 }
 
@@ -1542,8 +1651,10 @@ function formatDiscountRowLabel(discountAmt, baseTotal) {
     return `Discount (${numStr}%)`;
 }
 
-/** Default Discount amount — "-BD " prefix; user may delete the minus. */
-const EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT = '-BD ';
+/** Default Discount amount — "-{symbol} " prefix; user may delete the minus. */
+function getEmsPricingDiscountAmountDefault() {
+    return `-${runtimeCurrencySymbol()} `;
+}
 
 /** True when the typed discount text should keep a leading minus after format. */
 function discountAmountTextPrefersMinus(raw) {
@@ -1554,20 +1665,21 @@ function discountAmountTextPrefersMinus(raw) {
     if (!txt) return true;
     if (/^-/.test(txt)) return true;
     if (/^\(\s*[\d,]/.test(txt)) return true;
-    if (/\bBD\s+-/i.test(txt)) return true;
-    /* Explicit positive "BD …" or bare digits — user removed the minus. */
-    if (/^BD\b/i.test(txt)) return false;
+    if (new RegExp(`\\b${EMS_CUR_TOKEN_RE}\\s+-`, 'i').test(txt)) return true;
+    /* Explicit positive currency … or bare digits — user removed the minus. */
+    if (new RegExp(`^${EMS_CUR_TOKEN_RE}\\b`, 'i').test(txt)) return false;
     if (/^[\d.,]+$/.test(txt)) return false;
     return true;
 }
 
 /** Format Discount amount as "-BD 1,200.000" or "BD 1,200.000" (preserves user minus choice). */
 function formatDiscountAmountDisplay(raw, parsed) {
-    if (parsed == null || !Number.isFinite(parsed)) return EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT;
+    const fallback = getEmsPricingDiscountAmountDefault();
+    if (parsed == null || !Number.isFinite(parsed)) return fallback;
     const magnitude = Math.abs(parsed);
     const useMinus = discountAmountTextPrefersMinus(raw);
     if (magnitude === 0) {
-        return useMinus ? EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT : formatBhdAmount(0);
+        return useMinus ? fallback : formatBhdAmount(0);
     }
     return formatBhdAmount(useMinus ? -magnitude : magnitude);
 }
@@ -1594,13 +1706,12 @@ function parseBhdAmountText(raw) {
         .replace(/&nbsp;/gi, ' ')
         .trim();
     if (isIncompleteBhdAmountText(txt)) return null;
-    const negBdPrefix = /^\s*-\s*BD\b/i.test(txt) || /\bBD\s+-/i.test(txt);
+    const negBdPrefix =
+        new RegExp(`^\\s*-\\s*${EMS_CUR_TOKEN_RE}\\b`, 'i').test(txt)
+        || new RegExp(`\\b${EMS_CUR_TOKEN_RE}\\s+-`, 'i').test(txt);
     const parenNeg = /\(/.test(txt) && /\)/.test(txt);
-    const cleaned = txt
-        .replace(/[()]/g, '')
-        .replace(/[^0-9.,\-]/g, '')
-        .replace(/,/g, '');
-    const n = parseFloat(cleaned);
+    const cleaned = stripCurrencyNoise(txt).replace(/[^0-9.,\-]/g, '');
+    const n = parseCurrencyAmount(cleaned) ?? parseFloat(cleaned);
     if (!Number.isFinite(n)) return 0;
     if (n < 0) return n;
     if (negBdPrefix || (parenNeg && n > 0)) return -n;
@@ -1619,7 +1730,7 @@ function extractEmsAutoPricingTableHtml(html) {
 function isEmsPricingFooterRowEl(rowKind, label) {
     const labelTrim = String(label || '').trim();
     if (EMS_PRICING_FOOTER_LABEL_RE.test(labelTrim)) return true;
-    if (rowKind === 'total' && /^Total\s*\(Base Price\)/i.test(labelTrim)) return true;
+    if (rowKind === 'total' && isPricingTotalRowLabel(labelTrim)) return true;
     if (rowKind === 'discount' && isDiscountPricingLabel(labelTrim)) return true;
     if (rowKind === 'final-discounted' && isFinalDiscountedPricingLabel(labelTrim)) return true;
     if (rowKind === 'vat' && /^VAT\b/i.test(labelTrim)) return true;
@@ -1649,6 +1760,9 @@ function isPricingTableFooterLabel(label) {
 function isPricingTableFooterRow(row) {
     const cells = row?.cells || [];
     if (cells.length < 2) return false;
+    const kind = String(row.getAttribute('data-ems-row') || '').trim();
+    // Keep Total/VAT/Grand rows even if Jodit mangled the label text.
+    if (EMS_PRICING_FOOTER_ROW_KIND_RE.test(kind)) return true;
     return isPricingTableFooterLabel(cells[0].textContent);
 }
 
@@ -1670,21 +1784,22 @@ function sanitizeMisplacedPricingFooterAttrsInTable(table) {
 }
 
 function sanitizeMisplacedPricingFooterAttrsInTableHtml(html) {
-    const tableHtml = extractEmsAutoPricingTableHtml(html);
-    if (!tableHtml) return String(html || '');
     if (typeof DOMParser === 'undefined') return String(html || '');
     try {
-        const doc = new DOMParser().parseFromString(tableHtml, 'text/html');
-        const table = doc.querySelector('table');
-        if (!table) return String(html || '');
-        sanitizeMisplacedPricingFooterAttrsInTable(table);
-        const sanitizedTable = table.outerHTML;
-        const idAttr = EMS_AUTO_PRICE_SUMMARY_TABLE_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const tableRe = new RegExp(
-            `<table[^>]*(?:id=["']${idAttr}["']|data-ems-pricing-cols=["']fixed["'])[^>]*>[\\s\\S]*?<\\/table>`,
-            'i'
+        const doc = new DOMParser().parseFromString(
+            `<div id="ems-san-root">${String(html || '')}</div>`,
+            'text/html'
         );
-        return String(html || '').replace(tableRe, sanitizedTable);
+        const root = doc.getElementById('ems-san-root');
+        if (!root) return String(html || '');
+        const tables = [
+            ...root.querySelectorAll(
+                'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+            ),
+        ];
+        if (!tables.length) return String(html || '');
+        tables.forEach((table) => sanitizeMisplacedPricingFooterAttrsInTable(table));
+        return root.innerHTML;
     } catch (_e) {
         return String(html || '');
     }
@@ -1796,24 +1911,47 @@ function parseLumpSumFromAutoTableHtml(html) {
 }
 
 /** Editor-only — never document.getElementById (preview/measure hosts duplicate the same table id). */
-function findLiveEmsPricingTableElement() {
-    if (typeof document === 'undefined') return null;
-    const editingTable = document.querySelector(
-        '#quote-preview .quote-clause-block--editing .jodit-wysiwyg table#ems-auto-price-summary-table, #quote-preview .quote-clause-block--editing .jodit-wysiwyg table[data-ems-pricing-cols="fixed"]'
-    );
-    if (editingTable) return editingTable;
-
-    const inlineTable = document.querySelector(
-        '#quote-preview .quote-clause-inline-editor .jodit-wysiwyg table#ems-auto-price-summary-table, #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table[data-ems-pricing-cols="fixed"]'
-    );
-    if (inlineTable) return inlineTable;
-
-    const tables = [
-        ...document.querySelectorAll(
-            '.clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table, .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"]'
-        ),
+function findAllLiveEmsPricingTableElements() {
+    if (typeof document === 'undefined') return [];
+    const scopes = [
+        '#quote-preview .quote-clause-block--editing .jodit-wysiwyg',
+        '#quote-preview .quote-clause-inline-editor .jodit-wysiwyg',
+        '.clause-editor-wrapper .jodit-wysiwyg',
     ];
-    return tables.length ? tables[tables.length - 1] : null;
+    for (const scope of scopes) {
+        const tables = [
+            ...document.querySelectorAll(
+                `${scope} table[data-ems-pricing-cols="fixed"], ${scope} table[id^="ems-auto-price-summary-table"]`
+            ),
+        ];
+        if (tables.length) return tables;
+    }
+    return [];
+}
+
+function findLiveEmsPricingTableElement() {
+    const tables = findAllLiveEmsPricingTableElements();
+    if (!tables.length) return null;
+    const active = typeof document !== 'undefined' ? document.activeElement : null;
+    const fromActive = active?.closest?.(
+        'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+    );
+    if (fromActive && tables.includes(fromActive)) return fromActive;
+
+    try {
+        const sel = window.getSelection?.();
+        if (sel?.rangeCount) {
+            const node = sel.getRangeAt(0).startContainer;
+            const el = node?.nodeType === 1 ? node : node?.parentElement;
+            const fromSel = el?.closest?.(
+                'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+            );
+            if (fromSel && tables.includes(fromSel)) return fromSel;
+        }
+    } catch (_e) {
+        /* selection best-effort */
+    }
+    return tables[0];
 }
 
 function resolveActiveClauseEditorJodit() {
@@ -1913,7 +2051,7 @@ function normalizeDiscountRowsInPricingTable(table, { skipCell = null, baseTotal
         amtCell.setAttribute('data-ems-amount', 'discount');
         const raw = String(amtCell?.textContent || '').trim();
         if (!raw) {
-            if (!isActiveCell) amtCell.textContent = EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT;
+            if (!isActiveCell) amtCell.textContent = getEmsPricingDiscountAmountDefault();
             if (lineBase != null) {
                 const nextLabel = formatDiscountRowLabel(0, lineBase);
                 if ((labelCell.textContent || '').trim() !== nextLabel) labelCell.textContent = nextLabel;
@@ -1922,8 +2060,8 @@ function normalizeDiscountRowsInPricingTable(table, { skipCell = null, baseTotal
         }
         if (isIncompleteBhdAmountText(amtCell?.textContent)) {
             if (!isActiveCell) {
-                if (!raw || raw === '-' || /^-\s*BD\s*$/i.test(raw)) {
-                    amtCell.textContent = EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT;
+                if (!raw || raw === '-' || new RegExp(`^-\\s*${EMS_CUR_TOKEN_RE}\\s*$`, 'i').test(raw)) {
+                    amtCell.textContent = getEmsPricingDiscountAmountDefault();
                 }
             }
             if (lineBase != null) {
@@ -1946,14 +2084,87 @@ function normalizeDiscountRowsInPricingTable(table, { skipCell = null, baseTotal
     }
 }
 
+function isLooseVatPricingLabel(label) {
+    const t = String(label || '')
+        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return /^VAT\b/i.test(t) || /\bVAT\s*10\s*%/i.test(t);
+}
+
+function isLooseGrandVatPricingLabel(label) {
+    const t = String(label || '')
+        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    return /^Grand Total with VAT/i.test(t) || /^Grand Total\b/i.test(t);
+}
+
+/**
+ * Find the VAT amount row even when Jodit stripped data-ems-row / data-ems-amount.
+ * Prefer attrs/label, then the row sitting between Total and Grand Total.
+ */
+function findPricingVatRowInTable(table) {
+    if (!table) return null;
+    const rows = getPricingTableDataRows(table);
+    let totalIdx = -1;
+    let grandIdx = -1;
+    let vatIdx = -1;
+    rows.forEach((row, i) => {
+        const cells = row.cells || [];
+        if (cells.length < 2) return;
+        const kind = String(row.getAttribute('data-ems-row') || '')
+            .trim()
+            .toLowerCase();
+        const label = String(cells[0].textContent || '')
+            .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const amtKind = String(cells[cells.length - 1].getAttribute('data-ems-amount') || '')
+            .trim()
+            .toLowerCase();
+        if (kind === 'vat' || amtKind === 'vat' || isLooseVatPricingLabel(label)) vatIdx = i;
+        if (kind === 'total' || amtKind === 'total' || isPricingTotalRowLabel(label)) totalIdx = i;
+        if (
+            kind === 'grand-vat' ||
+            kind === 'grand' ||
+            amtKind === 'grand-vat' ||
+            isLooseGrandVatPricingLabel(label)
+        ) {
+            grandIdx = i;
+        }
+    });
+    if (vatIdx >= 0) return rows[vatIdx];
+    // Positional: VAT is the last non-grand footer row after Total (skip discount/final-discounted if labeled).
+    if (totalIdx >= 0 && grandIdx > totalIdx) {
+        for (let i = grandIdx - 1; i > totalIdx; i -= 1) {
+            const cells = rows[i].cells || [];
+            if (cells.length < 2) continue;
+            const kind = String(rows[i].getAttribute('data-ems-row') || '')
+                .trim()
+                .toLowerCase();
+            const label = String(cells[0].textContent || '')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (kind === 'discount' || isDiscountPricingLabel(label)) continue;
+            if (kind === 'final-discounted' || isFinalDiscountedPricingLabel(label)) continue;
+            return rows[i];
+        }
+    }
+    return null;
+}
+
 function patchPricingTableFooterDom(table, baseTotal) {
     if (!table) return;
     sanitizeMisplacedPricingFooterAttrsInTable(table);
     const hasDiscount = pricingTableHasDiscountBlock(table);
     const taxedBase = calcTaxedBaseFromPricingTable(table, baseTotal);
     const { vat, grandWithVat } = calcPricingTotalsFromBase(taxedBase);
+    const optionName =
+        String(table.getAttribute('data-ems-price-option') || '').trim() || 'Base Price';
+    const totalLabel = formatPricingTotalRowLabel(optionName);
     const footerValues = [
-        { attr: 'total', rowKind: 'total', label: 'Total (Base Price)', text: formatBhdAmount(baseTotal) },
+        { attr: 'total', rowKind: 'total', label: totalLabel, text: formatBhdAmount(baseTotal), labelMatch: isPricingTotalRowLabel },
     ];
     if (hasDiscount) {
         footerValues.push({
@@ -1964,28 +2175,74 @@ function patchPricingTableFooterDom(table, baseTotal) {
         });
     }
     footerValues.push(
-        { attr: 'vat', rowKind: 'vat', label: 'VAT 10%', text: formatBhdAmount(vat) },
-        { attr: 'grand-vat', rowKind: 'grand-vat', label: 'Grand Total with VAT 10%', text: formatBhdAmount(grandWithVat) },
+        {
+            attr: 'vat',
+            rowKind: 'vat',
+            label: 'VAT 10%',
+            text: formatBhdAmount(vat),
+            labelMatch: isLooseVatPricingLabel,
+        },
+        {
+            attr: 'grand-vat',
+            rowKind: 'grand-vat',
+            label: 'Grand Total with VAT 10%',
+            text: formatBhdAmount(grandWithVat),
+            labelMatch: isLooseGrandVatPricingLabel,
+        },
     );
-    footerValues.forEach(({ attr, rowKind, label, text }) => {
+    footerValues.forEach(({ attr, rowKind, label, text, labelMatch }) => {
         let patched = false;
         for (const row of getPricingTableDataRows(table)) {
             const cells = row.cells || [];
             if (cells.length < 2) continue;
-            const rowLabel = String(cells[0].textContent || '').trim();
-            if (rowLabel !== label && !rowLabel.startsWith(label)) continue;
+            const rowKindAttr = String(row.getAttribute('data-ems-row') || '').trim().toLowerCase();
+            const rowLabel = String(cells[0].textContent || '')
+                .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+            const matches =
+                rowKindAttr === String(rowKind || '').toLowerCase() ||
+                (labelMatch ? labelMatch(rowLabel) : rowLabel === label || rowLabel.startsWith(label));
+            if (!matches) continue;
             const amtCell = cells[cells.length - 1];
             row.setAttribute('data-ems-row', rowKind);
             amtCell.setAttribute('data-ems-amount', attr);
+            if (rowKind === 'total' && (cells[0].textContent || '').trim() !== label) {
+                cells[0].textContent = label;
+            }
             if ((amtCell.textContent || '').trim() !== text) amtCell.textContent = text;
             patched = true;
         }
         if (patched) return;
+        // Attr / row-kind fallback — do not require footer-label regex (stale VAT must still update).
         table.querySelectorAll(`td[data-ems-amount="${attr}"]`).forEach((c) => {
-            const row = c.closest('tr');
-            if (!row || !isPricingTableFooterRow(row)) return;
             if ((c.textContent || '').trim() !== text) c.textContent = text;
+            const row = c.closest('tr');
+            if (row) row.setAttribute('data-ems-row', rowKind);
+            patched = true;
         });
+        table.querySelectorAll(`tr[data-ems-row="${rowKind}"]`).forEach((row) => {
+            const cells = row.cells || [];
+            if (cells.length < 2) return;
+            const amtCell = cells[cells.length - 1];
+            amtCell.setAttribute('data-ems-amount', attr);
+            if ((amtCell.textContent || '').trim() !== text) amtCell.textContent = text;
+            patched = true;
+        });
+        // VAT last resort: positional row between Total and Grand (attrs/label often stripped by Jodit).
+        if (!patched && rowKind === 'vat') {
+            const vatRow = findPricingVatRowInTable(table);
+            if (vatRow?.cells?.length >= 2) {
+                const amtCell = vatRow.cells[vatRow.cells.length - 1];
+                vatRow.setAttribute('data-ems-row', 'vat');
+                amtCell.setAttribute('data-ems-amount', 'vat');
+                if ((amtCell.textContent || '').trim() !== text) amtCell.textContent = text;
+                const labelCell = vatRow.cells[0];
+                if (labelCell && !isLooseVatPricingLabel(labelCell.textContent)) {
+                    labelCell.textContent = 'VAT 10%';
+                }
+            }
+        }
     });
     if (hasDiscount) {
         const discountRow = findPricingTableRowByKindOrLabel(table, {
@@ -2001,7 +2258,7 @@ function patchPricingTableFooterDom(table, baseTotal) {
             const nextLabel = formatDiscountRowLabel(discAmt, baseTotal);
             if ((labelCell.textContent || '').trim() !== nextLabel) labelCell.textContent = nextLabel;
             const rawAmt = String(amtCell.textContent || '').trim();
-            if (!rawAmt) amtCell.textContent = EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT;
+            if (!rawAmt) amtCell.textContent = getEmsPricingDiscountAmountDefault();
         }
     }
 }
@@ -2033,12 +2290,12 @@ function getPricingDiscountFooterCellStyles(totalRow) {
     };
 }
 
-/** Insert Discount + Final Discounted Price between Total (Base Price) and VAT. */
+/** Insert Discount + Final Discounted Price between Total (…) and VAT. */
 function insertDiscountBlockIntoPricingTable(table) {
     if (!table || pricingTableHasDiscountBlock(table)) return false;
     const totalRow = findPricingTableRowByKindOrLabel(table, {
         rowKind: 'total',
-        labelTest: (label) => /^Total\s*\(Base Price\)/i.test(label),
+        labelTest: isPricingTotalRowLabel,
     });
     if (!totalRow?.parentNode) return false;
 
@@ -2067,7 +2324,7 @@ function insertDiscountBlockIntoPricingTable(table) {
         'discount',
         'discount',
         'Discount',
-        EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT
+        getEmsPricingDiscountAmountDefault()
     );
     const finalRow = createFooterRow(
         'final-discounted',
@@ -2083,20 +2340,38 @@ function insertDiscountBlockIntoPricingTable(table) {
 }
 
 function extractPricingDiscountStateFromHtml(html) {
-    const tableHtml = extractEmsAutoPricingTableHtml(html);
-    if (!tableHtml || typeof DOMParser === 'undefined') return null;
+    const all = extractAllPricingDiscountStatesFromHtml(html);
+    return all.length ? all[0] : null;
+}
+
+/** Per-table discount amounts (independent Disc% per price option). */
+function extractAllPricingDiscountStatesFromHtml(html) {
+    if (typeof DOMParser === 'undefined') return [];
     try {
-        const doc = new DOMParser().parseFromString(tableHtml, 'text/html');
-        const table = doc.querySelector('table');
-        if (!table || !pricingTableHasDiscountBlock(table)) return null;
-        const discountRow = findPricingTableRowByKindOrLabel(table, {
-            rowKind: 'discount',
-            labelTest: isDiscountPricingLabel,
+        const doc = new DOMParser().parseFromString(`<div id="ems-disc-root">${String(html || '')}</div>`, 'text/html');
+        const root = doc.getElementById('ems-disc-root');
+        const tables = [
+            ...(root?.querySelectorAll(
+                'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+            ) || []),
+        ];
+        const out = [];
+        tables.forEach((table) => {
+            if (!pricingTableHasDiscountBlock(table)) return;
+            const discountRow = findPricingTableRowByKindOrLabel(table, {
+                rowKind: 'discount',
+                labelTest: isDiscountPricingLabel,
+            });
+            const amtText = String(discountRow?.cells?.[discountRow.cells.length - 1]?.textContent || '').trim();
+            const option =
+                String(table.getAttribute('data-ems-price-option') || '').trim()
+                || String(table.getAttribute('id') || '').trim()
+                || 'Base Price';
+            out.push({ option, amountText: amtText });
         });
-        const amtText = String(discountRow?.cells?.[discountRow.cells.length - 1]?.textContent || '').trim();
-        return { amountText: amtText };
+        return out;
     } catch (_e) {
-        return null;
+        return [];
     }
 }
 
@@ -2111,7 +2386,7 @@ function applyDiscountBlockToPricingTableElement(table, discountState) {
     });
     if (discountRow?.cells?.length >= 2) {
         const amtCell = discountRow.cells[discountRow.cells.length - 1];
-        const nextAmt = String(discountState.amountText || '').trim() || EMS_PRICING_DISCOUNT_AMOUNT_DEFAULT;
+        const nextAmt = String(discountState.amountText || '').trim() || getEmsPricingDiscountAmountDefault();
         if ((amtCell.textContent || '').trim() !== nextAmt) amtCell.textContent = nextAmt;
     }
     const lineBase = parseBaseTotalFromPricingTableElement(table);
@@ -2123,30 +2398,53 @@ function applyDiscountBlockToPricingTableElement(table, discountState) {
 }
 
 function applyDiscountBlockToPricingTermsHtml(html, discountState, numberToWordsFn) {
-    if (!discountState) return String(html || '');
-    const tableHtml = extractEmsAutoPricingTableHtml(html);
-    if (!tableHtml || typeof DOMParser === 'undefined') return String(html || '');
+    const states = Array.isArray(discountState)
+        ? discountState
+        : discountState
+          ? [discountState]
+          : [];
+    if (!states.length) return String(html || '');
+    if (typeof DOMParser === 'undefined') return String(html || '');
     try {
-        const doc = new DOMParser().parseFromString(tableHtml, 'text/html');
-        const table = doc.querySelector('table');
-        if (!table) return String(html || '');
-        applyDiscountBlockToPricingTableElement(table, discountState);
-        const lineBase = parseBaseTotalFromPricingTableElement(table);
-        const taxedBase =
-            lineBase != null && Number.isFinite(lineBase)
-                ? calcTaxedBaseFromPricingTable(table, lineBase)
-                : null;
-        const grandWithVat =
-            taxedBase != null ? calcPricingTotalsFromBase(taxedBase).grandWithVat : null;
-        const sanitizedTable = table.outerHTML;
-        const idAttr = EMS_AUTO_PRICE_SUMMARY_TABLE_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const tableRe = new RegExp(
-            `<table[^>]*(?:id=["']${idAttr}["']|data-ems-pricing-cols=["']fixed["'])[^>]*>[\\s\\S]*?<\\/table>`,
-            'i'
-        );
-        let out = String(html || '').replace(tableRe, sanitizedTable);
-        if (grandWithVat != null && typeof numberToWordsFn === 'function') {
-            out = patchClause41LumpSumInHtml(out, grandWithVat, numberToWordsFn);
+        const doc = new DOMParser().parseFromString(`<div id="ems-disc-apply">${String(html || '')}</div>`, 'text/html');
+        const root = doc.getElementById('ems-disc-apply');
+        if (!root) return String(html || '');
+        const tables = [
+            ...root.querySelectorAll(
+                'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+            ),
+        ];
+        if (!tables.length) return String(html || '');
+        tables.forEach((table, idx) => {
+            const opt = String(table.getAttribute('data-ems-price-option') || '').trim();
+            const tableId = String(table.getAttribute('id') || '').trim();
+            const matched =
+                states.find((s) => s.option && (s.option === opt || s.option === tableId))
+                || (states.length === tables.length ? states[idx] : null)
+                || (tables.length === 1 ? states[0] : null);
+            if (!matched) {
+                if (!pricingTableHasDiscountBlock(table)) return;
+                const lineBase = parseBaseTotalFromPricingTableElement(table);
+                if (lineBase != null) patchPricingTableFooterDom(table, lineBase);
+                return;
+            }
+            applyDiscountBlockToPricingTableElement(table, matched);
+        });
+        let out = root.innerHTML;
+        if (typeof numberToWordsFn === 'function') {
+            out = syncPricingTerms41LumpSumProse(out, 0, false, numberToWordsFn);
+            if (!/data-ems-price-wording=/i.test(out)) {
+                const lineBase = parseBaseTotalFromPricingTableElement(tables[0]);
+                const taxedBase =
+                    lineBase != null && Number.isFinite(lineBase)
+                        ? calcTaxedBaseFromPricingTable(tables[0], lineBase)
+                        : null;
+                const grandWithVat =
+                    taxedBase != null ? calcPricingTotalsFromBase(taxedBase).grandWithVat : null;
+                if (grandWithVat != null) {
+                    out = patchClause41LumpSumInHtml(out, grandWithVat, numberToWordsFn);
+                }
+            }
         }
         return out;
     } catch (_e) {
@@ -2154,31 +2452,129 @@ function applyDiscountBlockToPricingTermsHtml(html, discountState, numberToWords
     }
 }
 
-function insertDiscountBlockIntoPricingTermsHtml(html, numberToWordsFn) {
-    const tableHtml = extractEmsAutoPricingTableHtml(html);
-    if (!tableHtml || typeof DOMParser === 'undefined') return null;
+/** Prefer live Jodit pricing HTML when capturing Disc% to re-apply after price refresh. */
+function getPricingTermsHtmlPreferringLiveEditor(fallbackHtml) {
     try {
-        const doc = new DOMParser().parseFromString(tableHtml, 'text/html');
-        const table = doc.querySelector('table');
-        if (!table) return null;
-        if (pricingTableHasDiscountBlock(table)) return null;
-        if (!insertDiscountBlockIntoPricingTable(table)) return null;
-        const lineBase = parseBaseTotalFromPricingTableElement(table);
-        const taxedBase =
-            lineBase != null && Number.isFinite(lineBase)
-                ? calcTaxedBaseFromPricingTable(table, lineBase)
-                : null;
-        const grandWithVat =
-            taxedBase != null ? calcPricingTotalsFromBase(taxedBase).grandWithVat : null;
-        const sanitizedTable = table.outerHTML;
-        const idAttr = EMS_AUTO_PRICE_SUMMARY_TABLE_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const tableRe = new RegExp(
-            `<table[^>]*(?:id=["']${idAttr}["']|data-ems-pricing-cols=["']fixed["'])[^>]*>[\\s\\S]*?<\\/table>`,
-            'i'
-        );
-        let out = String(html || '').replace(tableRe, sanitizedTable);
-        if (grandWithVat != null && typeof numberToWordsFn === 'function') {
-            out = patchClause41LumpSumInHtml(out, grandWithVat, numberToWordsFn);
+        const liveTables = findAllLiveEmsPricingTableElements();
+        if (liveTables.length) {
+            const wys = liveTables[0].closest('.jodit-wysiwyg');
+            const liveHtml = String(wys?.innerHTML || '');
+            if (liveHtml && clauseHtmlHasEmsAutoPricingTable(liveHtml)) {
+                return liveHtml;
+            }
+        }
+    } catch (_e) {
+        /* ignore */
+    }
+    return String(fallbackHtml || '');
+}
+
+/**
+ * After rebuilding auto pricing tables (Update Price / summary sync), keep existing Discount rows
+ * and amounts; only division/base amounts come from the new table HTML.
+ */
+function preserveDiscountsOntoPricingTermsHtml(prevOrLiveHtml, nextHtml, numberToWordsFn) {
+    const sourceHtml = getPricingTermsHtmlPreferringLiveEditor(prevOrLiveHtml);
+    const preserved = extractAllPricingDiscountStatesFromHtml(sourceHtml);
+    if (!preserved.length) return String(nextHtml || '');
+    // Always re-apply — fresh auto tables have no discount block; do not drop Disc% on Update Price.
+    return applyDiscountBlockToPricingTermsHtml(nextHtml, preserved, numberToWordsFn);
+}
+
+function insertDiscountBlockIntoPricingTermsHtml(html, numberToWordsFn) {
+    if (typeof DOMParser === 'undefined') return null;
+    try {
+        const doc = new DOMParser().parseFromString(`<div id="ems-disc-ins">${String(html || '')}</div>`, 'text/html');
+        const root = doc.getElementById('ems-disc-ins');
+        if (!root) return null;
+        const tables = [
+            ...root.querySelectorAll(
+                'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+            ),
+        ];
+        if (!tables.length) return null;
+        if (tables.every((t) => pricingTableHasDiscountBlock(t))) return null;
+        let inserted = false;
+        tables.forEach((table) => {
+            if (insertDiscountBlockIntoPricingTable(table)) inserted = true;
+        });
+        if (!inserted) return null;
+        let out = root.innerHTML;
+        if (typeof numberToWordsFn === 'function') {
+            out = syncPricingTerms41LumpSumProse(out, 0, false, numberToWordsFn);
+            if (!/data-ems-price-wording=/i.test(out)) {
+                const lineBase = parseBaseTotalFromPricingTableElement(tables[0]);
+                const taxedBase =
+                    lineBase != null && Number.isFinite(lineBase)
+                        ? calcTaxedBaseFromPricingTable(tables[0], lineBase)
+                        : null;
+                const grandWithVat =
+                    taxedBase != null ? calcPricingTotalsFromBase(taxedBase).grandWithVat : null;
+                if (grandWithVat != null) {
+                    out = patchClause41LumpSumInHtml(out, grandWithVat, numberToWordsFn);
+                }
+            }
+        }
+        return ensurePricingTableColgroupInHtml(out);
+    } catch (_e) {
+        return null;
+    }
+}
+
+/** Remove Discount + Final Discounted Price rows; restore Total → VAT → Grand Total. */
+function removeDiscountBlockFromPricingTable(table) {
+    if (!table || !pricingTableHasDiscountBlock(table)) return false;
+    const toRemove = [];
+    for (const row of getPricingTableDataRows(table)) {
+        const cells = row.cells || [];
+        if (cells.length < 2) continue;
+        const label = String(cells[0].textContent || '').trim();
+        const kind = String(row.getAttribute('data-ems-row') || '').trim();
+        if (
+            kind === 'discount'
+            || kind === 'final-discounted'
+            || isDiscountPricingLabel(label)
+            || isFinalDiscountedPricingLabel(label)
+        ) {
+            toRemove.push(row);
+        }
+    }
+    toRemove.forEach((row) => row.parentNode?.removeChild(row));
+    const lineBase = parseBaseTotalFromPricingTableElement(table);
+    if (lineBase != null && Number.isFinite(lineBase)) {
+        patchPricingTableFooterDom(table, lineBase);
+    }
+    return toRemove.length > 0;
+}
+
+function removeDiscountBlocksFromPricingTermsHtml(html, numberToWordsFn) {
+    if (typeof DOMParser === 'undefined') return null;
+    try {
+        const doc = new DOMParser().parseFromString(`<div id="ems-disc-rm">${String(html || '')}</div>`, 'text/html');
+        const root = doc.getElementById('ems-disc-rm');
+        if (!root) return null;
+        const tables = [
+            ...root.querySelectorAll(
+                'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+            ),
+        ];
+        if (!tables.length) return null;
+        let removed = false;
+        tables.forEach((table) => {
+            if (removeDiscountBlockFromPricingTable(table)) removed = true;
+        });
+        if (!removed) return null;
+        let out = root.innerHTML;
+        if (typeof numberToWordsFn === 'function') {
+            out = syncPricingTerms41LumpSumProse(out, 0, false, numberToWordsFn);
+            if (!/data-ems-price-wording=/i.test(out)) {
+                const lineBase = parseBaseTotalFromPricingTableElement(tables[0]);
+                const grandWithVat =
+                    lineBase != null ? calcPricingTotalsFromBase(lineBase).grandWithVat : null;
+                if (grandWithVat != null) {
+                    out = patchClause41LumpSumInHtml(out, grandWithVat, numberToWordsFn);
+                }
+            }
         }
         return ensurePricingTableColgroupInHtml(out);
     } catch (_e) {
@@ -2207,12 +2603,13 @@ function applyPricingTableRecalcDomPatches(liveTable, baseTotal) {
 
 /** Recompute footer rows + clause 4.1 from edited pricing table HTML (prefer live editor DOM). */
 function recalcPricingTermsEditorHtml(val, numberToWordsFn) {
+    const liveTables = findAllLiveEmsPricingTableElements();
     const liveTable = findLiveEmsPricingTableElement();
     let html = String(val || '');
 
-    if (liveTable) {
-        sanitizeMisplacedPricingFooterAttrsInTable(liveTable);
-        const wys = liveTable.closest('.jodit-wysiwyg');
+    if (liveTables.length) {
+        liveTables.forEach((t) => sanitizeMisplacedPricingFooterAttrsInTable(t));
+        const wys = liveTables[0].closest('.jodit-wysiwyg');
         if (wys) html = wys.innerHTML;
     } else {
         html = sanitizeMisplacedPricingFooterAttrsInTableHtml(html);
@@ -2227,7 +2624,14 @@ function recalcPricingTermsEditorHtml(val, numberToWordsFn) {
     if (baseTotal == null || !Number.isFinite(baseTotal)) return null;
 
     try {
-        applyPricingTableRecalcDomPatches(liveTable, baseTotal);
+        if (liveTables.length) {
+            liveTables.forEach((t) => {
+                const b = parseBaseTotalFromPricingTableElement(t);
+                if (b != null) applyPricingTableRecalcDomPatches(t, b);
+            });
+        } else {
+            applyPricingTableRecalcDomPatches(liveTable, baseTotal);
+        }
     } catch (_domErr) {
         /* footer patch is best-effort */
     }
@@ -2249,18 +2653,23 @@ function recalcPricingTermsEditorHtml(val, numberToWordsFn) {
     }
     const grandWithVat = calcPricingTotalsFromBase(taxedBase).grandWithVat;
 
-    const wys = liveTable?.closest('.jodit-wysiwyg');
+    const wys = liveTables[0]?.closest('.jodit-wysiwyg') || liveTable?.closest('.jodit-wysiwyg');
     const jodit = resolveActiveClauseEditorJodit();
     if (wys) {
         try {
-            /* Skip live 4.1 DOM rewrite while typing — string sync below still updates parent state. */
             const skipLivePatch = Boolean(jodit && isClauseEditorTypingActive(jodit));
             if (!skipLivePatch) {
-                const patchClause41 = () => patchClause41LumpSumInWysiwyg(wys, grandWithVat, numberToWordsFn);
+                const patchWordings = () => {
+                    if (wys.querySelector('p[data-ems-price-wording]')) {
+                        syncAllPricingOptionWordingsInWysiwyg(wys, numberToWordsFn);
+                    } else {
+                        patchClause41LumpSumInWysiwyg(wys, grandWithVat, numberToWordsFn);
+                    }
+                };
                 if (jodit) {
-                    preserveClauseEditorSelectionDuring(jodit, patchClause41);
+                    preserveClauseEditorSelectionDuring(jodit, patchWordings);
                 } else {
-                    patchClause41();
+                    patchWordings();
                 }
             }
             html = wys.innerHTML;
@@ -2270,8 +2679,20 @@ function recalcPricingTermsEditorHtml(val, numberToWordsFn) {
     }
 
     let synced = ensurePricingTableColgroupInHtml(updatePricingTableFooterCellsInHtml(html, baseTotal));
-    synced = patchClause41LumpSumInHtml(synced, grandWithVat, numberToWordsFn);
+    if (/data-ems-price-wording=/i.test(synced)) {
+        synced = syncAllPricingOptionWordingsInHtml(synced, numberToWordsFn);
+    } else {
+        synced = patchClause41LumpSumInHtml(synced, grandWithVat, numberToWordsFn);
+    }
     synced = stripSpellMarksFromHtml(synced);
+    // Prefer amount-aware compare so a fixed VAT cell is never discarded as "unchanged".
+    if (pricingFooterAmountsSig(synced) !== pricingFooterAmountsSig(val)) {
+        return synced;
+    }
+    // Total/Grand can look "unchanged" in the sig while VAT is still a stale leftover — never discard.
+    if (pricingFooterVatInconsistent(val) || pricingFooterVatInconsistent(synced)) {
+        return ensurePricingTableColgroupInHtml(reconcilePricingVatAmountCellsInHtml(synced));
+    }
     if (normalizeClauseHtmlPreservingTables(synced) === normalizeClauseHtmlPreservingTables(val)) {
         return null;
     }
@@ -2279,68 +2700,437 @@ function recalcPricingTermsEditorHtml(val, numberToWordsFn) {
 }
 
 /**
- * Rewrite Total (Base Price), VAT 10%, and Grand Total with VAT cells in the auto pricing table HTML.
+ * Regex fallback: force VAT / Grand Total from Total (+ optional Discount).
+ * Catches stale VAT cells when Total/Grand are already correct but VAT was left behind.
+ */
+function pricingFooterAmountsSig(html) {
+    const amounts = [
+        ...String(html || '').matchAll(
+            /data-ems-amount=["'](total|vat|grand-vat|final-discounted)["'][^>]*>([\s\S]*?)<\/td>/gi
+        ),
+    ];
+    return amounts
+        .map(
+            (m) =>
+                `${m[1]}=${String(m[2])
+                    .replace(/<[^>]*>/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim()}`
+        )
+        .join('|');
+}
+
+/** True when Total (+ optional Discount) imply 10% VAT but the VAT cell text disagrees. */
+function pricingFooterVatInconsistent(html) {
+    const raw = String(html || '');
+    if (!raw || !/<table\b/i.test(raw)) return false;
+    const total = parsePricingTotalFromTableHtmlFragment(raw);
+    if (total == null || !Number.isFinite(total)) return false;
+
+    let taxedBase = roundBhdAmount(total);
+    const finalDiscMatch = raw.match(
+        /data-ems-amount=["']final-discounted["'][^>]*>([\s\S]*?)<\/td>/i
+    );
+    if (finalDiscMatch) {
+        const fd = parseBhdAmountText(finalDiscMatch[1]);
+        if (fd != null && Number.isFinite(fd)) {
+            taxedBase = roundBhdAmount(fd);
+        }
+    } else if (
+        /data-ems-row=["']discount["']/i.test(raw) ||
+        /data-ems-amount=["']discount["']/i.test(raw)
+    ) {
+        const discMatch = raw.match(/data-ems-amount=["']discount["'][^>]*>([\s\S]*?)<\/td>/i);
+        if (discMatch) {
+            const disc = parseBhdAmountText(discMatch[1]);
+            if (disc != null && Number.isFinite(disc)) {
+                taxedBase = roundBhdAmount(total - Math.abs(disc));
+            }
+        }
+    }
+
+    const expectedVat = calcPricingTotalsFromBase(taxedBase).vat;
+    const vatAttr = raw.match(/data-ems-amount=["']vat["'][^>]*>([\s\S]*?)<\/td>/i);
+    let vatAmt = vatAttr ? parseBhdAmountText(vatAttr[1]) : null;
+    if (vatAmt == null) {
+        const rowRe = /<tr([^>]*)>([\s\S]*?)<\/tr>/gi;
+        let rm;
+        while ((rm = rowRe.exec(raw)) !== null) {
+            const labelMatch = rm[2].match(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/i);
+            const label = labelMatch
+                ? String(labelMatch[1]).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+                : '';
+            const kind = (rm[1].match(/data-ems-row=["']([^"']+)["']/i) || [])[1] || '';
+            if (String(kind).toLowerCase() !== 'vat' && !isLooseVatPricingLabel(label)) continue;
+            const cells = [...rm[2].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)];
+            if (cells.length < 2) continue;
+            vatAmt = parseBhdAmountText(cells[cells.length - 1][1]);
+            break;
+        }
+    }
+    if (vatAmt == null || !Number.isFinite(vatAmt)) return true;
+    return Math.abs(vatAmt - expectedVat) > 0.0005;
+}
+
+/**
+ * Force every pricing table in a DOM root to show VAT = 10% of Total.
+ * Used by paint-time + MutationObserver so React re-applies cannot leave a stale cell.
+ */
+function forcePricingVatInDomRoot(root) {
+    if (!root?.querySelectorAll) return false;
+    let changed = false;
+    root
+        .querySelectorAll(
+            'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+        )
+        .forEach((table) => {
+            // Prefer displayed Total row (source of truth) over line-sum — matches what user sees.
+            let base = null;
+            const totalRow = findPricingTableRowByKindOrLabel(table, {
+                rowKind: 'total',
+                labelTest: isPricingTotalRowLabel,
+            });
+            if (totalRow?.cells?.length >= 2) {
+                base = parseBhdAmountText(totalRow.cells[totalRow.cells.length - 1].textContent);
+            }
+            if (base == null || !Number.isFinite(base)) {
+                base = parseBaseTotalFromPricingTableElement(table);
+            }
+            if (base == null || !Number.isFinite(base)) return;
+
+            const beforeVat = findPricingVatRowInTable(table);
+            const beforeText = beforeVat?.cells?.[beforeVat.cells.length - 1]
+                ? String(beforeVat.cells[beforeVat.cells.length - 1].textContent || '').trim()
+                : '';
+
+            patchPricingTableFooterDom(table, base);
+
+            const taxed = calcTaxedBaseFromPricingTable(table, base);
+            const { vat, grandWithVat } = calcPricingTotalsFromBase(taxed);
+            const vatText = formatBhdAmount(vat);
+            const grandText = formatBhdAmount(grandWithVat);
+
+            const vatRow = findPricingVatRowInTable(table);
+            if (vatRow?.cells?.length >= 2) {
+                const cell = vatRow.cells[vatRow.cells.length - 1];
+                vatRow.setAttribute('data-ems-row', 'vat');
+                cell.setAttribute('data-ems-amount', 'vat');
+                if ((cell.textContent || '').trim() !== vatText) {
+                    cell.textContent = vatText;
+                    changed = true;
+                } else if (beforeText && beforeText !== vatText) {
+                    changed = true;
+                }
+            }
+            const grandRow = findPricingTableRowByKindOrLabel(table, {
+                rowKind: 'grand-vat',
+                labelTest: isLooseGrandVatPricingLabel,
+            });
+            if (grandRow?.cells?.length >= 2) {
+                const cell = grandRow.cells[grandRow.cells.length - 1];
+                grandRow.setAttribute('data-ems-row', 'grand-vat');
+                cell.setAttribute('data-ems-amount', 'grand-vat');
+                if ((cell.textContent || '').trim() !== grandText) {
+                    cell.textContent = grandText;
+                    changed = true;
+                }
+            }
+        });
+    return changed;
+}
+
+/**
+ * Read Total (pre-VAT) from a pricing table HTML fragment even when data-ems-amount attrs
+ * were stripped by Jodit / sanitize — prefer attrs, then data-ems-row, then label text.
+ */
+function parsePricingTotalFromTableHtmlFragment(tableHtml) {
+    const chunk = String(tableHtml || '');
+    const byAttr = chunk.match(/data-ems-amount=["']total["'][^>]*>([\s\S]*?)<\/td>/i);
+    if (byAttr) {
+        const n = parseBhdAmountText(byAttr[1]);
+        if (n != null && Number.isFinite(n) && n >= 0) return n;
+    }
+    const rowRe = /<tr([^>]*)>([\s\S]*?)<\/tr>/gi;
+    let rm;
+    while ((rm = rowRe.exec(chunk)) !== null) {
+        const rowAttrs = rm[1] || '';
+        const rowHtml = rm[2] || '';
+        const cells = [...rowHtml.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)];
+        if (cells.length < 2) continue;
+        const label = String(cells[0][1] || '')
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const rowKindMatch = rowAttrs.match(/data-ems-row=["']([^"']+)["']/i);
+        const rowKind = String(rowKindMatch?.[1] || '').trim().toLowerCase();
+        const isTotal =
+            rowKind === 'total' ||
+            isPricingTotalRowLabel(label) ||
+            /^Total(\s*\([^)]*\))?$/i.test(label);
+        if (!isTotal) continue;
+        const n = parseBhdAmountText(cells[cells.length - 1][1]);
+        if (n != null && Number.isFinite(n) && n >= 0) return n;
+    }
+    return null;
+}
+
+function reconcilePricingVatAmountCellsInHtml(html) {
+    const raw = String(html || '');
+    if (!raw || !/<table\b/i.test(raw)) return raw;
+
+    // Prefer DOM walk — survives missing/stripped data-ems-amount attrs that break regex-only sync.
+    if (typeof DOMParser !== 'undefined') {
+        try {
+            const doc = new DOMParser().parseFromString(
+                `<div id="ems-vat-rec-root">${raw}</div>`,
+                'text/html'
+            );
+            const root = doc.getElementById('ems-vat-rec-root');
+            if (root) {
+                const tables = [
+                    ...root.querySelectorAll(
+                        'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+                    ),
+                ];
+                if (tables.length) {
+                    tables.forEach((table) => {
+                        let base = parseBaseTotalFromPricingTableElement(table);
+                        if (base == null || !Number.isFinite(base)) {
+                            const totalRow = findPricingTableRowByKindOrLabel(table, {
+                                rowKind: 'total',
+                                labelTest: isPricingTotalRowLabel,
+                            });
+                            if (totalRow?.cells?.length >= 2) {
+                                base = parseBhdAmountText(
+                                    totalRow.cells[totalRow.cells.length - 1].textContent
+                                );
+                            }
+                        }
+                        if (base == null || !Number.isFinite(base) || base < 0) return;
+                        patchPricingTableFooterDom(table, base);
+                    });
+                    return root.innerHTML;
+                }
+            }
+        } catch (_e) {
+            /* fall through to regex */
+        }
+    }
+
+    return raw.replace(/<table\b[\s\S]*?<\/table>/gi, (tableHtml) => {
+        if (
+            !/data-ems-pricing-cols=["']fixed["']/i.test(tableHtml) &&
+            !/id=["']ems-auto-price-summary-table/i.test(tableHtml)
+        ) {
+            return tableHtml;
+        }
+        let total = parsePricingTotalFromTableHtmlFragment(tableHtml);
+        if (total == null || !Number.isFinite(total) || total < 0) {
+            return tableHtml;
+        }
+
+        let taxedBase = roundBhdAmount(total);
+        if (/data-ems-row=["']discount["']/i.test(tableHtml)) {
+            const discMatch = tableHtml.match(
+                /data-ems-amount=["']discount["'][^>]*>([\s\S]*?)<\/td>/i
+            );
+            if (discMatch) {
+                const disc = parseBhdAmountText(discMatch[1]);
+                if (disc != null && Number.isFinite(disc)) {
+                    taxedBase = roundBhdAmount(total - Math.abs(disc));
+                }
+            }
+        }
+        const { vat, grandWithVat } = calcPricingTotalsFromBase(taxedBase);
+        const vatText = formatBhdAmount(vat);
+        const grandText = formatBhdAmount(grandWithVat);
+
+        const rewriteFooterAmount = (src, rowKind, amountAttr, text, labelTest) => {
+            const rowRe = new RegExp(
+                `(<tr[^>]*data-ems-row=["']${rowKind}["'][^>]*>)([\\s\\S]*?)(<\\/tr>)`,
+                'i'
+            );
+            let m = src.match(rowRe);
+            if (!m && typeof labelTest === 'function') {
+                const anyRowRe = /(<tr[^>]*>)([\s\S]*?)(<\/tr>)/gi;
+                let rm;
+                while ((rm = anyRowRe.exec(src)) !== null) {
+                    const labelCell = rm[2].match(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/i);
+                    const label = labelCell
+                        ? String(labelCell[1])
+                              .replace(/<[^>]*>/g, ' ')
+                              .replace(/\s+/g, ' ')
+                              .trim()
+                        : '';
+                    if (!labelTest(label)) continue;
+                    m = rm;
+                    break;
+                }
+            }
+            if (m) {
+                let inner = m[2];
+                if (new RegExp(`data-ems-amount=["']${amountAttr}["']`, 'i').test(inner)) {
+                    inner = inner.replace(
+                        new RegExp(
+                            `(data-ems-amount=["']${amountAttr}["'][^>]*>)([\\s\\S]*?)(<\\/td>)`,
+                            'i'
+                        ),
+                        `$1${text}$3`
+                    );
+                } else {
+                    // Attr stripped by sanitize — rewrite last cell text and restore attr.
+                    const cellRe = /(<td\b)([^>]*>)([\s\S]*?)(<\/td>)/gi;
+                    const cells = [...inner.matchAll(cellRe)];
+                    if (cells.length >= 2) {
+                        const last = cells[cells.length - 1];
+                        const attrs = /data-ems-amount=/i.test(last[2])
+                            ? last[2]
+                            : ` data-ems-amount="${amountAttr}"${last[2]}`;
+                        const rebuilt = `${last[1]}${attrs}${text}${last[4]}`;
+                        inner =
+                            inner.slice(0, last.index) +
+                            rebuilt +
+                            inner.slice(last.index + last[0].length);
+                    }
+                }
+                return src.slice(0, m.index) + m[1] + inner + m[3] + src.slice(m.index + m[0].length);
+            }
+            return src.replace(
+                new RegExp(
+                    `(data-ems-amount=["']${amountAttr}["'][^>]*>)([\\s\\S]*?)(<\\/td>)`,
+                    'i'
+                ),
+                `$1${text}$3`
+            );
+        };
+
+        let next = tableHtml;
+        next = rewriteFooterAmount(next, 'vat', 'vat', vatText, isLooseVatPricingLabel);
+        next = rewriteFooterAmount(
+            next,
+            'grand-vat',
+            'grand-vat',
+            grandText,
+            isLooseGrandVatPricingLabel
+        );
+        // Positional fallback: rewrite the amount cell of the row between Total and Grand.
+        if (pricingFooterVatInconsistent(next)) {
+            const rowRe = /(<tr[^>]*>)([\s\S]*?)(<\/tr>)/gi;
+            const rows = [];
+            let rm;
+            while ((rm = rowRe.exec(next)) !== null) {
+                rows.push({
+                    full: rm[0],
+                    open: rm[1],
+                    inner: rm[2],
+                    close: rm[3],
+                    index: rm.index,
+                    length: rm[0].length,
+                });
+            }
+            let totalIdx = -1;
+            let grandIdx = -1;
+            rows.forEach((row, i) => {
+                const labelCell = row.inner.match(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/i);
+                const label = labelCell
+                    ? String(labelCell[1]).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+                    : '';
+                const kind = (row.open.match(/data-ems-row=["']([^"']+)["']/i) || [])[1] || '';
+                if (String(kind).toLowerCase() === 'total' || isPricingTotalRowLabel(label)) {
+                    totalIdx = i;
+                }
+                if (
+                    String(kind).toLowerCase() === 'grand-vat' ||
+                    String(kind).toLowerCase() === 'grand' ||
+                    isLooseGrandVatPricingLabel(label)
+                ) {
+                    grandIdx = i;
+                }
+            });
+            if (totalIdx >= 0 && grandIdx > totalIdx) {
+                for (let i = grandIdx - 1; i > totalIdx; i -= 1) {
+                    const labelCell = rows[i].inner.match(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/i);
+                    const label = labelCell
+                        ? String(labelCell[1]).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+                        : '';
+                    const kind = (rows[i].open.match(/data-ems-row=["']([^"']+)["']/i) || [])[1] || '';
+                    if (String(kind).toLowerCase() === 'discount' || isDiscountPricingLabel(label)) {
+                        continue;
+                    }
+                    if (
+                        String(kind).toLowerCase() === 'final-discounted' ||
+                        isFinalDiscountedPricingLabel(label)
+                    ) {
+                        continue;
+                    }
+                    const cellRe = /(<td\b)([^>]*>)([\s\S]*?)(<\/td>)/gi;
+                    const cells = [...rows[i].inner.matchAll(cellRe)];
+                    if (cells.length < 2) continue;
+                    const last = cells[cells.length - 1];
+                    const attrs = /data-ems-amount=/i.test(last[2])
+                        ? last[2]
+                        : ` data-ems-amount="vat"${last[2]}`;
+                    const newInner =
+                        rows[i].inner.slice(0, last.index) +
+                        `${last[1]}${attrs}${vatText}${last[4]}` +
+                        rows[i].inner.slice(last.index + last[0].length);
+                    const openWithKind = /data-ems-row=/i.test(rows[i].open)
+                        ? rows[i].open.replace(
+                              /data-ems-row=["'][^"']*["']/i,
+                              'data-ems-row="vat"'
+                          )
+                        : rows[i].open.replace(/<tr/i, '<tr data-ems-row="vat"');
+                    const rebuilt = `${openWithKind}${newInner}${rows[i].close}`;
+                    next =
+                        next.slice(0, rows[i].index) +
+                        rebuilt +
+                        next.slice(rows[i].index + rows[i].length);
+                    break;
+                }
+            }
+        }
+        return next;
+    });
+}
+
+/**
+ * Rewrite Total (…), VAT 10%, and Grand Total with VAT cells in all auto pricing tables.
  */
 function updatePricingTableFooterCellsInHtml(html, baseTotal) {
     let out = sanitizeMisplacedPricingFooterAttrsInTableHtml(html);
-    const tableHtml = extractEmsAutoPricingTableHtml(out);
-    if (!tableHtml || typeof DOMParser === 'undefined') return out;
-    try {
-        const doc = new DOMParser().parseFromString(tableHtml, 'text/html');
-        const table = doc.querySelector('table');
-        if (!table) return out;
-        patchPricingTableFooterDom(table, baseTotal);
-        const sanitizedTable = table.outerHTML;
-        const idAttr = EMS_AUTO_PRICE_SUMMARY_TABLE_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const tableRe = new RegExp(
-            `<table[^>]*(?:id=["']${idAttr}["']|data-ems-pricing-cols=["']fixed["'])[^>]*>[\\s\\S]*?<\\/table>`,
-            'i'
-        );
-        return out.replace(tableRe, sanitizedTable);
-    } catch (_e) {
-        return out;
+    if (typeof DOMParser !== 'undefined') {
+        try {
+            const doc = new DOMParser().parseFromString(`<div id="ems-ft-root">${out}</div>`, 'text/html');
+            const root = doc.getElementById('ems-ft-root');
+            if (root) {
+                const tables = [
+                    ...root.querySelectorAll(
+                        'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+                    ),
+                ];
+                tables.forEach((table) => {
+                    const lineBase = parseBaseTotalFromPricingTableElement(table);
+                    const useBase =
+                        lineBase != null && Number.isFinite(lineBase)
+                            ? lineBase
+                            : tables.length === 1
+                              ? baseTotal
+                              : null;
+                    if (useBase == null || !Number.isFinite(useBase)) return;
+                    patchPricingTableFooterDom(table, useBase);
+                });
+                out = root.innerHTML;
+            }
+        } catch (_e) {
+            /* keep out — regex reconcile below still runs */
+        }
     }
+    return reconcilePricingVatAmountCellsInHtml(out);
 }
 
 // Global styles for pasted tables in clauses
 
-const numberToWordsBHD = (num) => {
-    const n = Number(num);
-    if (!Number.isFinite(n)) return 'Bahraini Dinars Zero only.';
-    const negative = n < 0;
-    const abs = Math.abs(n);
-    const dinars = Math.floor(abs);
-    const fils = Math.round((abs - dinars) * 1000);
-
-    const convert = (v) => {
-        const units = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
-        const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
-        const scales = ['', 'Thousand', 'Million', 'Billion'];
-
-        if (v === 0) return '';
-        if (v < 20) return units[v];
-        if (v < 100) return tens[Math.floor(v / 10)] + (v % 10 !== 0 ? ' ' + units[v % 10] : '');
-        if (v < 1000) return units[Math.floor(v / 100)] + ' Hundred' + (v % 100 !== 0 ? ' and ' + convert(v % 100) : '');
-
-        for (let i = 0, scale = 1; i < scales.length; i++, scale *= 1000) {
-            if (v < scale * 1000) {
-                return convert(Math.floor(v / scale)) + ' ' + scales[i] + (v % scale !== 0 ? ' ' + convert(v % scale) : '');
-            }
-        }
-        return String(v);
-    };
-
-    let result = negative ? 'Negative ' : '';
-    result += 'Bahraini Dinars ';
-    if (dinars === 0) result += 'Zero';
-    else result += convert(dinars);
-
-    if (fils > 0) {
-        result += ' and fils ' + fils + '/1000';
-    }
-    result += ' only.';
-    return result;
-};
+const numberToWordsBHD = (num) => numberToWordsRuntimeCurrency(num);
 
 const normalize = (str) => {
     if (!str) return '';
@@ -2562,6 +3352,20 @@ function quoteRowMatchesEnquiryScopedParams(q, p, requestNo) {
 
 const stripQuoteJobPrefix = (name) =>
     String(name || '').replace(/^(L\d+|Sub Job)\s*-\s*/i, '').trim();
+
+/** Ensure quote search sends ISO dates even if the From/To field was not blurred yet. */
+function normalizeQuoteSearchDateParam(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    try {
+        const parsed = parse(s, 'dd-MMM-yyyy', new Date());
+        if (isValid(parsed)) return format(parsed, 'yyyy-MM-dd');
+    } catch {
+        /* ignore */
+    }
+    return s;
+}
 
 /**
  * OwnJob for quote/draft scope: first tab → division dropdown; subjob tab → active tab label.
@@ -2907,6 +3711,42 @@ function resolveQuoteLogoSrc(logo) {
     }
     if (s.startsWith('/')) return withApiBaseForUploads(encodeAppStaticPath(s));
     return withApiBaseForUploads(encodeAppStaticPath(`/${s}`));
+}
+
+const QUOTE_HEADER_LOGO_STYLE = {
+    height: '68px',
+    width: 'auto',
+    maxWidth: '212px',
+    objectFit: 'contain',
+};
+
+function QuoteHeaderLogo({ candidates }) {
+    const resolved = React.useMemo(() => {
+        const seen = new Set();
+        const out = [];
+        for (const raw of candidates || []) {
+            const src = resolveQuoteLogoSrc(raw);
+            if (src && !seen.has(src)) {
+                seen.add(src);
+                out.push(src);
+            }
+        }
+        return out;
+    }, [candidates]);
+    const [idx, setIdx] = React.useState(0);
+    React.useEffect(() => {
+        setIdx(0);
+    }, [resolved]);
+    const src = resolved[idx] ?? null;
+    if (!src) return null;
+    return (
+        <img
+            src={src}
+            alt=""
+            style={QUOTE_HEADER_LOGO_STYLE}
+            onError={() => setIdx((i) => (i + 1 < resolved.length ? i + 1 : i))}
+        />
+    );
 }
 
 /** Server-built map: internal division → Master_ConcernedSE names + default assigned SE for this enquiry. */
@@ -3388,6 +4228,16 @@ const parsePrice = (v) => {
     return parseFloat(clean) || 0;
 };
 
+/** True when text refers to IBMS (Integrated Building), not plain BMS. */
+const textRefersToIbms = (text) => /\bibms\b/i.test(String(text || ''));
+
+/** True when text refers to BMS (Building Management), excluding IBMS. */
+const textRefersToBms = (text) => {
+    const t = String(text || '');
+    if (textRefersToIbms(t)) return false;
+    return /\bbms\b/i.test(t) || /\bbmp\b/i.test(t);
+};
+
 // Global Helper for Division Code Mapping - Updated for more robust matching
 const matchDivisionCode = (qDivCode, jName, jDivCode = null) => {
     if (!qDivCode || !jName) return false;
@@ -3403,7 +4253,8 @@ const matchDivisionCode = (qDivCode, jName, jDivCode = null) => {
 
     // Priority 2: Label-based heuristic matches
     return (q === 'ELE' || q === 'ELP' || q === 'ELM' || q === 'AME') && (j.includes('ELECTRICAL') || j.includes('ELE') || j.includes('ELM')) ||
-        ((q === 'BMS' || q === 'BMP' || q === 'PRP') && (j.includes('BMS') || j.includes('PRICING') || j.includes('PROJECT'))) ||
+        (q === 'IBMS' && textRefersToIbms(j)) ||
+        ((q === 'BMS' || q === 'BMP' || q === 'PRP') && (textRefersToBms(j) || j.includes('PRICING') || (j.includes('PROJECT') && !textRefersToIbms(j)))) ||
         (q === 'PLFF' || q === 'PLP') && (j.includes('PLUMBING') || j.includes('FIRE') || j.includes('PLFF')) ||
         (q === 'CVLP' || q === 'CVP' || q === 'CVL' || q === 'CMP' || q === 'CIP') && (j.includes('CIVIL') || j.includes('CONCRETE')) ||
         (q === 'FPE' || q === 'FPP') && j.includes('FIRE') ||
@@ -3437,6 +4288,8 @@ const matchMasterEnquiryForBrandingRow = (activeTab, rows) => {
         const d = collapseSpacesLower(String(dn || ''));
         if (!d) return 0;
         if (d === tabN) return 100;
+        if (textRefersToIbms(tabN) && d === 'bms project') return 0;
+        if (textRefersToBms(tabN) && textRefersToIbms(dn)) return 0;
         if (tabN.includes(d) || d.includes(tabN)) return 80;
         return 0;
     };
@@ -3444,6 +4297,8 @@ const matchMasterEnquiryForBrandingRow = (activeTab, rows) => {
         const i = collapseSpacesLower(stripQuoteJobPrefix(String(itemName || '')));
         if (!i) return 0;
         if (i === tabN) return 100;
+        if (textRefersToIbms(tabN) && i === 'bms') return 0;
+        if (textRefersToBms(tabN) && textRefersToIbms(itemName)) return 0;
         if (tabN.includes(i) || i.includes(tabN)) return 80;
         return 0;
     };
@@ -3452,7 +4307,10 @@ const matchMasterEnquiryForBrandingRow = (activeTab, rows) => {
         .filter((x) => x.sd > 0 || x.si > 0)
         .sort((a, b) => {
             if (b.sd !== a.sd) return b.sd - a.sd;
-            return b.si - a.si;
+            if (b.si !== a.si) return b.si - a.si;
+            const aLogo = mefLogoFromRow(a.r) ? 1 : 0;
+            const bLogo = mefLogoFromRow(b.r) ? 1 : 0;
+            return bLogo - aLogo;
         });
     return scored[0]?.r ?? null;
 };
@@ -3467,24 +4325,49 @@ const mefFooterContactFromRow = (row) => {
     };
 };
 
+/** Normalize logo path from Master_EnquiryFor / API rows. */
+const mefLogoFromRow = (row) => {
+    if (!row) return null;
+    const raw = row.companyLogo ?? row.CompanyLogo ?? null;
+    if (raw == null) return null;
+    const s = String(raw).trim();
+    return s || null;
+};
+
 /** Strict match: label = Master_EnquiryFor.DepartmentName. */
 const findMefBrandingRowByDepartmentName = (departmentLabel, enquiryData) => {
     const dept = String(departmentLabel || '').trim();
     if (!dept) return null;
     const deptNorm = collapseSpacesLower(dept);
     const rows = Array.isArray(enquiryData?.enquiryForBrandingRows) ? enquiryData.enquiryForBrandingRows : [];
+    const map = enquiryData?.masterEnquiryForFooterLookup;
+    const mapHit = map && typeof map === 'object' ? map[dept.toLowerCase()] : null;
+
+    const mergeRowWithMap = (row) => {
+        if (!row) return null;
+        if (!mapHit) return row;
+        return {
+            departmentName: row.departmentName || mapHit.departmentName || dept,
+            companyName: row.companyName || mapHit.companyName || '',
+            companyLogo: mefLogoFromRow(row) || mefLogoFromRow(mapHit),
+            address: row.address || mapHit.address || '',
+            phone: row.phone ?? row.Phone ?? mapHit.phone ?? mapHit.Phone ?? '',
+            faxNo: row.faxNo ?? row.FaxNo ?? mapHit.faxNo ?? mapHit.FaxNo ?? '',
+            commonMailIds:
+                row.commonMailIds ?? row.CommonMailIds ?? mapHit.commonMailIds ?? mapHit.CommonMailIds ?? '',
+        };
+    };
+
     const fromRows = rows.find(
         (r) => collapseSpacesLower(String(r?.departmentName || '').trim()) === deptNorm
     );
-    if (fromRows) return fromRows;
+    if (fromRows) return mergeRowWithMap(fromRows);
 
-    const map = enquiryData?.masterEnquiryForFooterLookup;
-    const mapHit = map && typeof map === 'object' ? map[dept.toLowerCase()] : null;
     if (!mapHit) return null;
     return {
         departmentName: mapHit.departmentName || dept,
         companyName: mapHit.companyName || '',
-        companyLogo: mapHit.companyLogo || null,
+        companyLogo: mefLogoFromRow(mapHit),
         address: mapHit.address || '',
         phone: mapHit.phone || mapHit.Phone || '',
         faxNo: mapHit.faxNo || mapHit.FaxNo || '',
@@ -3503,9 +4386,9 @@ const getActiveTabDepartmentMatchKeys = (activeTab) => {
 const brandingFromMefRow = (mefRow, fallbackName = '') => {
     if (!mefRow) return null;
     const mefContact = mefFooterContactFromRow(mefRow);
-    const logoRaw = mefRow.companyLogo || null;
-    const name = String(mefRow.companyName || fallbackName || '').trim();
-    if (!name && !mefRow.address && !mefContact.phone && !mefContact.fax && !mefContact.email) {
+    const logoRaw = mefLogoFromRow(mefRow);
+    const name = String(mefRow.companyName || mefRow.CompanyName || fallbackName || '').trim();
+    if (!name && !mefRow.address && !mefContact.phone && !mefContact.fax && !mefContact.email && !logoRaw) {
         return null;
     }
     return {
@@ -3518,18 +4401,232 @@ const brandingFromMefRow = (mefRow, fallbackName = '') => {
     };
 };
 
+const pickFirstQuoteLogoRaw = (...candidates) => {
+    for (const c of candidates) {
+        const v = c == null ? '' : String(c).trim();
+        if (v) return v;
+    }
+    return null;
+};
+
+const mergeQuoteBrandingPrimaryWithLogo = (primary, ...logoSources) => {
+    if (!primary?.name) return primary || null;
+    const logo = pickFirstQuoteLogoRaw(primary.logo, ...logoSources.map((s) => s?.logo));
+    return logo && logo !== primary.logo ? { ...primary, logo } : primary;
+};
+
+const resolveEffectiveQuoteBranding = ({
+    approvalReviewBranding,
+    activeTabBranding,
+    divisionToolbarBranding,
+    quoteLogoFallback,
+}) => {
+    const primary =
+        approvalReviewBranding || activeTabBranding || divisionToolbarBranding || null;
+    if (!primary?.name && !quoteLogoFallback) return null;
+    if (!primary) {
+        const logo = pickFirstQuoteLogoRaw(quoteLogoFallback);
+        return logo ? { name: '', logo, address: '', phone: '', fax: '', email: '' } : null;
+    }
+    // Approvals: never let the active pricing tab (often another division) overwrite creator logo.
+    if (approvalReviewBranding?.name) {
+        return mergeQuoteBrandingPrimaryWithLogo(
+            primary,
+            approvalReviewBranding,
+            { logo: quoteLogoFallback },
+            divisionToolbarBranding,
+            activeTabBranding
+        );
+    }
+    return mergeQuoteBrandingPrimaryWithLogo(
+        primary,
+        activeTabBranding,
+        divisionToolbarBranding,
+        approvalReviewBranding,
+        { logo: quoteLogoFallback }
+    );
+};
+
+/** Header/footer from Division toolbar (Master_EnquiryFor.DepartmentName). */
+const resolveBrandingFromDivisionLabel = (divisionLabel, enquiryData) => {
+    const dept = String(divisionLabel || '').trim();
+    if (!dept) return null;
+    const mefBranding = brandingFromMefRow(findMefBrandingRowByDepartmentName(dept, enquiryData), dept);
+    if (
+        mefBranding?.name &&
+        (mefBranding.logo || mefBranding.address || mefBranding.phone || mefBranding.fax || mefBranding.email)
+    ) {
+        return mefBranding;
+    }
+    const profiles = Array.isArray(enquiryData?.availableProfiles) ? enquiryData.availableProfiles : [];
+    const deptNorm = collapseSpacesLower(dept);
+    const profile =
+        profiles.find((p) => {
+            if (p.isPersonalProfile) return false;
+            const dn = collapseSpacesLower(String(p.departmentName || '').trim());
+            const inm = collapseSpacesLower(stripQuoteJobPrefix(p.itemName || ''));
+            const pn = collapseSpacesLower(String(p.name || '').trim());
+            return dn === deptNorm || inm === deptNorm || pn === deptNorm;
+        }) ||
+        (textRefersToIbms(dept)
+            ? profiles.find(
+                  (p) =>
+                      !p.isPersonalProfile &&
+                      (textRefersToIbms(p.itemName || '') ||
+                          textRefersToIbms(p.name || '') ||
+                          textRefersToIbms(p.departmentName || '') ||
+                          String(p.divisionCode || '').toUpperCase() === 'IBMS')
+              )
+            : textRefersToBms(dept)
+              ? profiles.find(
+                    (p) =>
+                        !p.isPersonalProfile &&
+                        (textRefersToBms(p.itemName || '') ||
+                            textRefersToBms(p.name || '') ||
+                            String(p.divisionCode || '').toUpperCase() === 'BMS' ||
+                            String(p.divisionCode || '').toUpperCase() === 'BMP')
+                )
+              : null);
+    if (!profile) return mefBranding?.name ? mefBranding : null;
+    return brandingFromMefRow(
+        {
+            companyName: profile.name,
+            companyLogo: profile.logo,
+            address: profile.address,
+            phone: profile.phone,
+            faxNo: profile.fax,
+            commonMailIds: profile.email,
+        },
+        profile.name
+    );
+};
+
 /** Cover "For …", footer, logo — active tab name matched to Master_EnquiryFor.DepartmentName. */
 const resolveBrandingFromActiveTab = (activeTab, enquiryData) => {
     if (!activeTab) return null;
+    let best = null;
     for (const key of getActiveTabDepartmentMatchKeys(activeTab)) {
         const mefRow = findMefBrandingRowByDepartmentName(key, enquiryData);
         const branding = brandingFromMefRow(mefRow, key);
-        if (branding?.name) return branding;
+        if (!branding?.name) continue;
+        if (!best || (!best.logo && branding.logo)) best = branding;
     }
+    if (best) return best;
     const rows = Array.isArray(enquiryData?.enquiryForBrandingRows) ? enquiryData.enquiryForBrandingRows : [];
     const mefHit = matchMasterEnquiryForBrandingRow(activeTab, rows);
     const tabFallback = String(stripQuoteJobPrefix(activeTab.label || activeTab.name || '')).trim();
     return brandingFromMefRow(mefHit, tabFallback);
+};
+
+/**
+ * Approvals header logo must follow the quote's division (OwnJob / Quote Ref / list Division),
+ * never a sibling pricing tab's company (e.g. Civil over IFM).
+ */
+const collectApprovalDivisionHints = ({
+    creatorDivision,
+    ownJob,
+    listDivision,
+    quoteNumber,
+}) => {
+    const hints = [];
+    const push = (v) => {
+        const s = String(v || '').trim();
+        if (!s) return;
+        const key = collapseSpacesLower(s);
+        if (hints.some((h) => collapseSpacesLower(h) === key)) return;
+        hints.push(s);
+    };
+    push(ownJob);
+    push(creatorDivision);
+    push(listDivision);
+    const parts = String(quoteNumber || '')
+        .split('/')
+        .map((p) => p.trim())
+        .filter(Boolean);
+    // Quote Ref IFM/IFC/… — put company + division code first so Approvals logo follows the quote,
+    // not a sibling pricing tab (Civil) when OwnJob is empty/wrong on multi-branch enquiries.
+    const withRefFirst = [];
+    const pushUnique = (v) => {
+        const s = String(v || '').trim();
+        if (!s) return;
+        const key = collapseSpacesLower(s);
+        if (withRefFirst.some((h) => collapseSpacesLower(h) === key)) return;
+        withRefFirst.push(s);
+    };
+    if (parts[0]) pushUnique(parts[0]);
+    if (parts[1] && !['GEN', 'AAC', 'ACC'].includes(parts[1].toUpperCase())) pushUnique(parts[1]);
+    for (const h of hints) pushUnique(h);
+    return withRefFirst;
+};
+
+const resolveBrandingFromApprovalHints = (hints, enquiryData) => {
+    if (!Array.isArray(hints) || !hints.length) return null;
+
+    for (const hint of hints) {
+        const byDiv = resolveBrandingFromDivisionLabel(hint, enquiryData);
+        if (byDiv?.logo) return byDiv;
+    }
+
+    const rows = Array.isArray(enquiryData?.enquiryForBrandingRows)
+        ? enquiryData.enquiryForBrandingRows
+        : [];
+    const profiles = Array.isArray(enquiryData?.availableProfiles)
+        ? enquiryData.availableProfiles
+        : [];
+
+    for (const hint of hints) {
+        const n = collapseSpacesLower(hint);
+        const u = String(hint).trim().toUpperCase();
+        const row = rows.find((r) => {
+            const cn = collapseSpacesLower(String(r?.companyName || '').trim());
+            const dn = collapseSpacesLower(String(r?.departmentName || '').trim());
+            const inm = collapseSpacesLower(stripQuoteJobPrefix(String(r?.itemName || '').trim()));
+            const dc = String(r?.divisionCode || r?.DivisionCode || '')
+                .trim()
+                .toUpperCase();
+            return (
+                cn === n ||
+                dn === n ||
+                inm === n ||
+                dc === u ||
+                (cn && (cn.includes(n) || n.includes(cn))) ||
+                (dn && (dn.includes(n) || n.includes(dn)))
+            );
+        });
+        if (row && mefLogoFromRow(row)) {
+            return brandingFromMefRow(row, hint);
+        }
+
+        const prof = profiles.find((p) => {
+            if (p?.isPersonalProfile) return false;
+            const cn = collapseSpacesLower(String(p?.name || '').trim());
+            const dn = collapseSpacesLower(String(p?.departmentName || '').trim());
+            const inm = collapseSpacesLower(stripQuoteJobPrefix(String(p?.itemName || '').trim()));
+            const dc = String(p?.divisionCode || '')
+                .trim()
+                .toUpperCase();
+            return cn === n || dn === n || inm === n || dc === u;
+        });
+        if (prof?.logo || prof?.name) {
+            return brandingFromMefRow(
+                {
+                    companyName: prof.name,
+                    companyLogo: prof.logo,
+                    address: prof.address,
+                    phone: prof.phone,
+                    faxNo: prof.fax,
+                    commonMailIds: prof.email,
+                },
+                prof.name
+            );
+        }
+    }
+
+    for (const hint of hints) {
+        const byDiv = resolveBrandingFromDivisionLabel(hint, enquiryData);
+        if (byDiv?.name) return byDiv;
+    }
+    return null;
 };
 
 const lookupMefFooterContactFromMap = (enquiryData, keys) => {
@@ -3563,6 +4660,8 @@ const findMefBrandingRowForFooter = (rows, { divisionLabel, companyName, activeT
                     const dn = collapseSpacesLower(stripQuoteJobPrefix(r?.departmentName || ''));
                     const inm = collapseSpacesLower(stripQuoteJobPrefix(r?.itemName || ''));
                     const cn = collapseSpacesLower(String(r?.companyName || '').trim());
+                    if (textRefersToIbms(norm) && (inm === 'bms' || dn === 'bms project')) return false;
+                    if (textRefersToBms(norm) && textRefersToIbms(r?.departmentName || r?.itemName || '')) return false;
                     return (
                         (dn && (dn.includes(norm) || norm.includes(dn))) ||
                         (inm && (inm.includes(norm) || norm.includes(inm))) ||
@@ -3584,11 +4683,8 @@ const findMefBrandingRowForFooter = (rows, { divisionLabel, companyName, activeT
         }
     }
 
-    if (companyName) {
-        const cn = collapseSpacesLower(String(companyName).trim());
-        const byCompany = tryNormMatch(cn, true) || tryNormMatch(cn, false);
-        if (byCompany) return byCompany;
-    }
+    // Prefer division when provided (Approvals creator division / OwnJob) so shared
+    // company names like "Almoayyed Contracting" do not bind Civil over IFM/HVAC/etc.
     if (divisionLabel) {
         const deptNorm = collapseSpacesLower(String(divisionLabel).trim());
         const byDeptExact = list.find(
@@ -3598,6 +4694,11 @@ const findMefBrandingRowForFooter = (rows, { divisionLabel, companyName, activeT
         const norm = collapseSpacesLower(stripQuoteJobPrefix(divisionLabel));
         const byDiv = tryNormMatch(norm, true) || tryNormMatch(norm, false);
         if (byDiv) return byDiv;
+    }
+    if (companyName) {
+        const cn = collapseSpacesLower(String(companyName).trim());
+        const byCompany = tryNormMatch(cn, true) || tryNormMatch(cn, false);
+        if (byCompany) return byCompany;
     }
     return matchMasterEnquiryForBrandingRow(activeTab, list);
 };
@@ -3617,7 +4718,7 @@ const lookupMefBrandingFromMap = (enquiryData, companyName) => {
     const contact = mefFooterContactFromRow(hit);
     return {
         name: String(hit.companyName || name).trim(),
-        logo: hit.companyLogo ? String(hit.companyLogo).trim() : null,
+        logo: mefLogoFromRow(hit),
         address: String(hit.address || '').trim(),
         phone: contact.phone,
         fax: contact.fax,
@@ -3829,8 +4930,10 @@ const collectDirectChildJobIdsFromPools = (parentId, pricingPool, hierarchyPool)
 };
 
 const tableStyles = `
-    /* EMS-built / manual tables fill the preview column; Excel/Word pastes keep editor px widths. */
-    .clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]) {
+    /* EMS-built / manual tables fill the preview column; Excel/Word pastes keep editor px widths.
+       Pricing option tables (base + Option-*) stay at EMS_QUOTE_PRICING_TABLE_WIDTH — exclude them
+       so generic 100% does not overpower attribute selectors on secondary option tables. */
+    .clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]):not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]) {
         width: 100% !important;
         border-collapse: collapse !important;
         table-layout: fixed !important;
@@ -3894,7 +4997,9 @@ const tableStyles = `
     ${EMS_QUOTE_PRICING_TABLE_COLUMN_SYNC_CSS}
     ${EMS_QUOTE_PRICING_TABLE_PRESENTATION_CSS}
     ${EMS_QUOTE_PRICING_TABLE_COMPACT_ROW_CSS}
-    .clause-content table#ems-auto-price-summary-table {
+    .clause-content table#ems-auto-price-summary-table,
+    .clause-content table[id^="ems-auto-price-summary-table"],
+    .clause-content table[data-ems-pricing-cols="fixed"] {
         border-collapse: collapse !important;
         margin-top: ${EMS_QUOTE_PRICING_TABLE_MARGIN_TOP} !important;
         margin-bottom: 6px !important;
@@ -3903,14 +5008,22 @@ const tableStyles = `
         border: ${EMS_QUOTE_PRICING_TABLE_OUTER_BORDER} !important;
         width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
         max-width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
+        table-layout: fixed !important;
+        box-sizing: border-box !important;
     }
     .clause-content table#ems-auto-price-summary-table th,
-    .clause-content table#ems-auto-price-summary-table td {
+    .clause-content table#ems-auto-price-summary-table td,
+    .clause-content table[id^="ems-auto-price-summary-table"] th,
+    .clause-content table[id^="ems-auto-price-summary-table"] td,
+    .clause-content table[data-ems-pricing-cols="fixed"] th,
+    .clause-content table[data-ems-pricing-cols="fixed"] td {
         border: ${EMS_QUOTE_PRICING_TABLE_CELL_BORDER} !important;
         font-size: 11px !important;
         color: #0f172a !important;
     }
-    .clause-content table#ems-auto-price-summary-table thead th {
+    .clause-content table#ems-auto-price-summary-table thead th,
+    .clause-content table[id^="ems-auto-price-summary-table"] thead th,
+    .clause-content table[data-ems-pricing-cols="fixed"] thead th {
         background: ${EMS_QUOTE_PRICING_TABLE_HEADER_BG} !important;
         color: ${EMS_QUOTE_PRICING_TABLE_HEADER_COLOR} !important;
         font-weight: 600 !important;
@@ -3919,13 +5032,25 @@ const tableStyles = `
     .clause-content table#ems-auto-price-summary-table tr[data-ems-row="total"] td,
     .clause-content table#ems-auto-price-summary-table tr[data-ems-row="vat"] td,
     .clause-content table#ems-auto-price-summary-table tr[data-ems-row="grand-vat"] td,
-    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="grand"] td {
+    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="grand"] td,
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="total"] td,
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="vat"] td,
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand-vat"] td,
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand"] td,
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="total"] td,
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="vat"] td,
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand-vat"] td,
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand"] td {
         background: ${EMS_QUOTE_PRICING_TABLE_TOTAL_BG} !important;
         font-weight: 700 !important;
         border-top: 1px solid #94a3b8 !important;
     }
     .clause-content table#ems-auto-price-summary-table tr[data-ems-row="discount"] td,
-    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td {
+    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td,
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="discount"] td,
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="final-discounted"] td,
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="discount"] td,
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="final-discounted"] td {
         background: ${EMS_QUOTE_PRICING_TABLE_DISCOUNT_BG} !important;
         font-weight: 700 !important;
         border-top: 1px solid #94a3b8 !important;
@@ -3944,9 +5069,9 @@ const tableStyles = `
         line-height: 1.1 !important;
     }
     .clause-content table[data-ems-paste-source="office"] tr td,
-    .clause-content table[data-ems-col-widths] tr td,
+    .clause-content table[data-ems-col-widths]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) tr td,
     .clause-content table[data-ems-paste-source="office"] tr th,
-    .clause-content table[data-ems-col-widths] tr th {
+    .clause-content table[data-ems-col-widths]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) tr th {
         padding: 0 3px !important;
         line-height: 1.1 !important;
         vertical-align: middle !important;
@@ -3973,11 +5098,33 @@ const tableStyles = `
     .clause-content table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td:first-child,
     .clause-content table#ems-auto-price-summary-table tr[data-ems-row="vat"] td:first-child,
     .clause-content table#ems-auto-price-summary-table tr[data-ems-row="grand-vat"] td:first-child,
-    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="grand"] td:first-child {
+    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="grand"] td:first-child,
+    .clause-content table[id^="ems-auto-price-summary-table"] th:nth-child(2),
+    .clause-content table[id^="ems-auto-price-summary-table"] td:nth-child(2),
+    .clause-content table[id^="ems-auto-price-summary-table"] td[data-ems-amount],
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="total"] td:first-child,
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="discount"] td:first-child,
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="final-discounted"] td:first-child,
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="vat"] td:first-child,
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand-vat"] td:first-child,
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand"] td:first-child,
+    .clause-content table[data-ems-pricing-cols="fixed"] th:nth-child(2),
+    .clause-content table[data-ems-pricing-cols="fixed"] td:nth-child(2),
+    .clause-content table[data-ems-pricing-cols="fixed"] td[data-ems-amount],
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="total"] td:first-child,
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="discount"] td:first-child,
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="final-discounted"] td:first-child,
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="vat"] td:first-child,
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand-vat"] td:first-child,
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand"] td:first-child {
         text-align: right !important;
     }
     .clause-content table#ems-auto-price-summary-table tr[data-ems-row="division"],
-    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="division"] td {
+    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="division"] td,
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="division"],
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="division"] td,
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="division"],
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="division"] td {
         background-color: #ffffff !important;
     }
     /* normal: pre-wrap preserved newline TEXT NODES between injected </p><p> — looked like huge gaps in preview/PDF */
@@ -4325,6 +5472,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const { currentUser } = useAuth();
     const isAdmin = ['Admin', 'Admins'].includes(currentUser?.role || currentUser?.Roles);
 
+    /* Kill any leftover ChatBox socket/polls so Quote editor keeps CPU free. */
+    useEffect(() => {
+        disconnectChatboxSocket();
+    }, []);
+
     // Search state
     const [searchTerm, setSearchTerm] = useState('');
     const [suggestions, setSuggestions] = useState([]);
@@ -4348,6 +5500,19 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const [quoteId, setQuoteId] = useState(null);
     /** EnquiryQuotesDraft row id — draft save in toolbar (not a persisted EnquiryQuotes revision). */
     const [quoteDraftId, setQuoteDraftId] = useState(null);
+    /**
+     * When > 0, this draft is a revision of an existing QuoteNo series.
+     * Final approval promotes to next R# (R0 first, then R1, R2, …) keeping the same QuoteNo.
+     */
+    const [revisionSourceQuoteNo, setRevisionSourceQuoteNo] = useState(0);
+    const revisionSourceQuoteNoRef = useRef(0);
+    const saveQuoteDraftRef = useRef(null);
+    const setRevisionSourceQuoteNoBoth = useCallback((n) => {
+        const v = Number(n);
+        const next = Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+        revisionSourceQuoteNoRef.current = next;
+        setRevisionSourceQuoteNo(next);
+    }, []);
     /** Lead-job enquiry fetch only (left panel) — must not gate the right-hand quote preview. */
     const [enquiryLeadLoading, setEnquiryLeadLoading] = useState(false);
     const [existingQuotes, setExistingQuotes] = useState([]);
@@ -4368,6 +5533,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const quoteRowAutoSelectLeadRef = useRef(false);
     /** Full first lead `<option value>` (e.g. "L1 - Civil") from enquiry divisions — pairs with quoteRowAutoSelectLeadRef. */
     const quoteRowFirstLeadDivisionFullRef = useRef('');
+    /**
+     * Pending/Search list row click: fill Enquiry No only — keep Lead Job empty until the user picks it.
+     * Blocks division-refresh / background hydrate from re-applying server leadJobPrefix into the dropdown.
+     */
+    const quoteListEnquiryOnlySkipLeadRef = useRef(false);
     /** While true, skip external-customer "(L#)" effect so search-row "first division lead" is not overwritten. */
     const quoteRowDivisionLeadLockRef = useRef(false);
     /** After row enquiry pick: fill "To" from the same list as the customer dropdown (not raw customerOptions[0]). */
@@ -4650,8 +5820,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         return isUserQuoteCcMailSigner(email, divisionEmails);
     }, [currentUser?.EmailId, currentUser?.email, enquiryData?.divisionEmails]);
 
-    // Pending Files State
+    // Pending Files State — { file, name, visibility: 'Public'|'Private' }
     const [pendingFiles, setPendingFiles] = useState([]);
+    /** Paste (Ctrl+V) uses the last section the user clicked Add Files on. */
+    const [preferredAttachmentVisibility, setPreferredAttachmentVisibility] = useState('Public');
 
     // Clause content
     const [clauseContent, setClauseContent] = useState({
@@ -4682,11 +5854,20 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     // Expanded clause for editing
     const [expandedClause, setExpandedClause] = useState(null);
     const [spellDictReady, setSpellDictReady] = useState(false);
-    useEffect(() => subscribeSpellDictionaryReady(() => setSpellDictReady(true)), []);
+    /* Defer Hunspell load so opening Quote stays responsive. */
+    useEffect(() => {
+        let unsub = () => {};
+        const t = window.setTimeout(() => {
+            unsub = subscribeSpellDictionaryReady(() => setSpellDictReady(true));
+        }, 2500);
+        return () => {
+            window.clearTimeout(t);
+            unsub();
+        };
+    }, []);
 
     // Company Header Info
     const [quoteLogo, setQuoteLogo] = useState(null);
-    const quoteLogoDisplaySrc = React.useMemo(() => resolveQuoteLogoSrc(quoteLogo), [quoteLogo]);
     const [quoteCompanyName, setQuoteCompanyName] = useState('Almoayyed Air Conditioning');
     const [quoteAttachments, setQuoteAttachments] = useState([]);
     const [isUploading, setIsUploading] = useState(false);
@@ -4719,7 +5900,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         fromEmail: '',
         fromDisplayName: '',
     });
-    const fileInputRef = useRef(null);
+    const publicFileInputRef = useRef(null);
+    const privateFileInputRef = useRef(null);
     const [footerDetails, setFooterDetails] = useState(null);
     const [companyProfiles, setCompanyProfiles] = useState([]);
 
@@ -4845,30 +6027,57 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const fromCtx = String(openContext?.draftQuoteId || '').trim();
         return fromCtx ? Number(fromCtx) : null;
     }, [quoteDraftId, openContext?.draftQuoteId]);
-    /** Quote B2B: approval only when Previous Quotes is on and a saved revision (quoteId) is active — not draft mode. */
+    /** Approval is mandatory for all new quotes (draft mode). Previous Quotes keeps revision browse. */
     const quoteModuleApprovalWorkflowEnabled = React.useMemo(() => {
-        const id = Number(quoteId);
-        return browsePreviousQuotesRevisions && Number.isFinite(id) && id > 0;
-    }, [browsePreviousQuotesRevisions, quoteId]);
+        if (embeddedApprovalReview) return true;
+        if (browsePreviousQuotesRevisions) {
+            const id = Number(quoteId);
+            return Number.isFinite(id) && id > 0;
+        }
+        // Draft / new quote path — approval required before EnquiryQuotes commit
+        return true;
+    }, [embeddedApprovalReview, browsePreviousQuotesRevisions, quoteId]);
     const approvalWorkflowDisabledHint = React.useMemo(() => {
         if (embeddedApprovalReview) return null;
-        if (!browsePreviousQuotesRevisions) {
-            return 'Approval workflow is available only in Previous Quotes / Revisions mode. Enable the checkbox and select a saved quote revision.';
+        if (browsePreviousQuotesRevisions) {
+            if (!quoteId) {
+                return 'Select a saved quote revision to view its approval workflow.';
+            }
+            return null;
         }
-        if (!quoteModuleApprovalWorkflowEnabled) {
-            return 'Select a saved quote revision to configure approval workflow. Each revision has its own approval path.';
+        if (!String(enquiryData?.enquiry?.RequestNo || '').trim() || !String(toName || '').trim()) {
+            return 'Select enquiry, lead job, and customer, then save a draft to configure approval.';
+        }
+        if (!approvalWorkflowDraftId && !quoteDraftId) {
+            return 'Save the quote first, then set the approval hierarchy and send for approval. Quote number is generated when the final approver approves.';
         }
         return null;
-    }, [embeddedApprovalReview, browsePreviousQuotesRevisions, quoteModuleApprovalWorkflowEnabled]);
-    const embeddedApprovalQuoteReady = React.useMemo(
-        () =>
-            embeddedApprovalReview &&
+    }, [
+        embeddedApprovalReview,
+        browsePreviousQuotesRevisions,
+        quoteId,
+        enquiryData,
+        toName,
+        approvalWorkflowDraftId,
+        quoteDraftId,
+    ]);
+    const embeddedApprovalQuoteReady = React.useMemo(() => {
+        if (!embeddedApprovalReview) return false;
+        if (approvalWorkflowDraftId && loadedEnquiryQuoteRowForPreview) {
+            return true;
+        }
+        return (
             !!approvalWorkflowQuoteId &&
             !!loadedEnquiryQuoteRowForPreview &&
             String(quoteRowId(loadedEnquiryQuoteRowForPreview) ?? '') ===
-                String(approvalWorkflowQuoteId ?? ''),
-        [embeddedApprovalReview, approvalWorkflowQuoteId, loadedEnquiryQuoteRowForPreview]
-    );
+                String(approvalWorkflowQuoteId ?? '')
+        );
+    }, [
+        embeddedApprovalReview,
+        approvalWorkflowQuoteId,
+        approvalWorkflowDraftId,
+        loadedEnquiryQuoteRowForPreview,
+    ]);
     /** Right-hand quote preview + clause editor load only after lead job and customer are both chosen. */
     const quoteShellReady =
         embeddedApprovalQuoteReady || (hasSelectedLeadJob && hasSelectedCustomer);
@@ -4891,9 +6100,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const [companyApproverUsers, setCompanyApproverUsers] = useState([]);
     const [customersList, setCustomersList] = useState([]);
     const [pendingQuotes, setPendingQuotes] = useState([]); // Pending List State
+    const [pendingQuotesLoading, setPendingQuotesLoading] = useState(false);
+    const pendingQuotesAbortRef = useRef(null);
     const [quoteSearchResults, setQuoteSearchResults] = useState([]);
     const [quoteSearchLoading, setQuoteSearchLoading] = useState(false);
     const [quoteSearchError, setQuoteSearchError] = useState('');
+    const quoteSearchAbortRef = useRef(null);
     /** When true with an enquiry open, right panel shows pending/search list instead of quote preview (after Search click). */
     const [showQuoteListSummaryOverQuote, setShowQuoteListSummaryOverQuote] = useState(false);
     const quoteSummaryClearColFiltersRef = useRef(() => {});
@@ -4951,7 +6163,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     }, [quoteListDivision]);
 
     useEffect(() => {
-        const div = (quoteListDivision || '').trim();
+        const divs = quoteEffectiveDivisions(quoteListDivision, quoteListDivisions);
+        // Prepared By / Signatory options API is single-division; use primary selected (or first of All).
+        const div = divs[0] || '';
         if (!div) {
             setDivisionPickerOptions({ preparedBy: [], signatory: [] });
             return undefined;
@@ -4980,7 +6194,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         return () => {
             cancelled = true;
         };
-    }, [quoteListDivision]);
+    }, [quoteListDivision, quoteListDivisions]);
 
     /** Drop Prepared By / Signatory on new quotes when not in the selected division member list. */
     useEffect(() => {
@@ -5018,30 +6232,72 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const userEmail = currentUser?.EmailId || currentUser?.email || '';
         if (!userEmail) {
             setPendingQuotes([]);
+            setPendingQuotesLoading(false);
             return;
         }
-        const divisionToUse =
-            divisionOverride != null ? String(divisionOverride || '').trim() : quoteListDivision.trim();
-        const divQ = divisionToUse
-            ? `&division=${encodeURIComponent(divisionToUse)}`
-            : '';
-        fetch(`${API_BASE}/api/quotes/list/pending?userEmail=${encodeURIComponent(userEmail)}${divQ}`)
+        const rawOverride = divisionOverride != null ? String(divisionOverride || '').trim() : null;
+        const divisionToUse = formatUserDepartments(
+            quoteEffectiveDivisions(
+                rawOverride != null ? rawOverride : quoteListDivision,
+                quoteListDivisions
+            )
+        );
+        if (!divisionToUse) {
+            setPendingQuotes([]);
+            setPendingQuotesLoading(false);
+            return;
+        }
+        pendingQuotesAbortRef.current?.abort();
+        const abortController = new AbortController();
+        pendingQuotesAbortRef.current = abortController;
+        setPendingQuotesLoading(true);
+        const divQ = `&division=${encodeURIComponent(divisionToUse)}`;
+        fetch(`${API_BASE}/api/quotes/list/pending?userEmail=${encodeURIComponent(userEmail)}${divQ}`, {
+            signal: abortController.signal,
+        })
             .then(res => res.json())
-            .then(data => setPendingQuotes(data || []))
-            .catch(err => console.error('Error fetching pending quotes:', err));
-    }, [currentUser, quoteListDivision]);
+            .then(data => {
+                if (abortController.signal.aborted) return;
+                setPendingQuotes(Array.isArray(data) ? data : []);
+            })
+            .catch(err => {
+                if (err?.name === 'AbortError') return;
+                console.error('Error fetching pending quotes:', err);
+                setPendingQuotes([]);
+            })
+            .finally(() => {
+                if (!abortController.signal.aborted) {
+                    setPendingQuotesLoading(false);
+                }
+            });
+    }, [currentUser, quoteListDivision, quoteListDivisions]);
 
-    const handleQuoteListSearch = useCallback(async () => {
+    const handleQuoteListSearch = useCallback(async (divisionOverride = null) => {
         if (quoteListCategory !== QUOTE_LIST_CATEGORY.SEARCH) return;
+        quoteSearchAbortRef.current?.abort();
+        const abortController = new AbortController();
+        quoteSearchAbortRef.current = abortController;
         setShowQuoteListSummaryOverQuote(true);
         clearLeftPanelForToolbarSearchRef.current?.();
         const userEmail = currentUser?.EmailId || currentUser?.email || '';
         const q = quoteListSearchCriteria.trim();
-        const df = (quoteListDateFrom || '').trim();
-        const dt = (quoteListDateTo || '').trim();
+        const df = normalizeQuoteSearchDateParam(quoteListDateFrom);
+        const dt = normalizeQuoteSearchDateParam(quoteListDateTo);
         if (!q && !(df && dt)) {
             setQuoteSearchResults([]);
             setQuoteSearchError('');
+            return;
+        }
+        // Ignore click/keyboard event objects mistakenly passed as divisionOverride.
+        const rawDiv =
+            typeof divisionOverride === 'string' || typeof divisionOverride === 'number'
+                ? String(divisionOverride || '').trim()
+                : quoteListDivision;
+        const divList = quoteEffectiveDivisions(rawDiv, quoteListDivisions);
+        const divToUse = formatUserDepartments(divList);
+        if (quoteListDivisions.length > 0 && !divToUse) {
+            setQuoteSearchResults([]);
+            setQuoteSearchError('Select a division to search quotes.');
             return;
         }
         setQuoteSearchLoading(true);
@@ -5052,8 +6308,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             params.set('q', quoteListSearchCriteria);
             if (df) params.set('dateFrom', df);
             if (dt) params.set('dateTo', dt);
-            if (quoteListDivision.trim()) params.set('division', quoteListDivision.trim());
-            const res = await fetch(`${API_BASE}/api/quotes/list/search?${params.toString()}`);
+            if (divToUse) params.set('division', divToUse);
+            const res = await fetch(`${API_BASE}/api/quotes/list/search?${params.toString()}`, {
+                signal: abortController.signal,
+            });
+            if (abortController.signal.aborted) return;
             if (!res.ok) {
                 let message = `Search failed (${res.status})`;
                 try {
@@ -5068,15 +6327,19 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 return;
             }
             const data = await res.json();
+            if (abortController.signal.aborted) return;
             setQuoteSearchResults(Array.isArray(data) ? data : []);
         } catch (e) {
+            if (e?.name === 'AbortError') return;
             console.error('[QuoteForm] list/search', e);
             setQuoteSearchResults([]);
             setQuoteSearchError('Search failed. Check that the API server is running and reachable.');
         } finally {
-            setQuoteSearchLoading(false);
+            if (!abortController.signal.aborted) {
+                setQuoteSearchLoading(false);
+            }
         }
-    }, [quoteListCategory, quoteListSearchCriteria, quoteListDateFrom, quoteListDateTo, quoteListDivision, currentUser]);
+    }, [quoteListCategory, quoteListSearchCriteria, quoteListDateFrom, quoteListDateTo, quoteListDivision, quoteListDivisions, currentUser]);
 
     const handleQuoteListClear = useCallback(() => {
         // Same full reset as the left panel Search row "Clear" (enquiry no, lead job, customer, etc.)
@@ -5135,6 +6398,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         quoteRowAutoSelectLeadRef.current = false;
         quoteRowDivisionLeadLockRef.current = false;
         quoteRowFirstLeadDivisionFullRef.current = '';
+        quoteListEnquiryOnlySkipLeadRef.current = false;
         preserveQuoteOnLeadChangeRef.current = null;
         pendingPricingBootstrapRef.current = null;
         setEnquiryData((prev) => (prev ? { ...prev, leadJobPrefix: '' } : prev));
@@ -5162,16 +6426,25 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 setCoSignatoryDesignation('');
             }
             setQuoteListDivision(nextDivision);
-            if (quoteListCategory === QUOTE_LIST_CATEGORY.PENDING) {
-                refetchPendingQuotes(nextDivision);
+            if (
+                divisionChanged &&
+                quoteListCategory === QUOTE_LIST_CATEGORY.SEARCH &&
+                (String(quoteListSearchCriteria || '').trim() ||
+                    (String(quoteListDateFrom || '').trim() && String(quoteListDateTo || '').trim()))
+            ) {
+                handleQuoteListSearch(nextDivision);
             }
         },
         [
             enquiryData?.enquiry?.RequestNo,
             quoteListDivision,
             quoteListCategory,
+            quoteListSearchCriteria,
+            quoteListDateFrom,
+            quoteListDateTo,
             refetchPendingQuotes,
             clearLeadAndCustomerForDivisionChange,
+            handleQuoteListSearch,
         ]
     );
 
@@ -5193,11 +6466,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 if (cancelled) return;
                 const list = Array.isArray(data.divisions) ? data.divisions : [];
                 setQuoteListDivisions(list);
-                setQuoteListDivision((prev) => {
+                setQuoteListDivision(() => {
                     if (!list.length) return '';
-                    const saved = localStorage.getItem('quote_listDivision') || '';
-                    if (saved && list.includes(saved)) return saved;
-                    if (prev && list.includes(prev)) return prev;
+                    const rawSaved = localStorage.getItem('quote_listDivision');
+                    const saved = parseUserDepartments(rawSaved).filter((s) => list.includes(s));
+                    // Single-select: prefer last saved division, else first accessible option.
+                    if (saved.length) return saved[0];
                     return list[0];
                 });
             } catch {
@@ -5219,7 +6493,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         let cancelled = false;
         (async () => {
             try {
-                const div = (quoteListDivision || '').trim();
+                const div = formatUserDepartments(
+                    quoteEffectiveDivisions(quoteListDivision, quoteListDivisions)
+                );
                 const leadUrl = `${API_BASE}/api/quotes/enquiry-data/${encodeURIComponent(rn)}?userEmail=${encodeURIComponent(userEmail)}${div ? `&division=${encodeURIComponent(div)}` : ''}&scope=lead`;
                 const res = await fetch(leadUrl, { cache: 'no-store' });
                 if (!res.ok || cancelled) return;
@@ -5233,10 +6509,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 } else {
                     setEnquiryDivisionScopeNotice('');
                 }
+                const keepLeadEmpty = quoteListEnquiryOnlySkipLeadRef.current;
                 setEnquiryData((prev) => ({
                     ...prev,
                     ...data,
-                    leadJobPrefix: data.leadJobPrefix ?? '',
+                    leadJobPrefix: keepLeadEmpty ? '' : (data.leadJobPrefix ?? ''),
                 }));
                 const fullRes = await fetch(
                     `${API_BASE}/api/quotes/enquiry-data/${encodeURIComponent(rn)}?userEmail=${encodeURIComponent(userEmail)}${div ? `&division=${encodeURIComponent(div)}` : ''}`,
@@ -5247,7 +6524,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 if (!cancelled) {
                     setEnquiryData((prev) => ({
                         ...fullData,
-                        leadJobPrefix: fullData.leadJobPrefix ?? '',
+                        leadJobPrefix: keepLeadEmpty || quoteListEnquiryOnlySkipLeadRef.current
+                            ? ''
+                            : (fullData.leadJobPrefix ?? ''),
                     }));
                     setCompanyProfiles(fullData.availableProfiles || []);
                 }
@@ -5258,7 +6537,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         return () => {
             cancelled = true;
         };
-    }, [quoteListDivision]);
+    }, [quoteListDivision, quoteListDivisions, currentUser?.EmailId, currentUser?.email, enquiryData?.enquiry?.RequestNo]);
 
     // Tab State for unified Quote and Pricing Sections
     const [activeQuoteTab, setActiveQuoteTab] = useState('self');
@@ -5553,12 +6832,36 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const [templates, setTemplates] = useState([]);
     const [savedTemplateName, setSavedTemplateName] = useState('');
     const [selectedTemplateId, setSelectedTemplateId] = useState('');
+    /** Clause Templates panel: saved user templates vs load clauses from a prior EnquiryQuotes revision. */
+    const [clauseSourceTab, setClauseSourceTab] = useState('stored'); // 'stored' | 'prev-revision'
+    const [selectedPrevRevisionQuoteId, setSelectedPrevRevisionQuoteId] = useState('');
     const clauseTemplateImportInputRef = useRef(null);
     const clauseTemplateUserEmail = React.useMemo(() => {
         const raw = (currentUser?.EmailId || currentUser?.email || currentUser?.MailId || '').trim();
         if (!raw) return '';
         return raw.toLowerCase().replace(/@almcg\.com/g, '@almoayyedcg.com');
     }, [currentUser?.EmailId, currentUser?.email, currentUser?.MailId]);
+
+    /** EnquiryQuotes rows for the current enquiry — pick one to load clause content into a new draft/revision. */
+    const prevRevisionQuoteOptions = React.useMemo(() => {
+        const rows = Array.isArray(existingQuotes) ? existingQuotes : [];
+        return [...rows]
+            .filter((q) => quoteRowId(q) != null)
+            .sort((a, b) => {
+                const aQn = String(a.QuoteNumber || a.quoteNumber || '');
+                const bQn = String(b.QuoteNumber || b.quoteNumber || '');
+                if (aQn !== bQn) return bQn.localeCompare(aQn);
+                return Number(b.RevisionNo ?? b.revisionNo ?? 0) - Number(a.RevisionNo ?? a.revisionNo ?? 0);
+            });
+    }, [existingQuotes]);
+
+    React.useEffect(() => {
+        if (!selectedPrevRevisionQuoteId) return;
+        const stillThere = prevRevisionQuoteOptions.some(
+            (q) => String(quoteRowId(q) ?? '') === String(selectedPrevRevisionQuoteId)
+        );
+        if (!stillThere) setSelectedPrevRevisionQuoteId('');
+    }, [prevRevisionQuoteOptions, selectedPrevRevisionQuoteId]);
 
     const refreshClauseTemplates = React.useCallback(async () => {
         if (!clauseTemplateUserEmail) {
@@ -5818,9 +7121,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         setQuoteId(null);
         setQuoteDraftId(null);
         setQuoteNumber('');
+        setRevisionSourceQuoteNoBoth(0);
         setLoadedEnquiryQuoteRowForPreview(null);
         pendingAutoAlignPreviewRef.current = true;
-    }, [currentUser]);
+    }, [currentUser, setRevisionSourceQuoteNoBoth]);
 
     const applyNoDraftQuoteDefaults = applyFreshQuoteShellDefaults;
 
@@ -6661,6 +7965,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const editingClauseLiveHtmlRef = useRef({ key: null, html: '' });
     const editingClauseLiveSigTimerRef = useRef(null);
     const editingClauseReflowTimerRef = useRef(null);
+    /** Last idle preview segments — reused while a clause editor is open to avoid rebuild lag. */
+    const clauseSegmentsFrozenWhileEditingRef = useRef([]);
     const [editingClauseLiveSig, setEditingClauseLiveSig] = useState('');
     /** Checked clauses in UI order (preview + measurement source). */
     const activeClausesList = React.useMemo(() => {
@@ -6740,26 +8046,53 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             html = String(live.html || '');
         }
         const lump = parseLumpSumFromAutoTableHtml(html);
+        const vatCell = html.match(/data-ems-amount=["']vat["'][^>]*>([\s\S]*?)<\/td>/i);
+        const vatSig = vatCell
+            ? String(vatCell[1])
+                  .replace(/<[^>]*>/g, ' ')
+                  .replace(/\s+/g, ' ')
+                  .trim()
+            : '';
+        const totalCell = html.match(/data-ems-amount=["']total["'][^>]*>([\s\S]*?)<\/td>/i);
+        const totalSig = totalCell
+            ? String(totalCell[1])
+                  .replace(/<[^>]*>/g, ' ')
+                  .replace(/\s+/g, ' ')
+                  .trim()
+            : '';
         const proseTail = html.replace(/<table[\s\S]*?<\/table>\s*/i, '');
-        return `${lump ?? ''}:${proseTail.length}:${proseTail.slice(-48)}`;
+        // Include Total + VAT so correcting a stale VAT cell refreshes preview after leaving edit.
+        return `${lump ?? ''}|t:${totalSig}|v:${vatSig}|${proseTail.length}:${proseTail.slice(-48)}`;
     }, [clauseContent?.pricingTerms, expandedClause, editingClauseLiveSig]);
 
     const clauseSegmentsForPagination = React.useMemo(() => {
-        if (!activeClausesList.length) return [];
+        if (!activeClausesList.length) {
+            return [];
+        }
+        /* Freeze preview segments while inline editing — full rebuild + VAT reconcile on each
+           keystroke/flush made the Jodit editor lag. Refresh when the editor closes. */
+        if (expandedClause && clauseSegmentsFrozenWhileEditingRef.current.length) {
+            return clauseSegmentsFrozenWhileEditingRef.current;
+        }
         /* Align Page: fine splits for tight packing. Normal preview: coarser segments for faster load. */
         const splitOpts = clausePackSplitMode
             ? { splitListsPerItem: true, splitTableMinRows: 2, splitParagraphs: true }
             : { splitTableMinRows: 8, splitListMinItems: 16, splitParagraphs: false };
-        /* While editing, skip Hunspell decorate — it re-ran on every keystroke and caused typing lag. */
+        /* While editing, skip Hunspell + VAT DOMParser — both re-ran on every keystroke. */
         const formatBody = expandedClause
             ? (html, listKey, displayMajor) =>
-                  getClauseDisplayBodyHtml(html, listKey, displayMajor, { spell: false })
+                  getClauseDisplayBodyHtml(html, listKey, displayMajor, {
+                      spell: false,
+                      reconcile: false,
+                  })
             : getClauseDisplayBodyHtml;
-        return buildClauseSegmentsForPagination(
+        const next = buildClauseSegmentsForPagination(
             activeClausesList,
             formatBody,
             splitOpts
         );
+        clauseSegmentsFrozenWhileEditingRef.current = next;
+        return next;
     }, [activeClausesList, clausePaginationLayoutKey, pricingTermsEditorSig, clausePackSplitMode, expandedClause]);
 
     const isQuotePreviewVisible = quoteShellReady;
@@ -7237,13 +8570,75 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 return plain.length > 0 || block.showHeading;
             });
             if (!hasBody) return;
+            // While editing, skip VAT reconcile — DOMParser on every sheet rebuild freezes typing.
+            if (expandedClause) {
+                res.push({
+                    isFirstPage: false,
+                    blocks,
+                });
+                return;
+            }
+            // Reconcile AFTER split/rejoin so dangerouslySetInnerHTML cannot re-apply a stale VAT cell.
+            const fixedBlocks = blocks.map((block) => {
+                const html = String(block.bodyHtml || '');
+                const needsVat =
+                    block.listKey === 'showPricingTerms' ||
+                    /data-ems-amount=["']vat["']/i.test(html) ||
+                    /data-ems-row=["']vat["']/i.test(html) ||
+                    /id=["']ems-auto-price-summary-table/i.test(html) ||
+                    /data-ems-pricing-cols=["']fixed["']/i.test(html);
+                if (!needsVat) return block;
+                return {
+                    ...block,
+                    bodyHtml: ensurePricingTableColgroupInHtml(
+                        reconcilePricingVatAmountCellsInHtml(html)
+                    ),
+                };
+            });
             res.push({
                 isFirstPage: false,
-                blocks,
+                blocks: fixedBlocks,
             });
         });
         return res;
-    }, [sanitizedClauseSegmentPageGroups, clauseSegmentsForPagination]);
+    }, [sanitizedClauseSegmentPageGroups, clauseSegmentsForPagination, expandedClause]);
+
+    /**
+     * One-shot VAT sync after preview paint (no MutationObserver — continuous observe
+     * froze the tab while editing / when discount VAT checks looped).
+     */
+    useLayoutEffect(() => {
+        if (expandedClause) return undefined;
+        const root = document.getElementById('quote-preview');
+        if (!root) return undefined;
+        forcePricingVatInDomRoot(root);
+        const raf = window.requestAnimationFrame(() => {
+            forcePricingVatInDomRoot(root);
+        });
+        return () => window.cancelAnimationFrame(raf);
+    }, [sheets, expandedClause, pricingTermsEditorSig]);
+
+    /** Persist corrected VAT into clause state so pack/PDF don't keep the stale cell. */
+    useEffect(() => {
+        if (expandedClause) return;
+        const current = String(clauseContentRef.current?.pricingTerms || '');
+        if (!clauseHtmlHasEmsAutoPricingTable(current)) return;
+        if (!pricingFooterVatInconsistent(current)) return;
+        const fixed = ensurePricingTableColgroupInHtml(
+            reconcilePricingVatAmountCellsInHtml(current)
+        );
+        // Amount-only compare — avoids DOMParser reformatting loops.
+        if (pricingFooterAmountsSig(fixed) === pricingFooterAmountsSig(current)) return;
+        setClauseContent((prev) => {
+            const prevTerms = String(prev?.pricingTerms || '');
+            if (pricingFooterAmountsSig(prevTerms) === pricingFooterAmountsSig(fixed)) {
+                return prev;
+            }
+            const next = { ...prev, pricingTerms: fixed };
+            clauseContentRef.current = next;
+            return next;
+        });
+    }, [expandedClause, clauseContent?.pricingTerms, pricingTermsEditorSig]);
 
     const hiddenContinuationSheetCount = React.useMemo(() => {
         if (!expandedClause) return 0;
@@ -7792,20 +9187,25 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         if (currentUser && enquiryData?.availableProfiles) {
             // Multiple branch tabs: header/footer follow active tab + division profile (do not force personal profile).
             if ((calculatedTabs || []).length > 1) return;
+            // Division toolbar selection drives header/footer — do not override with login profile.
+            if (String(quoteListDivision || '').trim()) return;
 
-            const userDept = (currentUser.Department || '').trim().toLowerCase();
+            const userDeptTokens = parseUserDepartments(currentUser.Department || '');
             const userEmail = (currentUser.EmailId || currentUser.email || '').trim().toLowerCase();
             // Priority 1: Backend Flag
             let personalProfile = enquiryData.availableProfiles.find(p => p.isPersonalProfile);
 
-            // Priority 2: Robust match (Email or Dept)
+            // Priority 2: Robust match (Email or any assigned Department token)
             if (!personalProfile) {
                 personalProfile = enquiryData.availableProfiles.find(p => {
                     const pEmail = (p.email || '').trim().toLowerCase();
                     const pItem = (p.itemName || '').trim().toLowerCase();
                     const pName = (p.name || '').trim().toLowerCase();
                     return (userEmail && pEmail && (userEmail.includes(pEmail) || pEmail.includes(userEmail.split('@')[0]))) ||
-                        (pItem === userDept || pName === userDept || (userDept.includes('bms') && pItem.includes('bms')));
+                        userDeptTokens.some((tok) => {
+                            const userDept = tok.toLowerCase();
+                            return pItem === userDept || pName === userDept || (textRefersToBms(userDept) && textRefersToBms(pItem));
+                        });
                 });
             }
 
@@ -7834,7 +9234,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 });
             }
         }
-    }, [currentUser, enquiryData?.availableProfiles, calculatedTabs?.length]);
+    }, [currentUser, enquiryData?.availableProfiles, calculatedTabs?.length, quoteListDivision]);
 
     /** Stable string so memo/effects do not re-fire when calculatedTabs is a new array with the same tabs. */
     const quoteTabsFingerprint = React.useMemo(
@@ -8183,7 +9583,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     const pricingTermsAutoTablePreviewHtml = React.useMemo(() => {
         if (!pricingSummaryForClause?.length || !pricingData) return '';
-        const { tableHtml } = buildEmsAutoPricingTableHtml(pricingSummaryForClause, activeJobsForClause);
+        const { tableHtml } = buildEmsAutoPricingTableHtml(
+            pricingSummaryForClause,
+            activeJobsForClause,
+            numberToWordsBHD
+        );
         return tableHtml;
     }, [pricingSummaryForClause, activeJobsForClause, pricingStableSig, pricingData]);
 
@@ -8196,10 +9600,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         if (!Array.isArray(pricingSummaryForClause)) return '';
         const checked = Array.isArray(activeJobsForClause) ? activeJobsForClause : [];
         const round6 = (n) => Number((Number(n) || 0).toFixed(6));
-        return pricingSummaryForClause
+        const optionSet = new Set();
+        const body = pricingSummaryForClause
             .filter((g) => g?.name && jobNameMatchesActiveJobsList(g.name, checked))
             .map((g) => {
                 const items = Array.isArray(g.items) ? g.items : [];
+                items.forEach((i) => {
+                    const n = String(i?.name || '').trim();
+                    if (n) optionSet.add(n);
+                });
                 const itemSig = items
                     .map((i) => `${String(i?.name || '').trim()}=${round6(i?.total)}`)
                     .sort()
@@ -8208,6 +9617,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             })
             .sort()
             .join('||');
+        const opts = [...optionSet].sort((a, b) => {
+            if (a === 'Base Price') return -1;
+            if (b === 'Base Price') return 1;
+            return a.localeCompare(b);
+        });
+        /* v5 = all option tables locked to same 80% width (inline !important + CSS exclusions). */
+        return `v5|opts=${opts.join(',')}|${body}`;
     }, [pricingSummaryForClause, activeJobsForClause]);
 
     const lastInjectedAutoTableSigRef = useRef('');
@@ -8216,14 +9632,61 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     // changes (jobs added/removed, item names changed). Mere edits to prices in the editor must
     // not reinject the table, otherwise multi-cell selection and manual edits keep getting reset.
     React.useEffect(() => {
-        if (embeddedApprovalReview) return;
-        if (!pricingTermsAutoTablePreviewHtml) return;
-        // Previous Quotes ON: Clause 4 pricing table comes from the selected EnquiryQuotes revision.
-        if (browsePreviousQuotesRevisionsRef.current) {
+        if (embeddedApprovalReview) {
+            const currentTerms = String(clauseContentRef.current?.pricingTerms || '');
+            if (clauseHtmlHasEmsAutoPricingTable(currentTerms)) {
+                const fixed = ensurePricingTableColgroupInHtml(
+                    updatePricingTableFooterCellsInHtml(currentTerms, null)
+                );
+                if (fixed && pricingFooterAmountsSig(fixed) !== pricingFooterAmountsSig(currentTerms)) {
+                    setClauseContent((prev) => {
+                        const prevTerms = String(prev?.pricingTerms || '');
+                        if (pricingFooterAmountsSig(prevTerms) === pricingFooterAmountsSig(fixed)) {
+                            return prev;
+                        }
+                        return { ...prev, pricingTerms: fixed };
+                    });
+                }
+            }
             return;
         }
-        // Draft loaded: Clause 4 pricing table comes from EnquiryQuotesDraft until "Update Price".
+        if (!pricingTermsAutoTablePreviewHtml) return;
+        // Previous Quotes ON: keep revision PricingTerms, but still reconcile VAT footer.
+        if (browsePreviousQuotesRevisionsRef.current) {
+            const currentTerms = String(clauseContentRef.current?.pricingTerms || '');
+            if (clauseHtmlHasEmsAutoPricingTable(currentTerms)) {
+                const fixed = ensurePricingTableColgroupInHtml(
+                    updatePricingTableFooterCellsInHtml(currentTerms, null)
+                );
+                if (fixed && pricingFooterAmountsSig(fixed) !== pricingFooterAmountsSig(currentTerms)) {
+                    setClauseContent((prev) => {
+                        const prevTerms = String(prev?.pricingTerms || '');
+                        if (pricingFooterAmountsSig(prevTerms) === pricingFooterAmountsSig(fixed)) {
+                            return prev;
+                        }
+                        return { ...prev, pricingTerms: fixed };
+                    });
+                }
+            }
+            return;
+        }
+        // Draft loaded: keep saved PricingTerms body, but still reconcile VAT/Total/Grand footer.
         if (shouldKeepDraftPricingTerms()) {
+            const currentTerms = String(clauseContentRef.current?.pricingTerms || '');
+            if (clauseHtmlHasEmsAutoPricingTable(currentTerms)) {
+                const fixed = ensurePricingTableColgroupInHtml(
+                    updatePricingTableFooterCellsInHtml(currentTerms, null)
+                );
+                if (fixed && pricingFooterAmountsSig(fixed) !== pricingFooterAmountsSig(currentTerms)) {
+                    setClauseContent((prev) => {
+                        const prevTerms = String(prev?.pricingTerms || '');
+                        if (pricingFooterAmountsSig(prevTerms) === pricingFooterAmountsSig(fixed)) {
+                            return prev;
+                        }
+                        return { ...prev, pricingTerms: fixed };
+                    });
+                }
+            }
             return;
         }
 
@@ -8274,11 +9737,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             );
         }
 
-        const preservedDiscount = extractPricingDiscountStateFromHtml(currentTerms);
-        if (preservedDiscount && !extractPricingDiscountStateFromHtml(nextHtml)) {
+        const preservedDiscounts = extractAllPricingDiscountStatesFromHtml(
+            getPricingTermsHtmlPreferringLiveEditor(currentTerms)
+        );
+        if (preservedDiscounts.length) {
             nextHtml = applyDiscountBlockToPricingTermsHtml(
                 nextHtml,
-                preservedDiscount,
+                preservedDiscounts,
                 numberToWordsBHD
             );
         }
@@ -8287,7 +9752,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const previewGrand = parseLumpSumFromAutoTableHtml(pricingTermsAutoTablePreviewHtml);
         const livePrice = parseLumpSumFromAutoTableHtml(nextHtml);
         const totalForProse =
-            preservedDiscount && livePrice != null && Number.isFinite(livePrice)
+            preservedDiscounts.length && livePrice != null && Number.isFinite(livePrice)
                 ? livePrice
                 : previewGrand != null && Number.isFinite(previewGrand)
                   ? previewGrand
@@ -8296,11 +9761,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     : fallbackGrandBaseTotal;
         const synced = applyTableRowHeightModelInHtmlString(
             ensurePricingTableColgroupInHtml(
-                syncPricingTerms41LumpSumProse(
-                    nextHtml,
-                    totalForProse,
-                    false,
-                    numberToWordsBHD
+                updatePricingTableFooterCellsInHtml(
+                    syncPricingTerms41LumpSumProse(
+                        nextHtml,
+                        totalForProse,
+                        false,
+                        numberToWordsBHD
+                    ),
+                    null
                 )
             )
         );
@@ -8309,7 +9777,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (prevTerms === synced) return prev;
             return { ...prev, pricingTerms: synced };
         });
-    }, [pricingTermsAutoTablePreviewHtml, pricingAutoTableSignature, fallbackGrandBaseTotal, selectedJobsSig, pricingSelectionTouched]);
+    }, [
+        embeddedApprovalReview,
+        clauseContent?.pricingTerms,
+        pricingTermsAutoTablePreviewHtml,
+        pricingAutoTableSignature,
+        fallbackGrandBaseTotal,
+        selectedJobsSig,
+        pricingSelectionTouched,
+    ]);
 
     /** Aligns with UI fallback when calculatedTabs is empty (e.g. lead job + internal customer only). */
     const effectiveQuoteTabs = React.useMemo(() => {
@@ -8502,24 +9978,131 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         ]
     );
 
+    const divisionToolbarBranding = React.useMemo(
+        () => resolveBrandingFromDivisionLabel(quoteListDivision, enquiryData),
+        [
+            quoteListDivision,
+            enquiryData?.enquiryForBrandingRows,
+            enquiryData?.masterEnquiryForFooterLookup,
+            enquiryData?.availableProfiles,
+        ]
+    );
+
     const approvalReviewBranding = React.useMemo(() => {
         if (!embeddedApprovalReview) return null;
-        if (approvalWorkflowCreatorBranding?.name) return approvalWorkflowCreatorBranding;
-        return resolveBrandingFromCompanyName(
-            approvalWorkflowCreatorCompanyName,
+        const quoteRefHint =
+            String(openContext?.quoteNumber || '').trim() ||
+            String(quoteNumber || '').trim() ||
+            String(loadedEnquiryQuoteRowForPreview?.QuoteNumber || '').trim();
+
+        const hints = collectApprovalDivisionHints({
+            creatorDivision: approvalWorkflowCreatorDivisionName,
+            ownJob: openContext?.ownJob,
+            listDivision: openContext?.listDivision || quoteListDivision,
+            quoteNumber: quoteRefHint,
+        });
+
+        // Division / OwnJob / Quote Ref first — never let Civil tab win over IFM.
+        const byDivision = resolveBrandingFromApprovalHints(hints, enquiryData);
+        if (byDivision?.logo) return byDivision;
+
+        if (approvalWorkflowCreatorBranding?.name && approvalWorkflowCreatorBranding?.logo) {
+            return approvalWorkflowCreatorBranding;
+        }
+        const fromCompany = resolveBrandingFromCompanyName(
+            approvalWorkflowCreatorCompanyName || approvalWorkflowCreatorBranding?.name || '',
             enquiryData,
-            approvalWorkflowCreatorDivisionName
+            hints[0] || ''
         );
+        if (fromCompany?.logo || fromCompany?.name) return fromCompany;
+        if (byDivision?.name) return byDivision;
+        return approvalWorkflowCreatorBranding || null;
     }, [
         embeddedApprovalReview,
         approvalWorkflowCreatorBranding,
         approvalWorkflowCreatorCompanyName,
         approvalWorkflowCreatorDivisionName,
+        openContext?.ownJob,
+        openContext?.listDivision,
+        openContext?.quoteNumber,
+        quoteNumber,
+        quoteListDivision,
+        loadedEnquiryQuoteRowForPreview?.QuoteNumber,
         enquiryData?.enquiryForBrandingRows,
         enquiryData?.masterEnquiryForFooterLookup,
+        enquiryData?.availableProfiles,
     ]);
 
-    const effectiveQuoteBranding = approvalReviewBranding || activeTabBranding;
+    const effectiveQuoteBranding = React.useMemo(
+        () =>
+            resolveEffectiveQuoteBranding({
+                approvalReviewBranding,
+                activeTabBranding,
+                divisionToolbarBranding,
+                quoteLogoFallback: quoteLogo,
+            }),
+        [approvalReviewBranding, activeTabBranding, divisionToolbarBranding, quoteLogo]
+    );
+
+    const quoteLogoCandidateRaws = React.useMemo(() => {
+        const tab = activeQuoteTabForBranding;
+        const tabJob =
+            tab?.realId != null
+                ? jobsPool.find((j) => String(j.id || j.ItemID || j.ID) === String(tab.realId))
+                : null;
+        const hierarchyNode =
+            tab?.realId != null && Array.isArray(enquiryData?.divisionsHierarchy)
+                ? enquiryData.divisionsHierarchy.find(
+                      (d) => String(d.id || d.ItemID || d.ID) === String(tab.realId)
+                  )
+                : null;
+        const tabFallbacks = [
+            activeTabBranding?.logo,
+            tab?.companyLogo,
+            tabJob?.companyLogo,
+            tabJob?.CompanyLogo,
+            hierarchyNode?.companyLogo,
+            hierarchyNode?.CompanyLogo,
+            enquiryData?.enquiryLogo,
+            enquiryData?.companyDetails?.logo,
+        ];
+        // Approvals preview must follow creator / selected division branding — not the first pricing tab
+        // (multi-branch enquiries often open on Civil and wrongly show Almoayyed Contracting).
+        if (embeddedApprovalReview) {
+            return [
+                approvalReviewBranding?.logo,
+                effectiveQuoteBranding?.logo,
+                quoteLogo,
+                divisionToolbarBranding?.logo,
+                ...tabFallbacks,
+            ];
+        }
+        return [
+            activeTabBranding?.logo,
+            effectiveQuoteBranding?.logo,
+            divisionToolbarBranding?.logo,
+            approvalReviewBranding?.logo,
+            quoteLogo,
+            ...tabFallbacks.slice(1),
+        ];
+    }, [
+        embeddedApprovalReview,
+        activeTabBranding?.logo,
+        effectiveQuoteBranding?.logo,
+        divisionToolbarBranding?.logo,
+        approvalReviewBranding?.logo,
+        quoteLogo,
+        activeQuoteTabForBranding,
+        jobsPool,
+        enquiryData?.divisionsHierarchy,
+        enquiryData?.enquiryLogo,
+        enquiryData?.companyDetails?.logo,
+    ]);
+
+    const quoteLogoDisplaySrc = React.useMemo(
+        () => resolveQuoteLogoSrc(quoteLogoCandidateRaws.find((raw) => raw != null && String(raw).trim())),
+        [quoteLogoCandidateRaws]
+    );
 
     /** Company line in the standard cover letter (first page) — same source as print footer when possible. */
     const quoteCoverOfferCompanyName = React.useMemo(() => {
@@ -9351,6 +10934,42 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     rows = [pinned];
                 }
             }
+            /**
+             * Once any revision of a QuoteNo matches the current tuple, include ALL revisions
+             * for that QuoteNo (same RequestNo) from the enquiry quote pool.
+             * Prevents R1 vanishing when OwnJob/ToName drifted slightly vs R0 on the same series.
+             */
+            if (browsePreviousQuotesRevisions && rows.length > 0 && requestNoScope) {
+                const matchedQuoteNos = new Set(
+                    rows
+                        .map((q) => Number(q.QuoteNo ?? q.quoteNo))
+                        .filter((n) => Number.isFinite(n) && n > 0)
+                );
+                if (matchedQuoteNos.size > 0) {
+                    const pool = [];
+                    const pushAll = (list) => {
+                        if (!Array.isArray(list)) return;
+                        for (const q of list) pool.push(q);
+                    };
+                    pushAll(quoteSourceList);
+                    pushAll(existingQuotes);
+                    pushAll(quoteScopedForPanel);
+                    const byId = new Map();
+                    for (const q of rows) {
+                        const id = String(quoteRowId(q) ?? '');
+                        if (id && id !== 'undefined') byId.set(id, q);
+                    }
+                    for (const q of pool) {
+                        if (String(q.RequestNo ?? '').trim() !== String(requestNoScope).trim()) continue;
+                        const qn = Number(q.QuoteNo ?? q.quoteNo);
+                        if (!matchedQuoteNos.has(qn)) continue;
+                        const id = String(quoteRowId(q) ?? '');
+                        if (!id || id === 'undefined' || byId.has(id)) continue;
+                        byId.set(id, q);
+                    }
+                    rows = Array.from(byId.values());
+                }
+            }
             const pinnedApprovalQuoteId = listOpenApprovalQuoteIdRef.current;
             if (pinnedApprovalQuoteId) {
                 rows = rows.filter(
@@ -9381,6 +11000,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             quoteListDivision,
             browsePreviousQuotesRevisions,
             enquiryData?.enquiry?.RequestNo,
+            loadedEnquiryQuoteRowForPreview,
+            // scopedQuotePanelFetchKey is declared below — do not list it here (TDZ).
+            // Body already closes over scopedQuotesFetchSettledKey / scopedQuotePanelFetchKey.
         ]
     );
 
@@ -9668,6 +11290,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         })[0];
     }, [persistedRowsForScope]);
 
+    const latestPersistedRowForReviseRef = useRef(null);
+    const scopedQuotesSettledMatchRef = useRef(false);
+    useEffect(() => {
+        latestPersistedRowForReviseRef.current = latestPersistedRowForRevise;
+    }, [latestPersistedRowForRevise]);
+    useEffect(() => {
+        scopedQuotesSettledMatchRef.current =
+            !scopedEnquiryQuotesParams ||
+            scopedQuotesFetchSettledKey === scopedQuotePanelFetchKey;
+    }, [scopedEnquiryQuotesParams, scopedQuotesFetchSettledKey, scopedQuotePanelFetchKey]);
+
     const canRevisePersistedQuote = React.useMemo(() => {
         const ridLatest = quoteRowId(latestPersistedRowForRevise);
         if (ridLatest != null && String(ridLatest).trim() !== '') return true;
@@ -9683,38 +11316,69 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             }
             return;
         }
-            const currentQuoteTabValid = calculatedTabs.find(t => String(t.id) === String(activeQuoteTab));
-            if (!currentQuoteTabValid) {
-                console.log('[AutoRes] Fixing Active Quote Tab:', activeQuoteTab, '->', calculatedTabs[0].id);
-                setActiveQuoteTab(calculatedTabs[0].id);
-        }
-    }, [calculatedTabs, activeQuoteTab]);
+        const currentQuoteTabValid = calculatedTabs.find((t) => String(t.id) === String(activeQuoteTab));
+        if (currentQuoteTabValid) return;
 
-    // Approvals module: logo + footer from Master_EnquiryFor via CreatedByCompanyName (server lookup).
+        // Approvals: prefer the tab matching OwnJob / Quote Ref division (not always tabs[0] = Civil).
+        if (embeddedApprovalReview) {
+            const quoteRefHint =
+                String(openContext?.quoteNumber || '').trim() ||
+                String(quoteNumber || '').trim();
+            const hints = collectApprovalDivisionHints({
+                creatorDivision: approvalWorkflowCreatorDivisionName,
+                ownJob: openContext?.ownJob,
+                listDivision: openContext?.listDivision || quoteListDivision,
+                quoteNumber: quoteRefHint,
+            }).map((h) => collapseSpacesLower(h));
+            const refParts = String(quoteRefHint)
+                .split('/')
+                .map((p) => p.trim().toUpperCase())
+                .filter(Boolean);
+            const refDivCode = refParts[1] || '';
+
+            const byOwnJob = calculatedTabs.find((t) => {
+                const label = collapseSpacesLower(
+                    stripQuoteJobPrefix(String(t.label || t.name || '').trim())
+                );
+                const code = String(t.divisionCode || '')
+                    .trim()
+                    .toUpperCase();
+                if (refDivCode && code && code === refDivCode) return true;
+                return hints.some(
+                    (hint) =>
+                        label === hint ||
+                        (label && hint && (label.includes(hint) || hint.includes(label)))
+                );
+            });
+            if (byOwnJob) {
+                setActiveQuoteTab(byOwnJob.id);
+                return;
+            }
+        }
+        console.log('[AutoRes] Fixing Active Quote Tab:', activeQuoteTab, '->', calculatedTabs[0].id);
+        setActiveQuoteTab(calculatedTabs[0].id);
+    }, [
+        calculatedTabs,
+        activeQuoteTab,
+        embeddedApprovalReview,
+        openContext?.ownJob,
+        openContext?.listDivision,
+        openContext?.quoteNumber,
+        approvalWorkflowCreatorDivisionName,
+        quoteListDivision,
+        quoteNumber,
+    ]);
+
+    // Approvals module: logo + footer follow approvalReviewBranding (division / OwnJob / creator).
     useEffect(() => {
         if (!embeddedApprovalReview) return;
-        const branding =
-            approvalWorkflowCreatorBranding?.name
-                ? approvalWorkflowCreatorBranding
-                : resolveBrandingFromCompanyName(
-                      approvalWorkflowCreatorCompanyName,
-                      enquiryData,
-                      approvalWorkflowCreatorDivisionName
-                  );
-        if (!branding?.name) return;
-        applyQuoteBrandingState(branding, {
+        if (!approvalReviewBranding?.name) return;
+        applyQuoteBrandingState(approvalReviewBranding, {
             setQuoteLogo,
             setQuoteCompanyName,
             setFooterDetails,
         });
-    }, [
-        embeddedApprovalReview,
-        approvalWorkflowCreatorBranding,
-        approvalWorkflowCreatorCompanyName,
-        approvalWorkflowCreatorDivisionName,
-        enquiryData?.enquiryForBrandingRows,
-        enquiryData?.masterEnquiryForFooterLookup,
-    ]);
+    }, [embeddedApprovalReview, approvalReviewBranding]);
 
     // Sync Company Logo and Details based on Active Pricing Tab
     // Multi-tab: resolve division profile + jobsPool row (subjob tabs often had no company fields on the tab object).
@@ -9723,18 +11387,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const activeTab = calculatedTabs.find((t) => String(t.id) === String(activeQuoteTab));
         if (!activeTab) return;
 
+        // Approvals: never overwrite with the active pricing tab (often Civil on multi-branch enquiries).
         if (embeddedApprovalReview) {
-            const branding =
-                approvalWorkflowCreatorBranding?.name
-                    ? approvalWorkflowCreatorBranding
-                    : resolveBrandingFromCompanyName(
-                          approvalWorkflowCreatorCompanyName,
-                          enquiryData,
-                          approvalWorkflowCreatorDivisionName
-                      );
-            if (applyQuoteBrandingState(branding, { setQuoteLogo, setQuoteCompanyName, setFooterDetails })) {
-                return;
+            if (approvalReviewBranding?.name) {
+                applyQuoteBrandingState(approvalReviewBranding, {
+                    setQuoteLogo,
+                    setQuoteCompanyName,
+                    setFooterDetails,
+                });
             }
+            return;
         }
 
         const tabBranding = resolveBrandingFromActiveTab(activeTab, enquiryData);
@@ -9764,6 +11426,20 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 return nextFooter;
             });
             return;
+        }
+
+        const divisionLabel = String(quoteListDivision || '').trim();
+        if (divisionLabel) {
+            const divisionBranding = resolveBrandingFromDivisionLabel(divisionLabel, enquiryData);
+            if (
+                applyQuoteBrandingState(divisionBranding, {
+                    setQuoteLogo,
+                    setQuoteCompanyName,
+                    setFooterDetails,
+                })
+            ) {
+                return;
+            }
         }
 
         if (import.meta.env.DEV) {
@@ -10074,9 +11750,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         enquiryData?.divisionsHierarchy,
         quoteListDivision,
         embeddedApprovalReview,
-        approvalWorkflowCreatorCompanyName,
-        approvalWorkflowCreatorDivisionName,
-        approvalWorkflowCreatorBranding,
+        approvalReviewBranding,
     ]);
 
 
@@ -10650,6 +12324,24 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     /** Save / Revision — lead tab owners plus CC coordinators with pricing visibility (matches /api/quotes/access). */
     const canSaveOrReviseQuote = () => canEdit() || canCollaborateOnQuoteDraft();
 
+    useEffect(() => {
+        if (quoteListDivisionsLoading) return;
+        if (quoteListCategory !== QUOTE_LIST_CATEGORY.PENDING) return;
+        // Single-select Division — wait until options resolve, then fetch that division.
+        const divs = quoteEffectiveDivisions(quoteListDivision, quoteListDivisions);
+        if (!divs.length) {
+            setPendingQuotes([]);
+            return;
+        }
+        refetchPendingQuotes(formatUserDepartments(divs));
+    }, [
+        quoteListDivisionsLoading,
+        quoteListCategory,
+        quoteListDivision,
+        quoteListDivisions,
+        refetchPendingQuotes,
+    ]);
+
     // Click outside handler
     useEffect(() => {
         const handleClickOutside = (e) => {
@@ -10659,17 +12351,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         };
         document.addEventListener('mousedown', handleClickOutside);
 
-        // Fetch Pending Quotes (guard: only when division is known + category is Pending)
-        const userEmail = currentUser?.EmailId || currentUser?.email || '';
-        console.log('[QuoteForm] current user object:', currentUser);
-        console.log(`[QuoteForm] Fetched pending quotes for: ${userEmail}`);
-
-        if (quoteListCategory === QUOTE_LIST_CATEGORY.PENDING && (quoteListDivision || '').trim()) {
-            refetchPendingQuotes(quoteListDivision);
-        }
-
         return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, [currentUser, refetchPendingQuotes, quoteListCategory, quoteListDivision]);
+    }, [currentUser]);
 
     // Fetch Metadata Lists
     useEffect(() => {
@@ -11180,9 +12863,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     ).trim();
                     return ownJob ? `&division=${encodeURIComponent(ownJob)}` : '';
                 }
-                return (quoteListDivision || '').trim()
-                    ? `&division=${encodeURIComponent(quoteListDivision.trim())}`
-                    : '';
+                return quoteDivisionQueryParam(quoteListDivision, quoteListDivisions);
             })();
             const url = `${API_BASE}/api/pricing/${encodeURIComponent(reqNo)}?userEmail=${encodeURIComponent(currentUser?.email || currentUser?.EmailId || '')}&customerName=${encodeURIComponent(cxName || '')}${divQ}`;
             console.log('Fetching URL:', url);
@@ -11606,6 +13287,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
      */
     const handleUpdatePricingFromLive = useCallback(async () => {
         if (browsePreviousQuotesRevisionsRef.current) return;
+        // Capture Disc% from the live editor before rebuild so Update Price keeps them.
+        const discountSnapshot = extractAllPricingDiscountStatesFromHtml(
+            getPricingTermsHtmlPreferringLiveEditor(clauseContentRef.current?.pricingTerms)
+        );
         quoteDraftClausesLockedRef.current = false;
         quoteDraftPendingClauseReapplyRef.current = false;
         pricingTermsUserTouchedRef.current = false;
@@ -11639,6 +13324,19 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 forcePricingClauseUpdate: true,
             });
         }
+        // Re-apply captured discounts after async load/calc (in case live DOM was replaced).
+        if (discountSnapshot.length) {
+            setClauseContent((prev) => {
+                const prevTerms = String(prev?.pricingTerms || '');
+                const nextTerms = applyDiscountBlockToPricingTermsHtml(
+                    prevTerms,
+                    discountSnapshot,
+                    numberToWordsBHD
+                );
+                if (nextTerms === prevTerms) return prev;
+                return { ...prev, pricingTerms: nextTerms };
+            });
+        }
         markQuoteDraftEdited();
     }, [
         enquiryData?.enquiry?.RequestNo,
@@ -11649,6 +13347,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         pricingSummaryRowsForUi,
         quoteContextScope,
         defaultSelectablePricingJobNames,
+        numberToWordsBHD,
     ]);
 
 
@@ -12857,7 +14556,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                   : [];
         const { tableHtml, htmlGrandTotal, htmlGrandTotalWithVat } = buildEmsAutoPricingTableHtml(
             summaryForDisplay,
-            effectiveActiveJobsForTable
+            effectiveActiveJobsForTable,
+            numberToWordsBHD
         );
         const lumpSumForClause41 =
             htmlGrandTotalWithVat > 0 ? htmlGrandTotalWithVat : htmlGrandTotal;
@@ -12865,9 +14565,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         // Update Pricing Terms Text with Dynamic Total
         let pricingText = defaultClauses.pricingTerms || '';
         if (lumpSumForClause41 > 0 && !foundPricedOptional) {
-            const formattedTotal = lumpSumForClause41.toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+            const decimals = getCurrencyMeta(getRuntimeCurrency()).decimals;
+            const formattedTotal = lumpSumForClause41.toLocaleString(undefined, {
+                minimumFractionDigits: decimals,
+                maximumFractionDigits: decimals,
+            });
             const words = numberToWordsBHD(lumpSumForClause41);
-            const totalString = `BD ${formattedTotal} (${words})`;
+            const totalString = `${runtimeCurrencySymbol()} ${formattedTotal} (${words})`;
 
             pricingText = pricingText.replace('[Amount in figures and words]', totalString);
         }
@@ -12889,14 +14593,25 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     numberToWordsBHD
                 );
             }
-            pricingTermsFull = ensurePricingTableColgroupInHtml(pricingTermsFull);
+            pricingTermsFull = ensurePricingTableColgroupInHtml(
+                updatePricingTableFooterCellsInHtml(pricingTermsFull, null)
+            );
         } else {
             pricingTermsFull = mergePricingTermsClauseHtml(
                 clauseContentRef.current?.pricingTerms,
                 tableHtml,
                 pricingText
             );
-            if (lumpSumForClause41 > 0 && !foundPricedOptional) {
+            // Update Price / summary rebuild must keep Disc% amounts already in the editor.
+            pricingTermsFull = preserveDiscountsOntoPricingTermsHtml(
+                prevPricingTerms,
+                pricingTermsFull,
+                numberToWordsBHD
+            );
+            const retainedDiscounts = extractAllPricingDiscountStatesFromHtml(pricingTermsFull);
+            if (retainedDiscounts.length) {
+                // Discount-aware wording already applied in preserveDiscountsOntoPricingTermsHtml.
+            } else if (lumpSumForClause41 > 0 && !foundPricedOptional) {
                 pricingTermsFull = syncPricingTerms41LumpSumProse(
                     pricingTermsFull,
                     lumpSumForClause41,
@@ -12904,6 +14619,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     numberToWordsBHD
                 );
             }
+            pricingTermsFull = ensurePricingTableColgroupInHtml(
+                updatePricingTableFooterCellsInHtml(pricingTermsFull, null)
+            );
         }
 
         /** Same as sidebar "GRAND BASE PRICE TOTAL": Base Price only for jobs checked in Pricing Summary (EnquiryQuotes.TotalAmount). */
@@ -13014,11 +14732,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const userEmail = encodeURIComponent(currentUser?.EmailId || currentUser?.email || '');
         const userRole = encodeURIComponent(currentUser?.role || currentUser?.Roles || '');
         const userName = encodeURIComponent(currentUser?.FullName || currentUser?.name || '');
-        const div = (quoteListDivision || '').trim();
-        const divQ = div
-            ? `&division=${encodeURIComponent(div)}&enforceDivision=1`
-            : '';
-        return `${API_BASE}/api/enquiries?search=${encodeURIComponent(q)}&userEmail=${userEmail}&userRole=${userRole}&userName=${userName}${divQ}`;
+        const divQ = quoteDivisionQueryParam(quoteListDivision, quoteListDivisions);
+        const enforce =
+            quoteEffectiveDivisions(quoteListDivision, quoteListDivisions).length > 0
+                ? '&enforceDivision=1'
+                : '';
+        return `${API_BASE}/api/enquiries?search=${encodeURIComponent(q)}&userEmail=${userEmail}&userRole=${userRole}&userName=${userName}${divQ}${enforce}`;
     };
 
     const buildEnquiryDataFetchUrl = (requestNo, { scope } = {}) => {
@@ -13030,8 +14749,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (qid) quoteIdQ = `&quoteId=${encodeURIComponent(qid)}`;
         } else if (listOpenApprovalQuoteIdRef.current) {
             quoteIdQ = `&quoteId=${encodeURIComponent(String(listOpenApprovalQuoteIdRef.current))}`;
-        } else if (quoteListDivision.trim()) {
-            divQ = `&division=${encodeURIComponent(quoteListDivision.trim())}`;
+        } else if (quoteEffectiveDivisions(quoteListDivision, quoteListDivisions).length) {
+            divQ = quoteDivisionQueryParam(quoteListDivision, quoteListDivisions);
         }
         const scopeQ = scope ? `&scope=${encodeURIComponent(scope)}` : '';
         return `${API_BASE}/api/quotes/enquiry-data/${encodeURIComponent(requestNo)}?userEmail=${encodeURIComponent(userEmail)}${divQ}${quoteIdQ}${scopeQ}`;
@@ -13220,9 +14939,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     defaultClauses.exclusions
                 ),
                 pricingTerms: ensurePricingTableColgroupInHtml(
-                    clauseTextFromRow(
-                        quoteField('PricingTerms', 'pricingTerms'),
-                        defaultClauses.pricingTerms
+                    updatePricingTableFooterCellsInHtml(
+                        clauseTextFromRow(
+                            quoteField('PricingTerms', 'pricingTerms'),
+                            defaultClauses.pricingTerms
+                        ),
+                        null
                     )
                 ),
                 schedule: clauseTextFromRow(
@@ -13400,13 +15122,21 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         const qRowId = quoteRowId(quote);
         if (opts.isDraftRow === true) {
-            setQuoteDraftId(qRowId !== undefined ? qRowId : null);
+            // Seed from finalized EnquiryQuotes for a new draft: never treat quote ID as draft ID.
+            if (opts.seedFromLatestApproved === true) {
+                setQuoteDraftId(null);
+            } else {
+                setQuoteDraftId(qRowId !== undefined ? qRowId : null);
+            }
             setQuoteId(null);
             setQuoteNumber('');
+            const draftQn = Number(quote.QuoteNo ?? quote.quoteNo ?? 0);
+            setRevisionSourceQuoteNoBoth(Number.isFinite(draftQn) && draftQn > 0 ? draftQn : 0);
         } else {
             setQuoteDraftId(null);
             setQuoteId(qRowId !== undefined ? qRowId : null);
             setQuoteNumber(quote.QuoteNumber ?? quote.quoteNumber ?? '');
+            setRevisionSourceQuoteNoBoth(0);
         }
         setQuoteDate(quoteRowDateToInputYmd(quote));
         setValidityDays(quote.ValidityDays || 30);
@@ -13420,9 +15150,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     ''
             ).trim()
         );
-        setReasonForRevision(
-            String(quote.ReasonForRevision ?? quote.reasonForRevision ?? quote.reasonforrevision ?? '').trim()
-        );
+        if (opts.seedFromLatestApproved === true) {
+            // New draft basis — user must enter a fresh revision reason before save/approve.
+            setReasonForRevision('');
+        } else {
+            setReasonForRevision(
+                String(quote.ReasonForRevision ?? quote.reasonForRevision ?? quote.reasonforrevision ?? '').trim()
+            );
+        }
         setSubject(quote.Subject || '');
         {
             const fromQuote = String(quote.QuoteType || '')
@@ -13451,8 +15186,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             const parsedApprovalSteps = parseApprovalWorkflowJson(
                 quote.ApprovalWorkflowJson ?? quote.approvalWorkflowJson
             );
-            if (opts.isDraftRow === true) {
-                setApprovalWorkflowSteps([]);
+            if (opts.seedFromLatestApproved === true) {
+                // Keep hierarchy from latest approved quote, reset statuses for a new approval round.
+                setApprovalWorkflowSteps(resetApprovalStepsForNewRound(parsedApprovalSteps));
+                setApprovalRequestSent(false);
+            } else if (opts.isDraftRow === true) {
+                // Seed from draft JSON immediately; authoritative rows reload from QuoteApprovalSteps.
+                setApprovalWorkflowSteps(parsedApprovalSteps);
+                queueMicrotask(() => {
+                    void fetchApprovalStepsFromServerRef.current?.();
+                });
             } else if (
                 embeddedApprovalReview ||
                 (browsePreviousQuotesRevisionsRef.current && quoteRowId(quote) !== undefined)
@@ -14529,6 +16272,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             browseForceListTopRef.current = false;
             setQuoteId(null);
             setQuoteNumber('');
+            setRevisionSourceQuoteNoBoth(0);
             setLoadedEnquiryQuoteRowForPreview(null);
             setApprovalWorkflowSteps([]);
             quoteDraftClausesLockedRef.current = false;
@@ -14547,6 +16291,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             quoteId,
             quoteNumber,
             resetQuoteDraftDirtyTracking,
+            setRevisionSourceQuoteNoBoth,
         ]
     );
 
@@ -14566,17 +16311,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const effectiveReviseId =
             quoteId != null && String(quoteId).trim() !== '' ? quoteId : idFromTuple;
 
-        console.log('[handleRevise] Starting revision process. QuoteId:', effectiveReviseId);
         if (effectiveReviseId == null || String(effectiveReviseId).trim() === '') {
-            console.log('[handleRevise] No quoteId found, aborting');
+            alert('Select an approved quote before creating a revision.');
             return;
         }
 
-        // Validate mandatory fields BEFORE touching any state so a failed validation cannot
-        // alter what the user is seeing. (Previously a pre-validation `loadQuote(tupleLatest)`
-        // queued setState calls that React only committed after the user dismissed the
-        // mandatory-fields alert — silently replacing a user-loaded clause template's custom
-        // 4. Pricing & Payment Terms table with the saved quote's older pricing table.)
         if (!validateMandatoryFields()) return;
 
         const ownjobAmtRev = Number(ownjobBasePriceForEnquiryQuoteTotal);
@@ -14587,126 +16326,256 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             return;
         }
 
-        if (!window.confirm('Are you sure you want to create a new revision based on this quote?')) {
-            console.log('[handleRevise] User cancelled');
+        const sourceQuoteNo = Number(
+            tupleLatest?.QuoteNo ??
+                tupleLatest?.quoteNo ??
+                (() => {
+                    const qn = String(tupleLatest?.QuoteNumber || quoteNumber || '').trim();
+                    const m = qn.match(/\/(\d+)-R\d+/i);
+                    return m ? Number(m[1]) : 0;
+                })()
+        );
+        if (!Number.isFinite(sourceQuoteNo) || sourceQuoteNo <= 0) {
+            alert('Could not determine the quote number to revise.');
+            return;
+        }
+
+        if (
+            !window.confirm(
+                'Start a revision draft based on this quote?\n\n' +
+                    'The next revision number (R#) is issued only after final approval. ' +
+                    'Configure the approval workflow and send for approval when ready.'
+            )
+        ) {
             return;
         }
 
         setSaving(true);
         try {
             const liveTotal = await ensureLatestOwnjobTotalForQuotePersist();
-            const basePayload = getQuotePayload();
-            /** New revisions must not inherit the prior revision’s signatures until the user places stamps again. */
-            const payload = {
-                ...basePayload,
-                totalAmount:
-                    Number.isFinite(liveTotal) && liveTotal > 0
-                        ? liveTotal
-                        : basePayload.totalAmount,
-                digitalSignaturesJson: serializeDigitalStampsForApi([]),
-            };
-            console.log('[handleRevise] Payload:', payload);
-            console.log('[handleRevise] Calling API:', `${API_BASE}/api/quotes/${effectiveReviseId}/revise`);
+            const resetSteps = resetApprovalStepsForNewRound(approvalWorkflowSteps);
+            setApprovalWorkflowSteps(resetSteps);
+            setApprovalRequestSent(false);
+            commitQuoteDigitalStampsRef.current?.(() => []);
 
-            const res = await fetch(`${API_BASE}/api/quotes/${effectiveReviseId}/revise`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
+            // Leave Previous Quotes browse → editable draft mode without wiping clause content.
+            browsePreviousQuotesRevisionsRef.current = false;
+            setBrowsePreviousQuotesRevisions(false);
+            browseForceListTopRef.current = false;
+            markDraftHydrateSkipAutoLoad();
+            quoteSessionSkipServerDraftRef.current = true;
+            quoteDraftForceReloadRef.current = false;
+            setQuoteId(null);
+            setQuoteNumber('');
+            setQuoteDraftId(null);
+            setLoadedEnquiryQuoteRowForPreview(null);
+            setRevisionSourceQuoteNoBoth(sourceQuoteNo);
 
-            console.log('[handleRevise] Response status:', res.status);
-
-            if (res.ok) {
-                const data = await res.json();
-                console.log('[handleRevise] Success! New revision data:', data);
-
-                const newRevId = data.id ?? data.ID ?? data.Id;
-                const newRevQn = data.quoteNumber ?? data.QuoteNumber ?? '';
-                // Update quote ID and number first
-                setQuoteId(newRevId);
-                setQuoteNumber(newRevQn);
-
-                // Update local quotes list immediately so AutoLoad doesn't reset to Draft (Step 4488 FIX)
-                setExistingQuotes(prev => [
-                    ...prev,
-                    {
-                        ID: newRevId,
-                        QuoteNumber: newRevQn,
-                        ToName: toName,
-                        RevisionNo: data.revisionNo ?? data.RevisionNo ?? 0,
-                        Status: 'Saved',
-                        QuoteDate: quoteDate,
-                        PreparedBy: preparedBy,
-                        TotalAmount: payload.totalAmount ?? ownjobBasePriceForEnquiryQuoteTotal,
-                        OwnJob: payload.ownJob, // CRITICAL for AutoLoad matching
-                        LeadJob: payload.leadJob, // CRITICAL for AutoLoad matching
-                        DigitalSignaturesJson: payload.digitalSignaturesJson,
-                    }
-                ]);
-
-                if (scopedEnquiryQuotesParams) {
-                    const optimisticRevRow = {
-                        ID: newRevId,
-                        QuoteNumber: newRevQn,
-                        ToName: toName,
-                        RevisionNo: data.revisionNo ?? data.RevisionNo ?? 0,
-                        Status: 'Saved',
-                        QuoteDate: quoteDate,
-                        PreparedBy: preparedBy,
-                        TotalAmount: payload.totalAmount ?? ownjobBasePriceForEnquiryQuoteTotal,
-                        OwnJob: payload.ownJob,
-                        LeadJob: payload.leadJob,
-                        DigitalSignaturesJson: payload.digitalSignaturesJson,
-                    };
-                    setQuoteScopedForPanel((prev) => {
-                        const idStr = String(newRevId ?? '');
-                        if (!idStr || idStr === 'undefined') return prev;
-                        if (prev.some((q) => String(quoteRowId(q) ?? '') === idStr)) return prev;
-                        return [...prev, optimisticRevRow];
-                    });
-                }
-
-                commitQuoteDigitalStampsRef.current?.(() => []);
-
-                // Note: Metadata is NOT cleared anymore to allow immediate viewing/working with the new revision.
-                // Re-calculating existing quotes will pull the latest list.
-
-
-                // Wait a moment for DB commit, then refresh the quotes list
-                console.log('[handleRevise] Waiting 500ms for DB commit...');
-                await new Promise(resolve => setTimeout(resolve, 500));
-
-                console.log('[handleRevise] Refreshing quotes list...');
-                const refreshed = await fetchExistingQuotes(enquiryData.enquiry.RequestNo);
-                if (scopedEnquiryQuotesParams) {
-                    setScopedQuotePanelRefreshNonce((n) => n + 1);
-                }
-                const createdRow = Array.isArray(refreshed)
-                    ? refreshed.find((q) => String(quoteRowId(q) ?? '') === String(newRevId ?? ''))
-                    : null;
-                focusBrowseOnOwnjobWithQuote(createdRow, newRevId, newRevQn);
-
-                // Upload any pending files now that we have a new Revision ID
-                if (pendingFiles.length > 0 && newRevId != null && newRevId !== '') {
-                    console.log('[handleRevise] Uploading pending files to new revision...', pendingFiles.length);
-                    await uploadFiles(pendingFiles, newRevId);
-                    setPendingFiles([]); // Clear queue
-                }
-
-                console.log('[handleRevise] All updates complete!');
-                alert('Revision created successfully!');
-            } else {
-                const err = await res.json();
-                console.error('[handleRevise] Error response:', err);
-                alert('Error: ' + (err.error || 'Failed to revise quote'));
+            const saveFn = saveQuoteDraftRef.current;
+            if (typeof saveFn !== 'function') {
+                alert('Draft save is not ready. Please try again.');
+                return;
             }
+            const data = await saveFn({
+                force: true,
+                forceNewDraft: true,
+                quoteNo: sourceQuoteNo,
+                revisionNo: 0,
+                approvalWorkflowStepsOverride: resetSteps,
+                totalAmountOverride:
+                    Number.isFinite(liveTotal) && liveTotal > 0 ? liveTotal : undefined,
+                clearDigitalSignatures: true,
+            });
+            if (!data) {
+                return;
+            }
+
+            quoteSessionSkipServerDraftRef.current = false;
+            alert(
+                'Revision draft created. Update the quote as needed, then send for approval. ' +
+                    `The next R# for quote ${sourceQuoteNo} will be assigned when the final approver approves.`
+            );
         } catch (err) {
             console.error('[handleRevise] Fatal error:', err);
-            alert('Fatal error revising quote');
+            alert('Fatal error starting revision draft');
+            quoteSessionSkipServerDraftRef.current = false;
         } finally {
             setSaving(false);
         }
     };
+
+    /**
+     * Called from Send for Approval: mandatory fields + ensure a draft exists
+     * (revision draft when a persisted quote already exists for this scope).
+     * @returns {Promise<{ ok: boolean, draftQuoteId?: number|null, quoteId?: number|null }>}
+     */
+    const prepareQuoteDraftForApprovalSend = useCallback(async () => {
+        if (embeddedApprovalReview) {
+            return { ok: true, draftQuoteId: approvalWorkflowDraftId, quoteId: approvalWorkflowQuoteId };
+        }
+
+        if (browsePreviousQuotesRevisions) {
+            alert(
+                'Turn off "Previous Quotes / Revisions" first, complete the mandatory fields, then click Send for Approval.\n\n' +
+                    'The next R# is created only when the final approver approves.'
+            );
+            return { ok: false };
+        }
+
+        if (!validateMandatoryFields()) return { ok: false };
+
+        const ownjobAmt = Number(ownjobBasePriceForEnquiryQuoteTotal);
+        if (!Number.isFinite(ownjobAmt) || ownjobAmt <= 0) {
+            alert(
+                'Ownjob base price must be greater than zero before sending for approval. Ensure pricing exists for the first tab job.'
+            );
+            return { ok: false };
+        }
+
+        if (!enquiryData?.leadJobPrefix || !hasSelectedCustomer) {
+            alert('Select lead job and customer before sending for approval.');
+            return { ok: false };
+        }
+
+        if (!canCollaborateOnQuoteDraft()) {
+            alert('You do not have permission to send this quote for approval.');
+            return { ok: false };
+        }
+
+        const saveFn = saveQuoteDraftRef.current;
+        if (typeof saveFn !== 'function') {
+            alert('Draft save is not ready. Please try again.');
+            return { ok: false };
+        }
+
+        // --- Revision of an existing EnquiryQuotes series ---
+        if (hasPersistedQuoteForScope) {
+            const sortedTuple = (() => {
+                if (!persistedRowsForScope?.length) return [];
+                return [...persistedRowsForScope].sort((a, b) => {
+                    const r = (Number(b.RevisionNo) || 0) - (Number(a.RevisionNo) || 0);
+                    if (r !== 0) return r;
+                    const ta = Date.parse(a.QuoteDate || 0) || 0;
+                    const tb = Date.parse(b.QuoteDate || 0) || 0;
+                    return tb - ta;
+                });
+            })();
+            const tupleLatest = sortedTuple[0];
+            const sourceQuoteNo = Number(
+                tupleLatest?.QuoteNo ??
+                    tupleLatest?.quoteNo ??
+                    (() => {
+                        const qn = String(tupleLatest?.QuoteNumber || quoteNumber || '').trim();
+                        const m = qn.match(/\/(\d+)-R\d+/i);
+                        return m ? Number(m[1]) : 0;
+                    })()
+            );
+            if (!Number.isFinite(sourceQuoteNo) || sourceQuoteNo <= 0) {
+                alert('Could not determine the quote number to revise.');
+                return { ok: false };
+            }
+
+            const needsRevisionDraft =
+                !!quoteId ||
+                !quoteDraftId ||
+                Number(revisionSourceQuoteNo) !== sourceQuoteNo;
+
+            if (needsRevisionDraft) {
+                setSaving(true);
+                try {
+                    const liveTotal = await ensureLatestOwnjobTotalForQuotePersist();
+                    const resetSteps = resetApprovalStepsForNewRound(approvalWorkflowSteps);
+                    setApprovalWorkflowSteps(resetSteps);
+                    setApprovalRequestSent(false);
+                    commitQuoteDigitalStampsRef.current?.(() => []);
+
+                    browsePreviousQuotesRevisionsRef.current = false;
+                    setBrowsePreviousQuotesRevisions(false);
+                    browseForceListTopRef.current = false;
+                    markDraftHydrateSkipAutoLoad();
+                    quoteSessionSkipServerDraftRef.current = true;
+                    quoteDraftForceReloadRef.current = false;
+                    setQuoteId(null);
+                    setQuoteNumber('');
+                    setQuoteDraftId(null);
+                    setLoadedEnquiryQuoteRowForPreview(null);
+                    setRevisionSourceQuoteNoBoth(sourceQuoteNo);
+
+                    const data = await saveFn({
+                        force: true,
+                        forceNewDraft: true,
+                        quoteNo: sourceQuoteNo,
+                        revisionNo: 0,
+                        approvalWorkflowStepsOverride: resetSteps,
+                        totalAmountOverride:
+                            Number.isFinite(liveTotal) && liveTotal > 0 ? liveTotal : undefined,
+                        clearDigitalSignatures: true,
+                    });
+                    quoteSessionSkipServerDraftRef.current = false;
+                    if (!data) return { ok: false };
+
+                    const newDraftId = data.draftId ?? data.id ?? null;
+                    return { ok: true, draftQuoteId: newDraftId, quoteId: null, approvalSteps: resetSteps };
+                } catch (err) {
+                    console.error('[prepareQuoteDraftForApprovalSend] revision draft:', err);
+                    quoteSessionSkipServerDraftRef.current = false;
+                    alert('Could not prepare the revision draft for approval.');
+                    return { ok: false };
+                } finally {
+                    setSaving(false);
+                }
+            }
+
+            // Existing revision draft — persist latest edits before send
+            {
+                const data = await saveFn({ force: true, quoteNo: sourceQuoteNo, revisionNo: 0 });
+                if (!data) return { ok: false };
+                return {
+                    ok: true,
+                    draftQuoteId: data.draftId ?? data.id ?? quoteDraftId,
+                    quoteId: null,
+                };
+            }
+        }
+
+        // --- First quote for this scope ---
+        if (quoteId) {
+            alert(
+                'This quote is already finalized. Turn off "Previous Quotes / Revisions" and use Send for Approval to create the next revision.'
+            );
+            return { ok: false };
+        }
+
+        {
+            const data = await saveFn({ force: true });
+            if (!data) return { ok: false };
+            return {
+                ok: true,
+                draftQuoteId: data.draftId ?? data.id ?? quoteDraftId,
+                quoteId: null,
+            };
+        }
+    }, [
+        approvalWorkflowDraftId,
+        approvalWorkflowQuoteId,
+        approvalWorkflowSteps,
+        browsePreviousQuotesRevisions,
+        canCollaborateOnQuoteDraft,
+        embeddedApprovalReview,
+        ensureLatestOwnjobTotalForQuotePersist,
+        enquiryData?.leadJobPrefix,
+        hasPersistedQuoteForScope,
+        hasSelectedCustomer,
+        markDraftHydrateSkipAutoLoad,
+        ownjobBasePriceForEnquiryQuoteTotal,
+        persistedRowsForScope,
+        quoteDraftId,
+        quoteId,
+        quoteNumber,
+        revisionSourceQuoteNo,
+        setRevisionSourceQuoteNoBoth,
+        validateMandatoryFields,
+    ]);
 
     // Select enquiry
     // Trigger fetch when enquiry is loaded
@@ -14754,6 +16623,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     const handleSelectEnquiry = async (enq, options = {}) => {
         const enquiryOnlyFromList = Boolean(options?.enquiryOnlyFromList);
+        quoteListEnquiryOnlySkipLeadRef.current = enquiryOnlyFromList;
         const loadSeq = ++quoteEnquiryLoadSeqRef.current;
         let enquiryLoadSucceeded = false;
         const requestNo = String(enq?.RequestNo ?? enq ?? '').trim();
@@ -14847,13 +16717,21 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                             p.code === 'ACC' ||
                                             p.divisionCode === 'CVLP'
                                     );
-                                } else if (userDept.toLowerCase().includes('bms')) {
+                                } else if (textRefersToIbms(userDept)) {
                                     selectedProfile = fullData.availableProfiles.find(
                                         (p) =>
-                                            (p.itemName && p.itemName.toLowerCase().includes('bms')) ||
-                                            p.divisionCode === 'BMS' ||
-                                            p.divisionCode === 'BMP' ||
-                                            (p.name && p.name.toLowerCase().includes('bms'))
+                                            textRefersToIbms(p.itemName || '') ||
+                                            textRefersToIbms(p.name || '') ||
+                                            textRefersToIbms(p.departmentName || '') ||
+                                            String(p.divisionCode || '').toUpperCase() === 'IBMS'
+                                    );
+                                } else if (textRefersToBms(userDept)) {
+                                    selectedProfile = fullData.availableProfiles.find(
+                                        (p) =>
+                                            textRefersToBms(p.itemName || '') ||
+                                            textRefersToBms(p.name || '') ||
+                                            String(p.divisionCode || '').toUpperCase() === 'BMS' ||
+                                            String(p.divisionCode || '').toUpperCase() === 'BMP'
                                     );
                                 } else if (userDept.toLowerCase().includes('hv') || userDept.toLowerCase().includes('condition')) {
                                     selectedProfile = fullData.availableProfiles.find(
@@ -14878,7 +16756,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             }
                         }
                         const personalProfile = fullData.availableProfiles?.find((p) => p.isPersonalProfile);
-                        if (personalProfile) {
+                        if (personalProfile && !selectedProfile) {
                             selectedProfile = personalProfile;
                         }
                         if (selectedProfile) {
@@ -14895,7 +16773,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
                     setEnquiryData((prev) => ({
                         ...fullData,
-                        leadJobPrefix: prev?.leadJobPrefix ?? fullData.leadJobPrefix,
+                        leadJobPrefix:
+                            listRowOnly || quoteListEnquiryOnlySkipLeadRef.current
+                                ? ''
+                                : (prev?.leadJobPrefix ?? fullData.leadJobPrefix),
                     }));
 
                     const extendedSignatoryOptions = [
@@ -14966,12 +16847,19 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                 p.code === 'ACC' ||
                                 p.divisionCode === 'CVLP'
                             );
-                        } else if (userDept.toLowerCase().includes('bms')) {
+                        } else if (textRefersToIbms(userDept)) {
                             selectedProfile = data.availableProfiles.find(p =>
-                                (p.itemName && p.itemName.toLowerCase().includes('bms')) ||
-                                p.divisionCode === 'BMS' ||
-                                p.divisionCode === 'BMP' ||
-                                (p.name && p.name.toLowerCase().includes('bms'))
+                                textRefersToIbms(p.itemName || '') ||
+                                textRefersToIbms(p.name || '') ||
+                                textRefersToIbms(p.departmentName || '') ||
+                                String(p.divisionCode || '').toUpperCase() === 'IBMS'
+                            );
+                        } else if (textRefersToBms(userDept)) {
+                            selectedProfile = data.availableProfiles.find(p =>
+                                textRefersToBms(p.itemName || '') ||
+                                textRefersToBms(p.name || '') ||
+                                String(p.divisionCode || '').toUpperCase() === 'BMS' ||
+                                String(p.divisionCode || '').toUpperCase() === 'BMP'
                             );
                         } else if (userDept.toLowerCase().includes('hv') || userDept.toLowerCase().includes('condition')) {
                             selectedProfile = data.availableProfiles.find(p =>
@@ -14991,11 +16879,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     }
                 }
 
-                // --- MANDATORY IDENTITY OVERRIDE (Step 4488) ---
+                // --- Identity override only when Division toolbar has no selection ---
                 const personalProfile = data.availableProfiles?.find((p) => p.isPersonalProfile);
-                if (personalProfile) {
+                if (personalProfile && !String(quoteListDivision || '').trim()) {
                     selectedProfile = personalProfile;
                     console.log(`[Profile selection] ✓ ENFORCING personal identity: ${selectedProfile.name}`);
+                } else if (personalProfile && !selectedProfile) {
+                    selectedProfile = personalProfile;
+                    console.log(`[Profile selection] ✓ Fallback personal identity: ${selectedProfile.name}`);
                 }
 
                 if (selectedProfile) {
@@ -15123,10 +17014,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         console.log('[QuoteForm] Auto-selecting first Lead Job:', data.leadJobPrefix, firstLeadDivisionFull);
                     } else {
                         const userDeptL = (quoteListDivision || currentUser?.Department || '').toLowerCase();
-                        const bmsMatch = availableDivisions.find((d) => d.toLowerCase().includes('bms'));
+                        const ibmsMatch = availableDivisions.find((d) => textRefersToIbms(d));
+                        const bmsMatch = availableDivisions.find((d) => textRefersToBms(d));
                         const elecMatch = availableDivisions.find((d) => d.toLowerCase().includes('electrical'));
 
-                        if (userDeptL.includes('bms') && bmsMatch) {
+                        if (textRefersToIbms(userDeptL) && ibmsMatch) {
+                            firstLeadDivisionFull = ibmsMatch;
+                            data.leadJobPrefix = ibmsMatch.split('-')[0].trim();
+                        } else if (textRefersToBms(userDeptL) && bmsMatch) {
                             firstLeadDivisionFull = String(bmsMatch).trim();
                             data.leadJobPrefix = firstLeadDivisionFull.split('-')[0].trim();
                             console.log('[QuoteForm] Auto-selecting BMS for BMS user:', data.leadJobPrefix);
@@ -15383,22 +17278,29 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         pendingQuoteOpenTargetRef.current = null;
     }, [existingQuotes, enquiryData?.enquiry?.RequestNo, calculatedTabs, activeQuoteTab]);
 
-    /** Approvals module: seed quote id from list selection before async quote load completes. */
+    /** Approvals module: seed quote / draft id from list selection before async load completes. */
     useEffect(() => {
         if (!embeddedApprovalReview || !openContext) return;
         const qid = String(openContext.quoteId || '').trim();
+        const did = String(openContext.draftQuoteId || '').trim();
         if (qid && !quoteId) setQuoteId(Number(qid));
-        if (quoteDraftId) setQuoteDraftId(null);
-    }, [embeddedApprovalReview, openContext?.quoteId, quoteId, quoteDraftId]);
+        if (did && !quoteDraftId) setQuoteDraftId(Number(did));
+        if (did && qid) {
+            /* prefer saved quote when both present */
+        } else if (did && quoteId) {
+            setQuoteId(null);
+        }
+    }, [embeddedApprovalReview, openContext?.quoteId, openContext?.draftQuoteId, quoteId, quoteDraftId]);
 
-    /** Approvals module: load exact saved EnquiryQuotes revision for preview. */
+    /** Approvals module: load exact saved EnquiryQuotes revision OR draft for preview. */
     useEffect(() => {
         if (!embeddedApprovalReview) return;
         const quoteIdCtx = String(openContext?.quoteId || '').trim();
+        const draftIdCtx = String(openContext?.draftQuoteId || '').trim();
         const quoteNumberCtx = String(openContext?.quoteNumber || '').trim();
         const requestNo = String(openContext?.requestNo || '').trim();
-        if (!requestNo || (!quoteNumberCtx && !quoteIdCtx)) return;
-        const targetKey = [requestNo, quoteNumberCtx || quoteIdCtx].join('::');
+        if (!requestNo || (!quoteNumberCtx && !quoteIdCtx && !draftIdCtx)) return;
+        const targetKey = [requestNo, quoteNumberCtx || quoteIdCtx || `d-${draftIdCtx}`].join('::');
         if (handledQuoteOpenContextKeyRef.current === targetKey) return;
         handledQuoteOpenContextKeyRef.current = targetKey;
         markDraftHydrateSkipAutoLoad();
@@ -15411,11 +17313,45 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (!ok || cancelled) return;
             browsePreviousQuotesRevisionsRef.current = true;
             setBrowsePreviousQuotesRevisions(true);
-            setQuoteDraftId(null);
             const email = normalizeDraftUserEmailForApi(currentUser?.EmailId || currentUser?.email || '');
             if (!email) return;
 
             try {
+                // Draft-based pending approval
+                if (draftIdCtx && !quoteIdCtx) {
+                    setQuoteDraftId(Number(draftIdCtx));
+                    setQuoteId(null);
+                    const params = new URLSearchParams({
+                        userEmail: email,
+                        draftQuoteId: draftIdCtx,
+                    });
+                    const draftRes = await fetch(
+                        `${API_BASE}/api/quotes/quote-drafts/for-approval?${params.toString()}`,
+                        { cache: 'no-store' }
+                    );
+                    if (!draftRes.ok || cancelled) return;
+                    const row = await draftRes.json();
+                    const leadJobLabel = String(
+                        openContext?.leadJobName || row.LeadJob || row.leadJob || ''
+                    ).trim();
+                    if (leadJobLabel) embeddedApprovalLeadJobRef.current = leadJobLabel;
+                    setQuoteNumber(String(row.QuoteNumber || row.quoteNumber || quoteNumberCtx || '').trim());
+                    loadQuote(row, {
+                        skipPreparedSignatory: true,
+                        applySavedDigitalSignatures: true,
+                        preserveRecipient: true,
+                        isDraftRow: true,
+                    });
+                    const customer = String(
+                        openContext?.customerName || row.ToName || row.toname || ''
+                    ).trim();
+                    if (customer) setToName(customer);
+                    setHasUserPricing(true);
+                    setApprovalRequestSent(true);
+                    return;
+                }
+
+                setQuoteDraftId(null);
                 let row = null;
                 if (quoteNumberCtx) {
                     const params = new URLSearchParams({
@@ -15685,32 +17621,52 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         width: '100%',
                         minWidth: 0,
                         boxSizing: 'border-box',
-                        overflow: 'hidden',
+                        overflow: 'visible',
+                        position: 'relative',
+                        zIndex: 5,
                     }}
                 >
-                    <div style={{ ...quoteListToolbarFieldStackStyle, width: '118px' }}>
-                        <span style={quoteListToolbarLabelStyle}>Division</span>
+                    <div
+                        style={{
+                            ...quoteListToolbarFieldStackStyle,
+                            width: '148px',
+                            minWidth: '120px',
+                            overflow: 'visible',
+                            position: 'relative',
+                            zIndex: 20,
+                        }}
+                    >
+                        <span style={quoteListToolbarLabelStyle}>Division Name</span>
                         <select
-                            value={quoteListDivision}
-                            onChange={(e) => handleQuoteListDivisionChange(e.target.value)}
+                            aria-label="Division Name"
+                            value={
+                                quoteListDivisions.includes(String(quoteListDivision || '').trim())
+                                    ? String(quoteListDivision).trim()
+                                    : quoteListDivisions[0] || ''
+                            }
+                            onChange={(e) => {
+                                handleQuoteListDivisionChange(String(e.target.value || '').trim());
+                            }}
                             disabled={quoteListDivisionsLoading || !quoteListDivisions.length}
                             style={{
                                 ...quoteListToolbarFieldStyle,
-                                background: quoteListDivisionsLoading ? '#f1f5f9' : '#fff',
+                                background:
+                                    quoteListDivisionsLoading || !quoteListDivisions.length
+                                        ? '#f1f5f9'
+                                        : '#fff',
                                 cursor:
                                     quoteListDivisionsLoading || !quoteListDivisions.length
                                         ? 'not-allowed'
                                         : 'pointer',
                             }}
                         >
-                            {quoteListDivisionsLoading && quoteListDivisions.length === 0 && (
-                                <option value="" disabled>Loading…</option>
-                            )}
-                            {!quoteListDivisionsLoading && quoteListDivisions.length === 0 && (
-                                <option value="" disabled>No divisions</option>
-                            )}
+                            {quoteListDivisionsLoading && !quoteListDivisions.length ? (
+                                <option value="">Loading…</option>
+                            ) : null}
                             {quoteListDivisions.map((d) => (
-                                <option key={d} value={d}>{d}</option>
+                                <option key={d} value={d}>
+                                    {d}
+                                </option>
                             ))}
                         </select>
                     </div>
@@ -15723,7 +17679,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                 setQuoteListCategory(v);
                                 if (v === QUOTE_LIST_CATEGORY.PENDING) {
                                     setQuoteSearchResults([]);
-                                    refetchPendingQuotes(quoteListDivision);
                                 }
                             }}
                             style={{
@@ -15840,14 +17795,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             flexDirection: 'row',
                             flexWrap: 'nowrap',
                             gap: '4px',
-                            alignItems: 'flex-end',
+                            alignItems: 'center',
+                            alignSelf: 'flex-end',
                             flexShrink: 0,
+                            height: '24px',
+                            minHeight: '24px',
                         }}
                     >
                         <button
                             type="button"
                             className="no-print"
-                            onClick={handleQuoteListSearch}
+                            onClick={() => handleQuoteListSearch()}
                             disabled={!searchEnabled || quoteSearchLoading}
                             style={{
                                 ...(searchEnabled && !quoteSearchLoading
@@ -15861,6 +17819,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                 minHeight: '24px',
                                 height: '24px',
                                 whiteSpace: 'nowrap',
+                                boxSizing: 'border-box',
                             }}
                         >
                             {quoteSearchLoading ? 'Searching…' : 'Search'}
@@ -15879,18 +17838,26 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                 minHeight: '24px',
                                 height: '24px',
                                 whiteSpace: 'nowrap',
+                                boxSizing: 'border-box',
                             }}
                         >
                             Clear
                         </button>
                         <ExcelDownloadButton
                             onClick={handleQuoteListExcelDownload}
+                            size={16}
                             disabled={
                                 quoteSearchLoading ||
                                 !(Array.isArray(quoteListFilteredRows)
                                     ? quoteListFilteredRows.length
                                     : quoteListDisplayRows.length)
                             }
+                            style={{
+                                width: 24,
+                                height: 24,
+                                minWidth: 24,
+                                minHeight: 24,
+                            }}
                         />
                         {quoteListDisplayRows.length > 0 ? (
                             <button
@@ -15900,7 +17867,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                 disabled={!quoteSummaryHasColFilters}
                                 title="Clear all column filters"
                                 aria-label="Clear all column filters"
-                                style={{ width: '24px', height: '24px', minHeight: '24px' }}
+                                style={{
+                                    width: '24px',
+                                    height: '24px',
+                                    minWidth: '24px',
+                                    minHeight: '24px',
+                                    boxSizing: 'border-box',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    padding: 0,
+                                }}
                             >
                                 <FilterX size={12} strokeWidth={2} aria-hidden="true" />
                             </button>
@@ -15930,7 +17907,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     );
 
     const quoteListSummaryBody = React.useMemo(() => {
-        if (quoteSearchLoading) {
+        if (quoteSearchLoading || (quoteListCategory === QUOTE_LIST_CATEGORY.PENDING && pendingQuotesLoading)) {
             return (
                 <div
                     style={{
@@ -15945,7 +17922,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         border: '1px dashed #e2e8f0',
                     }}
                 >
-                    Searching quotes…
+                    {quoteListCategory === QUOTE_LIST_CATEGORY.SEARCH
+                        ? 'Searching quotes…'
+                        : 'Loading pending quotes…'}
                 </div>
             );
         }
@@ -16040,13 +18019,102 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 }}
             />
         );
-    }, [quoteListDisplayRows, quoteListCategory, handleSelectEnquiry, quoteSearchLoading, quoteSearchError]);
+    }, [quoteListDisplayRows, quoteListCategory, handleSelectEnquiry, quoteSearchLoading, quoteSearchError, pendingQuotesLoading]);
 
     // --- Attachment Functions ---
-    const fetchQuoteAttachments = useCallback(async (qId) => {
+    const quoteAttachmentAuthParams = useCallback(() => {
+        const params = new URLSearchParams();
+        const email = String(currentUser?.EmailId || currentUser?.email || '').trim();
+        const role = String(currentUser?.role || currentUser?.Roles || '').trim();
+        const requestNo = String(enquiryData?.enquiry?.RequestNo || '').trim();
+        if (email) params.set('userEmail', email);
+        if (role) params.set('userRole', role);
+        if (requestNo) params.set('requestNo', requestNo);
+        return params;
+    }, [currentUser?.EmailId, currentUser?.email, currentUser?.role, currentUser?.Roles, enquiryData?.enquiry?.RequestNo]);
+
+    const quoteAttachmentUploaderMeta = useCallback(() => {
+        const userName = String(
+            currentUser?.FullName || currentUser?.name || currentUser?.UserName || ''
+        ).trim();
+        const division = String(
+            quoteListDivision || currentUser?.Department || currentUser?.Division || 'General'
+        ).trim() || 'General';
+        return { userName, division };
+    }, [
+        currentUser?.FullName,
+        currentUser?.name,
+        currentUser?.UserName,
+        currentUser?.Department,
+        currentUser?.Division,
+        quoteListDivision,
+    ]);
+
+    const normalizePendingAttachmentItems = useCallback((filesOrPending, defaultVisibility = 'Public') => {
+        const visDefault =
+            String(defaultVisibility || 'Public').toLowerCase() === 'private' ? 'Private' : 'Public';
+        return Array.from(filesOrPending || [])
+            .map((item) => {
+                if (!item) return null;
+                if (item.file instanceof File) {
+                    const vis =
+                        String(item.visibility || visDefault).toLowerCase() === 'private'
+                            ? 'Private'
+                            : 'Public';
+                    return { file: item.file, name: item.file.name, visibility: vis };
+                }
+                if (typeof File !== 'undefined' && item instanceof File) {
+                    return { file: item, name: item.name, visibility: visDefault };
+                }
+                return null;
+            })
+            .filter(Boolean);
+    }, []);
+
+    const canViewQuotePrivateAttachment = useCallback(
+        (att) => {
+            const visibility = String(att?.Visibility || 'Public').trim();
+            if (visibility.toLowerCase() !== 'private') return true;
+            const isAdmin = String(currentUser?.role || currentUser?.Roles || '')
+                .toLowerCase()
+                .includes('admin');
+            if (isAdmin) return true;
+            const userDeptCsv = currentUser?.Department || currentUser?.Division || quoteListDivision || '';
+            const fileDivision = String(att?.Division || '').trim();
+            const uploader = String(att?.UploadedBy || '').trim().toLowerCase();
+            const me = String(
+                currentUser?.FullName || currentUser?.name || currentUser?.UserName || ''
+            )
+                .trim()
+                .toLowerCase();
+            const isOwnFile = Boolean(uploader && me && uploader === me);
+            if (fileDivision && userDeptCsv) {
+                if (userHasDepartment(userDeptCsv, fileDivision) || isOwnFile) return true;
+                return false;
+            }
+            return isOwnFile;
+        },
+        [
+            currentUser?.role,
+            currentUser?.Roles,
+            currentUser?.Department,
+            currentUser?.Division,
+            currentUser?.FullName,
+            currentUser?.name,
+            currentUser?.UserName,
+            quoteListDivision,
+        ]
+    );
+
+    const fetchQuoteAttachments = useCallback(async (qId, { draft = false } = {}) => {
         if (!qId) return;
         try {
-            const res = await fetch(`${API_BASE}/api/quotes/attachments/${qId}`);
+            const qs = quoteAttachmentAuthParams().toString();
+            const base = draft
+                ? `${API_BASE}/api/quotes/attachments/draft/${qId}`
+                : `${API_BASE}/api/quotes/attachments/${qId}`;
+            const url = qs ? `${base}?${qs}` : base;
+            const res = await fetch(url);
             if (res.ok) {
                 const data = await res.json();
                 setQuoteAttachments((prev) => {
@@ -16057,66 +18125,141 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     }
                     return data;
                 });
+            } else if (res.status === 403) {
+                setQuoteAttachments([]);
             }
         } catch (err) {
             console.error('Error fetching attachments:', err);
         }
-    }, []);
+    }, [quoteAttachmentAuthParams]);
 
-    const uploadFiles = useCallback(async (files, targetQuoteId) => {
-        // If targetQuoteId is EXPLICITLY passed (e.g. from Save/Revise), we upload.
-        // If it is NOT passed, we use component's quoteId and DECIDE whether to upload.
-        // Rule: If we have ANY quoteId (Saved State), we queue files to pending so they go to the NEXT Revise/Save.
-        const isInternalCall = targetQuoteId !== undefined;
-        const effectiveId = isInternalCall ? targetQuoteId : quoteId;
+    const uploadFiles = useCallback(async (filesOrPending, targetQuoteId, opts = {}) => {
+        const defaultVisibility =
+            String(opts?.visibility || preferredAttachmentVisibility || 'Public').toLowerCase() ===
+            'private'
+                ? 'Private'
+                : 'Public';
+        const items = normalizePendingAttachmentItems(filesOrPending, defaultVisibility);
+        if (!items.length) return;
 
-        if (!effectiveId || (!isInternalCall && quoteId)) {
-            // New Behavior: Queue files as pending until saved (Fresh Quote or Revision required)
-            if (files && files.length > 0) {
-                const fileArray = Array.from(files);
-                // Simple duplication check based on name
-                setPendingFiles(prev => {
-                    const newFiles = fileArray.filter(f => !prev.some(p => p.name === f.name));
-                    return [...prev, ...newFiles];
-                });
-            }
+        const explicitTarget = targetQuoteId !== undefined && targetQuoteId !== null && targetQuoteId !== '';
+        const asDraft = opts?.draft === true;
+        const effectiveQuoteId = explicitTarget ? targetQuoteId : quoteId || null;
+        const effectiveDraftId =
+            !effectiveQuoteId && !asDraft
+                ? quoteDraftId || approvalWorkflowDraftId || null
+                : asDraft
+                  ? targetQuoteId || quoteDraftId || approvalWorkflowDraftId || null
+                  : null;
+
+        const uploadAsDraft = Boolean(asDraft || (!effectiveQuoteId && effectiveDraftId));
+        const uploadId = uploadAsDraft ? effectiveDraftId : effectiveQuoteId;
+
+        if (!uploadId) {
+            setPendingFiles((prev) => {
+                const next = [...prev];
+                for (const it of items) {
+                    const exists = next.some(
+                        (p) =>
+                            String(p.name || p.file?.name || '') === it.name &&
+                            String(p.visibility || 'Public') === it.visibility
+                    );
+                    if (!exists) {
+                        next.push({
+                            ...it,
+                            pendingId: `p-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                        });
+                    }
+                }
+                return next;
+            });
             return;
         }
-        if (!files || files.length === 0) return;
+
+        const { userName, division } = quoteAttachmentUploaderMeta();
+        const authQs = quoteAttachmentAuthParams();
 
         setIsUploading(true);
-        const formData = new FormData();
-        Array.from(files).forEach(file => {
-            formData.append('files', file);
-        });
-
         try {
-            const res = await fetch(`${API_BASE}/api/quotes/attachments/${targetQuoteId}`, {
-                method: 'POST',
-                body: formData
-            });
-            if (res.ok) {
-                await fetchQuoteAttachments(targetQuoteId);
-            } else {
-                const err = await res.json();
-                alert('Failed to upload attachments: ' + (err.error || 'Unknown error'));
+            const groups = new Map();
+            for (const it of items) {
+                const vis = it.visibility === 'Private' ? 'Private' : 'Public';
+                if (!groups.has(vis)) groups.set(vis, []);
+                groups.get(vis).push(it.file);
             }
+
+            for (const [vis, fileList] of groups.entries()) {
+                const formData = new FormData();
+                fileList.forEach((file) => formData.append('files', file));
+                const qs = new URLSearchParams(authQs);
+                qs.set('visibility', vis);
+                qs.set('division', division);
+                if (userName) qs.set('userName', userName);
+                const base = uploadAsDraft
+                    ? `${API_BASE}/api/quotes/attachments/draft/${uploadId}`
+                    : `${API_BASE}/api/quotes/attachments/${uploadId}`;
+                const res = await fetch(`${base}?${qs.toString()}`, {
+                    method: 'POST',
+                    body: formData,
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    alert('Failed to upload attachments: ' + (err.error || 'Unknown error'));
+                    return;
+                }
+            }
+
+            await fetchQuoteAttachments(uploadId, { draft: uploadAsDraft });
+            setPendingFiles((prev) =>
+                prev.filter(
+                    (p) =>
+                        !items.some(
+                            (it) =>
+                                it.name === String(p.name || p.file?.name || '') &&
+                                it.visibility === String(p.visibility || 'Public')
+                        )
+                )
+            );
         } catch (err) {
             console.error('Upload error:', err);
             alert('Error uploading files. Please try again or check the server status.');
         } finally {
             setIsUploading(false);
         }
-    }, [quoteId, fetchQuoteAttachments]);
+    }, [
+        approvalWorkflowDraftId,
+        fetchQuoteAttachments,
+        normalizePendingAttachmentItems,
+        preferredAttachmentVisibility,
+        quoteAttachmentAuthParams,
+        quoteAttachmentUploaderMeta,
+        quoteDraftId,
+        quoteId,
+    ]);
 
     const handleDeleteAttachment = async (attachmentId) => {
+        /* After final approval the quote gets an ID — same lock as Save/edit: add OK, delete blocked. */
+        if (quoteId || browsePreviousQuotesRevisions || embeddedApprovalReview) {
+            alert(
+                'Attachments cannot be removed after the final approver has approved. You can still add new files.'
+            );
+            return;
+        }
         if (!window.confirm('Delete this attachment?')) return;
         try {
-            const res = await fetch(`${API_BASE}/api/quotes/attachments/${attachmentId}`, {
-                method: 'DELETE'
-            });
+            const qs = quoteAttachmentAuthParams().toString();
+            const url = qs
+                ? `${API_BASE}/api/quotes/attachments/${attachmentId}?${qs}`
+                : `${API_BASE}/api/quotes/attachments/${attachmentId}`;
+            const res = await fetch(url, { method: 'DELETE' });
             if (res.ok) {
-                setQuoteAttachments(prev => prev.filter(a => a.ID !== attachmentId));
+                setQuoteAttachments((prev) => prev.filter((a) => a.ID !== attachmentId));
+            } else if (res.status === 403) {
+                const err = await res.json().catch(() => ({}));
+                alert(
+                    err.error ||
+                        'You do not have permission to delete this attachment.'
+                );
             }
         } catch (err) {
             console.error('Error deleting attachment:', err);
@@ -16124,17 +18267,254 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     };
 
     const handleDownloadAttachment = (id, fileName) => {
-        window.open(`${API_BASE}/api/quotes/attachments/download/${id}?download=true`, '_blank');
+        const qs = quoteAttachmentAuthParams();
+        qs.set('download', 'true');
+        window.open(`${API_BASE}/api/quotes/attachments/download/${id}?${qs.toString()}`, '_blank');
+    };
+
+    const renderQuoteAttachmentCards = (visibility) => {
+        const vis = visibility === 'Private' ? 'Private' : 'Public';
+        const filteredPending = pendingFiles.filter(
+            (p) => String(p.visibility || 'Public') === vis
+        );
+        const filteredUploaded = (quoteAttachments || []).filter((a) => {
+            const aVis =
+                String(a.Visibility || 'Public').toLowerCase() === 'private' ? 'Private' : 'Public';
+            if (aVis !== vis) return false;
+            if (vis === 'Private' && !canViewQuotePrivateAttachment(a)) return false;
+            return true;
+        });
+
+        if (filteredPending.length === 0 && filteredUploaded.length === 0) {
+            return (
+                <div
+                    style={{
+                        border: '1px dashed #cbd5e1',
+                        borderRadius: '6px',
+                        padding: embeddedApprovalReview ? '10px' : '12px',
+                        textAlign: 'center',
+                        fontSize: embeddedApprovalReview ? '11px' : '12px',
+                        color: '#94a3b8',
+                        background: '#ffffff',
+                    }}
+                >
+                    {quoteId || quoteDraftId || approvalWorkflowDraftId
+                        ? `No ${vis.toLowerCase()} attachments yet.`
+                        : `Add ${vis.toLowerCase()} files anytime — they upload on Save.`}
+                </div>
+            );
+        }
+
+        return (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+                {filteredPending.map((item) => {
+                    const name = item.name || item.file?.name || 'file';
+                    const pendingKey = item.pendingId || `${vis}-${name}`;
+                    return (
+                        <div
+                            key={pendingKey}
+                            className="attachment-card"
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '10px',
+                                padding: '8px 12px',
+                                background: '#fff7ed',
+                                border: '1px dashed #f97316',
+                                borderRadius: '6px',
+                                width: '240px',
+                                maxWidth: '240px',
+                                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                                transition: 'all 0.2s',
+                                position: 'relative',
+                            }}
+                        >
+                            <div
+                                style={{
+                                    width: '32px',
+                                    height: '32px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    background: '#ffedd5',
+                                    borderRadius: '4px',
+                                    color: '#f97316',
+                                }}
+                            >
+                                <FileText size={18} />
+                            </div>
+                            <div style={{ flex: 1, overflow: 'hidden' }}>
+                                <div
+                                    style={{
+                                        fontSize: '12px',
+                                        fontWeight: '600',
+                                        color: '#1e293b',
+                                        whiteSpace: 'nowrap',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                    }}
+                                    title={name}
+                                >
+                                    {name}
+                                </div>
+                                <div style={{ fontSize: '10px', color: '#f97316', fontWeight: '600' }}>
+                                    Pending Save...
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '2px' }}>
+                                <button
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setPendingFiles((prev) =>
+                                            prev.filter((p) => {
+                                                if (item.pendingId) return p.pendingId !== item.pendingId;
+                                                return !(
+                                                    String(p.name || p.file?.name || '') === name &&
+                                                    String(p.visibility || 'Public') === vis
+                                                );
+                                            })
+                                        );
+                                    }}
+                                    style={{
+                                        background: 'transparent',
+                                        border: 'none',
+                                        color: '#94a3b8',
+                                        cursor: 'pointer',
+                                        padding: '4px',
+                                        borderRadius: '4px',
+                                    }}
+                                    title="Remove"
+                                >
+                                    <X size={14} />
+                                </button>
+                            </div>
+                        </div>
+                    );
+                })}
+
+                {filteredUploaded.map((att) => (
+                    <div
+                        key={att.ID}
+                        className="attachment-card"
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '8px 12px',
+                            background: 'white',
+                            border: `1px solid ${vis === 'Private' ? '#fecaca' : '#e2e8f0'}`,
+                            borderRadius: '6px',
+                            width: '240px',
+                            maxWidth: '240px',
+                            boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                            transition: 'all 0.2s',
+                            position: 'relative',
+                        }}
+                    >
+                        <div
+                            style={{
+                                width: '32px',
+                                height: '32px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                background: String(att.FileName || '')
+                                    .toLowerCase()
+                                    .endsWith('.pdf')
+                                    ? '#fee2e2'
+                                    : '#e0f2fe',
+                                borderRadius: '4px',
+                                color: String(att.FileName || '')
+                                    .toLowerCase()
+                                    .endsWith('.pdf')
+                                    ? '#ef4444'
+                                    : '#3b82f6',
+                            }}
+                        >
+                            <FileText size={18} />
+                        </div>
+                        <div style={{ flex: 1, overflow: 'hidden' }}>
+                            <div
+                                style={{
+                                    fontSize: '12px',
+                                    fontWeight: '600',
+                                    color: '#1e293b',
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                }}
+                                title={att.FileName}
+                            >
+                                {att.FileName}
+                            </div>
+                            <div style={{ fontSize: '10px', color: '#94a3b8' }}>
+                                {att.UploadedAt
+                                    ? format(new Date(att.UploadedAt), 'dd MMM, HH:mm')
+                                    : ''}
+                                {att.Division ? ` · ${att.Division}` : ''}
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '2px' }}>
+                            <button
+                                type="button"
+                                onClick={() => handleDownloadAttachment(att.ID, att.FileName)}
+                                style={{
+                                    background: 'transparent',
+                                    border: 'none',
+                                    color: '#64748b',
+                                    cursor: 'pointer',
+                                    padding: '4px',
+                                    borderRadius: '4px',
+                                }}
+                                title="Download"
+                                onMouseOver={(e) => (e.currentTarget.style.background = '#f1f5f9')}
+                                onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
+                            >
+                                <Download size={14} />
+                            </button>
+                            {!embeddedApprovalReview &&
+                                !quoteId &&
+                                !browsePreviousQuotesRevisions && (
+                                <button
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleDeleteAttachment(att.ID);
+                                    }}
+                                    style={{
+                                        background: 'transparent',
+                                        border: 'none',
+                                        color: '#94a3b8',
+                                        cursor: 'pointer',
+                                        padding: '4px',
+                                        borderRadius: '4px',
+                                    }}
+                                    title="Remove"
+                                >
+                                    <X size={14} />
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                ))}
+            </div>
+        );
     };
 
 
     useEffect(() => {
         if (quoteId) {
-            fetchQuoteAttachments(quoteId);
-        } else {
-            setQuoteAttachments((prev) => (prev.length === 0 ? prev : []));
+            fetchQuoteAttachments(quoteId, { draft: false });
+            return;
         }
-    }, [quoteId, fetchQuoteAttachments]);
+        const draftId = quoteDraftId || approvalWorkflowDraftId;
+        if (draftId) {
+            fetchQuoteAttachments(draftId, { draft: true });
+            return;
+        }
+        setQuoteAttachments((prev) => (prev.length === 0 ? prev : []));
+    }, [quoteId, quoteDraftId, approvalWorkflowDraftId, fetchQuoteAttachments]);
 
     // Clear selection
     const handleClear = () => {
@@ -16173,6 +18553,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         quoteRowAwaitingLeadForCustomerRef.current = false;
         quotePricingAwaitingNamedCustomerRef.current = false;
         pendingPricingBootstrapRef.current = null;
+        quoteListEnquiryOnlySkipLeadRef.current = false;
         setSelectedLeadId(null);
         setEnquiryDivisionScopeNotice('');
         setBrowsePreviousQuotesRevisions(false);
@@ -16217,7 +18598,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         let next = value;
         if (key === 'pricingTerms') {
             pricingTermsUserTouchedRef.current = true;
-            next = ensurePricingTableColgroupInHtml(value);
+            next = ensurePricingTableColgroupInHtml(
+                updatePricingTableFooterCellsInHtml(value, null)
+            );
         }
         const normalized = clauseEditorHtmlContainsTable(next)
             ? normalizeClauseHtmlPreservingTables(next)
@@ -16252,44 +18635,72 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             }
         };
 
-        const liveTable = findLiveEmsPricingTableElement();
-        if (liveTable) {
-            if (pricingTableHasDiscountBlock(liveTable)) {
-                focusDiscountAmount(liveTable);
-                return;
-            }
-            if (!insertDiscountBlockIntoPricingTable(liveTable)) return;
-            const wys = liveTable.closest('.jodit-wysiwyg');
-            const lineBase = parseBaseTotalFromPricingTableElement(liveTable);
-            const taxedBase =
-                lineBase != null && Number.isFinite(lineBase)
-                    ? calcTaxedBaseFromPricingTable(liveTable, lineBase)
-                    : null;
-            const grandWithVat =
-                taxedBase != null ? calcPricingTotalsFromBase(taxedBase).grandWithVat : null;
-            if (wys && grandWithVat != null) {
+        const syncProseAndPersist = (wys, htmlFallback) => {
+            if (wys) {
                 try {
-                    patchClause41LumpSumInWysiwyg(wys, grandWithVat, numberToWordsBHD);
+                    if (wys.querySelector('p[data-ems-price-wording]')) {
+                        syncAllPricingOptionWordingsInWysiwyg(wys, numberToWordsBHD);
+                    } else {
+                        const liveTable = findLiveEmsPricingTableElement();
+                        const lineBase = liveTable
+                            ? parseBaseTotalFromPricingTableElement(liveTable)
+                            : null;
+                        const taxedBase =
+                            liveTable && lineBase != null && Number.isFinite(lineBase)
+                                ? calcTaxedBaseFromPricingTable(liveTable, lineBase)
+                                : lineBase;
+                        const grandWithVat =
+                            taxedBase != null
+                                ? calcPricingTotalsFromBase(taxedBase).grandWithVat
+                                : null;
+                        if (grandWithVat != null) {
+                            patchClause41LumpSumInWysiwyg(wys, grandWithVat, numberToWordsBHD);
+                        }
+                    }
                 } catch (_e) {
                     /* prose patch best-effort */
                 }
             }
-            const html = ensurePricingTableColgroupInHtml(
-                wys?.innerHTML
-                    || clauseContentRef.current?.pricingTerms
-                    || ''
+            let html = ensurePricingTableColgroupInHtml(
+                wys?.innerHTML || htmlFallback || clauseContentRef.current?.pricingTerms || ''
             );
-            const with41 =
-                grandWithVat != null
-                    ? patchClause41LumpSumInHtml(html, grandWithVat, numberToWordsBHD)
-                    : html;
-            updateClauseContent('pricingTerms', with41);
+            if (/data-ems-price-wording=/i.test(html)) {
+                html = syncAllPricingOptionWordingsInHtml(html, numberToWordsBHD);
+            }
+            updateClauseContent('pricingTerms', html);
+        };
+
+        const liveTables = findAllLiveEmsPricingTableElements();
+        const liveTable = liveTables[0] || findLiveEmsPricingTableElement();
+        if (liveTables.length) {
+            const anyHaveDisc = liveTables.some((t) => pricingTableHasDiscountBlock(t));
+            if (anyHaveDisc) {
+                const remove = window.confirm(
+                    'Already Discount is applied; Do you want to remove'
+                );
+                if (!remove) return;
+                liveTables.forEach((t) => removeDiscountBlockFromPricingTable(t));
+                const wys = liveTable?.closest('.jodit-wysiwyg');
+                syncProseAndPersist(wys);
+                return;
+            }
+            liveTables.forEach((t) => insertDiscountBlockIntoPricingTable(t));
+            const wys = liveTable?.closest('.jodit-wysiwyg');
+            syncProseAndPersist(wys);
             focusDiscountAmount(liveTable);
             return;
         }
 
         const currentHtml = String(clauseContentRef.current?.pricingTerms || '');
-        if (extractPricingDiscountStateFromHtml(currentHtml)) return;
+        if (extractAllPricingDiscountStatesFromHtml(currentHtml).length) {
+            const remove = window.confirm(
+                'Already Discount is applied; Do you want to remove'
+            );
+            if (!remove) return;
+            const cleared = removeDiscountBlocksFromPricingTermsHtml(currentHtml, numberToWordsBHD);
+            if (cleared) updateClauseContent('pricingTerms', cleared);
+            return;
+        }
         const nextHtml = insertDiscountBlockIntoPricingTermsHtml(currentHtml, numberToWordsBHD);
         if (!nextHtml) return;
         updateClauseContent('pricingTerms', nextHtml);
@@ -16312,9 +18723,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 renumberCtx
                     ? canonicalizeClauseBodyHtml(html, renumberCtx.listKey, renumberCtx.displayMajor)
                     : html;
-            if (contentKey === 'pricingTerms') {
+    if (contentKey === 'pricingTerms') {
                 const synced = recalcPricingTermsEditorHtml(val, numberToWordsBHD);
-                const displayHtml = synced != null ? synced : val;
+                const displayHtml =
+                    synced != null
+                        ? synced
+                        : ensurePricingTableColgroupInHtml(
+                              updatePricingTableFooterCellsInHtml(val, null)
+                          );
                 updateClauseContent(contentKey, persistHtml(displayHtml));
                 return displayHtml;
             }
@@ -16622,17 +19038,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         if (!key) return;
         editingClauseLiveHtmlRef.current = { key, html: body };
         const sig = `${key}:${String(body).length}:${String(body).slice(-48)}`;
-        if (key === 'pricingTerms') {
-            setEditingClauseLiveSig(sig);
-            return;
-        }
+        /* Debounce all live-sig bumps (including Pricing) — sync setState on every keystroke
+           rebuilt the full preview and made the editor lag. */
         if (editingClauseLiveSigTimerRef.current) {
             clearTimeout(editingClauseLiveSigTimerRef.current);
         }
         editingClauseLiveSigTimerRef.current = setTimeout(() => {
             editingClauseLiveSigTimerRef.current = null;
             setEditingClauseLiveSig(sig);
-        }, 400);
+        }, 450);
     }, []);
 
     const bumpEditingClauseReflow = useCallback(() => {
@@ -16676,7 +19090,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             previewClauseEditorSyncTimerRef.current = setTimeout(() => {
                 previewClauseEditorSyncTimerRef.current = null;
                 flushPreviewClauseEditorSync();
-            }, 320);
+            }, 600);
             return cleaned;
         },
         [
@@ -16761,31 +19175,41 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 editingClauseReflowTimerRef.current = null;
             }
             cancelPreviewClauseEditorSyncTimer();
-            if (!pendingPreviewClauseSyncRef.current) {
-                const wys = document.querySelector(
-                    '#quote-preview .quote-clause-inline-editor .jodit-wysiwyg'
-                );
-                if (wys) {
-                    if (!wys.querySelector('table')) {
-                        normalizeClauseListHtml(wys);
-                    }
-                    stripClauseEditorSpuriousBlankRows(wys);
-                    finalizeAllOfficePasteTablesFormatting(wys, wys.ownerDocument?.defaultView);
-                    normalizeClauseProseTextColors(wys);
-                    stabilizeClauseEditorTablesForExport(wys);
-                    if (wys.querySelector('img[src^="blob:"]')) {
-                        await inlineBlobImagesInDomRoot(wys);
-                    }
-                    const isCustom = String(contentKey).startsWith('custom_');
-                    const val = normalizeClauseHtmlForHistory(wys.innerHTML);
-                    pendingPreviewClauseSyncRef.current = {
-                        contentKey,
-                        isCustom,
-                        clauseId: contentKey,
-                        val,
-                    };
-                    editingClauseLiveHtmlRef.current = { key: contentKey, html: val };
+            const wys = document.querySelector(
+                '#quote-preview .quote-clause-inline-editor .jodit-wysiwyg'
+            );
+            if (wys) {
+                if (!wys.querySelector('table')) {
+                    normalizeClauseListHtml(wys);
                 }
+                stripClauseEditorSpuriousBlankRows(wys);
+                finalizeAllOfficePasteTablesFormatting(wys, wys.ownerDocument?.defaultView);
+                normalizeClauseProseTextColors(wys);
+                stabilizeClauseEditorTablesForExport(wys);
+                if (wys.querySelector('img[src^="blob:"]')) {
+                    await inlineBlobImagesInDomRoot(wys);
+                }
+                const isCustom = String(contentKey).startsWith('custom_');
+                let val = normalizeClauseHtmlForHistory(wys.innerHTML);
+                // Pricing: always recompute VAT/Total/Grand from the live table before leaving edit.
+                // Stale debounced pending HTML can keep an old VAT cell while Grand looks correct.
+                if (contentKey === 'pricingTerms' && !isCustom) {
+                    const synced = recalcPricingTermsEditorHtml(val, numberToWordsBHD);
+                    val = normalizeClauseHtmlForHistory(
+                        synced != null
+                            ? synced
+                            : ensurePricingTableColgroupInHtml(
+                                  updatePricingTableFooterCellsInHtml(val, null)
+                              )
+                    );
+                }
+                pendingPreviewClauseSyncRef.current = {
+                    contentKey,
+                    isCustom,
+                    clauseId: contentKey,
+                    val,
+                };
+                editingClauseLiveHtmlRef.current = { key: contentKey, html: val };
             }
             persistActiveClauseHeadingHtml(contentKey);
             flushPreviewClauseEditorSync();
@@ -16796,6 +19220,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             flushPreviewClauseEditorSync,
             normalizeClauseHtmlForHistory,
             persistActiveClauseHeadingHtml,
+            numberToWordsBHD,
         ]
     );
 
@@ -16879,12 +19304,39 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         }
         void commitActiveClausePreviewEdit(key).finally(() => {
             bumpEditingClauseReflow();
+            // After pricing edit, force VAT footer into stored HTML before unmounting the editor
+            // so normal-mode segments cannot keep a stale VAT cell.
+            if (key === 'pricingTerms') {
+                flushSync(() => {
+                    setClauseContent((prev) => {
+                        const current = String(prev?.pricingTerms || '');
+                        if (!clauseHtmlHasEmsAutoPricingTable(current)) return prev;
+                        const fixed = ensurePricingTableColgroupInHtml(
+                            updatePricingTableFooterCellsInHtml(current, null)
+                        );
+                        if (pricingFooterAmountsSig(fixed) === pricingFooterAmountsSig(current)) {
+                            return prev;
+                        }
+                        const next = { ...prev, pricingTerms: fixed };
+                        clauseContentRef.current = next;
+                        return next;
+                    });
+                });
+            }
             editingClauseLiveHtmlRef.current = { key: null, html: '' };
             setEditingClauseLiveSig('');
             const host = document.getElementById(EMS_QUOTE_PREVIEW_TOOLBAR_ID);
             hideTableResizeHandles(host?.__emsActiveClauseEditorJodit, { force: true });
             hideAllEmsTableResizeHandles();
             setExpandedClause(null);
+            // Paint-time safety: patch pricing VAT cells after React commits the normal-mode preview.
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    const root = document.getElementById('quote-preview');
+                    if (!root) return;
+                    forcePricingVatInDomRoot(root);
+                });
+            });
         });
     }, [
         bumpEditingClauseReflow,
@@ -17026,7 +19478,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             const loadedContent = { ...normalized.clauseContent };
             if (loadedContent.pricingTerms) {
                 loadedContent.pricingTerms = ensurePricingTableColgroupInHtml(
-                    loadedContent.pricingTerms
+                    updatePricingTableFooterCellsInHtml(loadedContent.pricingTerms, null)
                 );
             }
 
@@ -17190,11 +19642,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     const totalForProse = livePrice != null ? livePrice : fallbackGrandBaseTotal;
                     config.clauseContent.pricingTerms = applyTableRowHeightModelInHtmlString(
                         ensurePricingTableColgroupInHtml(
-                            syncPricingTerms41LumpSumProse(
-                                nextHtml,
-                                totalForProse,
-                                false,
-                                numberToWordsBHD
+                            updatePricingTableFooterCellsInHtml(
+                                syncPricingTerms41LumpSumProse(
+                                    nextHtml,
+                                    totalForProse,
+                                    false,
+                                    numberToWordsBHD
+                                ),
+                                null
                             )
                         )
                     );
@@ -17229,6 +19684,133 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             templates,
         ]
     );
+
+    /**
+     * Load clause toggles + bodies AND left-panel Quote Details from a prior EnquiryQuotes revision
+     * into the current draft (does not switch into browse mode / does not replace Quote Ref).
+     */
+    const handleLoadPrevRevisionClauses = useCallback(() => {
+        if (!selectedPrevRevisionQuoteId) {
+            alert('Select a previous quote revision first.');
+            return;
+        }
+        if (browsePreviousQuotesRevisions) {
+            alert(
+                'Turn off "Previous Quotes / Revisions" first so content can be loaded into your new draft.'
+            );
+            return;
+        }
+        const row = (existingQuotes || []).find(
+            (q) => String(quoteRowId(q) ?? '') === String(selectedPrevRevisionQuoteId)
+        );
+        if (!row) {
+            alert('Selected quote revision was not found. Refresh the enquiry or pick another.');
+            return;
+        }
+
+        if (expandedClause) {
+            exitClausePreviewEdit();
+        } else {
+            flushPreviewClauseEditorSync({ recordHistory: false });
+        }
+
+        quoteDraftClausesLockedRef.current = false;
+        quoteDraftPendingClauseReapplyRef.current = false;
+        pricingTermsUserTouchedRef.current = true;
+        resetGlobalClauseHistory(clauseEditorHistoryRef.current);
+        clauseHtmlSnapshotRef.current = {};
+        editingClauseLiveHtmlRef.current = { key: null, html: '' };
+        setEditingClauseLiveSig('');
+        setExpandedClause(null);
+
+        // Left-panel Quote Details (keep current customer dropdown; stay in draft mode)
+        setQuoteDate(quoteRowDateToInputYmd(row));
+        setValidityDays(Number(row.ValidityDays ?? row.validityDays) || 30);
+        setCustomerReference(
+            String(
+                row.CustomerReference ??
+                    row.customerReference ??
+                    row.YourRef ??
+                    row.yourref ??
+                    ''
+            ).trim()
+        );
+        // New revision round — user enters a fresh reason
+        setReasonForRevision('');
+        setSubject(String(row.Subject ?? row.subject ?? '').trim());
+        {
+            const fromQuote = String(row.QuoteType ?? row.quoteType ?? '')
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean);
+            const fromEnq = resolveSelectedEnquiryTypes(enquiryData);
+            setQuoteTypeList(fromQuote.length > 0 ? fromQuote : fromEnq);
+            setQuoteEnquiryTypeSelect('');
+        }
+        {
+            const fromRow = String(row.PreparedBy ?? row.preparedby ?? '').trim();
+            if (fromRow) {
+                setPreparedBy(fromRow);
+            }
+            const rowEmail = String(row.PreparedByEmail ?? row.preparedbyemail ?? '').trim();
+            setLoadedQuotePreparedByEmail(
+                resolvePreparedByEmailForPersist(
+                    fromRow,
+                    usersList,
+                    currentUser,
+                    preparedByOptions,
+                    rowEmail
+                )
+            );
+        }
+        setSignatory(String(row.Signatory ?? row.signatory ?? '').trim());
+        setSignatoryDesignation(
+            String(row.SignatoryDesignation ?? row.signatoryDesignation ?? '').trim()
+        );
+        setCoSignatory(String(row.CoSignatory ?? row.coSignatory ?? '').trim());
+        setCoSignatoryDesignation(
+            String(row.CoSignatoryDesignation ?? row.coSignatoryDesignation ?? '').trim()
+        );
+
+        // Attention of + contact lines (do not overwrite selected customer name)
+        const savedAtt = String(row.ToAttention ?? row.toattention ?? '').trim();
+        if (savedAtt) {
+            setToAttention(savedAtt);
+        }
+        const rowAddr = String(row.ToAddress ?? row.toaddress ?? '').trim();
+        const rowPhone = String(row.ToPhone ?? row.tophone ?? '').trim();
+        const rowEmailTo = String(row.ToEmail ?? row.toemail ?? '').trim();
+        const rowFax = String(row.ToFax ?? row.tofax ?? '').trim();
+        if (rowAddr) setToAddress(rowAddr);
+        if (rowPhone) setToPhone(rowPhone);
+        if (rowEmailTo) setToEmail(rowEmailTo);
+        if (rowFax) setToFax(rowFax);
+
+        const sourceQuoteNo = Number(row.QuoteNo ?? row.quoteNo ?? 0);
+        if (Number.isFinite(sourceQuoteNo) && sourceQuoteNo > 0) {
+            setRevisionSourceQuoteNoBoth(sourceQuoteNo);
+        }
+
+        applyQuoteClauseBundleFromRow(row, { sync: true });
+        markQuoteDraftEdited?.();
+        alert(
+            `Quote details and clauses loaded from ${String(row.QuoteNumber || row.quoteNumber || 'previous revision').trim()}.`
+        );
+    }, [
+        applyQuoteClauseBundleFromRow,
+        browsePreviousQuotesRevisions,
+        currentUser,
+        enquiryData,
+        existingQuotes,
+        exitClausePreviewEdit,
+        expandedClause,
+        flushPreviewClauseEditorSync,
+        markQuoteDraftEdited,
+        preparedByOptions,
+        selectedPrevRevisionQuoteId,
+        setRevisionSourceQuoteNoBoth,
+        usersList,
+    ]);
 
     const handleExportTemplate = useCallback(() => {
         let templateName = savedTemplateName.trim();
@@ -17809,7 +20391,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 const pName = (p.name || '').trim().toLowerCase();
                 const uDept = userDept.toLowerCase();
                 return pItem === uDept || pName === uDept ||
-                    (uDept.includes('bms') && (pItem.includes('bms') || pName.includes('bms')));
+                    (textRefersToBms(uDept) && textRefersToBms(pItem) && !textRefersToIbms(uDept));
             });
             if (personalProfile) {
                 identitySource = `MatchedByDeptName(${userDept})`;
@@ -17817,7 +20399,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         }
 
         // 3. Fallback: Absolute hard-override for BMS users (Requested by User) — skipped when a concrete tab job supplies codes (HVAC vs BMS).
-        if (!branchCodesFromActiveQuoteTab && !personalProfile && userDept.toUpperCase().includes('BMS')) {
+        if (!branchCodesFromActiveQuoteTab && !personalProfile && textRefersToBms(userDept) && !textRefersToIbms(userDept)) {
             console.log('[getQuotePayload] HARD OVERRIDE: BMS user detected, forcing AAC/BMP identity');
             effectiveDivisionCode = 'BMP';
             effectiveDeptCode = 'AAC';
@@ -18008,7 +20590,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         if (mergedClauseContent.pricingTerms) {
             mergedClauseContent.pricingTerms = ensurePricingTableColgroupInHtml(
-                mergedClauseContent.pricingTerms
+                updatePricingTableFooterCellsInHtml(mergedClauseContent.pricingTerms, null)
             );
             if (clauseHtmlHasEmsAutoPricingTable(mergedClauseContent.pricingTerms)) {
                 pricingTermsUserTouchedRef.current = true;
@@ -18165,18 +20747,39 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         : null);
                 return Number.isFinite(id) ? id : null;
             }
-            if (!browsePreviousQuotesRevisions || !quoteId) return null;
-            return Number(quoteId);
+            if (quoteId) return Number(quoteId);
+            return null;
         })();
 
-        if (!targetQuoteId || !Number.isFinite(targetQuoteId)) return;
+        const targetDraftId = (() => {
+            if (targetQuoteId) return null;
+            if (embeddedApprovalReview) {
+                const id =
+                    quoteDraftId ||
+                    (String(openContext?.draftQuoteId || '').trim()
+                        ? Number(openContext.draftQuoteId)
+                        : null);
+                return Number.isFinite(id) ? id : null;
+            }
+            if (approvalWorkflowDraftId) return Number(approvalWorkflowDraftId);
+            if (quoteDraftId) return Number(quoteDraftId);
+            return null;
+        })();
+
+        if (
+            (!targetQuoteId || !Number.isFinite(targetQuoteId)) &&
+            (!targetDraftId || !Number.isFinite(targetDraftId))
+        ) {
+            return;
+        }
 
         const seq = ++approvalStepsFetchSeqRef.current;
         setApprovalWorkflowStepsLoading(true);
 
         try {
             const params = new URLSearchParams();
-            params.set('quoteId', String(targetQuoteId));
+            if (targetQuoteId) params.set('quoteId', String(targetQuoteId));
+            else params.set('draftQuoteId', String(targetDraftId));
             const res = await fetch(`${API_BASE}/api/quotes/approval-steps?${params.toString()}`, {
                 cache: 'no-store',
             });
@@ -18214,7 +20817,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 setApprovalWorkflowStepsLoading(false);
             }
         }
-    }, [embeddedApprovalReview, browsePreviousQuotesRevisions, quoteId, openContext?.quoteId]);
+    }, [
+        embeddedApprovalReview,
+        browsePreviousQuotesRevisions,
+        quoteId,
+        quoteDraftId,
+        approvalWorkflowDraftId,
+        openContext?.quoteId,
+        openContext?.draftQuoteId,
+    ]);
 
     useEffect(() => {
         if (embeddedApprovalReview) return;
@@ -18233,20 +20844,39 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     useEffect(() => {
         if (embeddedApprovalReview) {
-            const id =
+            const qid =
                 quoteId ||
                 (String(openContext?.quoteId || '').trim() ? Number(openContext.quoteId) : null);
-            if (!id || !Number.isFinite(id)) return;
-            void fetchApprovalStepsFromServer(id);
+            const did =
+                quoteDraftId ||
+                (String(openContext?.draftQuoteId || '').trim()
+                    ? Number(openContext.draftQuoteId)
+                    : null);
+            if (qid && Number.isFinite(qid)) {
+                void fetchApprovalStepsFromServer(qid);
+                return;
+            }
+            if (did && Number.isFinite(did)) {
+                void fetchApprovalStepsFromServer();
+            }
             return;
         }
-        if (!quoteModuleApprovalWorkflowEnabled || !quoteId) return;
-        void fetchApprovalStepsFromServer(quoteId);
+        if (!quoteModuleApprovalWorkflowEnabled) return;
+        if (quoteId) {
+            void fetchApprovalStepsFromServer(quoteId);
+            return;
+        }
+        if (approvalWorkflowDraftId || quoteDraftId) {
+            void fetchApprovalStepsFromServer();
+        }
     }, [
         embeddedApprovalReview,
         quoteModuleApprovalWorkflowEnabled,
         quoteId,
+        quoteDraftId,
+        approvalWorkflowDraftId,
         openContext?.quoteId,
+        openContext?.draftQuoteId,
         fetchApprovalStepsFromServer,
     ]);
 
@@ -18425,6 +21055,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             signatoryDesignation,
             coSignatory,
             coSignatoryDesignation,
+            toName,
             toAddress,
             toPhone,
             toEmail,
@@ -18438,6 +21069,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             customClauses,
             orderedClauses,
             selectedJobsSig,
+            approvalWorkflowSteps,
         });
 
         if (quoteDraftDirtyWatchRef.current === null) {
@@ -18461,6 +21093,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         signatoryDesignation,
         coSignatory,
         coSignatoryDesignation,
+        toName,
         toAddress,
         toPhone,
         toEmail,
@@ -18474,17 +21107,33 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         customClauses,
         orderedClauses,
         selectedJobsSig,
+        approvalWorkflowSteps,
         quoteDraftSavedFingerprint,
         markQuoteDraftEdited,
     ]);
 
-    const saveQuoteDraft = useCallback(async () => {
-        if (!enquiryData || !isQuoteDraftDirty) return null;
+    const saveQuoteDraft = useCallback(async (opts = {}) => {
+        const force = opts === true || opts?.force === true;
+        if (!enquiryData) return null;
+        if (!force && !isQuoteDraftDirty) return null;
+        // Finalized quotes (real quote number) cannot be edited via draft save.
+        // Revision flow clears quoteId before calling with force + quoteNo.
+        if (quoteId && !embeddedApprovalReview && !(force && Number(opts?.quoteNo) > 0)) {
+            alert(
+                'This quote is already finalized. Turn off "Previous Quotes / Revisions", update the draft, then use Send for Approval to create the next revision.'
+            );
+            return null;
+        }
         if (!canCollaborateOnQuoteDraft()) {
             alert('You do not have permission to save this draft.');
             return null;
         }
+        if (!enquiryData?.leadJobPrefix || !hasSelectedCustomer) {
+            alert('Select lead job and customer before saving.');
+            return null;
+        }
         setSavingDraft(true);
+        setSaving(true);
         try {
             const liveTotal = await ensureLatestOwnjobTotalForQuotePersist();
             const saveMerge = resolveMergedClauseContentForDraftSave();
@@ -18501,15 +21150,34 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             const pricingTermsSaved = String(
                 saveMerge.mergedClauseContent?.pricingTerms ?? apiFields.pricingTerms ?? ''
             );
+            const overrideSteps = opts?.approvalWorkflowStepsOverride;
+            const effectiveQuoteNo = (() => {
+                const fromOpts = Number(opts?.quoteNo);
+                if (Number.isFinite(fromOpts) && fromOpts > 0) return Math.floor(fromOpts);
+                const fromState = Number(revisionSourceQuoteNoRef.current);
+                if (Number.isFinite(fromState) && fromState > 0) return Math.floor(fromState);
+                return 0;
+            })();
+            const effectiveRevisionNo = (() => {
+                const fromOpts = Number(opts?.revisionNo);
+                if (Number.isFinite(fromOpts) && fromOpts >= 0) return Math.floor(fromOpts);
+                return 0;
+            })();
             const payload = {
                 ...apiFields,
                 totalAmount:
-                    Number.isFinite(liveTotal) && liveTotal > 0
-                        ? liveTotal
-                        : apiFields.totalAmount,
+                    Number.isFinite(opts?.totalAmountOverride) && opts.totalAmountOverride > 0
+                        ? opts.totalAmountOverride
+                        : Number.isFinite(liveTotal) && liveTotal > 0
+                          ? liveTotal
+                          : apiFields.totalAmount,
                 pricingTerms: pricingTermsSaved,
                 status: 'Draft',
-                draftId: quoteDraftId,
+                draftId: opts?.forceNewDraft ? null : quoteDraftId,
+                forceNewDraft: !!opts?.forceNewDraft,
+                quoteNo: effectiveQuoteNo,
+                sourceQuoteNo: effectiveQuoteNo,
+                revisionNo: effectiveRevisionNo,
                 sessionDivision: String(
                     quoteListDivision || currentUser?.Department || currentUser?.Division || ''
                 ).trim(),
@@ -18517,6 +21185,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     currentUser?.email || currentUser?.EmailId || currentUser?.MailId || ''
                 ).trim(),
             };
+            if (Array.isArray(overrideSteps)) {
+                payload.approvalWorkflowJson = serializeApprovalWorkflowJson(overrideSteps);
+            }
+            if (opts?.clearDigitalSignatures) {
+                payload.digitalSignaturesJson = serializeDigitalStampsForApi([]);
+            }
             const res = await fetch(`${API_BASE}/api/quotes/quote-drafts`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -18536,6 +21210,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             const data = await res.json();
             const newDraftId = data.draftId ?? data.id ?? null;
             if (newDraftId != null) setQuoteDraftId(newDraftId);
+            if (Number(data.quoteNo) > 0) {
+                setRevisionSourceQuoteNoBoth(data.quoteNo);
+            } else if (effectiveQuoteNo > 0) {
+                setRevisionSourceQuoteNoBoth(effectiveQuoteNo);
+            }
 
             // Keep saved PricingTerms authoritative — do not let EPV auto-table replace on next render/reload.
             quoteDraftClausesLockedRef.current = true;
@@ -18555,6 +21234,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 ...apiFields,
                 PricingTerms: pricingTermsSaved,
                 pricingTerms: pricingTermsSaved,
+                QuoteNo: effectiveQuoteNo,
+                quoteNo: effectiveQuoteNo,
                 ID: newDraftId ?? quoteDraftId,
             };
 
@@ -18566,6 +21247,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             }
             captureQuoteDraftBaselineFingerprint(savedFingerprint || quoteDraftFingerprint);
             quoteDraftLiveEditSigBaselineRef.current = String(editingClauseLiveSig || '');
+
+            // Persist queued attachments against the draft so they survive reload / promote.
+            if (pendingFiles.length > 0 && newDraftId != null && newDraftId !== '') {
+                try {
+                    await uploadFiles(pendingFiles, newDraftId, { draft: true });
+                    setPendingFiles([]);
+                } catch (attErr) {
+                    console.warn('[saveQuoteDraft] pending attachment upload:', attErr);
+                }
+            }
+
             return data;
         } catch (err) {
             console.error('[saveQuoteDraft]', err);
@@ -18573,10 +21265,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             return null;
         } finally {
             setSavingDraft(false);
+            setSaving(false);
         }
     }, [
         enquiryData,
         isQuoteDraftDirty,
+        quoteId,
+        embeddedApprovalReview,
+        hasSelectedCustomer,
         resolveMergedClauseContentForDraftSave,
         buildQuoteDraftFingerprintPayload,
         clauseContent,
@@ -18588,7 +21284,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         currentUser,
         editingClauseLiveSig,
         ensureLatestOwnjobTotalForQuotePersist,
+        setRevisionSourceQuoteNoBoth,
+        pendingFiles,
+        uploadFiles,
     ]);
+
+    saveQuoteDraftRef.current = saveQuoteDraft;
 
     /**
      * Draft mode (Previous Quotes OFF): load collaborative EnquiryQuotesDraft by
@@ -18728,15 +21429,55 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     setQuoteDraftHydrated(true);
                     armQuoteDraftBaselineCapture();
                 } else {
-                    quoteDraftScopeKeyRef.current = scopeKey;
-                    quoteDraftLoadedRowRef.current = null;
-                    quoteDraftPendingClauseReapplyRef.current = false;
-                    quoteDraftClausesLockedRef.current = false;
-                    pricingTermsUserTouchedRef.current = false;
-                    applyNoDraftQuoteDefaultsRef.current?.();
-                    setQuoteDraftId(null);
-                    setQuoteDraftHydrated(true);
-                    armQuoteDraftBaselineCapture();
+                    // No active EnquiryQuotesDraft (e.g. last quote was approved/promoted).
+                    // Wait for scoped EnquiryQuotes so we can seed from the latest revision.
+                    if (!scopedQuotesSettledMatchRef.current) {
+                        quoteDraftForceReloadRef.current = true;
+                        quoteDraftFetchInFlightRef.current = false;
+                        return;
+                    }
+                    const latestApproved = latestPersistedRowForReviseRef.current;
+                    if (latestApproved) {
+                        quoteDraftScopeKeyRef.current = scopeKey;
+                        quoteDraftLoadedRowRef.current = latestApproved;
+                        quoteDraftPendingClauseReapplyRef.current = true;
+                        setQuoteDraftId(null);
+                        const applyRow = loadQuoteRef.current;
+                        if (applyRow) {
+                            applyRow(latestApproved, {
+                                isDraftRow: true,
+                                seedFromLatestApproved: true,
+                                skipPreparedSignatory: true,
+                                applySavedDigitalSignatures: false,
+                                preserveRecipient: true,
+                            });
+                        } else {
+                            applyQuoteClauseBundleFromRow(latestApproved, {
+                                sync: true,
+                                lockDraftClauses: true,
+                                isDraftRow: true,
+                            });
+                            const qn = Number(
+                                latestApproved.QuoteNo ?? latestApproved.quoteNo ?? 0
+                            );
+                            setRevisionSourceQuoteNoBoth(
+                                Number.isFinite(qn) && qn > 0 ? qn : 0
+                            );
+                        }
+                        markDraftHydrateSkipAutoLoad();
+                        setQuoteDraftHydrated(true);
+                        armQuoteDraftBaselineCapture();
+                    } else {
+                        quoteDraftScopeKeyRef.current = scopeKey;
+                        quoteDraftLoadedRowRef.current = null;
+                        quoteDraftPendingClauseReapplyRef.current = false;
+                        quoteDraftClausesLockedRef.current = false;
+                        pricingTermsUserTouchedRef.current = false;
+                        applyNoDraftQuoteDefaultsRef.current?.();
+                        setQuoteDraftId(null);
+                        setQuoteDraftHydrated(true);
+                        armQuoteDraftBaselineCapture();
+                    }
                 }
             } catch (e) {
                 console.warn('[QuoteForm] quote draft load', e);
@@ -18770,6 +21511,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         currentUser?.Department,
         currentUser?.Division,
         pricingStableSig,
+        // Re-run after EnquiryQuotes for the tuple settle so we can seed from latest R# when no draft exists.
+        scopedQuotesFetchSettledKey,
+        scopedQuotePanelFetchKey,
+        latestPersistedRowForRevise,
     ]);
 
     /**
@@ -18800,6 +21545,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             // If already saved, we don't allow re-saving (Updates), only Revisions
             if (quoteId) {
                 alert("This quote is already saved and cannot be edited directly. Please use the 'Revision' button to make changes.");
+                return null;
+            }
+
+            // New quotes must go through draft + final-approver approval before EnquiryQuotes insert.
+            if (!browsePreviousQuotesRevisions) {
+                alert(
+                    'Quote numbers are created only after the final approver approves.\n\n' +
+                        '1. Save the quote draft\n' +
+                        '2. Set the approval hierarchy (mark a final approver if more than one)\n' +
+                        '3. Send for approval'
+                );
                 return null;
             }
 
@@ -19073,19 +21829,23 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
                     // Queue data as pending files
                     console.log('[Paste] Queuing files to pending list...');
-                    uploadFiles(filesToUpload);
+                    uploadFiles(filesToUpload, undefined, {
+                        visibility: preferredAttachmentVisibility,
+                    });
                     return;
                 }
 
                 e.preventDefault();
                 console.log('[Paste] Detected files:', filesToUpload.length);
-                uploadFiles(filesToUpload);
+                uploadFiles(filesToUpload, undefined, {
+                    visibility: preferredAttachmentVisibility,
+                });
             }
         };
 
         window.addEventListener('paste', handleGlobalPaste);
         return () => window.removeEventListener('paste', handleGlobalPaste);
-    }, [quoteId, uploadFiles, enquiryData, toName, saveQuote]);
+    }, [quoteId, uploadFiles, enquiryData, toName, preferredAttachmentVisibility]);
 
     /** Placed stamps are per enquiry + lead job context + customer (not per user only). */
     const digitalStampScope = React.useMemo(() => {
@@ -19485,6 +22245,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     useEffect(() => {
         if (!isQuotePreviewVisible) return undefined;
+        /* Page-info MutationObserver walks the whole preview tree — pause while editing. */
+        if (expandedClause) return undefined;
         const scroller = quotePreviewZoomViewportRef.current;
         updateQuotePreviewPageInfo();
         const onScroll = () => updateQuotePreviewPageInfo();
@@ -19506,6 +22268,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         quotePreviewZoom,
         clauseSegmentPageGroups,
         updateQuotePreviewPageInfo,
+        expandedClause,
     ]);
 
     const canUseQuoteDigitalSignature = Boolean(
@@ -21436,7 +24199,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 style={{
                     display: 'flex',
                     flexWrap: 'nowrap',
-                    alignItems: 'flex-end',
+                    alignItems: 'center',
                     gap: embeddedApprovalReview ? '5px' : '4px',
                     flexShrink: 0,
                     marginLeft: embeddedApprovalReview ? undefined : 'auto',
@@ -21444,6 +24207,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     minHeight: `${toolbarBtnPx}px`,
                     height: `${toolbarBtnPx}px`,
                     alignSelf: 'flex-end',
+                    boxSizing: 'border-box',
                 }}
             >
                 <button
@@ -21556,25 +24320,34 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     className="no-print"
                     title="Checked: include logo and company footer in print/PDF. Unchecked: hide them when printing on pre-printed letterhead (layout space kept)."
                     style={{
-                        display: 'flex',
+                        display: 'inline-flex',
                         alignItems: 'center',
+                        justifyContent: 'center',
                         gap: embeddedApprovalReview ? '4px' : '3px',
                         fontSize: toolbarLabelFontPx,
                         color: '#64748b',
                         cursor: 'pointer',
                         whiteSpace: 'nowrap',
                         lineHeight: 1,
+                        height: `${toolbarBtnPx}px`,
+                        minHeight: `${toolbarBtnPx}px`,
+                        flexShrink: 0,
+                        margin: 0,
+                        boxSizing: 'border-box',
                     }}
                 >
                     <input
                         type="checkbox"
                         checked={printWithHeader}
                         onChange={(e) => setPrintWithHeader(e.target.checked)}
-                        style={
-                            embeddedApprovalReview
-                                ? { width: '15px', height: '15px', margin: 0 }
-                                : undefined
-                        }
+                        style={{
+                            width: embeddedApprovalReview ? '15px' : '13px',
+                            height: embeddedApprovalReview ? '15px' : '13px',
+                            margin: 0,
+                            padding: 0,
+                            flexShrink: 0,
+                            verticalAlign: 'middle',
+                        }}
                     />
                     With Header
                 </label>
@@ -21599,9 +24372,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         opacity: !hasUserPricing ? 0.5 : 1,
                         flexShrink: 0,
                         boxSizing: 'border-box',
+                        padding: 0,
                     }}
                 >
-                    <Printer size={embeddedApprovalReview ? 16 : 13} />
+                    <Printer size={toolbarIconPx} />
                 </button>
                 <div
                     className="no-print"
@@ -21630,10 +24404,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         alignItems: 'center',
                         justifyContent: 'center',
                         gap: '3px',
+                        width: `${toolbarBtnPx}px`,
                         height: `${toolbarBtnPx}px`,
                         minHeight: `${toolbarBtnPx}px`,
-                        minWidth: embeddedApprovalReview ? '40px' : '32px',
-                        padding: embeddedApprovalReview ? '0 6px' : '0 5px',
+                        minWidth: `${toolbarBtnPx}px`,
+                        padding: 0,
                         border: '1px solid #cbd5e1',
                         borderRadius: toolbarBtnRadius,
                         background: 'white',
@@ -21652,83 +24427,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 >
                     <PenTool size={toolbarIconPx} aria-hidden />
                 </div>
-                {!embeddedApprovalReview ? (
-                    <button
-                        type="button"
-                        onClick={() => void saveQuoteDraft()}
-                        disabled={
-                            browsePreviousQuotesRevisions ||
-                            !isQuoteDraftDirty ||
-                            savingDraft ||
-                            saving ||
-                            !canCollaborateOnQuoteDraft() ||
-                            isEditingRestricted ||
-                            !enquiryData?.leadJobPrefix ||
-                            !hasSelectedCustomer
-                        }
-                        title={
-                            savingDraft
-                                ? 'Saving draft…'
-                                : !canCollaborateOnQuoteDraft()
-                                  ? 'No permission to save collaborative draft'
-                                  : isQuoteDraftDirty
-                                    ? 'Save quote draft to EnquiryQuotesDraft'
-                                    : 'No unsaved changes'
-                        }
-                        aria-label="Draft save quote"
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '3px',
-                            height: '24px',
-                            minHeight: '24px',
-                            padding: '0 7px',
-                            boxSizing: 'border-box',
-                            background:
-                                isQuoteDraftDirty &&
-                                !savingDraft &&
-                                canCollaborateOnQuoteDraft() &&
-                                !isEditingRestricted
-                                    ? '#1e293b'
-                                    : '#f1f5f9',
-                            color:
-                                isQuoteDraftDirty &&
-                                !savingDraft &&
-                                canCollaborateOnQuoteDraft() &&
-                                !isEditingRestricted
-                                    ? '#fff'
-                                    : '#94a3b8',
-                            border: '1px solid #cbd5e1',
-                            borderRadius: '5px',
-                            cursor:
-                                isQuoteDraftDirty &&
-                                !savingDraft &&
-                                canCollaborateOnQuoteDraft() &&
-                                !isEditingRestricted
-                                    ? 'pointer'
-                                    : 'not-allowed',
-                            fontWeight: 600,
-                            fontSize: '10.5px',
-                            flexShrink: 0,
-                        }}
-                    >
-                        <Save size={12} />
-                        {savingDraft ? 'Saving…' : 'Draft Save'}
-                    </button>
-                ) : null}
             </div>
         ),
         [
             embeddedApprovalReview,
             browsePreviousQuotesRevisions,
-            isQuoteDraftDirty,
-            savingDraft,
             saving,
-            canCollaborateOnQuoteDraft,
             isEditingRestricted,
             enquiryData?.leadJobPrefix,
             hasSelectedCustomer,
-            saveQuoteDraft,
             downloadPDF,
             warmQuotePdfCacheOnIntent,
             hasUserPricing,
@@ -21895,10 +24602,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
                                                 if (currentUser?.role === 'Admin' || currentUser?.Roles === 'Admin') return true;
 
-                                                const userDept = (currentUser?.Department || currentUser?.Division || '').trim().toLowerCase();
+                                                const userDeptCsv = currentUser?.Department || currentUser?.Division || '';
 
                                                 // Hard Filter: Explicitly exclude civil from non-civil and vice-versa if it's a root mismatch
-                                                if (userDept && userDept === 'civil' && !jobNameLower.includes('civil')) return false;
+                                                if (userHasDepartment(userDeptCsv, 'civil') && !jobNameLower.includes('civil')) return false;
 
                                                 // Find the actual root job object in pricingData (ItemName may be "L1 - X" or "X")
                                                 const rootJob = (pricingData.jobs || []).find(j => {
@@ -22075,6 +24782,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                 enquiryData?.divisionsHierarchy
                                                             );
                                                     if (jobObj) setSelectedLeadId(jobObj.id || jobObj.ItemID);
+                                                            // User explicitly chose a lead — allow later refreshes to keep their prefix.
+                                                            quoteListEnquiryOnlySkipLeadRef.current = false;
 
                                                             const nextPrefixForPricing = val.match(/^L\d+/)
                                                                 ? val.split('-')[0].trim()
@@ -22154,7 +24863,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     }}
                                     styles={quoteCustomerCreatableStyles}
                                     onChange={(selected) => handleCustomerChange(selected)}
-                                    placeholder="Select Customer..."
                                     formatCreateLabel={(inputValue) => `Use "${inputValue}"`}
                                     isClearable
                                 />
@@ -22223,10 +24931,33 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         <div style={{ display: 'flex', gap: '5px', alignItems: 'center', flexWrap: 'nowrap', flexShrink: 0 }}>
                             {enquiryData && quoteShellReady && (
                             <>
-                            {/* Save: enabled only when no persisted quote for this enquiry+lead+tab tuple+customer; Revision only when one exists */}
+                            {/* Save persists the draft when left/right quote content changed */}
                             <button
-                                onClick={() => saveQuote()}
-                                disabled={disableSaveRevisionInBrowse || saving || !canSaveOrReviseQuote() || !saveButtonScopeReady || hasPersistedQuoteForScope || isEditingRestricted}
+                                onClick={() => {
+                                    if (browsePreviousQuotesRevisions) {
+                                        void saveQuote();
+                                        return;
+                                    }
+                                    void saveQuoteDraft();
+                                }}
+                                disabled={
+                                    browsePreviousQuotesRevisions
+                                        ? disableSaveRevisionInBrowse ||
+                                          saving ||
+                                          !canSaveOrReviseQuote() ||
+                                          !saveButtonScopeReady ||
+                                          hasPersistedQuoteForScope ||
+                                          isEditingRestricted
+                                        : saving ||
+                                          savingDraft ||
+                                          !!quoteId ||
+                                          !isQuoteDraftDirty ||
+                                          !canCollaborateOnQuoteDraft() ||
+                                          isEditingRestricted ||
+                                          !enquiryData?.leadJobPrefix ||
+                                          !hasSelectedCustomer ||
+                                          !saveButtonScopeReady
+                                }
                                 style={{
                                     display: 'flex',
                                     alignItems: 'center',
@@ -22235,31 +24966,100 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     minHeight: '28px',
                                     padding: '0 12px',
                                     boxSizing: 'border-box',
-                                    background: (disableSaveRevisionInBrowse || !canSaveOrReviseQuote() || !saveButtonScopeReady || hasPersistedQuoteForScope || isEditingRestricted) ? '#f1f5f9' : '#1e293b',
-                                    color: (disableSaveRevisionInBrowse || !canSaveOrReviseQuote() || !saveButtonScopeReady || hasPersistedQuoteForScope || isEditingRestricted) ? '#94a3b8' : 'white',
+                                    background: (
+                                        browsePreviousQuotesRevisions
+                                            ? disableSaveRevisionInBrowse ||
+                                              !canSaveOrReviseQuote() ||
+                                              !saveButtonScopeReady ||
+                                              hasPersistedQuoteForScope ||
+                                              isEditingRestricted
+                                            : saving ||
+                                              savingDraft ||
+                                              !!quoteId ||
+                                              !isQuoteDraftDirty ||
+                                              !canCollaborateOnQuoteDraft() ||
+                                              isEditingRestricted ||
+                                              !enquiryData?.leadJobPrefix ||
+                                              !hasSelectedCustomer ||
+                                              !saveButtonScopeReady
+                                    )
+                                        ? '#f1f5f9'
+                                        : '#1e293b',
+                                    color: (
+                                        browsePreviousQuotesRevisions
+                                            ? disableSaveRevisionInBrowse ||
+                                              !canSaveOrReviseQuote() ||
+                                              !saveButtonScopeReady ||
+                                              hasPersistedQuoteForScope ||
+                                              isEditingRestricted
+                                            : saving ||
+                                              savingDraft ||
+                                              !!quoteId ||
+                                              !isQuoteDraftDirty ||
+                                              !canCollaborateOnQuoteDraft() ||
+                                              isEditingRestricted ||
+                                              !enquiryData?.leadJobPrefix ||
+                                              !hasSelectedCustomer ||
+                                              !saveButtonScopeReady
+                                    )
+                                        ? '#94a3b8'
+                                        : 'white',
                                     border: 'none',
                                     borderRadius: '6px',
-                                    cursor: (disableSaveRevisionInBrowse || !canSaveOrReviseQuote() || !saveButtonScopeReady || hasPersistedQuoteForScope || isEditingRestricted) ? 'not-allowed' : 'pointer',
+                                    cursor: (
+                                        browsePreviousQuotesRevisions
+                                            ? disableSaveRevisionInBrowse ||
+                                              !canSaveOrReviseQuote() ||
+                                              !saveButtonScopeReady ||
+                                              hasPersistedQuoteForScope ||
+                                              isEditingRestricted
+                                            : saving ||
+                                              savingDraft ||
+                                              !!quoteId ||
+                                              !isQuoteDraftDirty ||
+                                              !canCollaborateOnQuoteDraft() ||
+                                              isEditingRestricted ||
+                                              !enquiryData?.leadJobPrefix ||
+                                              !hasSelectedCustomer ||
+                                              !saveButtonScopeReady
+                                    )
+                                        ? 'not-allowed'
+                                        : 'pointer',
                                     fontWeight: '600',
                                     fontSize: '11px',
-                                    opacity: saving ? 0.7 : 1,
+                                    opacity: saving || savingDraft ? 0.7 : 1,
                                     flexShrink: 0,
                                 }}
                                 title={
-                                    saving ? 'Saving…' :
-                                    disableSaveRevisionInBrowse ? 'Disable "Previous Quotes / Revisions" to enable Save.' :
-                                    isEditingRestricted ? 'Editing is restricted for this tab' :
-                                    !canSaveOrReviseQuote() ? 'No permission to save (admin/lead access, pricing scope, CC coordinator, or tab ownership required)' :
-                                    !saveButtonScopeReady ? 'Loading quote scope…' :
-                                    hasPersistedQuoteForScope ? 'A quote already exists for this enquiry and customer. Use Revision to change it.' :
-                                    ''
+                                    saving || savingDraft
+                                        ? 'Saving…'
+                                        : browsePreviousQuotesRevisions
+                                          ? disableSaveRevisionInBrowse
+                                              ? 'Disable "Previous Quotes / Revisions" to enable Save.'
+                                              : isEditingRestricted
+                                                ? 'Editing is restricted for this tab'
+                                                : !canSaveOrReviseQuote()
+                                                  ? 'No permission to save'
+                                                  : hasPersistedQuoteForScope
+                                                    ? 'A quote already exists. Use Revision to change it.'
+                                                    : ''
+                                          : quoteId
+                                            ? 'Quote is finalized — use Revision to change it'
+                                            : !isQuoteDraftDirty
+                                              ? 'No unsaved changes'
+                                              : !canCollaborateOnQuoteDraft()
+                                                ? 'No permission to save'
+                                                : approvalRequestSent
+                                                  ? 'Save draft changes (approvers will see the updated draft)'
+                                                  : 'Save quote draft (quote number is created when the final approver approves)'
                                 }
                             >
-                                <Save size={13} /> {saving ? 'Saving...' : 'Save'}
+                                <Save size={13} />{' '}
+                                {saving || savingDraft ? 'Saving...' : 'Save'}
                             </button>
 
-                            {/* Revision Button */}
-                            {hasPersistedQuoteForScope && (
+            {/* Revision is created only on final approval — use Send for Approval instead. */}
+                            {false && hasPersistedQuoteForScope && (
                                 <button
                                     onClick={handleRevise}
                                     disabled={disableSaveRevisionInBrowse || saving || !canSaveOrReviseQuote() || isEditingRestricted || !canRevisePersistedQuote}
@@ -22540,8 +25340,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                             color: '#64748b',
                                                                         }}
                                                                     >
-                                                                        <span style={{ fontWeight: '600', color: '#334155' }}>
-                                                                            BD{' '}
+                                                                            <span style={{ fontWeight: '600', color: '#334155' }}>
+                                                                            {runtimeCurrencySymbol()}{' '}
                                                                             {parseFloat(latest.TotalAmount || 0).toLocaleString(undefined, {
                                                                                 minimumFractionDigits: 3,
                                                                             })}
@@ -22647,7 +25447,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                                 }}
                                                                             >
                                                                                 <span style={{ fontWeight: '600', color: '#334155' }}>
-                                                                                    BD{' '}
+                                                                                    {runtimeCurrencySymbol()}{' '}
                                                                                     {parseFloat(rev.TotalAmount || 0).toLocaleString(undefined, {
                                                                                         minimumFractionDigits: 3,
                                                                                     })}
@@ -22838,7 +25638,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                                     <span>- {item.name}</span>
                                                                                     <span style={{ textAlign: 'right', flexShrink: 0 }}>
                                                                                         <span style={{ whiteSpace: 'nowrap' }}>
-                                                                                            BD{' '}
+                                                                                            {runtimeCurrencySymbol()}{' '}
                                                                                             {item.total.toLocaleString('en-US', {
                                                                                                 minimumFractionDigits: 3,
                                                                                                 maximumFractionDigits: 3,
@@ -22868,7 +25668,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                 <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '2px solid #bbf7d0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                                     <span style={{ fontSize: '11px', fontWeight: '800', color: '#166534' }}>GRAND BASE PRICE TOTAL:</span>
                                                                     <span style={{ fontSize: '12px', fontWeight: '800', color: '#15803d' }}>
-                                                                        BD {pricingRowsDisplay
+                                                                        {runtimeCurrencySymbol()}{' '}
+                                                                        {pricingRowsDisplay
                                                                             .filter((g) =>
                                                                                 pricingRowsForPanel.length > 0
                                                                                     ? jobNameMatchesActiveJobsList(
@@ -23229,6 +26030,66 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         <h4 style={{ margin: 0, fontSize: '13px', color: '#166534', fontWeight: 600 }}>Clause Templates:</h4>
                                     </div>
 
+                                    <div
+                                        role="tablist"
+                                        aria-label="Clause template source"
+                                        style={{
+                                            display: 'flex',
+                                            gap: '4px',
+                                            marginBottom: '10px',
+                                            padding: '3px',
+                                            background: '#dcfce7',
+                                            borderRadius: '6px',
+                                            border: '1px solid #bbf7d0',
+                                        }}
+                                    >
+                                        <button
+                                            type="button"
+                                            role="tab"
+                                            aria-selected={clauseSourceTab === 'stored'}
+                                            onClick={() => setClauseSourceTab('stored')}
+                                            style={{
+                                                flex: 1,
+                                                padding: '6px 8px',
+                                                border: 'none',
+                                                borderRadius: '4px',
+                                                cursor: 'pointer',
+                                                fontSize: '12px',
+                                                fontWeight: 600,
+                                                background: clauseSourceTab === 'stored' ? '#ffffff' : 'transparent',
+                                                color: clauseSourceTab === 'stored' ? '#166534' : '#4b5563',
+                                                boxShadow: clauseSourceTab === 'stored' ? '0 1px 2px rgba(22, 101, 52, 0.12)' : 'none',
+                                            }}
+                                        >
+                                            Stored templates
+                                        </button>
+                                        <button
+                                            type="button"
+                                            role="tab"
+                                            aria-selected={clauseSourceTab === 'prev-revision'}
+                                            onClick={() => setClauseSourceTab('prev-revision')}
+                                            style={{
+                                                flex: 1,
+                                                padding: '6px 8px',
+                                                border: 'none',
+                                                borderRadius: '4px',
+                                                cursor: 'pointer',
+                                                fontSize: '12px',
+                                                fontWeight: 600,
+                                                background: clauseSourceTab === 'prev-revision' ? '#ffffff' : 'transparent',
+                                                color: clauseSourceTab === 'prev-revision' ? '#166534' : '#4b5563',
+                                                boxShadow:
+                                                    clauseSourceTab === 'prev-revision'
+                                                        ? '0 1px 2px rgba(22, 101, 52, 0.12)'
+                                                        : 'none',
+                                            }}
+                                        >
+                                            From Prev revision
+                                        </button>
+                                    </div>
+
+                                    {clauseSourceTab === 'stored' ? (
+                                        <>
                                     {/* Save / update template name + actions */}
                                     <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
                                         <input
@@ -23439,6 +26300,95 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                             <Trash2 size={14} />
                                         </button>
                                     </div>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <p
+                                                style={{
+                                                    margin: '0 0 8px 0',
+                                                    fontSize: '11px',
+                                                    color: '#64748b',
+                                                    lineHeight: 1.35,
+                                                }}
+                                            >
+                                                Pick a saved quote ref from this enquiry to copy its Quote Details (subject, prepared by, attention of, …) and clause content into your new revision.
+                                            </p>
+                                            <div style={{ display: 'flex', gap: '8px' }}>
+                                                <select
+                                                    value={selectedPrevRevisionQuoteId}
+                                                    onChange={(e) => setSelectedPrevRevisionQuoteId(e.target.value)}
+                                                    disabled={prevRevisionQuoteOptions.length === 0}
+                                                    style={{
+                                                        flex: 1,
+                                                        ...QUOTE_LEFT_COMPACT_CONTROL,
+                                                        fontSize: '12px',
+                                                        background: '#ffffff',
+                                                        color: '#0f172a',
+                                                        borderColor: '#86efac',
+                                                    }}
+                                                    title={
+                                                        prevRevisionQuoteOptions.length === 0
+                                                            ? 'No saved quotes for this enquiry yet'
+                                                            : 'Select a previous EnquiryQuotes revision'
+                                                    }
+                                                >
+                                                    <option value="">
+                                                        {prevRevisionQuoteOptions.length === 0
+                                                            ? 'No previous quotes...'
+                                                            : 'Select Quote Ref...'}
+                                                    </option>
+                                                    {prevRevisionQuoteOptions.map((q) => {
+                                                        const id = quoteRowId(q);
+                                                        const qn = String(q.QuoteNumber || q.quoteNumber || '').trim();
+                                                        const rev = Number(q.RevisionNo ?? q.revisionNo ?? 0);
+                                                        const dateLabel = formatQuoteRowListQuoteDate(q);
+                                                        const labelParts = [
+                                                            qn || `Quote #${id}`,
+                                                            !qn.includes('-R') ? `R${rev}` : null,
+                                                            dateLabel || null,
+                                                        ].filter(Boolean);
+                                                        return (
+                                                            <option key={String(id)} value={String(id)}>
+                                                                {labelParts.join(' · ')}
+                                                            </option>
+                                                        );
+                                                    })}
+                                                </select>
+                                                <button
+                                                    type="button"
+                                                    onClick={handleLoadPrevRevisionClauses}
+                                                    disabled={!selectedPrevRevisionQuoteId || browsePreviousQuotesRevisions}
+                                                    style={{
+                                                        padding: '6px 10px',
+                                                        background: selectedPrevRevisionQuoteId && !browsePreviousQuotesRevisions
+                                                            ? '#ffffff'
+                                                            : '#f1f5f9',
+                                                        border: '1px solid #86efac',
+                                                        borderRadius: '4px',
+                                                        cursor:
+                                                            selectedPrevRevisionQuoteId && !browsePreviousQuotesRevisions
+                                                                ? 'pointer'
+                                                                : 'not-allowed',
+                                                        color: '#166534',
+                                                        fontSize: '12px',
+                                                        fontWeight: 600,
+                                                        whiteSpace: 'nowrap',
+                                                        opacity:
+                                                            selectedPrevRevisionQuoteId && !browsePreviousQuotesRevisions
+                                                                ? 1
+                                                                : 0.45,
+                                                    }}
+                                                    title={
+                                                        browsePreviousQuotesRevisions
+                                                            ? 'Turn off Previous Quotes / Revisions to load clauses into a new draft'
+                                                            : 'Load clause content from the selected previous revision'
+                                                    }
+                                                >
+                                                    Load
+                                                </button>
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
 
                                 {/* Clause Checkboxes */}
@@ -23835,21 +26785,27 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     canEditHierarchy={
                                         embeddedApprovalReview
                                             ? false
-                                            : quoteModuleApprovalWorkflowEnabled && canEdit()
+                                            : quoteModuleApprovalWorkflowEnabled &&
+                                              canEdit() &&
+                                              !browsePreviousQuotesRevisions
                                     }
                                     approvalPathLocked={
                                         embeddedApprovalReview
                                             ? true
-                                            : approvalRequestSent
+                                            : approvalRequestSent || !!quoteId
                                     }
                                     quoteId={
                                         embeddedApprovalReview
                                             ? approvalWorkflowQuoteId
-                                            : quoteModuleApprovalWorkflowEnabled
-                                              ? quoteId
-                                              : null
+                                            : quoteId || null
                                     }
-                                    draftQuoteId={null}
+                                    draftQuoteId={
+                                        embeddedApprovalReview
+                                            ? approvalWorkflowDraftId
+                                            : browsePreviousQuotesRevisions
+                                              ? null
+                                              : approvalWorkflowDraftId
+                                    }
                                     currentUserEmail={
                                         currentUser?.EmailId ||
                                         currentUser?.email ||
@@ -23858,13 +26814,54 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     }
                                     currentUserName={currentUser?.FullName || currentUser?.name || ''}
                                     apiBase={API_BASE}
-                                    onStepsUpdated={(steps) => {
+                                    onStepsUpdated={(steps, meta) => {
+                                        if (meta?.action === 'rollback') {
+                                            if (
+                                                embeddedApprovalReview &&
+                                                typeof onApprovalActionComplete === 'function'
+                                            ) {
+                                                onApprovalActionComplete(meta);
+                                            }
+                                            return;
+                                        }
+                                        if (
+                                            Array.isArray(steps) &&
+                                            steps.some((s) => String(s.status || '').toLowerCase() === 'rejected')
+                                        ) {
+                                            setApprovalRequestSent(false);
+                                        }
                                         if (
                                             embeddedApprovalReview &&
                                             typeof onApprovalActionComplete === 'function' &&
-                                            steps.some((s) => s.status === 'approved' || s.status === 'rejected')
+                                            Array.isArray(steps) &&
+                                            steps.some(
+                                                (s) =>
+                                                    s.status === 'approved' || s.status === 'rejected'
+                                            ) &&
+                                            (meta?.action === 'approved' ||
+                                                meta?.action === 'rejected' ||
+                                                meta?.optimistic)
                                         ) {
-                                            onApprovalActionComplete();
+                                            onApprovalActionComplete({
+                                                action: meta?.action || 'approved',
+                                                quoteId:
+                                                    meta?.quoteId ||
+                                                    quoteId ||
+                                                    null,
+                                                draftQuoteId:
+                                                    meta?.draftQuoteId ||
+                                                    approvalWorkflowDraftId ||
+                                                    quoteDraftId ||
+                                                    null,
+                                                quoteFinalized: !!meta?.quoteFinalized,
+                                                optimistic: !!meta?.optimistic,
+                                                requestNo: String(
+                                                    enquiryData?.enquiry?.RequestNo ||
+                                                        searchTerm ||
+                                                        ''
+                                                ).trim(),
+                                                quoteNumber: String(quoteNumber || '').trim(),
+                                            });
                                         }
                                     }}
                                     enquiryNo={String(enquiryData?.enquiry?.RequestNo || searchTerm || '').trim()}
@@ -23887,18 +26884,28 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     })()}
                                     quoteNumber={String(quoteNumber || '').trim()}
                                     onApprovalSent={(data) => {
-                                        if (data?.approvalRequestSent) {
+                                        if (data?.correctionRequired || data?.approvalUnlocked) {
+                                            setApprovalRequestSent(false);
+                                        } else if (data?.approvalRequestSent) {
                                             setApprovalRequestSent(true);
                                         }
-                                        if (embeddedApprovalReview && data?.draftQuoteId && !quoteDraftId) {
+                                        if (data?.draftQuoteId && !quoteDraftId) {
                                             setQuoteDraftId(Number(data.draftQuoteId));
                                         }
-                                        if (data?.quoteId && !quoteId) {
+                                        if (data?.quoteId) {
                                             setQuoteId(Number(data.quoteId));
+                                            if (data.quoteNumber) {
+                                                setQuoteNumber(String(data.quoteNumber));
+                                            }
+                                            setApprovalRequestSent(true);
+                                        }
+                                        if (data?.quoteFinalized || data?.editLocked) {
+                                            setApprovalRequestSent(true);
                                         }
                                         approvalStepsSkipSaveRef.current = true;
                                         void fetchApprovalStepsFromServer();
                                     }}
+                                    beforeSendApproval={prepareQuoteDraftForApprovalSend}
                                 />
 
                                 <div
@@ -23920,38 +26927,19 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     }}
                                 >
                                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0 }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#475569', fontSize: '13px', fontWeight: '600' }}>
-                                            <Paperclip size={18} className="text-blue-500" />
-                                            <span>Attachments {quoteAttachments.length > 0 && `(${quoteAttachments.length})`}</span>
-                                        </div>
-                                        <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: 'normal', lineHeight: 1.4 }}>
-                                            Click &quot;Add Files&quot; or <span style={{ color: '#3b82f6', fontWeight: '500' }}>Paste (Ctrl+V)</span> —{' '}
-                                            <span style={{ color: '#10b981', fontWeight: '600' }}>{quoteId ? 'Ready' : 'Pending Save'}</span>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#475569', fontSize: '13px', fontWeight: '600' }}>
+                                        <Paperclip size={18} className="text-blue-500" />
+                                        <span>
+                                            Attachments{' '}
+                                            {(quoteAttachments.length > 0 || pendingFiles.length > 0) &&
+                                                `(${
+                                                    (quoteAttachments || []).filter((a) =>
+                                                        canViewQuotePrivateAttachment(a)
+                                                    ).length + pendingFiles.length
+                                                })`}
                                         </span>
                                     </div>
-                                    <button
-                                        type="button"
-                                            onClick={() => fileInputRef.current?.click()}
-                                            disabled={embeddedApprovalReview}
-                                            style={{
-                                                fontSize: '11px',
-                                                color: embeddedApprovalReview ? '#94a3b8' : '#3b82f6',
-                                                background: 'white',
-                                                border: `1px solid ${embeddedApprovalReview ? '#cbd5e1' : '#3b82f6'}`,
-                                            padding: '4px 10px',
-                                                borderRadius: '4px',
-                                                cursor: embeddedApprovalReview ? 'not-allowed' : 'pointer',
-                                                fontWeight: '600',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                            gap: '4px',
-                                            flexShrink: 0,
-                                            }}
-                                        >
-                                            <Plus size={14} /> Add Files
-                                        </button>
-                                    </div>
+                                </div>
                                 {quoteEmailDraftHref && (
                                     <div style={{ fontSize: '11px', color: '#475569', lineHeight: 1.45 }}>
                                         <div style={{ color: '#334155', marginBottom: '4px' }}>
@@ -23970,144 +26958,100 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         </div>
                                     </div>
                                 )}
-                                    <input
-                                        type="file"
-                                        multiple
-                                        ref={fileInputRef}
-                                        onChange={(e) => uploadFiles(e.target.files)}
-                                        style={{ display: 'none' }}
-                                    />
+                                <input
+                                    type="file"
+                                    multiple
+                                    ref={publicFileInputRef}
+                                    onChange={(e) => {
+                                        uploadFiles(e.target.files, undefined, { visibility: 'Public' });
+                                        e.target.value = '';
+                                    }}
+                                    style={{ display: 'none' }}
+                                />
+                                <input
+                                    type="file"
+                                    multiple
+                                    ref={privateFileInputRef}
+                                    onChange={(e) => {
+                                        uploadFiles(e.target.files, undefined, { visibility: 'Private' });
+                                        e.target.value = '';
+                                    }}
+                                    style={{ display: 'none' }}
+                                />
 
-                                {(quoteAttachments.length > 0 || pendingFiles.length > 0) ? (
-                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
-                                        {pendingFiles.map((file, idx) => (
-                                            <div
-                                                key={`pending-${idx}`}
-                                                className="attachment-card"
-                                                style={{
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '10px',
-                                                    padding: '8px 12px',
-                                                    background: '#fff7ed', // Orange tint for pending
-                                                    border: '1px dashed #f97316',
-                                                    borderRadius: '6px',
-                                                    width: '240px',
-                                                    maxWidth: '240px',
-                                                    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                                                    transition: 'all 0.2s',
-                                                    position: 'relative'
-                                                }}
-                                            >
-                                                <div style={{
-                                                    width: '32px',
-                                                    height: '32px',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    justifyContent: 'center',
-                                                    background: '#ffedd5',
-                                                    borderRadius: '4px',
-                                                    color: '#f97316'
-                                                }}>
-                                                    <FileText size={18} />
-                                                </div>
-                                                <div style={{ flex: 1, overflow: 'hidden' }}>
-                                                    <div style={{ fontSize: '12px', fontWeight: '600', color: '#1e293b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={file.name}>
-                                                        {file.name}
-                                                    </div>
-                                                    <div style={{ fontSize: '10px', color: '#f97316', fontWeight: '600' }}>
-                                                        Pending Save...
-                                                    </div>
-                                                </div>
-                                                <div style={{ display: 'flex', gap: '2px' }}>
-                                                    <button
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            setPendingFiles(prev => prev.filter((_, i) => i !== idx));
-                                                        }}
-                                                        style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px', borderRadius: '4px' }}
-                                                        title="Remove"
-                                                    >
-                                                        <X size={14} />
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
+                                {/* 1. Public Attachments */}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#1d4ed8' }}>
+                                            1. Public Attachments{' '}
+                                            <span style={{ fontWeight: 500, color: '#64748b', fontSize: '11px' }}>
+                                                (Visible to all assigned users - Own Division + Other division members in this enquiry)
+                                            </span>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setPreferredAttachmentVisibility('Public');
+                                                publicFileInputRef.current?.click();
+                                            }}
+                                            disabled={embeddedApprovalReview}
+                                            style={{
+                                                fontSize: '11px',
+                                                color: embeddedApprovalReview ? '#94a3b8' : '#2563eb',
+                                                background: 'white',
+                                                border: `1px solid ${embeddedApprovalReview ? '#cbd5e1' : '#2563eb'}`,
+                                                padding: '4px 10px',
+                                                borderRadius: '4px',
+                                                cursor: embeddedApprovalReview ? 'not-allowed' : 'pointer',
+                                                fontWeight: '600',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '4px',
+                                                flexShrink: 0,
+                                            }}
+                                        >
+                                            <Plus size={14} /> Add Files
+                                        </button>
+                                    </div>
+                                    {renderQuoteAttachmentCards('Public')}
+                                </div>
 
-                                        {quoteAttachments.map(att => (
-                                            <div
-                                                key={att.ID}
-                                                className="attachment-card"
-                                                style={{
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '10px',
-                                                    padding: '8px 12px',
-                                                    background: 'white',
-                                                    border: '1px solid #e2e8f0',
-                                                    borderRadius: '6px',
-                                                    width: '240px',
-                                                    maxWidth: '240px',
-                                                    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
-                                                    transition: 'all 0.2s',
-                                                    position: 'relative',
-                                                    group: 'true'
-                                                }}
-                                            >
-                                                <div style={{
-                                                    width: '32px',
-                                                    height: '32px',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    justifyContent: 'center',
-                                                    background: att.FileName.toLowerCase().endsWith('.pdf') ? '#fee2e2' : '#e0f2fe',
-                                                    borderRadius: '4px',
-                                                    color: att.FileName.toLowerCase().endsWith('.pdf') ? '#ef4444' : '#3b82f6'
-                                                }}>
-                                                    <FileText size={18} />
-                                                </div>
-                                                <div style={{ flex: 1, overflow: 'hidden' }}>
-                                                    <div style={{ fontSize: '12px', fontWeight: '600', color: '#1e293b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={att.FileName}>
-                                                        {att.FileName}
-                                                    </div>
-                                                    <div style={{ fontSize: '10px', color: '#94a3b8' }}>
-                                                        {format(new Date(att.UploadedAt), 'dd MMM, HH:mm')}
-                                                    </div>
-                                                </div>
-                                                <div style={{ display: 'flex', gap: '2px' }}>
-                                                    <button
-                                                        onClick={() => handleDownloadAttachment(att.ID, att.FileName)}
-                                                        style={{ background: 'transparent', border: 'none', color: '#64748b', cursor: 'pointer', padding: '4px', borderRadius: '4px' }}
-                                                        title="Download"
-                                                        onMouseOver={(e) => e.currentTarget.style.background = '#f1f5f9'}
-                                                        onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
-                                                    >
-                                                        <Download size={14} />
-                                                    </button>
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.ID); }}
-                                                        style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px', borderRadius: '4px' }}
-                                                        title="Remove"
-                                                    >
-                                                        <X size={14} />
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
+                                {/* 2. Private Attachments */}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
+                                        <div style={{ fontSize: '12px', fontWeight: 700, color: '#b91c1c' }}>
+                                            2. Private Attachments{' '}
+                                            <span style={{ fontWeight: 500, color: '#64748b', fontSize: '11px' }}>
+                                                (Your division members assigned in this enquiry + your managers only)
+                                            </span>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setPreferredAttachmentVisibility('Private');
+                                                privateFileInputRef.current?.click();
+                                            }}
+                                            disabled={embeddedApprovalReview}
+                                            style={{
+                                                fontSize: '11px',
+                                                color: embeddedApprovalReview ? '#94a3b8' : '#dc2626',
+                                                background: 'white',
+                                                border: `1px solid ${embeddedApprovalReview ? '#cbd5e1' : '#dc2626'}`,
+                                                padding: '4px 10px',
+                                                borderRadius: '4px',
+                                                cursor: embeddedApprovalReview ? 'not-allowed' : 'pointer',
+                                                fontWeight: '600',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '4px',
+                                                flexShrink: 0,
+                                            }}
+                                        >
+                                            <Plus size={14} /> Add Files
+                                        </button>
                                     </div>
-                                ) : (
-                                    <div style={{
-                                        border: '1px dashed #cbd5e1',
-                                        borderRadius: '6px',
-                                        padding: embeddedApprovalReview ? '10px' : '12px',
-                                        textAlign: 'center',
-                                        fontSize: embeddedApprovalReview ? '11px' : '12px',
-                                        color: '#94a3b8',
-                                        background: '#ffffff'
-                                    }}>
-                                        {quoteId ? "No attachments yet. Paste files here or Click 'Add Files' to attach documents." : "Start adding attachments anytime. They will be uploaded when you Save."}
-                                    </div>
-                                )}
+                                    {renderQuoteAttachmentCards('Private')}
+                                </div>
 
                                 {isUploading && (
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: '#3b82f6', fontWeight: '500' }}>
@@ -24184,8 +27128,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             >
                                 <div className="quote-print-repeat-strip" aria-hidden="true">
                                     <div style={{ display: 'flex', alignItems: 'center', width: '100%', justifyContent: 'flex-end' }}>
-                                        {quoteLogoDisplaySrc ? (
-                                            <img src={quoteLogoDisplaySrc} alt="" style={{ height: '68px', width: 'auto', maxWidth: '212px', objectFit: 'contain' }} />
+                                        {quoteLogoCandidateRaws?.length ? (
+                                            <QuoteHeaderLogo candidates={quoteLogoCandidateRaws} />
                                         ) : null}
                                     </div>
                                 </div>
@@ -25455,7 +28399,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         line-height: 1.45 !important;
                                         color: #0f172a;
                                     }
-                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]) {
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]):not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]) {
                                         max-width: 100% !important;
                                         width: 100% !important;
                                         table-layout: fixed;
@@ -26148,7 +29092,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         list-style-type: decimal !important;
                                     }
                                     ${CLAUSE_LIST_STYLES_CSS}
-                                    #quote-preview .clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]) {
+                                    #quote-preview .clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]):not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]) {
                                         margin-top: 4px !important;
                                         margin-bottom: 4px !important;
                                         border-collapse: collapse !important;
@@ -26167,8 +29111,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     #quote-preview .clause-content > table + table {
                                         margin-top: 0 !important;
                                     }
-                                    #quote-preview .clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]) th,
-                                    #quote-preview .clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]) td {
+                                    #quote-preview .clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]):not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) th,
+                                    #quote-preview .clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]):not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]) td {
                                         vertical-align: top !important;
                                         word-wrap: break-word !important;
                                         overflow-wrap: anywhere !important;
@@ -26182,37 +29126,64 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     ${EMS_QUOTE_PRICING_TABLE_PRESENTATION_CSS}
                                     ${EMS_QUOTE_PRICING_TABLE_COMPACT_ROW_CSS}
                                     #quote-preview .quote-clause-heading-panel + .clause-content > table#ems-auto-price-summary-table:first-child,
-                                    #quote-preview .clause-content > table#ems-auto-price-summary-table:first-child {
+                                    #quote-preview .clause-content > table#ems-auto-price-summary-table:first-child,
+                                    #quote-preview .clause-content > table[id^="ems-auto-price-summary-table"],
+                                    #quote-preview .clause-content > table[data-ems-pricing-cols="fixed"],
+                                    #quote-preview .clause-content table#ems-auto-price-summary-table,
+                                    #quote-preview .clause-content table[id^="ems-auto-price-summary-table"],
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"] {
                                         margin-top: ${EMS_QUOTE_PRICING_TABLE_MARGIN_TOP} !important;
                                         border: ${EMS_QUOTE_PRICING_TABLE_OUTER_BORDER} !important;
                                         border-collapse: collapse !important;
                                         width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
                                         max-width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
+                                        table-layout: fixed !important;
+                                        box-sizing: border-box !important;
                                     }
                                     #quote-preview .clause-content table#ems-auto-price-summary-table th,
-                                    #quote-preview .clause-content table#ems-auto-price-summary-table td {
+                                    #quote-preview .clause-content table#ems-auto-price-summary-table td,
+                                    #quote-preview .clause-content table[id^="ems-auto-price-summary-table"] th,
+                                    #quote-preview .clause-content table[id^="ems-auto-price-summary-table"] td,
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"] th,
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"] td {
                                         border: ${EMS_QUOTE_PRICING_TABLE_CELL_BORDER} !important;
                                         font-size: 11px !important;
                                     }
-                                    #quote-preview .clause-content table#ems-auto-price-summary-table thead th {
+                                    #quote-preview .clause-content table#ems-auto-price-summary-table thead th,
+                                    #quote-preview .clause-content table[id^="ems-auto-price-summary-table"] thead th,
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"] thead th {
                                         background: ${EMS_QUOTE_PRICING_TABLE_HEADER_BG} !important;
                                         color: ${EMS_QUOTE_PRICING_TABLE_HEADER_COLOR} !important;
                                         font-weight: 600 !important;
                                         border: ${EMS_QUOTE_PRICING_TABLE_HEAD_CELL_BORDER} !important;
                                     }
-                                    #quote-preview .clause-content table#ems-auto-price-summary-table tbody td {
+                                    #quote-preview .clause-content table#ems-auto-price-summary-table tbody td,
+                                    #quote-preview .clause-content table[id^="ems-auto-price-summary-table"] tbody td,
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"] tbody td {
                                         color: #0f172a !important;
                                     }
                                     #quote-preview .clause-content table#ems-auto-price-summary-table tr[data-ems-row="total"] td,
                                     #quote-preview .clause-content table#ems-auto-price-summary-table tr[data-ems-row="vat"] td,
                                     #quote-preview .clause-content table#ems-auto-price-summary-table tr[data-ems-row="grand-vat"] td,
-                                    #quote-preview .clause-content table#ems-auto-price-summary-table tr[data-ems-row="grand"] td {
+                                    #quote-preview .clause-content table#ems-auto-price-summary-table tr[data-ems-row="grand"] td,
+                                    #quote-preview .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="total"] td,
+                                    #quote-preview .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="vat"] td,
+                                    #quote-preview .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand-vat"] td,
+                                    #quote-preview .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand"] td,
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="total"] td,
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="vat"] td,
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand-vat"] td,
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand"] td {
                                         background: ${EMS_QUOTE_PRICING_TABLE_TOTAL_BG} !important;
                                         font-weight: 700 !important;
                                         border-top: 1px solid #94a3b8 !important;
                                     }
                                     #quote-preview .clause-content table#ems-auto-price-summary-table tr[data-ems-row="discount"] td,
-                                    #quote-preview .clause-content table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td {
+                                    #quote-preview .clause-content table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td,
+                                    #quote-preview .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="discount"] td,
+                                    #quote-preview .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="final-discounted"] td,
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="discount"] td,
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="final-discounted"] td {
                                         background: ${EMS_QUOTE_PRICING_TABLE_DISCOUNT_BG} !important;
                                         font-weight: 700 !important;
                                         border-top: 1px solid #94a3b8 !important;
@@ -26621,8 +29592,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                             {!sheetHasEditingBlock ? (
                                             <div className="quote-sheet-logo-row" style={{ width: '100%' }}>
                                                 <div style={{ textAlign: 'right', width: '100%' }}>
-                                                    {quoteLogoDisplaySrc ? (
-                                                        <img src={quoteLogoDisplaySrc} alt="" style={{ height: '68px', width: 'auto', maxWidth: '212px', objectFit: 'contain' }} />
+                                                    {quoteLogoCandidateRaws?.length ? (
+                                                        <QuoteHeaderLogo candidates={quoteLogoCandidateRaws} />
                                                     ) : null}
                                                 </div>
                                             </div>

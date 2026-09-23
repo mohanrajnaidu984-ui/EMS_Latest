@@ -67,6 +67,9 @@ const DashboardFilters = ({ filters, setFilters, masters, viewMode = 'all' }) =>
               ? filters.salesEngineer
               : regularUserSeOptions[0];
 
+    const canPickDivision = isCoordinator || regularUserDivisionOptions.length > 1;
+    const canPickSe = isCoordinator;
+
     const commonSelectStyle = (enabled) => ({
         fontWeight: 500,
         borderRadius: '4px',
@@ -90,14 +93,14 @@ const DashboardFilters = ({ filters, setFilters, masters, viewMode = 'all' }) =>
                 <div style={{ width: '38%' }}>
                     <select
                         className="form-select shadow-none dashboard-filter-select"
-                        style={commonSelectStyle(isCoordinator)}
+                        style={commonSelectStyle(canPickDivision)}
                         value={divisionValue}
                         onChange={(e) => setFilters(prev => ({
                             ...prev,
                             division: e.target.value,
                             salesEngineer: 'All'
                         }))}
-                        disabled={!isCoordinator}
+                        disabled={!canPickDivision}
                     >
                         {showAllDivisionsOption ? <option value="All">All Divisions</option> : null}
                         {divisionOptions.map((div, idx) => (
@@ -108,10 +111,10 @@ const DashboardFilters = ({ filters, setFilters, masters, viewMode = 'all' }) =>
                 <div style={{ width: '38%' }}>
                     <select
                         className="form-select shadow-none dashboard-filter-select"
-                        style={commonSelectStyle(isCoordinator)}
+                        style={commonSelectStyle(canPickSe)}
                         value={seValue}
                         onChange={(e) => setFilters(prev => ({ ...prev, salesEngineer: e.target.value }))}
-                        disabled={!isCoordinator}
+                        disabled={!canPickSe}
                     >
                         {isCoordinator ? <option value="All">All SEs</option> : null}
                         {seOptions && seOptions.map((se, idx) => (
@@ -146,14 +149,14 @@ const DashboardFilters = ({ filters, setFilters, masters, viewMode = 'all' }) =>
                     {/* When CC user, only show DepartmentName (fallback to 'All' if missing). */}
                     <select
                         className="form-select border-0 shadow-sm bg-white py-2 dashboard-filter-select"
-                        style={commonSelectStyle(isCoordinator)}
+                        style={commonSelectStyle(canPickDivision)}
                         value={lockedDivisionValue}
                         onChange={(e) => setFilters(prev => ({
                             ...prev,
                             division: e.target.value,
                             salesEngineer: 'All'
                         }))}
-                        disabled={!isCoordinator}
+                        disabled={!canPickDivision}
                     >
                         {showAllDivisionsOption ? <option value="All">All Divisions</option> : null}
                         {regularUserDivisionOptions.map((div, idx) => (
@@ -167,10 +170,10 @@ const DashboardFilters = ({ filters, setFilters, masters, viewMode = 'all' }) =>
                     <label className="form-label small fw-bold text-muted text-uppercase" style={{ fontSize: '0.7rem' }}>Sales Engineer</label>
                     <select
                         className="form-select border-0 shadow-sm bg-white py-2 dashboard-filter-select"
-                        style={commonSelectStyle(isCoordinator)}
+                        style={commonSelectStyle(canPickSe)}
                         value={lockedSeValue}
                         onChange={(e) => setFilters(prev => ({ ...prev, salesEngineer: e.target.value }))}
-                        disabled={!isCoordinator}
+                        disabled={!canPickSe}
                     >
                         {isCoordinator ? <option value="All">All Sales Engineers</option> : null}
                         {(isCoordinator ? dashboardSeOptions : regularUserSeOptions).map((se, idx) => (

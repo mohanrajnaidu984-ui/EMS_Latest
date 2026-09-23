@@ -2,6 +2,13 @@
 const express = require('express');
 const router = express.Router();
 const { sql } = require('../dbConfig');
+const { enrichProbabilityListRows } = require('../lib/mapProbabilityListingRows');
+const { normEmail } = require('../lib/probabilityAccess');
+const {
+    parseUserDepartments,
+    formatUserDepartments,
+    userHasManagementDepartment,
+} = require('../lib/userDepartments');
 
 // --- Helper: Format RequestNo for SQL LIKE if needed, or simple exact match ---
 const normalizeUserEmail = (email) =>
@@ -11,6 +18,27 @@ const normalizeUserEmail = (email) =>
         .trim()
         .replace(/@almcg\.com$/i, '@almoayyedcg.com');
 const norm = (s) => (s || '').toString().trim().toLowerCase();
+const sqlEscapeN = (s) => String(s || '').replace(/'/g, "''");
+
+/**
+ * SQL OR of UPPER(LTRIM(RTRIM(expr))) = token for each CSV division (multi-select).
+ * @param {string} divisionCsv
+ * @param {...string} exprs column expressions
+ */
+function buildProbDivisionMatchOrSql(divisionCsv, ...exprs) {
+    const tokens = parseUserDepartments(divisionCsv);
+    if (!tokens.length || !exprs.length) return '1=0';
+    return tokens
+        .map((tok) => {
+            const e = sqlEscapeN(tok);
+            const parts = exprs.map(
+                (expr) =>
+                    `UPPER(LTRIM(RTRIM(ISNULL(${expr}, '')))) = UPPER(LTRIM(RTRIM(N'${e}')))`
+            );
+            return `(${parts.join(' OR ')})`;
+        })
+        .join('\n            OR ');
+}
 let probabilityTableReady = false;
 
 const resolveCurrentUser = async (userEmail) => {
@@ -69,7 +97,7 @@ const resolveProbabilityDivisionScope = async (userEmail, requestedDivision = ''
     const nonCcDepartment = String(baseUser.Department || '').trim();
     const roleStr = String(baseUser.Roles || '').toLowerCase();
     const isAdmin = roleStr.includes('admin') || roleStr.includes('system');
-    const isManagementDept = nonCcDepartment.toLowerCase() === 'management';
+    const isManagementDept = userHasManagementDepartment(nonCcDepartment);
     const isCcUser = ccDivisions.length > 0 || isManagementDept || isAdmin;
     const isKnownProfileUser = !!String(baseUser.FullName || '').trim() || !!nonCcDepartment;
     if (!isKnownProfileUser && !isCcUser) return null;
@@ -90,20 +118,26 @@ const resolveProbabilityDivisionScope = async (userEmail, requestedDivision = ''
             divisions = ccDivisions;
         }
     } else {
-        divisions = nonCcDepartment ? [nonCcDepartment] : [];
+        divisions = parseUserDepartments(nonCcDepartment);
     }
     if (!divisions.length) return null;
 
-    const reqDiv = String(requestedDivision || '').trim();
-    const reqDivNorm = norm(reqDiv);
-    const matchedRequestedDivision = reqDiv && divisions.find((d) => norm(d) === reqDivNorm);
-    const chosenDivision = reqDiv ? (matchedRequestedDivision || '') : divisions[0];
+    const requestedTokens = parseUserDepartments(requestedDivision);
+    let selectedDivisions;
+    if (requestedTokens.length) {
+        selectedDivisions = divisions.filter((d) =>
+            requestedTokens.some((t) => norm(t) === norm(d))
+        );
+    } else {
+        // Empty = all accessible divisions (list "All divisions").
+        selectedDivisions = [...divisions];
+    }
+    if (!selectedDivisions.length) return null;
+
+    const chosenDivision = selectedDivisions[0];
+    const divisionCsv = formatUserDepartments(selectedDivisions);
     // Enforce strict own-job division from dropdown only (no fuzzy fallback).
     const ownJobDivision = chosenDivision;
-
-    if (!chosenDivision) {
-        return null;
-    }
 
     return {
         email: normalizedEmail,
@@ -111,6 +145,8 @@ const resolveProbabilityDivisionScope = async (userEmail, requestedDivision = ''
         roles: String(baseUser.Roles || '').trim(),
         isCcUser,
         divisions,
+        selectedDivisions,
+        divisionCsv,
         division: chosenDivision,
         ownJobDivision,
     };
@@ -136,6 +172,24 @@ const hasEnquiryDivisionAccess = async (requestNo, division) => {
           )
     `);
     return (result.recordset?.length || 0) > 0;
+};
+
+/** Prefer requested/single division; else first selected division with enquiry access. */
+const resolveScopeDivisionForEnquiry = async (scope, requestNo) => {
+    if (!scope) return '';
+    const preferred = String(scope.ownJobDivision || scope.division || '').trim();
+    if (preferred && (await hasEnquiryDivisionAccess(requestNo, preferred))) {
+        return preferred;
+    }
+    const candidates = Array.isArray(scope.selectedDivisions)
+        ? scope.selectedDivisions
+        : parseUserDepartments(scope.divisionCsv || preferred);
+    for (const d of candidates) {
+        const label = String(d || '').trim();
+        if (!label || norm(label) === norm(preferred)) continue;
+        if (await hasEnquiryDivisionAccess(requestNo, label)) return label;
+    }
+    return preferred;
 };
 
 const ensureProbabilityTable = async () => {
@@ -218,7 +272,7 @@ const fetchQuoteRowByQuoteNumber = async (quoteNumber) => {
 const parseMoneyToDecimalString = (value) => {
     const raw = String(value ?? '')
         .replace(/,/g, '')
-        .replace(/BD/gi, '')
+        .replace(/\b(BHD|AED|SAR|USD|EUR|GBP|KWD|OMR|QAR|BD|KD)\b/gi, '')
         .trim();
     if (!raw) return '';
     const n = Number(raw);
@@ -306,7 +360,7 @@ const insertProbabilityHistory = async ({
     const isWon = statusStr === 'Won';
     const rawWonVal = String(wonDetails?.orderValue || '')
         .replace(/,/g, '')
-        .replace(/BD/gi, '')
+        .replace(/\b(BHD|AED|SAR|USD|EUR|GBP|KWD|OMR|QAR|BD|KD)\b/gi, '')
         .trim();
     const wonNum = rawWonVal === '' ? NaN : parseFloat(rawWonVal);
     const wonBookedOk = isWon && Number.isFinite(wonNum) && wonNum > 0;
@@ -374,6 +428,49 @@ const hasProbabilityAccess = async (requestNo, userEmail) => {
     return (accessRes.recordset?.length || 0) > 0;
 };
 
+/** User is in CommonMailIds or CCMailIds for the enquiry job in the selected division. */
+const hasProbabilityMailAccessForEnquiry = async (requestNo, userEmail, division) => {
+    const email = normEmail(userEmail);
+    if (!email) return false;
+
+    const accessReq = new sql.Request();
+    accessReq.input('requestNo', sql.NVarChar, String(requestNo || '').trim());
+    accessReq.input('division', sql.NVarChar, String(division || '').trim());
+    accessReq.input('userEmail', sql.NVarChar, email);
+    const accessRes = await accessReq.query(`
+        SELECT TOP 1 1 AS ok
+        FROM EnquiryFor efAssign
+        JOIN Master_EnquiryFor mefAssign
+          ON UPPER(LTRIM(RTRIM(ISNULL(efAssign.ItemName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(mefAssign.ItemName, ''))))
+        WHERE LTRIM(RTRIM(ISNULL(efAssign.RequestNo, ''))) = LTRIM(RTRIM(ISNULL(@requestNo, '')))
+          AND (
+                UPPER(LTRIM(RTRIM(ISNULL(mefAssign.DepartmentName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
+                OR UPPER(LTRIM(RTRIM(ISNULL(mefAssign.ItemName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
+          )
+          AND (
+                CHARINDEX(
+                    ',' + LTRIM(RTRIM(UPPER(@userEmail))) + ',',
+                    ',' + REPLACE(REPLACE(ISNULL(UPPER(mefAssign.CommonMailIds), ''), ' ', ''), ';', ',') + ','
+                ) > 0
+                OR CHARINDEX(
+                    ',' + LTRIM(RTRIM(UPPER(@userEmail))) + ',',
+                    ',' + REPLACE(REPLACE(ISNULL(UPPER(mefAssign.CCMailIds), ''), ' ', ''), ';', ',') + ','
+                ) > 0
+          )
+    `);
+    return (accessRes.recordset?.length || 0) > 0;
+};
+
+const canUserUpdateProbability = async (requestNo, userEmail, division, scope) => {
+    const div = String(division || scope?.division || '').trim();
+    if (!div) return false;
+    if (!(await hasEnquiryDivisionAccess(requestNo, div))) return false;
+    if (scope?.isCcUser) return true;
+    if (await hasProbabilityAccess(requestNo, userEmail)) return true;
+    if (await hasProbabilityMailAccessForEnquiry(requestNo, userEmail, div)) return true;
+    return false;
+};
+
 /** At least one saved quote for this enquiry in the selected division (quote number carries division code). */
 function probabilityDivisionQuoteExistsSql() {
     return `
@@ -404,12 +501,75 @@ function probabilityPendingLikeStatusSql() {
     )`;
 }
 
+/** Enquiries with at least one job or quote in the selected division(s) (list scope CTE). */
+function probabilityListDivisionCteSql(divisionCsv) {
+    const mefDivMatch = buildProbDivisionMatchOrSql(
+        divisionCsv,
+        'mefDiv.DepartmentName',
+        'mefDiv.ItemName'
+    );
+    const mefDivQMatch = buildProbDivisionMatchOrSql(
+        divisionCsv,
+        'mefDivQ.DepartmentName',
+        'mefDivQ.ItemName'
+    );
+    return `
+;WITH ProbDivisionEnquiries AS (
+    SELECT DISTINCT LTRIM(RTRIM(ISNULL(efDiv.RequestNo, ''))) AS RequestNo
+    FROM EnquiryFor efDiv
+    INNER JOIN Master_EnquiryFor mefDiv
+      ON UPPER(LTRIM(RTRIM(ISNULL(efDiv.ItemName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(mefDiv.ItemName, ''))))
+    WHERE LTRIM(RTRIM(ISNULL(efDiv.RequestNo, ''))) <> ''
+      AND (
+            ${mefDivMatch}
+      )
+    UNION
+    SELECT DISTINCT LTRIM(RTRIM(ISNULL(qDiv.RequestNo, ''))) AS RequestNo
+    FROM EnquiryQuotes qDiv
+    INNER JOIN Master_EnquiryFor mefDivQ
+      ON (
+        ${mefDivQMatch}
+      )
+    WHERE LTRIM(RTRIM(ISNULL(qDiv.RequestNo, ''))) <> ''
+      AND LTRIM(RTRIM(ISNULL(mefDivQ.DivisionCode, ''))) <> ''
+      AND (
+            CHARINDEX('/' + UPPER(LTRIM(RTRIM(ISNULL(mefDivQ.DivisionCode, '')))) + '/', UPPER(ISNULL(qDiv.QuoteNumber, ''))) > 0
+            OR CHARINDEX('-' + UPPER(LTRIM(RTRIM(ISNULL(mefDivQ.DivisionCode, '')))) + '/', UPPER(ISNULL(qDiv.QuoteNumber, ''))) > 0
+            OR CHARINDEX('/' + UPPER(LTRIM(RTRIM(ISNULL(mefDivQ.DivisionCode, '')))) + '-', UPPER(ISNULL(qDiv.QuoteNumber, ''))) > 0
+      )
+),
+ProbDivisionQuoted AS (
+    SELECT DISTINCT LTRIM(RTRIM(ISNULL(qDiv.RequestNo, ''))) AS RequestNo
+    FROM EnquiryQuotes qDiv
+    INNER JOIN Master_EnquiryFor mefDivQ
+      ON (
+        ${mefDivQMatch}
+      )
+    WHERE LTRIM(RTRIM(ISNULL(qDiv.RequestNo, ''))) <> ''
+      AND LTRIM(RTRIM(ISNULL(mefDivQ.DivisionCode, ''))) <> ''
+      AND (
+            CHARINDEX('/' + UPPER(LTRIM(RTRIM(ISNULL(mefDivQ.DivisionCode, '')))) + '/', UPPER(ISNULL(qDiv.QuoteNumber, ''))) > 0
+            OR CHARINDEX('-' + UPPER(LTRIM(RTRIM(ISNULL(mefDivQ.DivisionCode, '')))) + '/', UPPER(ISNULL(qDiv.QuoteNumber, ''))) > 0
+            OR CHARINDEX('/' + UPPER(LTRIM(RTRIM(ISNULL(mefDivQ.DivisionCode, '')))) + '-', UPPER(ISNULL(qDiv.QuoteNumber, ''))) > 0
+      )
+)`;
+}
+
+function probabilityDivisionQuotedExistsJoinSql() {
+    return `
+        EXISTS (
+            SELECT 1
+            FROM ProbDivisionQuoted pq
+            WHERE pq.RequestNo = LTRIM(RTRIM(ISNULL(E.RequestNo, '')))
+        )`;
+}
+
 /** Pending update rows only when a division quote exists (ALL view + consistent with Pending Update mode). */
 function appendExcludePendingLikeWithoutQuote(query) {
     query += `
         AND NOT (
             ${probabilityPendingLikeStatusSql()}
-            AND NOT ${probabilityDivisionQuoteExistsSql()}
+            AND NOT ${probabilityDivisionQuotedExistsJoinSql()}
         ) `;
     return query;
 }
@@ -511,15 +671,27 @@ router.get('/list', async (req, res) => {
         const userEmail = rawEmail ? rawEmail.toLowerCase().trim() : '';
         const divisionScope = await resolveProbabilityDivisionScope(userEmail, requestedDivision);
         const currentUserFullName = divisionScope?.fullName || '';
-        const effectiveDivision = String(divisionScope?.ownJobDivision || divisionScope?.division || '').trim();
+        const effectiveDivisionCsv = String(
+            divisionScope?.divisionCsv ||
+                divisionScope?.ownJobDivision ||
+                divisionScope?.division ||
+                ''
+        ).trim();
         const isCcUser = !!divisionScope?.isCcUser;
         if (!isCcUser && !currentUserFullName) {
             return res.json([]);
         }
-        if (!effectiveDivision) {
+        if (!effectiveDivisionCsv) {
             return res.json([]);
         }
-        console.log(`[Probability API V5] Fetching list. Mode: ${mode}, User: ${userEmail}, Division: ${effectiveDivision}`);
+        console.log(`[Probability API V5] Fetching list. Mode: ${mode}, User: ${userEmail}, Division: ${effectiveDivisionCsv}`);
+        const ownJobMatchSql = buildProbDivisionMatchOrSql(effectiveDivisionCsv, 'P0.OwnJobName');
+        const quoteOwnJobMatchSql = buildProbDivisionMatchOrSql(effectiveDivisionCsv, 'P0.QuoteOwnJob');
+        const mefAssignMatchSql = buildProbDivisionMatchOrSql(
+            effectiveDivisionCsv,
+            'mefAssign.DepartmentName',
+            'mefAssign.ItemName'
+        );
         const concernedSeClause = `
               AND EXISTS (
                     SELECT 1
@@ -530,6 +702,7 @@ router.get('/list', async (req, res) => {
     `;
 
         let query = `
+            ${probabilityListDivisionCteSql(effectiveDivisionCsv)}
             SELECT
                 LTRIM(RTRIM(E.RequestNo)) as RequestNo,
                 E.ProjectName,
@@ -553,201 +726,24 @@ router.get('/list', async (req, res) => {
                 NULLIF(LTRIM(RTRIM(ISNULL(P.CompetitorPrice, ''))), '') as LostCompetitorPrice,
                 P.LostDate as LostDate,
                 P.UpdatedDateTime as UpdatedDateTime,
-                (SELECT TOP 1 QuoteDate FROM EnquiryQuotes Q WHERE LTRIM(RTRIM(Q.RequestNo)) = LTRIM(RTRIM(E.RequestNo)) ORDER BY QuoteDate DESC) as LastQuoteDate,
-                (
-                    SELECT 
-                        CASE 
-                            WHEN EXISTS (
-                                SELECT 1 FROM EnquiryPricingValues pv
-                                JOIN EnquiryPricingOptions po ON pv.OptionID = po.ID
-                                WHERE LTRIM(RTRIM(pv.RequestNo)) = LTRIM(RTRIM(E.RequestNo))
-                                AND (UPPER(LTRIM(RTRIM(po.OptionName))) LIKE '%OPTION%' OR UPPER(LTRIM(RTRIM(po.OptionName))) LIKE '%OPTIONAL%')
-                                AND ISNULL(pv.Price, 0) <> 0
-                            ) THEN 'Refer quote'
-                            ELSE CAST(ISNULL((
-                                SELECT SUM(MaxItemPrice)
-                                FROM (
-                                    SELECT MAX(pv.Price) as MaxItemPrice
-                                    FROM EnquiryPricingValues pv
-                                    JOIN EnquiryPricingOptions po ON pv.OptionID = po.ID
-                                    -- Fix JOIN to handle prefixes like "L1 - "
-                                    JOIN Master_EnquiryFor mef ON (pv.EnquiryForItem = mef.ItemName OR pv.EnquiryForItem LIKE '%- ' + mef.ItemName OR pv.EnquiryForItem LIKE '%-' + mef.ItemName)
-                                    WHERE LTRIM(RTRIM(pv.RequestNo)) = LTRIM(RTRIM(E.RequestNo))
-                                    AND UPPER(LTRIM(RTRIM(po.OptionName))) NOT LIKE '%OPTION%' 
-                                    AND UPPER(LTRIM(RTRIM(po.OptionName))) NOT LIKE '%OPTIONAL%'
-                                    AND UPPER(LTRIM(RTRIM(ISNULL(mef.DepartmentName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
-                                    AND (
-                                        -- Standard: User has access to this specific item (Own Job)
-                                        (
-                                            ',' + REPLACE(REPLACE(ISNULL(mef.CommonMailIds, ''), ' ', ''), ';', ',') + ',' LIKE '%,' + ISNULL(@userEmail, '') + ',%'
-                                            OR ',' + REPLACE(REPLACE(ISNULL(mef.CCMailIds, ''), ' ', ''), ';', ',') + ',' LIKE '%,' + ISNULL(@userEmail, '') + ',%'
-                                            OR mef.ItemName = @userDepartment
-                                        )
-                                        OR
-                                        -- Hierarchy: User has access to the Parent job of this specific item (Subjob)
-                                        EXISTS (
-                                            SELECT 1
-                                            FROM EnquiryFor child
-                                            JOIN EnquiryFor parent1 ON child.ParentID = parent1.ID
-                                            LEFT JOIN EnquiryFor parent2 ON parent1.ParentID = parent2.ID
-                                            LEFT JOIN EnquiryFor parent3 ON parent2.ParentID = parent3.ID
-                                            JOIN Master_EnquiryFor pmef ON (
-                                                -- Match against any ancestor level (parent1/parent2/parent3)
-                                                (
-                                                    parent1.ItemName = pmef.ItemName
-                                                    OR parent1.ItemName LIKE '%- ' + pmef.ItemName
-                                                    OR parent1.ItemName LIKE '%-' + pmef.ItemName
-                                                )
-                                                OR
-                                                (
-                                                    parent2.ItemName = pmef.ItemName
-                                                    OR parent2.ItemName LIKE '%- ' + pmef.ItemName
-                                                    OR parent2.ItemName LIKE '%-' + pmef.ItemName
-                                                )
-                                                OR
-                                                (
-                                                    parent3.ItemName = pmef.ItemName
-                                                    OR parent3.ItemName LIKE '%- ' + pmef.ItemName
-                                                    OR parent3.ItemName LIKE '%-' + pmef.ItemName
-                                                )
-                                            )
-                                            WHERE (
-                                                pv.EnquiryForItem = child.ItemName
-                                                OR pv.EnquiryForItem LIKE '%- ' + child.ItemName
-                                                OR pv.EnquiryForItem LIKE '%-' + child.ItemName
-                                            )
-                                            AND child.RequestNo = E.RequestNo
-                                            AND parent1.RequestNo = E.RequestNo
-                                            AND (parent2.RequestNo = E.RequestNo OR parent2.ID IS NULL)
-                                            AND (parent3.RequestNo = E.RequestNo OR parent3.ID IS NULL)
-                                            AND (
-                                                UPPER(LTRIM(RTRIM(ISNULL(pmef.DepartmentName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
-                                                AND (
-                                                    ',' + REPLACE(REPLACE(ISNULL(pmef.CommonMailIds, ''), ' ', ''), ';', ',') + ',' LIKE '%,' + ISNULL(@userEmail, '') + ',%'
-                                                    OR ',' + REPLACE(REPLACE(ISNULL(pmef.CCMailIds, ''), ' ', ''), ';', ',') + ',' LIKE '%,' + ISNULL(@userEmail, '') + ',%'
-                                                    OR pmef.ItemName = @userDepartment
-                                                )
-                                            )
-                                        )
-                                        OR
-                                        -- GLOBAL VISIBILITY FOR CIVIL USERS (e.g. they see everything in Total)
-                                        EXISTS (
-                                            SELECT 1 FROM Master_EnquiryFor civil
-                                            WHERE (civil.ItemName = 'Civil' OR civil.ItemName = 'Civil Project') 
-                                            AND UPPER(LTRIM(RTRIM(ISNULL(civil.DepartmentName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
-                                            AND (
-                                                ',' + REPLACE(REPLACE(ISNULL(civil.CommonMailIds, ''), ' ', ''), ';', ',') + ',' LIKE '%,' + ISNULL(@userEmail, '') + ',%'
-                                                OR ',' + REPLACE(REPLACE(ISNULL(civil.CCMailIds, ''), ' ', ''), ';', ',') + ',' LIKE '%,' + ISNULL(@userEmail, '') + ',%'
-                                            )
-                                        )
-                                    )
-                                    GROUP BY pv.EnquiryForItem
-                                ) t
-                            ), 0) AS NVARCHAR(50))
-                        END
-                ) as TotalQuotedValue,
-                COALESCE(
-                    NULLIF(LTRIM(RTRIM(ISNULL(P.NetQuotedValue, ''))), ''),
-                    (
-                        SELECT 
-                            CASE 
-                                WHEN EXISTS (
-                                    SELECT 1 FROM EnquiryPricingValues pv
-                                    JOIN EnquiryPricingOptions po ON pv.OptionID = po.ID
-                                    WHERE LTRIM(RTRIM(pv.RequestNo)) = LTRIM(RTRIM(E.RequestNo))
-                                    AND (UPPER(LTRIM(RTRIM(po.OptionName))) LIKE '%OPTION%' OR UPPER(LTRIM(RTRIM(po.OptionName))) LIKE '%OPTIONAL%')
-                                    AND ISNULL(pv.Price, 0) <> 0
-                                ) THEN 'Refer quote'
-                                ELSE CAST(ISNULL((
-                                    SELECT SUM(MaxItemPrice)
-                                    FROM (
-                                        SELECT MAX(pv.Price) as MaxItemPrice
-                                        FROM EnquiryPricingValues pv
-                                        JOIN EnquiryPricingOptions po ON pv.OptionID = po.ID
-                                        JOIN Master_EnquiryFor mef ON (pv.EnquiryForItem = mef.ItemName OR pv.EnquiryForItem LIKE '%- ' + mef.ItemName OR pv.EnquiryForItem LIKE '%-' + mef.ItemName)
-                                        WHERE LTRIM(RTRIM(pv.RequestNo)) = LTRIM(RTRIM(E.RequestNo))
-                                        AND UPPER(LTRIM(RTRIM(po.OptionName))) NOT LIKE '%OPTION%' 
-                                        AND UPPER(LTRIM(RTRIM(po.OptionName))) NOT LIKE '%OPTIONAL%'
-                                        AND UPPER(LTRIM(RTRIM(ISNULL(mef.DepartmentName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
-                                        AND (
-                                            -- Net Quoted fallback: strict user affiliation
-                                            ',' + REPLACE(REPLACE(ISNULL(mef.CommonMailIds, ''), ' ', ''), ';', ',') + ',' LIKE '%,' + ISNULL(@userEmail, '') + ',%'
-                                            OR ',' + REPLACE(REPLACE(ISNULL(mef.CCMailIds, ''), ' ', ''), ';', ',') + ',' LIKE '%,' + ISNULL(@userEmail, '') + ',%'
-                                            OR mef.ItemName = @userDepartment
-                                        )
-                                        GROUP BY pv.EnquiryForItem
-                                    ) t
-                                ), 0) AS NVARCHAR(50))
-                            END
-                    )
-                ) as NetQuotedValue,
-                (
-                    SELECT STUFF((
-                        SELECT ',' + CAST(Q.QuoteNumber AS NVARCHAR(MAX)) + '|' + CAST(ISNULL(Q.ToName, 'N/A') AS NVARCHAR(MAX)) + '|' + CAST(ISNULL(Q.LeadJob, '') AS NVARCHAR(MAX)) + '|' + ISNULL(CONVERT(NVARCHAR(23), Q.QuoteDate, 121), N'') + '|' + CAST(ISNULL(Q.QuoteType, '') AS NVARCHAR(MAX)) + '|' + CAST(ISNULL(Q.TotalAmount, 0) AS NVARCHAR(MAX))
-                        FROM EnquiryQuotes Q
-                        WHERE LTRIM(RTRIM(Q.RequestNo)) = LTRIM(RTRIM(E.RequestNo))
-                        AND (
-                            /* 1. Creator Access */
-                            (Q.PreparedByEmail IS NOT NULL AND LTRIM(RTRIM(UPPER(Q.PreparedByEmail))) = LTRIM(RTRIM(UPPER(NULLIF(@userEmail, '')))))
-                            OR
-                            /* 2. Division Access */
-                            EXISTS (
-                                SELECT 1 FROM Master_EnquiryFor mef
-                                WHERE (
-                                    ',' + REPLACE(REPLACE(ISNULL(UPPER(mef.CommonMailIds), ''), ' ', ''), ';', ',') + ',' LIKE '%,' + LTRIM(RTRIM(UPPER(NULLIF(@userEmail, '')))) + ',%'
-                                    OR ',' + REPLACE(REPLACE(ISNULL(UPPER(mef.CCMailIds), ''), ' ', ''), ';', ',') + ',' LIKE '%,' + LTRIM(RTRIM(UPPER(NULLIF(@userEmail, '')))) + ',%'
-                                )
-                                AND UPPER(LTRIM(RTRIM(ISNULL(mef.DepartmentName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
-                                AND mef.DivisionCode IS NOT NULL
-                                AND LEN(LTRIM(RTRIM(mef.DivisionCode))) > 0
-                                AND (
-                                    CHARINDEX('/' + UPPER(LTRIM(RTRIM(mef.DivisionCode))) + '/', UPPER(Q.QuoteNumber)) > 0
-                                    OR CHARINDEX('-' + UPPER(LTRIM(RTRIM(mef.DivisionCode))) + '/', UPPER(Q.QuoteNumber)) > 0
-                                    OR CHARINDEX('/' + UPPER(LTRIM(RTRIM(mef.DivisionCode))) + '-', UPPER(Q.QuoteNumber)) > 0
-                                )
-                            )
-                            /* 3. Admin Fallback */
-                            OR EXISTS (SELECT 1 FROM Master_ConcernedSE u WHERE LTRIM(RTRIM(UPPER(u.EmailId))) = LTRIM(RTRIM(UPPER(NULLIF(@userEmail, '')))) AND UPPER(u.Roles) LIKE '%ADMIN%')
-                        )
-                        ORDER BY
-                            CASE
-                                WHEN PATINDEX('%/L[0-9]%', UPPER(ISNULL(Q.QuoteNumber, ''))) > 0
-                                    THEN TRY_CAST(
-                                        SUBSTRING(
-                                            UPPER(ISNULL(Q.QuoteNumber, '')),
-                                            PATINDEX('%/L[0-9]%', UPPER(ISNULL(Q.QuoteNumber, ''))) + 2,
-                                            10
-                                        ) AS INT
-                                    )
-                                ELSE 999999
-                            END ASC,
-                            LTRIM(RTRIM(ISNULL(Q.QuoteNumber, ''))) ASC,
-                            LTRIM(RTRIM(Q.ToName)) ASC,
-                            Q.RevisionNo DESC
-                        FOR XML PATH(''), TYPE
-                    ).value('.', 'NVARCHAR(MAX)'), 1, 1, '')
-                ) as FilteredQuoteRefs,
-                (
-                    SELECT STUFF((
-                        SELECT '##' + CAST(po.OptionName AS NVARCHAR(MAX)) + '::' + CAST(ISNULL((SELECT SUM(pv.Price) FROM EnquiryPricingValues pv WHERE pv.OptionID = po.ID AND pv.CustomerName = po.CustomerName), 0) AS NVARCHAR(MAX))
-                        FROM EnquiryPricingOptions po
-                        JOIN EnquiryQuotes Q ON Q.QuoteNumber = E.WonQuoteRef
-                        WHERE LTRIM(RTRIM(po.RequestNo)) = LTRIM(RTRIM(E.RequestNo))
-                        AND po.CustomerName = Q.ToName
-                        AND (po.OptionName LIKE '%Option%' OR po.OptionName LIKE '%Optional%')
-                        FOR XML PATH(''), TYPE
-                    ).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-                ) as QuoteOptions
+                NULLIF(LTRIM(RTRIM(ISNULL(P.OwnJobName, ''))), '') as OwnJobName,
+                CAST(NULL AS DATETIME) as LastQuoteDate,
+                CAST(NULL AS NVARCHAR(50)) as TotalQuotedValue,
+                NULLIF(LTRIM(RTRIM(ISNULL(P.NetQuotedValue, ''))), '') as NetQuotedValue,
+                CAST('' AS NVARCHAR(MAX)) as FilteredQuoteRefs,
+                CAST('' AS NVARCHAR(MAX)) as QuoteOptions
             FROM EnquiryMaster E
+            INNER JOIN ProbDivisionEnquiries pde
+              ON pde.RequestNo = LTRIM(RTRIM(ISNULL(E.RequestNo, '')))
             OUTER APPLY (
                 SELECT TOP 1 *
                 FROM dbo.Probability P0
                 WHERE LTRIM(RTRIM(ISNULL(P0.RequestNo, ''))) = LTRIM(RTRIM(ISNULL(E.RequestNo, '')))
                   AND (
-                        UPPER(LTRIM(RTRIM(ISNULL(P0.OwnJobName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
+                        ${ownJobMatchSql}
                         OR (
                             LTRIM(RTRIM(ISNULL(P0.OwnJobName, ''))) = ''
-                            AND UPPER(LTRIM(RTRIM(ISNULL(P0.QuoteOwnJob, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
+                            AND (${quoteOwnJobMatchSql})
                         )
                   )
                 ORDER BY P0.UpdatedDateTime DESC, P0.ID DESC
@@ -759,38 +755,6 @@ router.get('/list', async (req, res) => {
                 ORDER BY ISNULL(Q.RevisionNo, 0) DESC, Q.ID DESC
             ) wonQ
             WHERE 1 = 1
-              AND (
-                  @mode = 'Pending'
-                  OR (
-                      EXISTS (
-                    SELECT 1
-                    FROM EnquiryFor efDiv
-                    JOIN Master_EnquiryFor mefDiv
-                      ON UPPER(LTRIM(RTRIM(ISNULL(efDiv.ItemName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(mefDiv.ItemName, ''))))
-                    WHERE LTRIM(RTRIM(ISNULL(efDiv.RequestNo, ''))) = LTRIM(RTRIM(ISNULL(E.RequestNo, '')))
-                      AND (
-                            UPPER(LTRIM(RTRIM(ISNULL(mefDiv.DepartmentName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
-                            OR UPPER(LTRIM(RTRIM(ISNULL(mefDiv.ItemName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
-                      )
-                      )
-                      OR EXISTS (
-                    SELECT 1
-                    FROM EnquiryQuotes qDiv
-                    JOIN Master_EnquiryFor mefDivQ
-                      ON (
-                        UPPER(LTRIM(RTRIM(ISNULL(mefDivQ.DepartmentName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
-                        OR UPPER(LTRIM(RTRIM(ISNULL(mefDivQ.ItemName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
-                      )
-                    WHERE LTRIM(RTRIM(ISNULL(qDiv.RequestNo, ''))) = LTRIM(RTRIM(ISNULL(E.RequestNo, '')))
-                      AND LTRIM(RTRIM(ISNULL(mefDivQ.DivisionCode, ''))) <> ''
-                      AND (
-                            CHARINDEX('/' + UPPER(LTRIM(RTRIM(ISNULL(mefDivQ.DivisionCode, '')))) + '/', UPPER(ISNULL(qDiv.QuoteNumber, ''))) > 0
-                            OR CHARINDEX('-' + UPPER(LTRIM(RTRIM(ISNULL(mefDivQ.DivisionCode, '')))) + '/', UPPER(ISNULL(qDiv.QuoteNumber, ''))) > 0
-                            OR CHARINDEX('/' + UPPER(LTRIM(RTRIM(ISNULL(mefDivQ.DivisionCode, '')))) + '-', UPPER(ISNULL(qDiv.QuoteNumber, ''))) > 0
-                      )
-                      )
-                  )
-              )
               ${concernedSeClause}
     `;
         // CC users should not be restricted by ConcernedSE rows.
@@ -801,9 +765,9 @@ router.get('/list', async (req, res) => {
 
         // Filter Logic
         if (mode === 'Pending') {
-            // Pending logic (strictly for selected division):
+            // Pending logic (any selected division):
             // 1) enquiry must be assigned to current user
-            // 2) at least one quote must exist for selected division
+            // 2) at least one quote must exist for selected division(s)
             // 3) probability for selected division is not fully updated yet
             query += `
                 AND (
@@ -820,8 +784,7 @@ router.get('/list', async (req, res) => {
                           ON UPPER(LTRIM(RTRIM(ISNULL(efAssign.ItemName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(mefAssign.ItemName, ''))))
                         WHERE LTRIM(RTRIM(ISNULL(efAssign.RequestNo, ''))) = LTRIM(RTRIM(ISNULL(E.RequestNo, '')))
                           AND (
-                                UPPER(LTRIM(RTRIM(ISNULL(mefAssign.DepartmentName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
-                                OR UPPER(LTRIM(RTRIM(ISNULL(mefAssign.ItemName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@division, ''))))
+                                ${mefAssignMatchSql}
                           )
                           AND (
                                 CHARINDEX(
@@ -846,7 +809,7 @@ router.get('/list', async (req, res) => {
                     OR (P.Status IN('FollowUp', 'Follow-up') AND (P.ProbabilityChance IS NULL OR LTRIM(RTRIM(P.ProbabilityChance)) = ''))
                 )
                 AND (P.Status NOT IN('Won', 'Lost', 'Cancelled', 'OnHold', 'On Hold', 'Retendered') OR P.Status IS NULL OR LTRIM(RTRIM(P.Status)) = '')
-                AND ${probabilityDivisionQuoteExistsSql()}
+                AND ${probabilityDivisionQuotedExistsJoinSql()}
             `;
         } else if (mode === 'Won') {
             query += ` AND P.Status = 'Won'`;
@@ -894,15 +857,24 @@ router.get('/list', async (req, res) => {
         request.input('userEmail', sql.NVarChar, userEmail || '');
         request.input('userDepartment', sql.NVarChar, userDepartment || '');
         request.input('currentUserFullName', sql.NVarChar, currentUserFullName);
-        request.input('division', sql.NVarChar, effectiveDivision);
         request.input('mode', sql.NVarChar, String(mode || '').trim());
         request.input('now', sql.DateTime, now);
 
+        const tQuery = Date.now();
         const result = await request.query(query.replace(/GETDATE\(\)/g, '@now'));
-        if (result.recordset.length > 0) {
-            console.log(`[Probability API V5] First Item FilteredQuoteRefs:`, result.recordset[0].FilteredQuoteRefs);
+        const queryMs = Date.now() - tQuery;
+        const tEnrich = Date.now();
+        const enriched = await enrichProbabilityListRows(result.recordset || [], {
+            userEmail,
+            division: effectiveDivisionCsv,
+        });
+        const enrichMs = Date.now() - tEnrich;
+        if (queryMs + enrichMs > 1500) {
+            console.log(
+                `[Probability list] mode=${mode} rows=${enriched.length} queryMs=${queryMs} enrichMs=${enrichMs}`
+            );
         }
-        res.json(result.recordset);
+        res.json(enriched);
 
     } catch (err) {
         console.error('API Error /list:', err);
@@ -913,7 +885,6 @@ router.get('/list', async (req, res) => {
 // GET /api/probability/divisions?userEmail=...
 router.get('/divisions', async (req, res) => {
     try {
-        await ensureProbabilityTable();
         const userEmail = String(req.query.userEmail || '').trim();
         const scope = await resolveProbabilityDivisionScope(userEmail, '');
         if (!scope) {
@@ -984,10 +955,8 @@ router.get('/:requestNo', async (req, res) => {
         const userEmail = req.query.userEmail || '';
         const requestedDivision = String(req.query.division || '').trim();
         const scope = await resolveProbabilityDivisionScope(userEmail, requestedDivision);
-        const allowedSe = await hasProbabilityAccess(requestNo, userEmail);
-        const allowedByDivision =
-            scope?.division && (await hasEnquiryDivisionAccess(requestNo, scope.division));
-        if (!allowedSe && !allowedByDivision) {
+        const allowedToView = await canUserUpdateProbability(requestNo, userEmail, scope?.division, scope);
+        if (!allowedToView) {
             return res.status(403).json({ error: 'Access denied for this enquiry' });
         }
 
@@ -1036,14 +1005,19 @@ router.post('/update', async (req, res) => {
             return res.status(403).json({ error: 'No division access for this user' });
         }
 
-        const divisionAllowedForEnquiry = await hasEnquiryDivisionAccess(enquiryNo, scope.division);
-        if (!divisionAllowedForEnquiry) {
+        const resolvedDivision = await resolveScopeDivisionForEnquiry(scope, enquiryNo);
+        if (!resolvedDivision) {
             return res.status(403).json({ error: 'Access denied for this enquiry division' });
         }
 
-        if (!scope.isCcUser) {
-            const allowed = await hasProbabilityAccess(enquiryNo, userEmail);
-            if (!allowed) return res.status(403).json({ error: 'Access denied for this enquiry' });
+        const allowedToUpdate = await canUserUpdateProbability(
+            enquiryNo,
+            userEmail,
+            resolvedDivision,
+            { ...scope, division: resolvedDivision, ownJobDivision: resolvedDivision }
+        );
+        if (!allowedToUpdate) {
+            return res.status(403).json({ error: 'Access denied for this enquiry' });
         }
 
         console.log(`[Probability Update] Processing ReqNo: ${enquiryNo}, Status: ${status}`);
@@ -1078,13 +1052,12 @@ router.post('/update', async (req, res) => {
             }
             const lostPrice = String(lostDetails?.competitorPrice ?? '')
                 .replace(/,/g, '')
-                .replace(/BD/gi, '')
+                .replace(/\b(BHD|AED|SAR|USD|EUR|GBP|KWD|OMR|QAR|BD|KD)\b/gi, '')
                 .trim();
-            if (lostPrice === '' || Number.isNaN(Number(lostPrice))) {
-                return res.status(400).json({ error: "Competitor's price is mandatory for Lost status" });
-            }
-            if (Number(lostPrice) < 0) {
-                return res.status(400).json({ error: "Competitor's price cannot be negative" });
+            if (lostPrice === '' || Number.isNaN(Number(lostPrice)) || Number(lostPrice) <= 0) {
+                return res.status(400).json({
+                    error: "Competitor's price is mandatory for Lost status (must be greater than zero)",
+                });
             }
             if (lostDetails?.lostDate == null || (typeof lostDetails.lostDate === 'string' && !String(lostDetails.lostDate).trim())) {
                 return res.status(400).json({ error: 'Lost Date is mandatory for Lost status' });
@@ -1128,7 +1101,7 @@ router.post('/update', async (req, res) => {
             enquiryNo,
             projectName,
             leadJobName,
-            division: String(scope.ownJobDivision || scope.division || '').trim(),
+            division: resolvedDivision,
             toName,
             totalQuotedValue,
             netQuotedValue,
@@ -1174,11 +1147,14 @@ router.get('/quote-details/:quoteNumber', async (req, res) => {
         }
 
         const quote = quoteRes.recordset[0];
-        const allowedSe = await hasProbabilityAccess(quote.RequestNo, userEmail);
         const scope = await resolveProbabilityDivisionScope(userEmail, division);
-        const divOk =
-            scope?.division && (await hasEnquiryDivisionAccess(quote.RequestNo, scope.division));
-        if (!allowedSe && !divOk) {
+        const allowedToView = await canUserUpdateProbability(
+            quote.RequestNo,
+            userEmail,
+            scope?.division || division,
+            scope
+        );
+        if (!allowedToView) {
             return res.status(403).json({ error: 'Access denied for this enquiry' });
         }
 

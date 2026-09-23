@@ -6,6 +6,7 @@
  */
 const { resolvePricingAccessContext, normalizePricingJobName } = require('./quotePricingAccess');
 const { buildEnquiryMasterDepartmentExistsSql, buildMefDepartmentNameEqualsSql } = require('./quoteListDivisionFilter');
+const { buildMultiDeptItemNameLikeSql } = require('./userDepartments');
 
 const quotedCustomersSub = `
                     (
@@ -93,22 +94,22 @@ async function runQuotedQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = ''
     const uEsc = (userEmail || '').replace(/'/g, "''");
     const uLocalEsc = ((userEmail || '').split('@')[0] || '').trim().replace(/'/g, "''");
     let trimmedDept = (userDepartment || '').trim();
-    let deptEsc = trimmedDept.replace(/'/g, "''");
-    let deptNormEsc = (normalizePricingJobName(trimmedDept) || '').replace(/'/g, "''");
-    let hasDeptScope = deptEsc.length > 0 || deptNormEsc.length > 0;
+    let hasDeptScope = trimmedDept.length > 0;
     if (isManagementDept) {
         trimmedDept = '';
-        deptEsc = '';
-        deptNormEsc = '';
         hasDeptScope = false;
     }
     // Division dropdown owns own-job scope for quote search; do not also constrain by profile Department.
     if (divisionFilter && divisionFilter.toString().trim()) {
         trimmedDept = '';
-        deptEsc = '';
-        deptNormEsc = '';
         hasDeptScope = false;
     }
+    const deptLikeMefEf = hasDeptScope
+        ? buildMultiDeptItemNameLikeSql(trimmedDept, 'MEF.ItemName', 'EF.ItemName', normalizePricingJobName)
+        : '';
+    const deptLikeMef2Ef2 = hasDeptScope
+        ? buildMultiDeptItemNameLikeSql(trimmedDept, 'MEF2.ItemName', 'EF2.ItemName', normalizePricingJobName)
+        : '';
     const unifyCcWithDivision =
         isCcUser && !isManagementDept && (divisionFilter || '').toString().trim();
     let mefAccessPredicate = isCcUser
@@ -124,20 +125,14 @@ async function runQuotedQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = ''
                 ${
                     hasDeptScope
                         ? `AND (
-                    LOWER(LTRIM(RTRIM(MEF.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR LOWER(LTRIM(RTRIM(EF.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR (${deptNormEsc ? `LOWER(LTRIM(RTRIM(MEF.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'
-                    OR LOWER(LTRIM(RTRIM(EF.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'` : '1=0'})
+                    ${deptLikeMefEf}
                 )`
                         : ''
                 }
             )`
         : hasDeptScope
             ? `(
-                    LOWER(LTRIM(RTRIM(MEF.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR LOWER(LTRIM(RTRIM(EF.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR (${deptNormEsc ? `LOWER(LTRIM(RTRIM(MEF.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'
-                    OR LOWER(LTRIM(RTRIM(EF.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'` : '1=0'})
+                    ${deptLikeMefEf}
                 )`
             : `1 = 1`;
 
@@ -154,10 +149,7 @@ async function runQuotedQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = ''
                 ${
                     hasDeptScope
                         ? `AND (
-                    LOWER(LTRIM(RTRIM(MEF2.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR LOWER(LTRIM(RTRIM(EF2.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR (${deptNormEsc ? `LOWER(LTRIM(RTRIM(MEF2.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'
-                    OR LOWER(LTRIM(RTRIM(EF2.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'` : '1=0'})
+                    ${deptLikeMef2Ef2}
                 )`
                         : ''
                 }
@@ -165,10 +157,7 @@ async function runQuotedQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = ''
             )`
         : hasDeptScope
             ? `(
-                    LOWER(LTRIM(RTRIM(MEF2.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR LOWER(LTRIM(RTRIM(EF2.ItemName))) LIKE '%' + LOWER(LTRIM(RTRIM('${deptEsc}'))) + '%'
-                    OR (${deptNormEsc ? `LOWER(LTRIM(RTRIM(MEF2.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'
-                    OR LOWER(LTRIM(RTRIM(EF2.ItemName))) LIKE '%' + N'${deptNormEsc}' + '%'` : '1=0'})
+                    ${deptLikeMef2Ef2}
                 )${divisionMef2DeptSql}`
             : `1 = 1${divisionMef2DeptSql}`;
 

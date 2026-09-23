@@ -222,6 +222,21 @@ SMTP_IPV4=1
 ENQUIRY_ATTACHMENTS_ROOT=\\\\151.50.20.129\\ems app
 EMS_ATTACHMENTS_DISABLE_LOCAL_FALLBACK=1
 
+# --- SQL pool + IIS ARR (ChatBox must not starve the rest of EMS) ---
+DB_POOL_MAX=40
+DB_POOL_MIN=4
+DB_POOL_IDLE_MS=120000
+DB_KEEPALIVE_MS=30000
+# Node keep-alive MUST exceed IIS ARR proxy timeout (~300s) or ARR returns 502
+HTTP_KEEP_ALIVE_TIMEOUT_MS=310000
+HTTP_HEADERS_TIMEOUT_MS=315000
+HTTP_REQUEST_TIMEOUT_MS=0
+HTTP_SERVER_TIMEOUT_MS=0
+# ChatBox Socket.IO — set EMS_CHATBOX_REALTIME=0 to disable sockets under load (REST chat still works)
+# TEMP DISABLED — reconnecting/CPU load; set back to 1 when ready to re-enable
+EMS_CHATBOX_REALTIME=0
+EMS_CHATBOX_MAX_SOCKETS=200
+
 # --- Enquiry email (Outlook COM fails under PM2/service) ---
 EMS_ENQUIRY_NOTIFY_VIA_SMTP=1
 EMS_ENQUIRY_NOTIFY_SMTP_FALLBACK=1
@@ -265,7 +280,14 @@ module.exports = {
             instances: 1,
             exec_mode: 'fork',
             autorestart: true,
-            max_memory_restart: '2500M',
+            // Keep in sync with EMS/deploy/ecosystem.config.cjs — soft restarts.
+            // Chrome + ChatBox can push RSS; killing the process = "backend disconnected".
+            max_memory_restart: '4000M',
+            kill_timeout: 10000,
+            min_uptime: '30s',
+            max_restarts: 80,
+            restart_delay: 5000,
+            exp_backoff_restart_delay: 2000,
             node_args: '--no-watch',
             env: {
                 NODE_ENV: 'production',
@@ -329,12 +351,18 @@ exit /b 0
     write(
         path.join(HELPERS_DIR, 'configure_arr.ps1'),
         `# Requires: Run as Administrator
-# Enables ARR reverse proxy and sets 180s timeout for quote PDF generation.
+# Enables ARR reverse proxy for EMS (PDF / long reports). Keep in sync with scripts/configure_arr_pdf_streaming.ps1
 Import-Module WebAdministration -ErrorAction Stop
 Write-Host "Enabling ARR proxy..."
 Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'enabled' -Value 'True'
-Write-Host "Setting proxy timeout to 180 seconds..."
-Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'timeout' -Value '00:03:00'
+Write-Host "Setting proxy timeout to 300 seconds..."
+Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'timeout' -Value '00:05:00'
+try {
+  Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'responseBufferLimit' -Value 0
+  Write-Host "OK: responseBufferLimit=0"
+} catch {
+  Write-Host "WARN: could not set responseBufferLimit — set manually in IIS ARR Server Proxy Settings."
+}
 Write-Host "ARR configured. Restart IIS if needed: iisreset"
 `
     );
@@ -1013,7 +1041,7 @@ Then enable proxy (Admin PowerShell):
 \`\`\`powershell
 Import-Module WebAdministration
 Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'enabled' -Value 'True'
-Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'timeout' -Value '00:03:00'
+Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'timeout' -Value '00:05:00'
 \`\`\`
 
 Or:
@@ -1048,7 +1076,7 @@ Option B — IIS Manager:
 
 ## ARR timeout for PDF
 
-Quote PDF can take up to ~3 minutes. Proxy timeout is set to \`00:03:00\` in \`configure_arr.ps1\`.
+Quote PDF can take several minutes under load. Proxy timeout is set to \`00:05:00\` in \`configure_arr.ps1\` (and \`scripts/configure_arr_pdf_streaming.ps1\`).
 
 ## Verify through IIS
 

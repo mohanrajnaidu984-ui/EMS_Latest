@@ -45,7 +45,7 @@ export function resolveLeadJobCodeForEnquiryForItem(item, allItems) {
     return segments.join('-');
 }
 
-/** One accountable SE per structure division row; ownJob stores that division label. */
+/** One accountable SE per structure division row; OwnJob stays on every selected member. */
 function finalizeAccountability(rows) {
     const list = Array.isArray(rows) ? rows : [];
     const winnerByScope = new Map();
@@ -62,14 +62,20 @@ function finalizeAccountability(rows) {
 
     return list.map((row) => {
         const code = String(row.leadJobCode || '').trim().toUpperCase();
-        const own = String(row.ownJob || '').trim().toLowerCase();
+        const ownRaw = row.ownJob ?? null;
+        const own = String(ownRaw || '').trim().toLowerCase();
         const scopeKey = own ? `${code}|${own}` : code;
-        if (!scopeKey || !winnerByScope.has(scopeKey)) return row;
+        if (!scopeKey || !winnerByScope.has(scopeKey)) {
+            return {
+                ...row,
+                ownJob: ownRaw || null,
+            };
+        }
         const winner = winnerByScope.get(scopeKey);
         return {
             ...row,
             accountability: row.seName === winner ? 'Yes' : null,
-            ownJob: row.seName === winner ? row.ownJob || null : null,
+            ownJob: ownRaw || null,
         };
     });
 }
@@ -112,7 +118,8 @@ export function buildConcernedSEAssignmentsFromEnquiryFor(enqForList) {
                 seName,
                 leadJobCode: leadJobCode || null,
                 accountability: isAccountable ? 'Yes' : null,
-                ownJob: isAccountable && divisionName ? divisionName : null,
+                // OwnJob for every selected member on this structure row (not only accountable).
+                ownJob: divisionName || null,
             });
         }
     }
@@ -124,6 +131,7 @@ function concernedRowsForEnquiryForItem(item, rows, allItems) {
     const division = divisionNameForEnquiryForItem(item);
     const code = resolveLeadJobCodeForEnquiryForItem(item, allItems);
     const codeNorm = code ? code.toUpperCase() : '';
+    const rootCode = codeNorm ? codeNorm.split('-')[0] : '';
 
     return (rows || []).filter((r) => {
         const ownJob = String(r.OwnJob || r.ownJob || '').trim();
@@ -132,7 +140,12 @@ function concernedRowsForEnquiryForItem(item, rows, allItems) {
         const rc = String(r.LeadJobCode || r.leadJobCode || '')
             .trim()
             .toUpperCase();
-        if (!codeNorm || !rc) return !ownJob;
+        if (!rc) return false;
+
+        // Lead-branch SE without own job (e.g. extra SE on L1) — show on all rows in that branch.
+        if (!ownJob && rootCode && rc === rootCode) return true;
+
+        if (!codeNorm) return !ownJob;
         return rc === codeNorm && !ownJob;
     });
 }
@@ -166,11 +179,13 @@ export function hydrateEnquiryForWithConcernedSEAssignments(items, concernedRows
         const assignedSEs =
             explicit.length > 0
                 ? explicit
-                : inferAssignedSEsForEnquiryForItem(
-                      { ...item, assignedSEs: [] },
-                      seNamesForItem.length > 0 ? seNamesForItem : allSeNames,
-                      users
-                  );
+                : seNamesForItem.length > 0
+                  ? [...new Set(seNamesForItem)]
+                  : inferAssignedSEsForEnquiryForItem(
+                        { ...item, assignedSEs: [] },
+                        allSeNames,
+                        users
+                    );
 
         const division = divisionNameForEnquiryForItem(item);
         const accountableRow = rowsForItem

@@ -6,6 +6,9 @@ const { sendEnquiryNotificationViaSmtp, splitRecipients } = require('./enquiryNo
 const { formatEnquiryDate, formatShortDate, FONT_FAMILY } = require('./enquiryNotifyEmailHtml');
 const { todayYmdInSchedulerTz, addWorkingDaysToYmd, isWorkingDayYmd } = require('./schedulerTime');
 const { getSmtpFromEmail } = require('./smtpTransport');
+const { resolveDueEmailDivisionLabel } = require('./enquiryLeadDivisions');
+const { escapeHtml } = require('./htmlEscape');
+const { splitDelimitedNames } = require('./loadEnquiryEmailRow');
 
 const REMINDER_KIND_TWO_WORKING = '2working';
 const REMINDER_KIND_TODAY = 'today';
@@ -28,20 +31,26 @@ function edCeoReminderBccEmails() {
     return splitRecipients(raw).map((e) => e.toLowerCase());
 }
 
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
-
+/** Serial-numbered customer list: 1. Name\n2. Name … */
 function displayCustomerName(row) {
+    let names = [];
     if (Array.isArray(row.CustomerNamesList) && row.CustomerNamesList.length) {
-        return row.CustomerNamesList.join(', ');
+        names = row.CustomerNamesList.map((n) => String(n || '').trim()).filter(Boolean);
+    } else {
+        const raw = String(row.CustomerNameDisplay || row.CustomerName || '').trim();
+        if (raw) {
+            if (/\d{1,2}\.\s/.test(raw)) {
+                names = raw
+                    .split(/,\s*(?=\d{1,2}\.\s)/)
+                    .map((part) => part.replace(/^\d{1,2}\.\s*/, '').trim())
+                    .filter(Boolean);
+            } else {
+                names = splitDelimitedNames(raw);
+            }
+        }
     }
-    const raw = String(row.CustomerNameDisplay || row.CustomerName || '').trim();
-    return raw.replace(/^\d{2}\.\s*/g, '').trim();
+    if (!names.length) return '';
+    return names.map((name, i) => `${i + 1}. ${name}`).join('\n');
 }
 
 function displayConsultantName(row) {
@@ -101,7 +110,7 @@ function buildEdCeoEnquiryListTableHtml(rows) {
         'Consultant Name',
         'Due Date',
         'Enquiry Details',
-        'Enquiry Created By',
+        'Enquiry Created by',
     ];
 
     const headRow = headers.map((h) => `<th style="${thStyle}">${escapeHtml(h)}</th>`).join('');
@@ -121,7 +130,7 @@ function buildEdCeoEnquiryListTableHtml(rows) {
                 row.enquiryCreatedBy,
             ];
             return `<tr>${cells
-                .map((c) => `<td style="${tdStyle}">${escapeHtml(c).replace(/\n/g, '<br>')}</td>`)
+                .map((c) => `<td style="${tdStyle}">${escapeHtml(String(c ?? '')).replace(/\n/g, '<br>')}</td>`)
                 .join('')}</tr>`;
         })
         .join('\n');
@@ -198,56 +207,6 @@ async function fetchEdCeoRequestNosDueOn(dueYmd) {
     return (res.recordset || []).map((r) => String(r.RequestNo || '').trim()).filter(Boolean);
 }
 
-async function loadLeadDivisionNames(requestNo) {
-    const res = await sql.query`
-        SELECT
-            EF.ID,
-            EF.ParentID,
-            EF.ItemName,
-            MEF.DepartmentName
-        FROM EnquiryFor EF
-        LEFT JOIN Master_EnquiryFor MEF ON (
-            LTRIM(RTRIM(MEF.ItemName)) = LTRIM(RTRIM(EF.ItemName))
-            OR LTRIM(RTRIM(MEF.DepartmentName)) = LTRIM(RTRIM(EF.ItemName))
-        )
-        WHERE EF.RequestNo = ${requestNo}
-        ORDER BY EF.ID
-    `;
-
-    const isLeadJob = (row) => {
-        const p = row.ParentID;
-        return p == null || p === '' || p === 0 || p === '0';
-    };
-
-    const divisionOf = (row) => String(row.DepartmentName || row.ItemName || '').trim();
-    const leadNames = [];
-    const otherNames = [];
-    const seen = new Set();
-
-    // Lead jobs (root EnquiryFor rows) first, in ID order.
-    for (const row of res.recordset || []) {
-        if (!isLeadJob(row)) continue;
-        const division = divisionOf(row);
-        if (!division) continue;
-        const key = division.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        leadNames.push(division);
-    }
-
-    // Then remaining divisions (sub-jobs), first appearance by ID.
-    for (const row of res.recordset || []) {
-        const division = divisionOf(row);
-        if (!division) continue;
-        const key = division.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        otherNames.push(division);
-    }
-
-    return [...leadNames, ...otherNames];
-}
-
 function mapRowToListEntry(row, divisionName) {
     return {
         division: String(divisionName || '').trim(),
@@ -259,13 +218,14 @@ function mapRowToListEntry(row, divisionName) {
         consultantName: displayConsultantName(row),
         dueDate: formatShortDate(row.DueDate),
         enquiryDetails: String(row.EnquiryDetails || '').trim(),
-        enquiryCreatedBy: String(row.CreatedBy || '').trim(),
+        // EnquiryMaster.CreatedBy (full name of enquiry creator)
+        enquiryCreatedBy: String(row.CreatedBy ?? row.createdBy ?? '').trim(),
     };
 }
 
 /**
  * One table row per enquiry (ED/CEO signature required).
- * Division column lists lead jobs first, then other divisions (numbered, one per line).
+ * Division = enquiry-involved divisions (lead first); Customer Name = 1. 2. 3…; Created by last.
  */
 async function buildEdCeoDueEnquiryRows(dueYmd) {
     const requestNos = await fetchEdCeoRequestNosDueOn(dueYmd);
@@ -275,22 +235,7 @@ async function buildEdCeoDueEnquiryRows(dueYmd) {
         const row = await loadEnquiryEmailRow(requestNo);
         if (!row) continue;
 
-        let divisions = await loadLeadDivisionNames(requestNo);
-        if (!divisions.length) {
-            divisions = Array.isArray(row.DivisionsInvolvedList)
-                ? row.DivisionsInvolvedList.filter(Boolean)
-                : [];
-        }
-        if (!divisions.length && row.DivisionsInvolvedDisplay) {
-            divisions = String(row.DivisionsInvolvedDisplay)
-                .split(',')
-                .map((s) => s.trim())
-                .filter(Boolean);
-        }
-
-        const divisionLabel = divisions.length
-            ? divisions.map((name, i) => `${i + 1}. ${name}`).join('\n')
-            : '';
+        const divisionLabel = await resolveDueEmailDivisionLabel(requestNo, row);
         rows.push(mapRowToListEntry(row, divisionLabel));
     }
 

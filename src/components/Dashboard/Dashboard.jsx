@@ -20,6 +20,7 @@ import {
     isDashboardCoordinatorUser,
 } from '../../utils/dashboardCcAccess';
 import './DashboardLayout.css';
+import { useMasterCurrency } from '../../hooks/useMasterCurrency';
 
 function sumCalendarDaily(daily, key) {
     return (Array.isArray(daily) ? daily : []).reduce((acc, row) => acc + (Number(row[key]) || 0), 0);
@@ -101,6 +102,12 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
             status: 'All',
             search: ''
         };
+    });
+    useMasterCurrency({
+        division:
+            String(filters.division || '').trim().toLowerCase() === 'all'
+                ? ''
+                : filters.division || '',
     });
 
     // -- Persistence --
@@ -974,6 +981,7 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
                                             emptyLabel="No enquiries for this selection."
                                             headerQuotedTotal={dashboardModalHeaderQuotedTotal}
                                             enableHeaderFilters
+                                            pageSize={500}
                                         />
                                     )}
                                 </div>

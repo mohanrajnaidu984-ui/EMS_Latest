@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Select from 'react-select';
 import { X, Plus, Trash2, ChevronUp, ChevronDown, Save } from 'lucide-react';
-import { normalizeApprovalEmail } from '../../utils/quoteApprovalWorkflow';
+import { normalizeApprovalEmail, orderApprovalStepsFinalLast } from '../../utils/quoteApprovalWorkflow';
 
 const selectStyles = {
     control: (base) => ({
@@ -32,6 +32,7 @@ function cloneSteps(steps) {
         approverEmail: s.approverEmail || s.email || '',
         approverName: s.approverName || s.name || '',
         approverDesignation: s.approverDesignation || s.designation || '',
+        isFinalApprover: !!s.isFinalApprover,
     }));
 }
 
@@ -99,24 +100,42 @@ export default function QuoteApprovalHierarchyModal({
 
     const handleAddDraftStep = () => {
         if (!pickerValue) return;
-        setDraftSteps((prev) => [
-            ...prev,
-            {
-                sequence: prev.length + 1,
-                approverEmail: pickerValue.email || pickerValue.value,
-                approverName: pickerValue.name || pickerValue.label,
-                approverDesignation: pickerValue.designation || '',
-            },
-        ]);
+        setDraftSteps((prev) => {
+            const next = [
+                ...prev,
+                {
+                    sequence: prev.length + 1,
+                    approverEmail: pickerValue.email || pickerValue.value,
+                    approverName: pickerValue.name || pickerValue.label,
+                    approverDesignation: pickerValue.designation || '',
+                    isFinalApprover: false,
+                },
+            ];
+            // New rows are non-final; keep / place final approver at the bottom.
+            if (next.length === 1) {
+                next[0].isFinalApprover = true;
+                return next;
+            }
+            if (!next.some((s) => s.isFinalApprover)) {
+                next[next.length - 1].isFinalApprover = true;
+            }
+            return orderApprovalStepsFinalLast(next);
+        });
         setPickerValue(null);
     };
 
     const removeDraftStep = (index) => {
-        setDraftSteps((prev) =>
-            prev
-                .filter((_, i) => i !== index)
-                .map((s, i) => ({ ...s, sequence: i + 1 }))
-        );
+        setDraftSteps((prev) => {
+            const next = prev.filter((_, i) => i !== index);
+            if (next.length === 1) {
+                next[0].isFinalApprover = true;
+                return next.map((s, i) => ({ ...s, sequence: i + 1 }));
+            }
+            if (next.length > 1 && !next.some((s) => s.isFinalApprover)) {
+                next[next.length - 1].isFinalApprover = true;
+            }
+            return orderApprovalStepsFinalLast(next);
+        });
     };
 
     const moveDraftStep = (index, dir) => {
@@ -124,9 +143,24 @@ export default function QuoteApprovalHierarchyModal({
             const next = [...prev];
             const target = index + dir;
             if (target < 0 || target >= next.length) return prev;
+            // Do not move the final approver out of the last slot via up/down.
+            if (next[index]?.isFinalApprover || next[target]?.isFinalApprover) {
+                return prev;
+            }
             [next[index], next[target]] = [next[target], next[index]];
-            return next.map((s, i) => ({ ...s, sequence: i + 1 }));
+            return orderApprovalStepsFinalLast(next);
         });
+    };
+
+    const setFinalApprover = (index) => {
+        setDraftSteps((prev) =>
+            orderApprovalStepsFinalLast(
+                prev.map((s, i) => ({
+                    ...s,
+                    isFinalApprover: i === index,
+                }))
+            )
+        );
     };
 
     const handleSave = async () => {
@@ -138,6 +172,10 @@ export default function QuoteApprovalHierarchyModal({
         }
         if (!draftSteps.length) {
             alert('Add at least one approver to the hierarchy.');
+            return;
+        }
+        if (draftSteps.length > 1 && !draftSteps.some((s) => s.isFinalApprover)) {
+            alert('Select a final approver (required when there is more than one approver).');
             return;
         }
         if (!email) {
@@ -308,7 +346,13 @@ export default function QuoteApprovalHierarchyModal({
                     </label>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        <span style={{ fontSize: '11px', fontWeight: 600, color: '#475569' }}>Add approvers in sequence</span>
+                        <span style={{ fontSize: '11px', fontWeight: 600, color: '#475569' }}>
+                            Add approvers (parallel)
+                        </span>
+                        <span style={{ fontSize: '10px', color: '#64748b', lineHeight: 1.35 }}>
+                            Approvers can act in any order. If more than one, mark exactly one as the final approver —
+                            their approval generates the quote number and locks editing.
+                        </span>
                         <Select
                             options={availableOptions}
                             value={pickerValue}
@@ -336,7 +380,7 @@ export default function QuoteApprovalHierarchyModal({
                                 gap: '4px',
                             }}
                         >
-                            <Plus size={14} /> Add to sequence
+                            <Plus size={14} /> Add approver
                         </button>
                     </div>
 
@@ -363,9 +407,9 @@ export default function QuoteApprovalHierarchyModal({
                                         alignItems: 'center',
                                         gap: '8px',
                                         padding: '8px',
-                                        border: '1px solid #e2e8f0',
+                                        border: step.isFinalApprover ? '1px solid #800000' : '1px solid #e2e8f0',
                                         borderRadius: '6px',
-                                        background: '#f8fafc',
+                                        background: step.isFinalApprover ? '#f5d0d6' : '#f8fafc',
                                     }}
                                 >
                                     <span
@@ -373,7 +417,8 @@ export default function QuoteApprovalHierarchyModal({
                                             minWidth: '22px',
                                             height: '22px',
                                             borderRadius: '999px',
-                                            background: '#e2e8f0',
+                                            background: step.isFinalApprover ? '#800000' : '#e2e8f0',
+                                            color: step.isFinalApprover ? '#ffffff' : '#334155',
                                             fontSize: '11px',
                                             fontWeight: 700,
                                             display: 'flex',
@@ -384,11 +429,47 @@ export default function QuoteApprovalHierarchyModal({
                                         {index + 1}
                                     </span>
                                     <div style={{ flex: 1, minWidth: 0 }}>
-                                        <div style={{ fontSize: '12px', fontWeight: 600, color: '#1e293b' }}>{step.approverName}</div>
+                                        <div style={{ fontSize: '12px', fontWeight: 600, color: '#1e293b' }}>
+                                            {step.approverName}
+                                        </div>
                                         {step.approverDesignation ? (
                                             <div style={{ fontSize: '10px', color: '#64748b' }}>{step.approverDesignation}</div>
                                         ) : null}
+                                        {step.isFinalApprover ? (
+                                            <div
+                                                style={{
+                                                    fontSize: '10px',
+                                                    fontWeight: 700,
+                                                    color: '#475569',
+                                                    marginTop: '2px',
+                                                }}
+                                            >
+                                                Final Approver
+                                            </div>
+                                        ) : null}
                                     </div>
+                                    {draftSteps.length > 1 ? (
+                                        <label
+                                            style={{
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '4px',
+                                                fontSize: '10px',
+                                                color: '#475569',
+                                                cursor: 'pointer',
+                                                whiteSpace: 'nowrap',
+                                            }}
+                                            title="Final approver generates the quote number"
+                                        >
+                                            <input
+                                                type="radio"
+                                                name="final-approver"
+                                                checked={!!step.isFinalApprover}
+                                                onChange={() => setFinalApprover(index)}
+                                            />
+                                            Final
+                                        </label>
+                                    ) : null}
                                     <button
                                         type="button"
                                         onClick={() => moveDraftStep(index, -1)}

@@ -446,38 +446,30 @@ const NotificationDropdown = ({ onOpenEnquiry }) => {
 
     return (
 
-        <div className="position-relative me-3" ref={dropdownRef}>
-
+        <div className="ems-header-notif position-relative" ref={dropdownRef}>
             <button
-
                 className="btn btn-light position-relative rounded-circle d-flex align-items-center justify-content-center border-0 shadow-sm"
-
                 style={{ width: '32px', height: '32px' }}
-
                 onClick={() => setIsOpen(!isOpen)}
-
                 aria-label="Notifications"
-
             >
-
                 <i className="bi bi-bell fs-6 text-secondary"></i>
-
                 {activeCount > 0 && (
-
                     <span
-
-                        className="position-absolute top-0 end-0 badge rounded-pill bg-danger"
-
-                        style={{ fontSize: '0.6rem', marginTop: '0px', marginRight: '0px' }}
-
+                        className="ems-header-notif-badge position-absolute badge rounded-pill bg-danger"
+                        style={{
+                            fontSize: '0.6rem',
+                            top: '-4px',
+                            right: '-6px',
+                            minWidth: '1.15rem',
+                            padding: '0.15rem 0.35rem',
+                            lineHeight: 1.1,
+                            zIndex: 1,
+                        }}
                     >
-
-                        {activeCount}
-
+                        {activeCount > 99 ? '99+' : activeCount}
                     </span>
-
                 )}
-
             </button>
 
 

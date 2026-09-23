@@ -308,7 +308,7 @@ router.get('/health', async (req, res) => {
         emsQuotePdfServerEnabled: serverPdfEnabled,
         emsQuotePdfPerfLog: isPerfLogEnabled(),
         emsQuotePdfDebugPagination: isPaginationDebugEnabled(),
-        quotePdfCssVersion: '2026-08-26-latest',
+        quotePdfCssVersion: '2026-09-13-v7',
         quotePdfAssetOrigin: (process.env.QUOTE_PDF_ASSET_ORIGIN || `http://127.0.0.1:${serverListenPort()}`).replace(
             /\/$/,
             ''
@@ -1451,6 +1451,17 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
             markBrowserUnhealthy();
         }
         console.error('[quote-pdf] PDF generation error handler caught:', err);
+        if (err && (err.code === 'PDF_SLOT_TIMEOUT' || err.name === 'PdfSlotTimeoutError')) {
+            if (!res.headersSent) {
+                return res.status(503).json({
+                    error: 'pdf_busy',
+                    message: err.message || 'PDF generation is busy. Please retry shortly.',
+                    retryable: true,
+                    hint: 'Too many concurrent PDF jobs. Wait a moment and try again.',
+                });
+            }
+            return;
+        }
         let msg = raw.trim() || 'pdf_generation_failed';
         let hint =
             'If logos fail to load, set QUOTE_PDF_ASSET_ORIGIN in server/.env (e.g. http://127.0.0.1:5002). ' +

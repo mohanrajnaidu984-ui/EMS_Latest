@@ -6,13 +6,16 @@ import {
     downloadExcelBlob,
     safeExcelFilePart,
 } from '../../utils/emsExcelWorkbook';
+import { formatRuntimeCurrencyAmount } from '../../utils/currency';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 function normalizeListQuoteRollupKey(raw) {
     let s = String(raw || '').trim();
+    if (s === 'Revision Required') return s;
     if (s === 'All Quoted' || s === 'Partial Quoted' || s === 'None Quoted') return s;
     const base = s.replace(/\s*\([^)]*\)\s*$/g, '').trim();
+    if (base === 'Revision Required') return base;
     if (base === 'All Quoted' || base === 'Partial Quoted' || base === 'None Quoted') return base;
     return 'None Quoted';
 }
@@ -20,6 +23,7 @@ function normalizeListQuoteRollupKey(raw) {
 function formatListQuoteRollupStatusTwoLines(raw) {
     const key = normalizeListQuoteRollupKey(raw);
     const tail = 'for this Ownjob';
+    if (key === 'Revision Required') return { line1: 'Revision Required', line2: '' };
     if (key === 'None Quoted') return { line1: 'None Quoted', line2: tail };
     if (key === 'Partial Quoted') return { line1: 'Partial Quoted', line2: tail };
     if (key === 'All Quoted') return { line1: 'All Quoted', line2: tail };
@@ -51,7 +55,7 @@ function formatQuoteDateShort(v) {
 function formatBd(n) {
     const num = Number(n);
     if (!Number.isFinite(num) || num <= 0) return '';
-    return `BD ${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return formatRuntimeCurrencyAmount(num);
 }
 
 function enquiryNoText(row) {

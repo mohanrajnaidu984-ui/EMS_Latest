@@ -2,13 +2,7 @@
  * Internal enquiry notification email HTML (EMS template) for Outlook draft.
  */
 
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
+const { escapeHtml } = require('./htmlEscape');
 
 function formatEnquiryDate(date) {
     if (!date) return '';
@@ -115,8 +109,9 @@ function isHttpUrl(url) {
 function buildVerticalListHtml(raw, { numbered = false, twoDigit = false } = {}) {
     const items = parseListItems(raw);
     if (items.length === 0) return '';
-    if (items.length === 1) return escapeHtml(items[0]);
 
+    /* Always wrap in a div so formatCellValue treats this as HTML and does not escape again
+       (single-item used to return a bare escaped string → "&" became visible "&amp;"). */
     const blocks = items
         .map((item, idx) => {
             const prefix = numbered
@@ -184,7 +179,11 @@ function buildSupplementaryReceivedHtml(row, attachments) {
 function formatCellValue(raw) {
     const isHtml =
         typeof raw === 'string' &&
-        (raw.includes('<div') || raw.includes('<ol') || raw.includes('<ul') || raw.includes('<a href'));
+        (raw.includes('<div') ||
+            raw.includes('<span') ||
+            raw.includes('<ol') ||
+            raw.includes('<ul') ||
+            raw.includes('<a href'));
     return isHtml ? raw : escapeHtml(raw ?? '').replace(/\n/g, '<br>');
 }
 

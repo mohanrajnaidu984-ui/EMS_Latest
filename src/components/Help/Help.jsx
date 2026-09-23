@@ -251,8 +251,8 @@ const Help = () => {
             </p>
             <ul className="mb-2" style={{ paddingLeft: '1.1rem' }}>
               <li><strong>Pending for Approval</strong> — quotes assigned to you that are still awaiting your approval (excludes workflows already rejected by anyone).</li>
-              <li><strong>Rejected by Me</strong> — quotes you personally rejected.</li>
-              <li><strong>Quote Search</strong> — find only workflow-linked quotes you are entitled to see by text and/or quote date (includes assigned rejected items and permitted cross-division workflow cases).</li>
+              <li><strong>Approved by Me</strong> — quotes you personally approved.</li>
+              <li><strong>Correction requested</strong> — quotes where you requested a correction during approval.</li>
             </ul>
             <p className="mb-1">
               <strong>Approver process (step-by-step):</strong>
@@ -269,7 +269,7 @@ const Help = () => {
               <strong>Cross-division access:</strong> If you are assigned in the workflow on a quote from another division, you can still open and approve it. Visibility is workflow-tied and enquiry-context-aware; broad division-only access is intentionally restricted.
             </p>
             <p className="mb-1">
-              <strong>Search visibility guardrails:</strong> Quote Search shows items through direct approver assignment, valid workflow teammate paths, and approved cross-division concern mapping for the same quote. Unrelated quotes from the same enquiry or customer are filtered out.
+              <strong>Filters:</strong> On <strong>Approved by Me</strong> and <strong>Correction requested</strong>, use Criteria / From / To / Division and Search to narrow the list.
             </p>
             <p className="mb-1">
               <strong>Loading:</strong> While a quote preview is loading or refreshing, a centred loading indicator appears so you can wait for the update to complete.

@@ -3,7 +3,7 @@ import { format } from 'date-fns';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
 
-const CollaborativeNotes = ({ enquiryId, enquiryData }) => {
+const CollaborativeNotes = ({ enquiryId, enquiryData, onOpenChatBox }) => {
     const { currentUser } = useAuth();
     const { masters } = useData();
     const [notes, setNotes] = useState([]);
@@ -221,7 +221,19 @@ const CollaborativeNotes = ({ enquiryId, enquiryData }) => {
     return (
         <div className="card mb-4 shadow-sm border-0 bg-light card-overline">
             <div className="card-body p-4">
-                <h5 className="card-title fw-bold mb-4">Collaborative Notes</h5>
+                <div className="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+                    <h5 className="card-title fw-bold mb-0">Collaborative Notes</h5>
+                    {onOpenChatBox && effectiveID ? (
+                        <button
+                            type="button"
+                            className="btn btn-sm btn-outline-success"
+                            onClick={() => onOpenChatBox(effectiveID)}
+                        >
+                            <i className="bi bi-chat-dots me-1" aria-hidden />
+                            Open in ChatBox
+                        </button>
+                    ) : null}
+                </div>
 
                 {/* Notes List */}
                 <div className="bg-light p-3 rounded border mb-3" style={{ maxHeight: '300px', overflowY: 'auto' }}>

@@ -5,6 +5,8 @@ import NotificationDropdown from './NotificationDropdown';
 import UserProfile from './UserProfile';
 import { isQuoteModuleTab, QUOTE_TAB_B2B, QUOTE_TAB_B2C } from '../../utils/quoteNav';
 import { EMS_PENDING_APPROVALS_CHANGED } from '../../constants/approvalEvents';
+import { EMS_CHATBOX_UNREAD_CHANGED } from '../../constants/chatboxEvents';
+import { isChatboxEnabled, disconnectChatboxSocket } from '../../utils/chatboxSocket';
 
 import { useAuth } from '../../context/AuthContext';
 
@@ -13,9 +15,11 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
   const [isScrolled, setIsScrolled] = useState(false);
   const [openSubmenuId, setOpenSubmenuId] = useState(null);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [chatUnreadTotal, setChatUnreadTotal] = useState(0);
   const navStripRef = useRef(null);
 
   const userEmail = String(currentUser?.email || currentUser?.EmailId || currentUser?.MailId || '').trim();
+  const onQuoteModule = isQuoteModuleTab(activeTab);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,7 +43,8 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
     };
 
     fetchPendingApprovalCount();
-    const interval = setInterval(fetchPendingApprovalCount, 30000);
+    // Slow poll — heavy SQL; event EMS_PENDING_APPROVALS_CHANGED refreshes sooner.
+    const interval = setInterval(fetchPendingApprovalCount, onQuoteModule ? 120000 : 90000);
     const onApprovalsChanged = () => {
       void fetchPendingApprovalCount();
     };
@@ -50,6 +55,64 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
       window.removeEventListener(EMS_PENDING_APPROVALS_CHANGED, onApprovalsChanged);
     };
   }, [userEmail, activeTab]);
+
+  const chatboxOff = !isChatboxEnabled();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchChatUnread = async () => {
+      if (chatboxOff || onQuoteModule || !userEmail) {
+        if (!cancelled) setChatUnreadTotal(0);
+        return;
+      }
+      try {
+        const res = await fetch(
+          `/api/chatbox/unread-total?email=${encodeURIComponent(userEmail)}`,
+          { cache: 'no-store' }
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setChatUnreadTotal(Number(data.count) || 0);
+      } catch (err) {
+        console.warn('[Header] chatbox unread', err);
+      }
+    };
+
+    /* Quote editor: no chat unread network work at all. */
+    if (chatboxOff || onQuoteModule) {
+      disconnectChatboxSocket();
+      setChatUnreadTotal(0);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    fetchChatUnread();
+    // Slow SQL poll only — do NOT open Socket.IO from Header for every logged-in user.
+    // Always-on long-polls occupied IIS ARR + Node and made the whole EMS feel slow.
+    // ChatBox tab opens its own socket when needed; badge refreshes via event / poll.
+    const interval = setInterval(fetchChatUnread, 120000);
+    let unreadDebounce = null;
+    const onChatUnread = () => {
+      if (chatboxOff || onQuoteModule) return;
+      if (unreadDebounce) clearTimeout(unreadDebounce);
+      unreadDebounce = setTimeout(() => {
+        void fetchChatUnread();
+      }, 5000);
+    };
+    window.addEventListener(EMS_CHATBOX_UNREAD_CHANGED, onChatUnread);
+
+    // No Socket.IO from Header — ChatBox opens the socket only when that tab is open.
+    // This keeps IIS/Node free for the rest of EMS while chat stays realtime in ChatBox.
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      if (unreadDebounce) clearTimeout(unreadDebounce);
+      window.removeEventListener(EMS_CHATBOX_UNREAD_CHANGED, onChatUnread);
+    };
+  }, [userEmail, chatboxOff, onQuoteModule]);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -72,6 +135,7 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
   }, [openSubmenuId]);
 
   const navItems = [
+    { id: 'ChatBox', label: 'ChatBox', icon: 'bi-chat-dots' },
     { id: 'Dashboard', label: 'Dashboard', icon: 'bi-speedometer2' },
     { id: 'Enquiry', label: 'Enquiry', icon: 'bi-clipboard-data' },
     { id: 'Pricing', label: 'Pricing', icon: 'bi-calculator' },
@@ -88,6 +152,7 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
     { id: 'Probability', label: 'Probability', icon: 'bi-graph-up' },
     { id: 'Sales Report', label: 'Sales Report', icon: 'bi-file-earmark-bar-graph' },
     { id: 'Reports', label: 'Sales Target', icon: 'bi-bullseye' },
+    { id: 'Usage', label: 'Usage', icon: 'bi-activity' },
     { id: 'Help', label: 'Help', icon: 'bi-question-circle' },
     { id: 'About', label: 'About', icon: 'bi-info-circle' }
   ];
@@ -99,10 +164,17 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
     : (Array.isArray(roleString) ? roleString.map(r => r.toLowerCase()) : []);
 
   const visibleItems = navItems.filter(item => {
+    if (item.id === 'ChatBox') {
+      return !chatboxOff;
+    }
     if (item.id === 'Dashboard') return true;
     if (item.id === 'Help') return true;
     if (item.id === 'About') return true;
     if (item.id === 'Approvals') return true;
+    // Admin / System only — Usage is not shown to other roles
+    if (item.id === 'Usage') {
+      return userRoles.includes('admin') || userRoles.includes('system');
+    }
 
     // Grant Admin access to everything
     if (userRoles.includes('admin')) return true;
@@ -164,26 +236,34 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
               </span>
             </div>
 
-            {/* Centered: Navigation Links aligned to header bottom */}
+            {/* Centered: Navigation Links + notification (between About and user) */}
             <div
-              className="d-flex justify-content-center align-items-center pb-0"
+              className="d-flex justify-content-center align-items-end pb-0"
               style={{
-                background: 'linear-gradient(180deg, #2f5fae 0%, #203f75 100%)',
-                borderTopLeftRadius: '18px',
-                borderTopRightRadius: '18px',
-                height: '35px',
                 margin: '0',
                 flexGrow: 0,
-                padding: menuStripPadding,
                 position: 'absolute',
                 left: '50%',
                 bottom: 0,
                 transform: 'translateX(-50%)',
-                boxShadow: '0 2px 8px rgba(23, 47, 99, 0.35), inset 0 1px 0 rgba(255,255,255,0.2)',
                 width: 'fit-content',
-                zIndex: 2
+                maxWidth: 'calc(100% - 280px)',
+                zIndex: 2,
+                gap: '10px',
               }}
             >
+              <div
+                className="d-flex justify-content-center align-items-center"
+                style={{
+                  background: 'linear-gradient(180deg, #2f5fae 0%, #203f75 100%)',
+                  borderTopLeftRadius: '18px',
+                  borderTopRightRadius: '18px',
+                  height: '35px',
+                  padding: menuStripPadding,
+                  boxShadow: '0 2px 8px rgba(23, 47, 99, 0.35), inset 0 1px 0 rgba(255,255,255,0.2)',
+                  width: 'fit-content',
+                }}
+              >
               <ul ref={navStripRef} className="nav d-flex align-items-center gap-2 m-0 ems-top-nav">
                 {visibleItems.map((item) => {
                   const hasChildren = Array.isArray(item.children) && item.children.length > 0;
@@ -266,11 +346,40 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
                             {pendingApprovalCount > 99 ? '99+' : pendingApprovalCount}
                           </span>
                         ) : null}
+                        {item.id === 'ChatBox' && chatUnreadTotal > 0 ? (
+                          <span
+                            className="position-absolute badge rounded-pill bg-danger text-white"
+                            style={{
+                              top: '-6px',
+                              right: '-4px',
+                              fontSize: '0.6rem',
+                              minWidth: '1.1rem',
+                              padding: '0.15rem 0.35rem',
+                              lineHeight: 1.1,
+                            }}
+                            aria-label={`${chatUnreadTotal} unread chat message${chatUnreadTotal === 1 ? '' : 's'}`}
+                          >
+                            {chatUnreadTotal > 99 ? '99+' : chatUnreadTotal}
+                          </span>
+                        ) : null}
                       </button>
                     </li>
                   );
                 })}
               </ul>
+              </div>
+
+              <div
+                className="ems-header-notif-slot d-flex align-items-center"
+                style={{
+                  height: '35px',
+                  paddingBottom: '2px',
+                  flexShrink: 0,
+                  zIndex: 3,
+                }}
+              >
+                <NotificationDropdown onOpenEnquiry={onOpenEnquiry} />
+              </div>
             </div>
 
             {/* Right: ACG logo + user controls — absolute slots so only the logo moves down */}
@@ -281,7 +390,7 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
                 marginLeft: 'auto',
                 alignSelf: 'stretch',
                 height: '100%',
-                width: 'min(240px, 40vw)',
+                width: 'min(200px, 36vw)',
                 flexShrink: 0,
               }}
             >
@@ -321,7 +430,6 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
                   zIndex: 2,
                 }}
               >
-                <NotificationDropdown onOpenEnquiry={onOpenEnquiry} />
                 <div style={{ transform: 'scale(0.9)', transformOrigin: 'right bottom' }}>
                   <UserProfile activeTab={activeTab} />
                 </div>

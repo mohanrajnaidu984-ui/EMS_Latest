@@ -123,7 +123,7 @@ function applyProfileMerge(base, profile) {
         role: profile.Roles ?? base.role,
         Roles: profile.Roles ?? base.Roles,
         Department: profile.Department,
-        // Keep DivisionName aligned with DB department for code that still reads DivisionName
+        // Keep DivisionName as Department CSV for legacy readers; prefer parseUserDepartments at use sites
         DivisionName: profile.Department ?? base.DivisionName,
         Designation: profile.Designation,
         RequestNo: profile.RequestNo,
@@ -190,6 +190,44 @@ export const AuthProvider = ({ children }) => {
         }
     }, [mergeProfileForEmail]);
 
+    // Presence heartbeat for Admin Usage page (online users) — all roles
+    useEffect(() => {
+        if (!currentUser) return undefined;
+        const email = String(
+            currentUser.email || currentUser.EmailId || getStoredLoginEmail() || ''
+        ).trim();
+        if (!email) return undefined;
+
+        const sendHeartbeat = () => {
+            const payload = {
+                email,
+                name: currentUser.name || currentUser.FullName || '',
+                department: currentUser.Department || currentUser.DivisionName || '',
+                roles: currentUser.Roles || currentUser.role || '',
+            };
+            void fetch('/api/usage/heartbeat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                keepalive: true,
+            }).catch(() => {});
+        };
+
+        sendHeartbeat();
+        // 60s — presence also updates from API activity middleware; avoid chat-era request storms
+        const t = setInterval(sendHeartbeat, 60000);
+        const onVis = () => {
+            if (document.visibilityState === 'visible') sendHeartbeat();
+        };
+        window.addEventListener('focus', sendHeartbeat);
+        document.addEventListener('visibilitychange', onVis);
+        return () => {
+            clearInterval(t);
+            window.removeEventListener('focus', sendHeartbeat);
+            document.removeEventListener('visibilitychange', onVis);
+        };
+    }, [currentUser]);
+
     const login = (userData, options = {}) => {
         const persistent = !!options.rememberMe;
 
@@ -208,10 +246,37 @@ export const AuthProvider = ({ children }) => {
 
         if (storedEmail) {
             mergeProfileForEmail(storedEmail);
+            // Register online immediately (don't wait for useEffect)
+            void fetch('/api/usage/heartbeat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    email: storedEmail,
+                    name: finalUserData.name || finalUserData.FullName || '',
+                    department: finalUserData.Department || finalUserData.DivisionName || '',
+                    roles: finalUserData.Roles || finalUserData.role || '',
+                }),
+                keepalive: true,
+            }).catch(() => {});
         }
     };
 
     const logout = () => {
+        const email = String(
+            currentUser?.email || currentUser?.EmailId || getStoredLoginEmail() || ''
+        ).trim();
+        if (email) {
+            try {
+                void fetch('/api/usage/goodbye', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email }),
+                    keepalive: true,
+                });
+            } catch (_) {
+                /* ignore */
+            }
+        }
         setCurrentUser(null);
         // Keep emsRememberMe + emsRememberedEmail so the login checkbox/email stay filled.
         clearSessionAuthStorage();

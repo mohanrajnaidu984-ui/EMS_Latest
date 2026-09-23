@@ -42,7 +42,7 @@ body {
   margin-left: auto;
   align-self: stretch;
   height: 100%;
-  width: min(240px, 40vw);
+  width: min(200px, 36vw);
   flex-shrink: 0;
 }
 
@@ -969,6 +969,9 @@ input[type="date"]:focus::-webkit-datetime-edit {
 .prob-probability-page .card-header {
   background: transparent !important;
   border-bottom: none !important;
+  overflow: visible !important;
+  position: relative;
+  z-index: 40;
 }
 
 .prob-probability-page .card-header label.small {
@@ -986,11 +989,20 @@ input[type="date"]:focus::-webkit-datetime-edit {
   border-radius: 10px;
   background: linear-gradient(180deg, #dce5f2 0%, #cfdced 55%, #c2d2e6 100%);
   overflow: visible;
+  position: relative;
+  z-index: 40;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 1px 6px rgba(71, 85, 105, 0.09);
 }
 
+/* Do not use overflow-x:auto here — CSS forces overflow-y to auto too and clips the Division dropdown */
+.prob-probability-page .prob-list-filter-panel > .prob-list-filter-row,
 .prob-probability-page .prob-list-filter-panel > .d-flex.align-items-end {
   gap: 0.35rem !important;
+  overflow: visible !important;
+}
+
+.prob-probability-page .prob-division-filter-wrap .sr-multi-select__panel {
+  z-index: 1300;
 }
 
 .prob-probability-page .prob-list-filter-panel label.small {

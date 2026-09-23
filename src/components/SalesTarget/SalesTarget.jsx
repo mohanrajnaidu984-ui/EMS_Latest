@@ -4,6 +4,9 @@ import { EMS_TABLE_HEADER_GRADIENT } from '../../constants/emsTheme';
 import ExcelDownloadButton from '../shared/ExcelDownloadButton';
 import { downloadSalesTargetXlsx } from './salesTargetExcel';
 import './SalesTarget.css';
+import { getRuntimeCurrencyCode } from '../../utils/currency';
+import { useMasterCurrency } from '../../hooks/useMasterCurrency';
+import MasterCurrencyBadge from '../shared/MasterCurrencyBadge';
 
 // ── Formatted Revenue Input (shows ###,###,### when not focused) ──
 const RevenueInput = ({ value, onChange, placeholder = '0', style = {}, disabled = false }) => {
@@ -81,6 +84,7 @@ const SalesTarget = () => {
     // Filters
     const [selectedYear, setSelectedYear] = useState(() => localStorage.getItem('target_year') || '2026');
     const [selectedDivision, setSelectedDivision] = useState(() => localStorage.getItem('target_division') || '');
+    const { currencyCode: targetCurrencyCode } = useMasterCurrency({ division: selectedDivision || '' });
     const [selectedEngineer, setSelectedEngineer] = useState(() => localStorage.getItem('target_engineer') || '');
 
     // -- Persistence --
@@ -593,6 +597,9 @@ const SalesTarget = () => {
                             {managedDivisions.map(d => <option key={d} value={d}>{d}</option>)}
                         </select>
                     </div>
+                    <div className="form-group d-flex align-items-end" style={{ minWidth: 'auto', paddingBottom: '2px' }}>
+                        <MasterCurrencyBadge currencyCode={targetCurrencyCode} division={selectedDivision} />
+                    </div>
                     <div className="form-group" style={{ minWidth: '250px' }}>
                         <label className="small text-muted mb-1">Sales Engineer</label>
                         <select className="form-select bg-white text-dark border-secondary" value={selectedEngineer} onChange={e => setSelectedEngineer(e.target.value)}>
@@ -768,7 +775,7 @@ const SalesTarget = () => {
                                                                 padding: '0 4px',
                                                                 whiteSpace: 'nowrap',
                                                             }}>
-                                                                BD {fmt(qGPAmts[qi])}
+                                                                {getRuntimeCurrencyCode()} {fmt(qGPAmts[qi])}
                                                             </span>
                                                         )}
                                                     </div>
@@ -889,7 +896,7 @@ const SalesTarget = () => {
                                         Booking Job Value
                                     </th>
                                     <th className="text-end text-white pe-2" style={{ width: '23%', fontSize: '11px', padding: '8px 10px' }}>
-                                        GP value (BD)
+                                        GP value ({getRuntimeCurrencyCode()})
                                     </th>
                                     <th className="text-end text-white pe-3" style={{ width: '23%', fontSize: '11px', padding: '8px 10px' }}>
                                         GP %

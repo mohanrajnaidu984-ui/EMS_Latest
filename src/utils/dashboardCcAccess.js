@@ -3,6 +3,12 @@
  * Management + Admin users get coordinator-style division + SE filters (like lohidas@almoayyedcg.com).
  */
 
+import {
+    parseUserDepartments,
+    userHasDepartment,
+    userHasManagementDepartment,
+} from './userDepartments';
+
 /** CC coordinators excluded from Enquiry For Structure SE/EE/QS picker (mirrors server notification exclusions). */
 const EXCLUDED_ENQUIRY_STRUCTURE_CC_EMAILS = new Set([
     'lohidas@almoayyedcg.com',
@@ -143,11 +149,15 @@ function divisionAssigneeDepartmentKeys(divisionLabel, enqItems) {
     return [...keys].filter(Boolean);
 }
 
-/** Master_ConcernedSE rows whose Department matches the structure division label (exact match only). */
+/** Master_ConcernedSE rows whose Department list includes the structure division (comma-separated OK). */
 function userDepartmentMatchesDivision(userDept, divisionLabel, enqItems) {
-    const d = normalizeDivisionKey(userDept);
-    if (!d) return false;
-    return divisionAssigneeDepartmentKeys(divisionLabel, enqItems).some((k) => d === k);
+    const keys = divisionAssigneeDepartmentKeys(divisionLabel, enqItems);
+    if (!keys.length) {
+        return userHasDepartment(userDept, divisionLabel);
+    }
+    return keys.some((k) =>
+        parseUserDepartments(userDept).some((d) => normalizeDivisionKey(d) === k)
+    );
 }
 
 export function getConcernedSeUsersForDivision(divisionLabel, masterUsers, enqItems = []) {
@@ -215,8 +225,7 @@ export function isAdminRole(currentUser) {
 }
 
 export function isManagementDepartmentUser(currentUser) {
-    const d = String(currentUser?.Department || currentUser?.DivisionName || '').trim().toLowerCase();
-    return d === 'management';
+    return userHasManagementDepartment(currentUser?.Department || currentUser?.DivisionName || '');
 }
 
 /** True if logged-in user's email appears on any Master_EnquiryFor.CCMailIds */
@@ -278,12 +287,21 @@ export function findMasterUserByEmail(currentUser, masterUsers) {
     );
 }
 
-/** Regular SE (not admin / management / CC): fixed dashboard division from profile or master. */
+/** Regular SE (not admin / management / CC): first profile division (CSV may have many). */
 export function getRegularUserDashboardDivision(currentUser, masterUsers) {
-    const fromProfile = String(currentUser?.Department || currentUser?.DivisionName || '').trim();
-    if (fromProfile) return fromProfile;
+    const fromProfile = parseUserDepartments(currentUser?.Department || currentUser?.DivisionName || '');
+    if (fromProfile.length) return fromProfile[0];
     const u = findMasterUserByEmail(currentUser, masterUsers);
-    return String(u?.Department ?? '').trim() || '';
+    const fromMaster = parseUserDepartments(u?.Department ?? '');
+    return fromMaster[0] || '';
+}
+
+/** All divisions on the SE profile (comma-separated Department). */
+export function getRegularUserDashboardDivisions(currentUser, masterUsers) {
+    const fromProfile = parseUserDepartments(currentUser?.Department || currentUser?.DivisionName || '');
+    if (fromProfile.length) return fromProfile;
+    const u = findMasterUserByEmail(currentUser, masterUsers);
+    return parseUserDepartments(u?.Department ?? '');
 }
 
 /** Regular SE: fixed dashboard SE filter value (FullName). */
@@ -315,8 +333,8 @@ export function getDashboardDivisionOptions(currentUser, enqItems, enquiryFor, m
         const ccDepts = getCcDepartmentNamesForUser(email, enqItems);
         return ccDepts.length > 0 ? ccDepts : ['All'];
     }
-    const dept = getRegularUserDashboardDivision(currentUser, masterUsers);
-    if (dept) return [dept];
+    const depts = getRegularUserDashboardDivisions(currentUser, masterUsers);
+    if (depts.length) return depts;
     return enquiryFor || [];
 }
 
@@ -350,11 +368,10 @@ export function getMasterConcernedSeNamesForDivision(division, masterUsers) {
     if (!division || String(division).trim() === '' || String(division).trim().toLowerCase() === 'all') {
         return [];
     }
-    const d = String(division).trim().toLowerCase();
     return Array.from(
         new Set(
             (masterUsers || [])
-                .filter((u) => String(u.Department ?? '').trim().toLowerCase() === d)
+                .filter((u) => userHasDepartment(u.Department ?? '', division))
                 .map((u) => String(u.FullName ?? u.fullName ?? '').trim())
                 .filter(Boolean)
         )
@@ -428,8 +445,7 @@ export function getCcCoordinatorNamesForDivision(division, enqItems, users) {
         );
         const fn = u?.FullName ?? u?.fullName;
         if (!fn || !String(fn).trim()) continue;
-        const dept = String(u.Department ?? '').trim().toLowerCase();
-        if (dept !== divLower) continue;
+        if (!userHasDepartment(u.Department ?? '', division)) continue;
         names.add(String(fn).trim());
     }
     return [...names];

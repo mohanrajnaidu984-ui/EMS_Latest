@@ -2,16 +2,10 @@
  * Customer acknowledgement email HTML for Outlook draft.
  */
 
+const { escapeHtml } = require('./htmlEscape');
+
 const FONT_FAMILY = "'Segoe UI', SegoeUI, Tahoma, Arial, sans-serif";
 const REP_LINE_BLUE = '#0563C1';
-
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
 
 function formatEnquiryDate(date) {
     if (!date) return '';

@@ -13,6 +13,7 @@
  */
 
 const { normalizePricingJobName, jobIdOfPricing } = require('./quotePricingAccess');
+const { parseUserDepartments } = require('./userDepartments');
 
 function jobIdOf(job) {
     return jobIdOfPricing(job);
@@ -26,15 +27,18 @@ function reqNoEq(a, b) {
     return String(a ?? '').trim() === String(b ?? '').trim();
 }
 
-/** Department ↔ EnquiryFor.ItemName (same idea as getDepartmentPricingAnchors). */
+/** Department (CSV OK) ↔ EnquiryFor.ItemName (same idea as getDepartmentPricingAnchors). */
 function departmentMatchesItemName(userDepartment, itemName) {
-    const d = normalizePricingJobName(userDepartment);
     const j = normalizePricingJobName(itemName);
-    if (!d || !j) return false;
-    if (d === j) return true;
-    if (d.length >= 3 && j.includes(d)) return true;
-    if (j.length >= 3 && d.includes(j)) return true;
-    return false;
+    if (!j) return false;
+    return parseUserDepartments(userDepartment).some((token) => {
+        const d = normalizePricingJobName(token);
+        if (!d) return false;
+        if (d === j) return true;
+        if (d.length >= 3 && j.includes(d)) return true;
+        if (j.length >= 3 && d.includes(j)) return true;
+        return false;
+    });
 }
 
 function parsePriceNum(v) {

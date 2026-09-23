@@ -433,6 +433,7 @@ const SearchEnquiry = ({ onOpen }) => {
                     masters={masters}
                     onRowOpen={onOpen}
                     enableHeaderFilters
+                    pageSize={1000}
                     onDisplayRowsChange={setDisplayRows}
                 />
             </div>

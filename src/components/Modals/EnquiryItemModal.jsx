@@ -16,7 +16,8 @@ const EnquiryItemModal = ({ show, onClose, mode = 'Add', initialData = null, onS
         Phone: '',
         Address: '',
         FaxNo: '',
-        CompanyLogo: ''
+        CompanyLogo: '',
+        Currency: 'BHD',
     });
 
     const [newCommonMail, setNewCommonMail] = useState('');
@@ -37,6 +38,7 @@ const EnquiryItemModal = ({ show, onClose, mode = 'Add', initialData = null, onS
 
                 setFormData({
                     ...initialData,
+                    Currency: initialData.Currency || initialData.currency || 'BHD',
                     CommonMailIds: common,
                     CCMailIds: cc
                 });
@@ -53,7 +55,8 @@ const EnquiryItemModal = ({ show, onClose, mode = 'Add', initialData = null, onS
                     Phone: '',
                     Address: '',
                     FaxNo: '',
-                    CompanyLogo: ''
+                    CompanyLogo: '',
+                    Currency: 'BHD',
                 });
             }
             setNewCommonMail('');
@@ -234,6 +237,25 @@ const EnquiryItemModal = ({ show, onClose, mode = 'Add', initialData = null, onS
                         <label className="form-label">Department Code</label>
                         <input type="text" className="form-control" style={{ fontSize: '13px' }}
                             value={formData.DepartmentCode || ''} onChange={(e) => handleChange('DepartmentCode', e.target.value)} />
+                    </div>
+                    <div className="col-md-3">
+                        <label className="form-label">Currency</label>
+                        <select
+                            className="form-select"
+                            style={{ fontSize: '13px' }}
+                            value={formData.Currency || 'BHD'}
+                            onChange={(e) => handleChange('Currency', e.target.value)}
+                        >
+                            <option value="BHD">BHD</option>
+                            <option value="AED">AED</option>
+                            <option value="SAR">SAR</option>
+                            <option value="USD">USD</option>
+                            <option value="EUR">EUR</option>
+                            <option value="GBP">GBP</option>
+                            <option value="KWD">KWD</option>
+                            <option value="OMR">OMR</option>
+                            <option value="QAR">QAR</option>
+                        </select>
                     </div>
                     <div className="col-md-3">
                         <label className="form-label">Phone</label>

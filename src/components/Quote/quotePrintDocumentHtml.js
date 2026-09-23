@@ -1279,7 +1279,7 @@ ${HTML2PDF_PAGE_BREAK_OVERRIDES}
     box-sizing: border-box !important;
     text-align: left !important;
 }
-.clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]) {
+.clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]):not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]) {
     table-layout: fixed !important;
     width: 100% !important;
     border-collapse: collapse !important;
@@ -2097,7 +2097,7 @@ html[data-preview-pdf="1"] .quote-sheet-main-flex {
     width: 100% !important;
     box-sizing: border-box !important;
 }
-html[data-preview-pdf="1"] .clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]) {
+html[data-preview-pdf="1"] .clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]):not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]) {
     width: 100% !important;
     max-width: 100% !important;
     box-sizing: border-box !important;
@@ -2694,20 +2694,30 @@ html[data-preview-pdf="1"] .footer-section > hr {
 ${EMS_QUOTE_PRICING_TABLE_COLUMN_SYNC_CSS}
 ${EMS_QUOTE_PRICING_TABLE_PRESENTATION_CSS}
 ${EMS_QUOTE_PRICING_TABLE_COMPACT_ROW_CSS}
-html[data-preview-pdf="1"] #ems-auto-price-summary-table {
+html[data-preview-pdf="1"] #ems-auto-price-summary-table,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"],
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] {
     border: ${EMS_QUOTE_PRICING_TABLE_OUTER_BORDER} !important;
     margin-top: ${EMS_QUOTE_PRICING_TABLE_MARGIN_TOP} !important;
     font-size: 11px !important;
     line-height: 1.25 !important;
     width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
     max-width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
+    table-layout: fixed !important;
+    box-sizing: border-box !important;
 }
 html[data-preview-pdf="1"] #ems-auto-price-summary-table th,
-html[data-preview-pdf="1"] #ems-auto-price-summary-table td {
+html[data-preview-pdf="1"] #ems-auto-price-summary-table td,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] th,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] td,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] th,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] td {
     border: ${EMS_QUOTE_PDF_TABLE_BORDER_WIDTH} solid ${EMS_QUOTE_PRICING_TABLE_BORDER_COLOR} !important;
     color: #0f172a !important;
 }
-html[data-preview-pdf="1"] #ems-auto-price-summary-table thead th {
+html[data-preview-pdf="1"] #ems-auto-price-summary-table thead th,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] thead th,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] thead th {
     background: ${EMS_QUOTE_PRICING_TABLE_HEADER_BG} !important;
     color: ${EMS_QUOTE_PRICING_TABLE_HEADER_COLOR} !important;
     font-weight: 600 !important;
@@ -2716,13 +2726,25 @@ html[data-preview-pdf="1"] #ems-auto-price-summary-table thead th {
 html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="total"] td,
 html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="vat"] td,
 html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="grand-vat"] td,
-html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="grand"] td {
+html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="grand"] td,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="total"] td,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="vat"] td,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand-vat"] td,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand"] td,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="total"] td,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="vat"] td,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand-vat"] td,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand"] td {
     background: ${EMS_QUOTE_PRICING_TABLE_TOTAL_BG} !important;
     font-weight: 700 !important;
     border-top: 1px solid #94a3b8 !important;
 }
 html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="discount"] td,
-html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td {
+html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="discount"] td,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="final-discounted"] td,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="discount"] td,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="final-discounted"] td {
     background: ${EMS_QUOTE_PRICING_TABLE_DISCOUNT_BG} !important;
     font-weight: 700 !important;
     border-top: 1px solid #94a3b8 !important;
@@ -2735,7 +2757,25 @@ html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="discou
 html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td:first-child,
 html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="vat"] td:first-child,
 html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="grand-vat"] td:first-child,
-html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="grand"] td:first-child {
+html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="grand"] td:first-child,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] th:nth-child(2),
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] td:nth-child(2),
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] td[data-ems-amount],
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="total"] td:first-child,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="discount"] td:first-child,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="final-discounted"] td:first-child,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="vat"] td:first-child,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand-vat"] td:first-child,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand"] td:first-child,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] th:nth-child(2),
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] td:nth-child(2),
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] td[data-ems-amount],
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="total"] td:first-child,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="discount"] td:first-child,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="final-discounted"] td:first-child,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="vat"] td:first-child,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand-vat"] td:first-child,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand"] td:first-child {
     text-align: right !important;
 }
 /** Highest-specificity sheet pin — portrait default; landscape overrides via .quote-a4-sheet--landscape. */
