@@ -8,9 +8,14 @@
     "server": "npm --prefix server start",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:pagination": "vitest run src/components/Quote/__tests__ && playwright test e2e/quote-pagination.spec.js"
   },
   "dependencies": {
+    "@fontsource/arimo": "^5.3.0",
     "@fontsource/inter": "^5.2.8",
     "date-fns": "^4.1.0",
     "docx": "^9.7.1",
@@ -19,6 +24,7 @@
     "jodit-react": "^5.3.21",
     "jszip": "^3.10.1",
     "lucide-react": "^0.554.0",
+    "pagedjs": "^0.4.3",
     "pptxgenjs": "^4.0.1",
     "qrcode": "^1.5.4",
     "react": "^19.2.0",
@@ -34,6 +40,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.64.1",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^5.1.0",
@@ -41,6 +48,9 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
-    "vite": "^7.2.2"
+    "happy-dom": "^21.0.4",
+    "pdf-parse": "^2.4.5",
+    "vite": "^7.2.2",
+    "vitest": "^5.0.5"
   }
 }

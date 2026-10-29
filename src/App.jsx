@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DataProvider } from './context/DataContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import MainLayout from './components/Layout/MainLayout';
 import Login from './components/Auth/Login';
 import Main from './components/Main';
 import { normalizeAppTabId } from './utils/quoteNav';
+import { isChatboxEnabled } from './utils/chatboxSocket';
 
 function AppContent() {
   const { isAuthenticated, currentUser } = useAuth();
@@ -46,7 +47,10 @@ function readSessionActiveTab() {
 }
 
 function normalizeStoredAppTab(tab) {
-  return normalizeAppTabId(tab || 'Enquiry');
+  const normalized = normalizeAppTabId(tab || 'Enquiry');
+  // ChatBox is fully disabled — never restore/open that tab.
+  if (normalized === 'ChatBox' && !isChatboxEnabled()) return 'Enquiry';
+  return normalized;
 }
 
 function readSessionEnquiryToOpen() {
@@ -104,7 +108,19 @@ function MainLayoutWrapper() {
     setActiveTab('Enquiry');
   };
 
+  useEffect(() => {
+    if (activeTab === 'ChatBox' && !isChatboxEnabled()) {
+      setActiveTab('Enquiry');
+      try {
+        sessionStorage.setItem(SESSION_ACTIVE_TAB, 'Enquiry');
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }, [activeTab]);
+
   const handleTabChange = (tab) => {
+    if (tab === 'ChatBox' && !isChatboxEnabled()) return;
     const normalized = normalizeStoredAppTab(tab);
     setActiveTab(normalized);
     try {

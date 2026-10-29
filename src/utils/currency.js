@@ -301,6 +301,106 @@ export function getRuntimeCurrency() {
     return runtimeCurrencyCode || DEFAULT_CURRENCY;
 }
 
+/** Session/runtime default VAT % from Master_EnquiryFor.VAT_Per (set with currency). */
+let runtimeVatPercent = null;
+
+export function setRuntimeVatPercent(pct) {
+    if (pct == null || pct === '') {
+        runtimeVatPercent = null;
+        return null;
+    }
+    const n = Number(pct);
+    if (!Number.isFinite(n) || n < 0) {
+        runtimeVatPercent = null;
+        return null;
+    }
+    runtimeVatPercent = Math.round(n * 10000) / 10000;
+    return runtimeVatPercent;
+}
+
+export function getRuntimeVatPercent() {
+    return runtimeVatPercent;
+}
+
+/**
+ * Pick VAT_Per from a Master_EnquiryFor row.
+ * @returns {number|null}
+ */
+export function pickVatPercentFromRow(row) {
+    const raw = row?.VAT_Per ?? row?.vat_Per ?? row?.Vat_Per ?? row?.vatPer;
+    if (raw == null || raw === '') return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return Math.round(n * 10000) / 10000;
+}
+
+/**
+ * Resolve Master_EnquiryFor.VAT_Per for company / division / item.
+ * @returns {number|null} null when no matched row has VAT_Per set
+ */
+export function resolveVatPercentFromMasterRows(masterRows, keys = {}) {
+    const list = Array.isArray(masterRows) ? masterRows : [];
+    const dept = normKey(keys.departmentName || keys.division || keys.DepartmentName);
+    const company = normKey(keys.companyName || keys.CompanyName);
+    const item = normKey(keys.itemName || keys.ItemName);
+
+    const scored = [];
+    for (const row of list) {
+        const vat = pickVatPercentFromRow(row);
+        if (vat == null) continue;
+        const rDept = normKey(row.DepartmentName || row.departmentName);
+        const rCompany = normKey(row.CompanyName || row.companyName);
+        const rItem = normKey(row.ItemName || row.itemName);
+        let score = 0;
+        if (item && rItem && item === rItem) score += 100;
+        if (dept && rDept && dept === rDept) score += 40;
+        if (company && rCompany && company === rCompany) score += 20;
+        if (score > 0) scored.push({ score, vat });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    if (scored.length) return scored[0].vat;
+
+    if (company) {
+        const byCo = list.find(
+            (r) =>
+                normKey(r.CompanyName || r.companyName) === company &&
+                pickVatPercentFromRow(r) != null
+        );
+        if (byCo) return pickVatPercentFromRow(byCo);
+    }
+    if (dept) {
+        const byDept = list.find(
+            (r) =>
+                normKey(r.DepartmentName || r.departmentName) === dept &&
+                pickVatPercentFromRow(r) != null
+        );
+        if (byDept) return pickVatPercentFromRow(byDept);
+    }
+    return null;
+}
+
+/** Currency-only VAT defaults (used when Master_EnquiryFor.VAT_Per is unset). */
+export function getVatPercentForCurrency(currencyCode = DEFAULT_CURRENCY) {
+    const code = getCurrencyMeta(currencyCode).code;
+    if (code === 'SAR') return 15;
+    return 10;
+}
+
+/**
+ * Default quote pricing VAT percent.
+ * Prefer Master_EnquiryFor.VAT_Per (runtime) when no explicit currency arg is passed;
+ * with an explicit currency code, use currency-based defaults (BHD 10 / SAR 15).
+ */
+export function getDefaultPricingVatPercent(currencyCode) {
+    if (currencyCode === undefined) {
+        if (runtimeVatPercent != null && Number.isFinite(runtimeVatPercent)) {
+            return runtimeVatPercent;
+        }
+        return getVatPercentForCurrency(getRuntimeCurrency());
+    }
+    return getVatPercentForCurrency(currencyCode);
+}
+
 export function formatRuntimeCurrencyAmount(n) {
     return formatCurrencyAmount(n, getRuntimeCurrency());
 }

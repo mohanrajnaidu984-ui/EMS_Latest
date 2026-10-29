@@ -15,26 +15,26 @@ let subscriberCount = 0;
 export const CHATBOX_SOCKET_PATH = '/api/socket.io';
 
 /**
- * Feature kill-switch: set VITE_CHATBOX_ENABLED=0 and rebuild to hide ChatBox nav/UI.
+ * Feature kill-switch. Default OFF — set VITE_CHATBOX_ENABLED=1 and rebuild to re-enable.
  */
 export function isChatboxEnabled() {
-    const flag = String(import.meta.env.VITE_CHATBOX_ENABLED ?? '1')
+    const flag = String(import.meta.env.VITE_CHATBOX_ENABLED ?? '0')
         .trim()
         .toLowerCase();
-    if (flag === '0' || flag === 'false' || flag === 'no' || flag === 'off') return false;
-    return true;
+    if (flag === '1' || flag === 'true' || flag === 'yes' || flag === 'on') return true;
+    return false;
 }
 
 /**
- * Kill-switch: set VITE_CHATBOX_REALTIME=0 in production build to disable Socket.IO
- * entirely (ChatBox REST + peek still work; EMS never pays socket cost).
+ * Socket.IO kill-switch. Default OFF. Requires ChatBox enabled as well.
  */
 export function isChatboxRealtimeEnabled() {
-    const flag = String(import.meta.env.VITE_CHATBOX_REALTIME ?? '1')
+    if (!isChatboxEnabled()) return false;
+    const flag = String(import.meta.env.VITE_CHATBOX_REALTIME ?? '0')
         .trim()
         .toLowerCase();
-    if (flag === '0' || flag === 'false' || flag === 'no' || flag === 'off') return false;
-    return true;
+    if (flag === '1' || flag === 'true' || flag === 'yes' || flag === 'on') return true;
+    return false;
 }
 
 function normalizeSocketEmail(email) {
@@ -88,7 +88,7 @@ export function disconnectChatboxSocket() {
 
 function ensureSocketInstance() {
     if (typeof window === 'undefined') return null;
-    if (!isChatboxRealtimeEnabled()) return null;
+    if (!isChatboxEnabled() || !isChatboxRealtimeEnabled()) return null;
     if (socket) return socket;
 
     const useWs = shouldUseWebsocketUpgrade();
@@ -201,7 +201,7 @@ export function subscribeChatboxRealtime({
     onGroupsChanged,
     onReconnect,
 } = {}) {
-    if (!isChatboxRealtimeEnabled()) {
+    if (!isChatboxEnabled() || !isChatboxRealtimeEnabled()) {
         return () => {};
     }
 

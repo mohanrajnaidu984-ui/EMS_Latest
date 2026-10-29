@@ -36,6 +36,7 @@ BEGIN
         [CustomClauses] NVARCHAR(MAX) NULL,
         [ClauseOrder] NVARCHAR(MAX) NULL,
         [DigitalSignaturesJson] NVARCHAR(MAX) NULL,
+        [PageOrientationsJson] NVARCHAR(MAX) NULL,
         [CustomerReference] NVARCHAR(255) NULL,
         [YourRef] NVARCHAR(255) NULL,
         [QuoteType] NVARCHAR(500) NULL,

@@ -569,6 +569,22 @@ const applyFontCommand = (editor, command, rawValue) => {
 
     if (!applied) return false;
 
+    /* Mark intentional toolbar font picks so paste/render sanitizers do not strip them. */
+    if (command === 'fontname') {
+        try {
+            const root = editor.editor;
+            const range = lockedRange || editor.s?.range;
+            if (root && range && !range.collapsed) {
+                root.querySelectorAll('[style*="font-family"], font[face]').forEach((el) => {
+                    if (!elementIntersectsRange(el, range, root.ownerDocument)) return;
+                    el.setAttribute('data-ems-user-font', '1');
+                });
+            }
+        } catch {
+            /* ignore */
+        }
+    }
+
     const range = editor.s?.range;
     if (range && !range.collapsed) {
         editor.__emsLastGoodListRange = range.cloneRange();
@@ -581,6 +597,66 @@ const applyFontCommand = (editor, command, rawValue) => {
     editor.e?.fire?.('updateToolbar');
     scheduleClauseEditorSelectionRestore(editor, selectionBookmark);
     return true;
+};
+
+/**
+ * Reset font-family to the quote default (Segoe UI / Selawik).
+ * @param {object} editor
+ * @param {'selection'|'document'} [scope]
+ */
+export function resetClauseEditorFontToDefault(editor, scope = 'selection') {
+    if (!editor?.editor) return false;
+    const root = editor.editor;
+    const clearEl = (el) => {
+        if (!el?.style) return;
+        el.style.removeProperty('font-family');
+        el.removeAttribute?.('face');
+        el.removeAttribute?.('data-ems-user-font');
+    };
+    if (scope === 'document') {
+        root.querySelectorAll('[style*="font-family"], [face], [data-ems-user-font], font').forEach(clearEl);
+        clearEl(root);
+    } else {
+        restoreClauseEditorFormatSelection(editor);
+        let range = null;
+        try {
+            range = editor.s?.range?.cloneRange?.() || null;
+        } catch {
+            range = null;
+        }
+        if (!range || range.collapsed) {
+            root.querySelectorAll('[style*="font-family"], [face], [data-ems-user-font], font').forEach(clearEl);
+        } else {
+            root.querySelectorAll('[style*="font-family"], [face], [data-ems-user-font], font').forEach((el) => {
+                if (elementIntersectsRange(el, range, root.ownerDocument)) clearEl(el);
+            });
+        }
+    }
+    if (typeof editor.synchronizeValues === 'function') editor.synchronizeValues();
+    editor.e?.fire?.('change');
+    editor.e?.fire?.('updateToolbar');
+    return true;
+}
+
+/** Toolbar: reset selection (or whole clause) to default Segoe UI. */
+export const EMS_RESET_FONT_TOOLBAR_CONTROL = {
+    icon: 'font',
+    tooltip: 'Reset font to default (Segoe UI)',
+    exec: (editor, _current, { control }) => {
+        const whole = control?.args?.[0] === 'document';
+        resetClauseEditorFontToDefault(editor, whole ? 'document' : 'selection');
+        return true;
+    },
+    list: {
+        selection: 'Reset selection to Segoe UI',
+        document: 'Reset whole clause to Segoe UI',
+    },
+    childExec: (editor, _current, { control, button }) => {
+        const key = control?.args?.[0];
+        resetClauseEditorFontToDefault(editor, key === 'document' ? 'document' : 'selection');
+        closeListToolbarPopup(editor, button);
+        return true;
+    },
 };
 
 const resolveFontControlArg = (control) => control?.args?.[0];

@@ -5,7 +5,6 @@ import { useAuth } from '../../context/AuthContext';
 import DashboardQuoteSummaryTable, { getQuoteListRowKey } from '../Dashboard/DashboardQuoteSummaryTable';
 import DateInput from '../Enquiry/DateInput';
 import QuoteForm from './QuoteForm';
-import { QUOTE_TAB_B2B } from '../../utils/quoteNav';
 import {
     EMS_LIST_SEARCH_ENABLED_STYLE,
     EMS_LIST_SEARCH_DISABLED_STYLE,
@@ -122,6 +121,7 @@ function mapPendingApprovalToTableRow(row) {
         ListWorkflowNo: String(row.workflowNo || '').trim(),
         ListApprovalStatus: String(row.approvalStatus || '').trim(),
         ListReasonForRevision: String(row.reasonForRevision || '').trim(),
+        ListInitiatorName: String(row.createdByName || '').trim(),
         ListPendingPvId: quoteId ? String(quoteId) : draftQuoteId ? `d-${draftQuoteId}` : '',
         QuoteListKind: ref || (quoteId ? `q-${quoteId}` : draftQuoteId ? `d-${draftQuoteId}` : ''),
         _approvalSelection: {
@@ -234,46 +234,52 @@ function mapQuoteListRowToApprovalSelection(row) {
 async function resolveQuoteSelectionFromListRow(row, userEmail) {
     const mapped = row?._approvalSelection ? row : mapQuoteListRowToApprovalSelection(row);
     const sel = mapped?._approvalSelection || {};
-    const draftQuoteId = sel.draftQuoteId
+    const draftQuoteIdRaw = sel.draftQuoteId
         ? Number(sel.draftQuoteId)
         : String(mapped?.ListPendingPvId || '').startsWith('d-')
           ? Number(String(mapped.ListPendingPvId).slice(2))
           : null;
-    const quoteId =
+    const draftQuoteId =
+        draftQuoteIdRaw != null && Number.isFinite(draftQuoteIdRaw) && draftQuoteIdRaw > 0
+            ? draftQuoteIdRaw
+            : null;
+    const quoteIdRaw =
         sel.quoteId ||
         (String(mapped?.ListPendingPvId || '').trim() &&
         !String(mapped.ListPendingPvId).startsWith('d-')
             ? Number(mapped.ListPendingPvId)
             : null);
+    const quoteId =
+        quoteIdRaw != null && Number.isFinite(Number(quoteIdRaw)) && Number(quoteIdRaw) > 0
+            ? Number(quoteIdRaw)
+            : null;
     const quoteNumber = String(sel.quoteNumber || parseQuoteRefFromListRow(mapped) || '').trim();
     const requestNo = String(sel.requestNo || mapped?.RequestNo || '').trim();
+
+    const base = {
+        quoteNumber,
+        requestNo,
+        customerName: String(sel.customerName || mapped?.ListQuoteDetailToName || '').trim(),
+        leadJobName: sel.leadJobName || '',
+        ownJob: sel.ownJob || '',
+        projectName: sel.projectName || mapped?.ProjectName || '',
+        revisionNo: sel.revisionNo ?? null,
+    };
 
     // Prefer saved quote when both ids exist (draft was promoted after final approval).
     if (quoteId && requestNo) {
         return {
+            ...base,
             quoteId,
             draftQuoteId: null,
-            quoteNumber,
-            requestNo,
-            customerName: String(sel.customerName || mapped?.ListQuoteDetailToName || '').trim(),
-            leadJobName: sel.leadJobName || '',
-            ownJob: sel.ownJob || '',
-            projectName: sel.projectName || mapped?.ProjectName || '',
-            revisionNo: sel.revisionNo ?? null,
         };
     }
 
-    if (draftQuoteId && Number.isFinite(draftQuoteId) && requestNo) {
+    if (draftQuoteId && requestNo) {
         return {
+            ...base,
             quoteId: null,
             draftQuoteId,
-            quoteNumber,
-            requestNo,
-            customerName: String(sel.customerName || mapped?.ListQuoteDetailToName || '').trim(),
-            leadJobName: sel.leadJobName || '',
-            ownJob: sel.ownJob || '',
-            projectName: sel.projectName || mapped?.ProjectName || '',
-            revisionNo: sel.revisionNo ?? null,
         };
     }
     if (!requestNo) return null;
@@ -464,8 +470,12 @@ export default function QuoteApprovalPage({ openContext = null }) {
               ? correctionLoading
               : pendingLoading;
 
-    const notifyPendingApprovalsChanged = useCallback(() => {
-        window.dispatchEvent(new CustomEvent(EMS_PENDING_APPROVALS_CHANGED));
+    const notifyPendingApprovalsChanged = useCallback((detail) => {
+        window.dispatchEvent(
+            new CustomEvent(EMS_PENDING_APPROVALS_CHANGED, {
+                detail: detail && typeof detail === 'object' ? detail : undefined,
+            })
+        );
     }, []);
 
     const refetchPending = useCallback(async () => {
@@ -528,6 +538,7 @@ export default function QuoteApprovalPage({ openContext = null }) {
             if (meta?.action === 'rollback') {
                 dismissedPendingKeysRef.current.clear();
                 void refetchPending();
+                notifyPendingApprovalsChanged();
                 return;
             }
 
@@ -565,17 +576,18 @@ export default function QuoteApprovalPage({ openContext = null }) {
                 setSelectedPreview(null);
             });
 
-            /* Optimistic path: do not refetch yet (would restore the row before SQL commits). */
+            /* Optimistic path: list dismissed locally; badge delta comes from workflow event. */
             if (meta?.optimistic) {
                 return;
             }
 
             notifyPendingApprovalsChanged();
+            void refetchApproved();
             window.setTimeout(() => {
                 void refetchPending();
             }, 600);
         },
-        [refetchPending, selectedPreview, notifyPendingApprovalsChanged]
+        [refetchPending, refetchApproved, selectedPreview, notifyPendingApprovalsChanged]
     );
 
     useEffect(() => {
@@ -645,7 +657,9 @@ export default function QuoteApprovalPage({ openContext = null }) {
     // Instant refresh: workflow send / approve / reject anywhere in the app, or returning to this tab.
     useEffect(() => {
         if (listTab !== LIST_TAB.PENDING || !userEmail || divisionsLoading) return;
-        const onChanged = () => {
+        const onChanged = (event) => {
+            // Badge-only optimistic tick — list already dismissed locally.
+            if (event?.detail?.skipRefresh) return;
             void refetchPending();
         };
         const onVisible = () => {
@@ -737,6 +751,11 @@ export default function QuoteApprovalPage({ openContext = null }) {
             setResolvingPreview(true);
             try {
                 const sel = await resolveQuoteSelectionFromListRow(row, userEmail);
+                if (!sel?.requestNo) {
+                    console.warn('[QuoteApprovalPage] could not resolve quote selection from row', row);
+                    setSelectedPreview(null);
+                    return;
+                }
                 setSelectedPreview(sel);
             } catch (e) {
                 console.warn('[QuoteApprovalPage] resolve preview', e);
@@ -777,7 +796,8 @@ export default function QuoteApprovalPage({ openContext = null }) {
     const previewOpenContext = useMemo(() => {
         if (!selectedPreview?.requestNo) return null;
         return {
-            tab: QUOTE_TAB_B2B,
+            /** Not a Quote-module tab — avoids QuoteForm treating this as a B2B deep-link open. */
+            tab: 'Approvals',
             requestNo: selectedPreview.requestNo,
             quoteId: selectedPreview.quoteId ? String(selectedPreview.quoteId) : '',
             draftQuoteId: selectedPreview.draftQuoteId ? String(selectedPreview.draftQuoteId) : '',
@@ -793,23 +813,38 @@ export default function QuoteApprovalPage({ openContext = null }) {
     const previewKey = previewOpenContext
         ? [
               previewOpenContext.requestNo,
-              previewOpenContext.quoteId,
-              previewOpenContext.quoteNumber,
+              previewOpenContext.quoteId || '',
+              previewOpenContext.draftQuoteId || '',
+              previewOpenContext.quoteNumber || '',
           ].join('::')
         : '';
 
     const selectedListRowKey = useMemo(() => {
-        if (!selectedPreview?.quoteId) return '';
-        const qid = String(selectedPreview.quoteId);
-        const match = displayRows.find(
-            (r) => String(r._approvalSelection?.quoteId ?? r.ListPendingPvId ?? '').trim() === qid
-        );
+        const qid = selectedPreview?.quoteId ? String(selectedPreview.quoteId) : '';
+        const did = selectedPreview?.draftQuoteId ? String(selectedPreview.draftQuoteId) : '';
+        if (!qid && !did) return '';
+        const match = displayRows.find((r) => {
+            const sel = r._approvalSelection || {};
+            if (qid && String(sel.quoteId ?? r.ListPendingPvId ?? '').trim() === qid) return true;
+            if (did) {
+                const rowDraft =
+                    sel.draftQuoteId != null
+                        ? String(sel.draftQuoteId)
+                        : String(r.ListPendingPvId || '').startsWith('d-')
+                          ? String(r.ListPendingPvId).slice(2)
+                          : '';
+                if (rowDraft && rowDraft === did) return true;
+            }
+            return false;
+        });
         if (match) {
             return getQuoteListRowKey(match, displayRows.indexOf(match));
         }
         return getQuoteListRowKey({
             RequestNo: selectedPreview.requestNo,
-            QuoteListKind: selectedPreview.quoteNumber || `q-${qid}`,
+            QuoteListKind:
+                selectedPreview.quoteNumber ||
+                (qid ? `q-${qid}` : did ? `d-${did}` : ''),
         });
     }, [selectedPreview, displayRows]);
 
@@ -1170,7 +1205,7 @@ export default function QuoteApprovalPage({ openContext = null }) {
                 ) : previewOpenContext ? (
                     <QuoteForm
                         key={previewKey}
-                        embeddedApprovalReview
+                        embeddedApprovalReview={true}
                         openContext={previewOpenContext}
                         onApprovalActionComplete={handleApprovalActionComplete}
                     />

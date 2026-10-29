@@ -119,6 +119,9 @@ function plainClauseEmptyMarkerText(prefix) {
 const EMS_LIST_MARKER_GAP = '2ch';
 const EMS_BULLET_MARKER_WIDTH = '0.55em';
 const EMS_NUM_MARKER_WIDTH = '1.45em';
+/* Sized to "4.1." / "4.1.1." — markers are right-aligned so the number-to-text gap matches the top level. */
+const EMS_NUM_SUB_MARKER_WIDTH = '1.65em';
+const EMS_NUM_SUB2_MARKER_WIDTH = '2.5em';
 const EMS_LINE_INDENT_STEP_PX = 24;
 const EMS_LINE_INDENT_MAX_PX = 240;
 
@@ -1191,6 +1194,24 @@ function resolveTextOffsetInRoot(root, targetOffset) {
     return { node: root, offset: 0 };
 }
 
+/**
+ * Like resolveTextOffsetInRoot, but an offset on a line boundary resolves to the start of the
+ * next line (selection start) instead of the end of the previous one.
+ */
+function resolveTextOffsetInRootForward(root, targetOffset) {
+    const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let counted = 0;
+    let node;
+    while ((node = walker.nextNode())) {
+        const len = node.textContent?.length ?? 0;
+        if (counted + len > targetOffset) {
+            return { node, offset: Math.max(0, targetOffset - counted) };
+        }
+        counted += len;
+    }
+    return resolveTextOffsetInRoot(root, targetOffset);
+}
+
 function selectClauseEditorRange(jodit, range) {
     if (!range || !jodit?.s) return false;
     try {
@@ -1212,11 +1233,16 @@ function restoreTextRangeBookmark(jodit, bookmark) {
     const root = getWysiwygEditor(jodit);
     if (!root || !bookmark) return false;
     try {
-        const start = resolveTextOffsetInRoot(root, bookmark.start);
+        const start = resolveTextOffsetInRootForward(root, bookmark.start);
         const end = resolveTextOffsetInRoot(root, bookmark.end);
         const range = root.ownerDocument.createRange();
         range.setStart(start.node, start.offset);
         range.setEnd(end.node, end.offset);
+        if (range.collapsed && bookmark.end > bookmark.start) {
+            const back = resolveTextOffsetInRoot(root, bookmark.start);
+            range.setStart(back.node, back.offset);
+            range.setEnd(end.node, end.offset);
+        }
         return selectClauseEditorRange(jodit, range);
     } catch {
         return false;
@@ -1872,13 +1898,36 @@ function replaceEditorBodyWithSingleList(jodit, tagName, preset, clearClassNames
 }
 
 /** Remember the last non-empty editor selection (opening the bullet menu often collapses it). */
+function rangeInsideSingleTableCell(range) {
+    if (!range || range.collapsed) return null;
+    try {
+        const startEl =
+            range.startContainer?.nodeType === 1
+                ? range.startContainer
+                : range.startContainer?.parentElement;
+        const endEl =
+            range.endContainer?.nodeType === 1
+                ? range.endContainer
+                : range.endContainer?.parentElement;
+        const startCell = startEl?.closest?.('td, th');
+        const endCell = endEl?.closest?.('td, th');
+        if (!startCell || startCell !== endCell || !startCell.isConnected) return null;
+        if (!startCell.contains(range.startContainer) || !startCell.contains(range.endContainer)) {
+            return null;
+        }
+        return startCell;
+    } catch {
+        return null;
+    }
+}
+
 function rememberEditorListSelection(jodit) {
     try {
-        if (isClauseEditorSelectionInTable(jodit)) return;
         const activeRange = getClauseEditorActiveTextRange(jodit);
-        if (activeRange) {
-            jodit.__emsLastGoodListRange = activeRange.cloneRange();
-        }
+        if (!activeRange) return;
+        /* Keep a highlighted run inside one cell so Bold can target that text. */
+        if (isClauseEditorSelectionInTable(jodit) && !rangeInsideSingleTableCell(activeRange)) return;
+        jodit.__emsLastGoodListRange = activeRange.cloneRange();
     } catch {
         /* ignore */
     }
@@ -1894,7 +1943,10 @@ function stashListToolbarSelection(jodit) {
             jodit.__emsListToolbarSelStashed = true;
             return;
         }
-        if (jodit.__emsLastGoodListRange) {
+        if (
+            jodit.__emsLastGoodListRange &&
+            !rangeInsideSingleTableCell(jodit.__emsLastGoodListRange)
+        ) {
             jodit.__emsSavedListRange = jodit.__emsLastGoodListRange.cloneRange();
             jodit.__emsListToolbarSelStashed = true;
         }
@@ -1904,7 +1956,12 @@ function stashListToolbarSelection(jodit) {
 }
 
 function restoreListToolbarSelection(jodit) {
-    if (isClauseEditorSelectionInTable(jodit)) return false;
+    const live = getClauseEditorActiveTextRange(jodit);
+    if (live && rangeInsideSingleTableCell(live)) return true;
+    const saved = jodit.__emsSavedListRange || jodit.__emsLastGoodListRange;
+    if (isClauseEditorSelectionInTable(jodit) && !rangeInsideSingleTableCell(saved)) {
+        return false;
+    }
     let restored = false;
     let restoredFromSavedRange = false;
     if (jodit.__emsSavedListRange) {
@@ -2058,7 +2115,7 @@ function registerListToolbarSelectionHooks(jodit) {
     const onEditorSelectionActivity = () => {
         if (jodit.__emsListApplyLock) return;
         const staged = (jodit.__emsFormatTableCells || []).filter((c) => c?.isConnected);
-        if (staged.length >= 1 || jodit.__emsTableToolbarInteracting) return;
+        if (staged.length >= 2 || jodit.__emsTableToolbarInteracting) return;
         rememberEditorListSelection(jodit);
     };
 
@@ -2088,7 +2145,7 @@ function registerListToolbarSelectionHooks(jodit) {
         doc.addEventListener('selectionchange', () => {
             if (jodit.__emsListApplyLock) return;
             const staged = (jodit.__emsFormatTableCells || []).filter((c) => c?.isConnected);
-            if (staged.length >= 1 || jodit.__emsTableToolbarInteracting) return;
+            if (staged.length >= 2 || jodit.__emsTableToolbarInteracting) return;
             rememberEditorListSelection(jodit);
         });
     }
@@ -2106,6 +2163,9 @@ function registerListToolbarSelectionHooks(jodit) {
             return;
         }
         if (isClauseEditorSelectionInTable(jodit)) {
+            if (/^(bold|italic|underline|strikethrough|forecolor|emsforecolor|background|emsbackground)$/.test(c)) {
+                restoreListToolbarSelection(jodit);
+            }
             jodit.__emsPendingFormatBookmark = null;
             return;
         }
@@ -2285,12 +2345,15 @@ function shouldApplyListPresetInPlaceOnly(jodit, editorRoot, tagName) {
 }
 
 function applyListPresetInPlace(jodit, editorRoot, tagName, preset, clearClassNames, oppClear) {
-    if (tagName === 'ul') {
-        convertListsInScope(jodit, 'ol', 'ul', oppClear);
-    } else {
-        convertListsInScope(jodit, 'ul', 'ol', oppClear);
+    const alreadyTarget = getListsToStyle(jodit, tagName);
+    const converted =
+        tagName === 'ul'
+            ? convertListsInScope(jodit, 'ol', 'ul', oppClear)
+            : convertListsInScope(jodit, 'ul', 'ol', oppClear);
+    let lists = [...new Set([...alreadyTarget, ...converted])].filter((l) => l?.isConnected);
+    if (!lists.length) {
+        lists = getListsToStyle(jodit, tagName);
     }
-    let lists = getListsToStyle(jodit, tagName);
     if (!lists.length) {
         lists = getListsIntersectingRange(jodit, tagName);
     }
@@ -2523,12 +2586,63 @@ function mergeListsIntersectingRange(jodit, tagName) {
 }
 
 /** All lists of a tag that overlap the current selection (more reliable than ancestor-only). */
+/** Range over an <li>'s own line (excludes its nested sub-list). */
+function listItemLabelRange(li) {
+    const r = li.ownerDocument.createRange();
+    r.selectNodeContents(li);
+    const nested = li.querySelector(':scope > ul, :scope > ol');
+    if (nested) r.setEndBefore(nested);
+    return r;
+}
+
+/** Caret / selection is on this item's own text (not only on its sub-items). */
+function rangeSelectsListItemLabel(range, li) {
+    try {
+        const lr = listItemLabelRange(li);
+        if (range.collapsed) {
+            return (
+                range.compareBoundaryPoints(Range.START_TO_START, lr) >= 0 &&
+                range.compareBoundaryPoints(Range.END_TO_END, lr) <= 0
+            );
+        }
+        const overlaps =
+            range.compareBoundaryPoints(Range.END_TO_START, lr) < 0 &&
+            range.compareBoundaryPoints(Range.START_TO_END, lr) > 0;
+        if (!overlaps) return false;
+        const r = lr.cloneRange();
+        if (range.compareBoundaryPoints(Range.START_TO_START, r) > 0) {
+            r.setStart(range.startContainer, range.startOffset);
+        }
+        if (range.compareBoundaryPoints(Range.END_TO_END, r) < 0) {
+            r.setEnd(range.endContainer, range.endOffset);
+        }
+        return !!r.toString().replace(/\u00a0/g, ' ').trim() || !getListItemDirectText(li);
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Keep only lists whose own items are selected — selecting 4.1–4.4 restyles that sub-list,
+ * not the parent "1. 2. 3. 4." list that merely contains it.
+ */
+function narrowListsToSelectedItems(editor, lists, range) {
+    if (!range || !lists.length) return lists;
+    const listHasSelectedItem = (list) =>
+        [...list.children].some((li) => li.tagName === 'LI' && rangeSelectsListItemLabel(range, li));
+    const narrowed = lists.filter(listHasSelectedItem);
+    if (narrowed.length) return narrowed;
+    const onSomeListItem = [...editor.querySelectorAll('li')].some((li) => rangeSelectsListItemLabel(range, li));
+    return onSomeListItem ? [] : lists;
+}
+
 function getListsIntersectingRange(jodit, tagName) {
     const editor = getWysiwygEditor(jodit);
     if (!editor) return [];
     const range = getEffectiveListRange(jodit);
     const fromAncestor = getListsInScope(jodit, tagName);
-    if (!range || range.collapsed) return fromAncestor;
+    if (!range) return fromAncestor;
+    if (range.collapsed) return narrowListsToSelectedItems(editor, fromAncestor, range);
 
     const found = new Set(fromAncestor);
     const doc = editor.ownerDocument;
@@ -2544,7 +2658,7 @@ function getListsIntersectingRange(jodit, tagName) {
             /* ignore detached nodes */
         }
     });
-    return [...found];
+    return narrowListsToSelectedItems(editor, [...found], range);
 }
 
 /** Replace <ol> with <ul> or the reverse so bullet/number toolbar matches the chosen list type. */
@@ -2562,21 +2676,22 @@ function replaceListElement(list, newTagName) {
     return replacement;
 }
 
+/** Returns the replacement list elements (DOM moves can shift the live selection off them). */
 function convertListsInScope(jodit, fromTag, toTag, clearClassNames) {
     const lists = [...getListsIntersectingRange(jodit, fromTag)];
-    lists.forEach((list) => {
+    const replacements = lists.map((list) => {
         stripClasses(list, clearClassNames);
         if (list.style) {
             list.style.listStyleType = '';
         }
-        replaceListElement(list, toTag);
+        return replaceListElement(list, toTag);
     });
     const editor = getWysiwygEditor(jodit);
     if (editor) {
         mergeAdjacentLists(editor, toTag);
         stripLeadingListMarkers(editor);
     }
-    return lists.length;
+    return replacements;
 }
 
 function applyPresetToListElement(list, preset, clearClassNames, oppositeClearClassNames) {
@@ -2692,7 +2807,119 @@ function clearListPreset(jodit, tagName, clearClassNames) {
     return true;
 }
 
+/** Lines of the same series as block (same parent number, same depth), in document order. */
+function collectPlainSubSeries(block, allowTopLevel = false) {
+    const parts = getPlainNumberParts(block);
+    if (!parts || parts.length < (allowTopLevel ? 1 : 2)) return [];
+    const depth = parts.length;
+    const parent = parts.slice(0, -1);
+    const inSeries = (p) => p.length === depth && (depth === 1 || clausePartsSharePrefix(p, parent));
+    const series = [block];
+    let node = getPreviousLineBlock(block);
+    while (node) {
+        const p = getPlainNumberParts(node);
+        if (!p || p.length < depth) break;
+        if (p.length === depth && !inSeries(p)) break;
+        if (inSeries(p)) series.unshift(node);
+        node = getPreviousLineBlock(node);
+    }
+    node = getNextLineBlock(block);
+    while (node) {
+        const p = getPlainNumberParts(node);
+        if (!p || p.length < depth) break;
+        if (p.length === depth && !inSeries(p)) break;
+        if (inSeries(p)) series.push(node);
+        node = getNextLineBlock(node);
+    }
+    return series;
+}
+
+function restylePlainNumberedBlock(block, style) {
+    const m = matchPlainNumberedBlock(block);
+    if (!m) return;
+    const canonical = formatClauseNumberParts(parseClauseNumberParts(m[1]));
+    setPlainSubNumberStyle(block, style);
+    syncPlainNumberAttr(block, canonical);
+    const shown = plainNumberDisplayPrefix(block, canonical);
+    const bodyEmpty = plainClauseBodyIsEmpty(
+        (block.textContent || '').replace(/\u00a0/g, ' ').slice(m[0].length)
+    );
+    replaceLeadingMarkerPreservingFormatting(
+        block,
+        m[0].length,
+        bodyEmpty ? plainClauseEmptyMarkerText(shown) : `${shown} `
+    );
+}
+
+/** "None" on typed numbers: drop the "2.1. " / "a) " prefix, keep the text and indent. */
+function stripPlainNumberedBlockMarker(block) {
+    const m = matchPlainNumberedBlock(block);
+    if (!m) return;
+    replaceLeadingMarkerPreservingFormatting(block, m[0].length, '');
+    block.removeAttribute('data-ems-num-style');
+    block.removeAttribute('data-ems-num');
+    if (!(block.textContent || '').replace(/\u00a0/g, ' ').trim()) block.innerHTML = '<br>';
+}
+
+/**
+ * Number menu on plain typed numbers:
+ * - "None" removes the prefixes (selected lines, or the caret line's series);
+ * - a) / i. / A. … restyles a sub-series (2.4.1. …) instead of wrapping it in an <ol>;
+ * - "1. 2. 3." puts styled lines back to digits; on plain digit lines it falls through to the <ol> conversion.
+ */
+function tryApplyPlainSubNumberStyle(jodit, type) {
+    const root = getWysiwygEditor(jodit);
+    if (!root) return false;
+    const range = getEffectiveListRange(jodit) || getClauseEditorLiveRange(jodit);
+    if (!range || !root.contains(range.startContainer)) return false;
+    const numbered = collectIndentBlocksInRange(root, range).filter(
+        (b) => b.tagName !== 'LI' && isPlainNumberedLineBlock(b)
+    );
+    if (!numbered.length) return false;
+
+    if (type === 'none') {
+        const targets = range.collapsed ? collectPlainSubSeries(numbered[0], true) : numbered;
+        if (!targets.length) return false;
+        const caretLine = targets[targets.length - 1];
+        targets.forEach(stripPlainNumberedBlockMarker);
+        if (caretLine?.isConnected) {
+            placeCaretInBlock(jodit, caretLine, (caretLine.textContent || '').length);
+        }
+        notifyEditorContentChange(jodit);
+        return true;
+    }
+
+    const picked = numbered.filter((b) => (getPlainNumberParts(b) || []).length >= 2);
+    if (!picked.length) return false;
+
+    const style = PLAIN_SUB_NUMBER_STYLES.has(type) ? type : '';
+    if (!style) {
+        const anyStyled = picked.some((b) =>
+            collectPlainSubSeries(b).some((line) => getPlainSubNumberStyle(line))
+        );
+        if (!anyStyled) return false;
+    }
+    const done = new Set();
+    picked.forEach((b) => {
+        collectPlainSubSeries(b).forEach((line) => {
+            if (done.has(line)) return;
+            done.add(line);
+            restylePlainNumberedBlock(line, style);
+        });
+    });
+
+    const caretBlock = picked[picked.length - 1];
+    if (caretBlock?.isConnected) {
+        placeCaretInBlock(jodit, caretBlock, (caretBlock.textContent || '').length);
+    }
+    notifyEditorContentChange(jodit);
+    return true;
+}
+
 function applyListPreset(jodit, tagName, type, presets, clearClassNames, oppositeClearClassNames) {
+    if (tagName === 'ol' && tryApplyPlainSubNumberStyle(jodit, type)) {
+        return true;
+    }
     if (type === 'none') {
         return clearListPreset(jodit, tagName, clearClassNames);
     }
@@ -2845,23 +3072,163 @@ function isSameNumberSeries(partsA, partsB) {
     return true;
 }
 
+/**
+ * Sub-level marker styles for plain numbered lines ("2.4.1." shown as "a)", "i.", ...).
+ * The visible text holds the styled marker; the outline number stays in data-ems-num so
+ * renumber / Tab / Enter logic keeps working on digits.
+ */
+const PLAIN_SUB_NUMBER_STYLES = new Set([
+    'decimal-paren',
+    'upper-roman',
+    'upper-alpha',
+    'lower-alpha-paren',
+    'lower-alpha',
+    'lower-roman',
+]);
+const CLAUSE_PLAIN_SUB_MARKER_RE = /^\s*(?:\d{1,3}|[A-Za-z]{1,8})[.)]\s*/;
+
+function toAlphaCounter(n) {
+    let x = Math.max(1, Math.floor(n));
+    let s = '';
+    while (x > 0) {
+        x -= 1;
+        s = String.fromCharCode(97 + (x % 26)) + s;
+        x = Math.floor(x / 26);
+    }
+    return s;
+}
+
+function toRomanCounter(n) {
+    const map = [
+        [1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'],
+        [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i'],
+    ];
+    let x = Math.max(1, Math.floor(n));
+    let s = '';
+    for (const [v, r] of map) {
+        while (x >= v) {
+            s += r;
+            x -= v;
+        }
+    }
+    return s;
+}
+
+function formatPlainSubMarker(style, n) {
+    switch (style) {
+        case 'decimal-paren':
+            return `${n})`;
+        case 'upper-roman':
+            return `${toRomanCounter(n).toUpperCase()}.`;
+        case 'upper-alpha':
+            return `${toAlphaCounter(n).toUpperCase()}.`;
+        case 'lower-alpha-paren':
+            return `${toAlphaCounter(n)})`;
+        case 'lower-alpha':
+            return `${toAlphaCounter(n)}.`;
+        case 'lower-roman':
+            return `${toRomanCounter(n)}.`;
+        default:
+            return '';
+    }
+}
+
+function getPlainSubNumberStyle(block) {
+    const s = block?.getAttribute?.('data-ems-num-style') || '';
+    return PLAIN_SUB_NUMBER_STYLES.has(s) ? s : '';
+}
+
+function setPlainSubNumberStyle(block, style) {
+    if (!block?.setAttribute) return;
+    if (PLAIN_SUB_NUMBER_STYLES.has(style)) block.setAttribute('data-ems-num-style', style);
+    else block.removeAttribute('data-ems-num-style');
+}
+
+/** Visible marker for an outline number on this block ("2.4.1." or its styled form, e.g. "a)"). */
+function plainNumberDisplayPrefix(block, canonicalPrefix) {
+    const style = getPlainSubNumberStyle(block);
+    if (!style) return canonicalPrefix;
+    const parts = parseClauseNumberParts(String(canonicalPrefix).replace(/\.$/, ''));
+    const last = parts[parts.length - 1];
+    return Number.isFinite(last) ? formatPlainSubMarker(style, last) : canonicalPrefix;
+}
+
+function syncPlainNumberAttr(block, canonicalPrefix) {
+    if (!block?.setAttribute) return;
+    if (getPlainSubNumberStyle(block)) {
+        block.setAttribute('data-ems-num', String(canonicalPrefix).replace(/\.$/, ''));
+    } else {
+        block.removeAttribute('data-ems-num');
+    }
+}
+
+/** Like text.match(CLAUSE_PLAIN_NUMBER_RE): [0] = marker incl. gap, [1] = outline number ("2.4.1"). */
+function matchPlainNumberedBlock(block) {
+    if (!block || block.nodeType !== 1) return null;
+    const text = (block.textContent || '').replace(/\u00a0/g, ' ');
+    const style = getPlainSubNumberStyle(block);
+    if (style) {
+        const canon = String(block.getAttribute('data-ems-num') || '').trim();
+        const parts = parseClauseNumberParts(canon);
+        const m = text.match(CLAUSE_PLAIN_SUB_MARKER_RE);
+        if (
+            m &&
+            parts.length > 1 &&
+            parts.every(Number.isFinite) &&
+            m[0].trim() === formatPlainSubMarker(style, parts[parts.length - 1])
+        ) {
+            const out = [m[0], canon];
+            out.index = 0;
+            out.input = text;
+            return out;
+        }
+    }
+    return text.match(CLAUSE_PLAIN_NUMBER_RE);
+}
+
 function replaceBlockNumberPrefix(block, newPrefix) {
     const text = (block.textContent || '').replace(/\u00a0/g, ' ');
-    const match = text.match(CLAUSE_PLAIN_NUMBER_RE);
+    const match = matchPlainNumberedBlock(block);
     if (!match) return;
     const body = text.slice(match[0].length).replace(/^\s+/, '');
+    const shown = plainNumberDisplayPrefix(block, newPrefix);
+    syncPlainNumberAttr(block, newPrefix);
     block.textContent = plainClauseBodyIsEmpty(body)
-        ? plainClauseEmptyMarkerText(newPrefix)
-        : `${newPrefix} ${body}`;
+        ? plainClauseEmptyMarkerText(shown)
+        : `${shown} ${body}`;
+}
+
+/** Swap the leading marker text without flattening inline formatting in the body. */
+function replaceLeadingMarkerPreservingFormatting(block, oldMarkerLen, newMarkerWithGap) {
+    const walker = block.ownerDocument.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    let remaining = oldMarkerLen;
+    let first = null;
+    while (remaining > 0 && walker.nextNode()) {
+        const node = walker.currentNode;
+        if (!first) first = node;
+        const len = node.nodeValue.length;
+        if (len <= remaining) {
+            node.nodeValue = '';
+            remaining -= len;
+        } else {
+            node.nodeValue = node.nodeValue.slice(remaining);
+            remaining = 0;
+        }
+    }
+    if (first) first.nodeValue = newMarkerWithGap + first.nodeValue;
+    else block.textContent = newMarkerWithGap;
 }
 
 /** Caret after "1.2. " / bullet gap — never flush against the marker on a new empty line. */
 function caretOffsetAfterPlainClauseMarker(block) {
     if (!block) return 0;
     const text = (block.textContent || '').replace(/\u00a0/g, ' ');
-    const numMatch = text.match(CLAUSE_PLAIN_NUMBER_RE);
+    const numMatch = matchPlainNumberedBlock(block);
     if (numMatch) {
-        const prefix = formatClauseNumberParts(parseClauseNumberParts(numMatch[1]));
+        const prefix = plainNumberDisplayPrefix(
+            block,
+            formatClauseNumberParts(parseClauseNumberParts(numMatch[1]))
+        );
         const body = text.slice(numMatch[0].length).replace(/^\s+/, '');
         if (plainClauseBodyIsEmpty(body)) {
             const normalized = plainClauseEmptyMarkerText(prefix);
@@ -2901,8 +3268,7 @@ function isPlainNumberedLineBlock(node) {
     if (node.tagName === 'DIV' && node.querySelector?.(':scope > p, :scope > ul, :scope > ol, :scope > table')) {
         return false;
     }
-    const text = (node.textContent || '').replace(/\u00a0/g, ' ');
-    return CLAUSE_PLAIN_NUMBER_RE.test(text);
+    return !!matchPlainNumberedBlock(node);
 }
 
 /** After inserting a new numbered line, bump the last segment of each following sibling in the same series. */
@@ -2916,8 +3282,7 @@ function renumberFollowingPlainNumberedLines(afterBlock, seriesParts) {
             continue;
         }
         if (!isPlainNumberedLineBlock(node)) break;
-        const text = (node.textContent || '').replace(/\u00a0/g, ' ');
-        const m = text.match(CLAUSE_PLAIN_NUMBER_RE);
+        const m = matchPlainNumberedBlock(node);
         if (!m) break;
         const parts = parseClauseNumberParts(m[1]);
         if (parts.length !== depth || !isSameNumberSeries(parts, seriesParts)) break;
@@ -2938,8 +3303,7 @@ function renumberBlockAndFollowingPlainNumberedLines(fromBlock, seriesParts) {
             continue;
         }
         if (!isPlainNumberedLineBlock(node)) break;
-        const text = (node.textContent || '').replace(/\u00a0/g, ' ');
-        const m = text.match(CLAUSE_PLAIN_NUMBER_RE);
+        const m = matchPlainNumberedBlock(node);
         if (!m) break;
         const parts = parseClauseNumberParts(m[1]);
         if (parts.length !== depth || !isSameNumberSeries(parts, seriesParts)) break;
@@ -3088,9 +3452,7 @@ function finishEnterContinuation(jodit, caretTarget, caretOffset = null) {
         }
         const block = jodit.__emsEnterContinueCaretBlock;
         if (block?.isConnected) {
-            const plainMarker = CLAUSE_PLAIN_NUMBER_RE.test(
-                (block.textContent || '').replace(/\u00a0/g, ' ')
-            ) || CLAUSE_PLAIN_BULLET_RE.test((block.textContent || '').replace(/\u00a0/g, ' '));
+            const plainMarker = !!matchPlainNumberedBlock(block) || CLAUSE_PLAIN_BULLET_RE.test((block.textContent || '').replace(/\u00a0/g, ' '));
             if (!plainMarker && isEmptyClauseBlock(block)) {
                 placeCaretInEmptyBlock(jodit, block);
                 return true;
@@ -3116,9 +3478,7 @@ function finishEnterContinuation(jodit, caretTarget, caretOffset = null) {
                 return true;
             }
             if (savedBlock?.isConnected) {
-                const plainMarker = CLAUSE_PLAIN_NUMBER_RE.test(
-                    (savedBlock.textContent || '').replace(/\u00a0/g, ' ')
-                ) || CLAUSE_PLAIN_BULLET_RE.test(
+                const plainMarker = !!matchPlainNumberedBlock(savedBlock) || CLAUSE_PLAIN_BULLET_RE.test(
                     (savedBlock.textContent || '').replace(/\u00a0/g, ' ')
                 );
                 if (!plainMarker && isEmptyClauseBlock(savedBlock)) {
@@ -3277,7 +3637,7 @@ function handleClausePlainEnter(jodit) {
     if (!isEmptyClauseBlock(block)) return false;
 
     const text = (block.textContent || '').replace(/\u00a0/g, ' ');
-    if (CLAUSE_PLAIN_NUMBER_RE.test(text) || CLAUSE_PLAIN_BULLET_RE.test(text)) return false;
+    if (matchPlainNumberedBlock(block) || CLAUSE_PLAIN_BULLET_RE.test(text)) return false;
 
     insertEmptyParagraphAfter(jodit, block);
     return true;
@@ -3349,8 +3709,7 @@ function isLastInPlainNumberedSeries(block, numMatch) {
     let next = getNextLineBlock(block);
     while (next) {
         if (isPlainNumberedLineBlock(next)) {
-            const text = (next.textContent || '').replace(/\u00a0/g, ' ');
-            const m = text.match(CLAUSE_PLAIN_NUMBER_RE);
+            const m = matchPlainNumberedBlock(next);
             if (!m) return true;
             const nextParts = parseClauseNumberParts(m[1]);
             if (nextParts.length === seriesParts.length && isSameNumberSeries(nextParts, seriesParts)) {
@@ -3423,8 +3782,15 @@ function continuePlainNumberedLine(jodit, block, range, numMatch) {
     if (!next || !seriesParts.length) return false;
 
     if (atNumberStart && !plainClauseBodyIsEmpty(bodyText)) {
-        const newBlock = insertPlainParagraphBefore(jodit, block, plainClauseEmptyMarkerText(currentPrefix));
-        if (newBlock) renumberBlockAndFollowingPlainNumberedLines(block, seriesParts);
+        const newBlock = insertPlainParagraphBefore(
+            jodit,
+            block,
+            plainClauseEmptyMarkerText(plainNumberDisplayPrefix(block, currentPrefix))
+        );
+        if (newBlock) {
+            copyPlainNumberLineFormat(newBlock, block, currentPrefix);
+            renumberBlockAndFollowingPlainNumberedLines(block, seriesParts);
+        }
         finishEnterContinuation(
             jodit,
             newBlock || block,
@@ -3434,8 +3800,15 @@ function continuePlainNumberedLine(jodit, block, range, numMatch) {
     }
 
     if (atEnd) {
-        const newBlock = insertPlainParagraphAfter(jodit, block, plainClauseEmptyMarkerText(next));
-        if (newBlock) renumberFollowingPlainNumberedLines(newBlock, seriesParts);
+        const newBlock = insertPlainParagraphAfter(
+            jodit,
+            block,
+            plainClauseEmptyMarkerText(plainNumberDisplayPrefix(block, next))
+        );
+        if (newBlock) {
+            copyPlainNumberLineFormat(newBlock, block, next);
+            renumberFollowingPlainNumberedLines(newBlock, seriesParts);
+        }
         finishEnterContinuation(
             jodit,
             newBlock || block,
@@ -3451,11 +3824,14 @@ function continuePlainNumberedLine(jodit, block, range, numMatch) {
         after.setEnd(block, block.childNodes.length);
         const tail = after.extractContents();
         const p = doc.createElement('p');
-        const prefixNode = doc.createTextNode(plainClauseEmptyMarkerText(next));
+        const prefixNode = doc.createTextNode(
+            plainClauseEmptyMarkerText(plainNumberDisplayPrefix(block, next))
+        );
         p.appendChild(prefixNode);
         if (!plainClauseBodyIsEmpty(tail.textContent?.replace(/\u00a0/g, ' '))) {
             p.appendChild(tail);
         }
+        copyPlainNumberLineFormat(p, block, next);
         block.parentNode?.insertBefore(p, block.nextSibling);
         renumberFollowingPlainNumberedLines(p, seriesParts);
         finishEnterContinuation(jodit, p, caretOffsetAfterPlainClauseMarker(p));
@@ -3562,7 +3938,7 @@ function handleClauseEnterContinuation(jodit, e) {
     }
 
     const text = (block.textContent || '').replace(/\u00a0/g, ' ');
-    const numMatch = text.match(CLAUSE_PLAIN_NUMBER_RE);
+    const numMatch = matchPlainNumberedBlock(block);
     if (numMatch) {
         return continuePlainNumberedLine(jodit, block, range, numMatch);
     }
@@ -3596,7 +3972,7 @@ function isCaretAtStartOfBlock(block, range) {
 
 function getLineBodyText(block) {
     const text = (block.textContent || '').replace(/\u00a0/g, ' ');
-    const numMatch = text.match(CLAUSE_PLAIN_NUMBER_RE);
+    const numMatch = matchPlainNumberedBlock(block);
     if (numMatch) return text.slice(numMatch[0].length).replace(/^\s+/, '');
     const bulletMatch = text.match(CLAUSE_PLAIN_BULLET_RE);
     if (bulletMatch) return text.slice(bulletMatch[0].length).replace(/^\s+/, '');
@@ -3605,7 +3981,17 @@ function getLineBodyText(block) {
 
 function setPlainNumberedBlockBody(block, prefix, body) {
     const trimmed = String(body || '').replace(/\u00a0/g, ' ').trim();
-    block.textContent = trimmed ? `${prefix} ${trimmed}` : plainClauseEmptyMarkerText(prefix);
+    const shown = plainNumberDisplayPrefix(block, prefix);
+    syncPlainNumberAttr(block, prefix);
+    block.textContent = trimmed ? `${shown} ${trimmed}` : plainClauseEmptyMarkerText(shown);
+}
+
+/** New sibling line (Enter) keeps the source line's indent and sub-number style. */
+function copyPlainNumberLineFormat(target, source, canonicalPrefix) {
+    if (!target || !source) return;
+    setInlineMarginLeftPx(target, parseInlineMarginLeftPx(source));
+    setPlainSubNumberStyle(target, getPlainSubNumberStyle(source));
+    syncPlainNumberAttr(target, canonicalPrefix);
 }
 
 function getPreviousLineBlock(block) {
@@ -3792,8 +4178,7 @@ function handleClauseEmptyLineDelete(jodit, isBackspace) {
 
     const isPlainEmptySpacer = (lineBlock) => {
         if (!lineBlock || !isEmptyClauseBlock(lineBlock)) return false;
-        const text = (lineBlock.textContent || '').replace(/\u00a0/g, ' ');
-        return !CLAUSE_PLAIN_NUMBER_RE.test(text);
+        return !matchPlainNumberedBlock(lineBlock);
     };
 
     if (isPlainEmptySpacer(block)) {
@@ -3823,8 +4208,7 @@ function renumberPlainNumberedSeriesFrom(fromBlock, startParts) {
             continue;
         }
         if (!isPlainNumberedLineBlock(node)) break;
-        const text = (node.textContent || '').replace(/\u00a0/g, ' ');
-        const m = text.match(CLAUSE_PLAIN_NUMBER_RE);
+        const m = matchPlainNumberedBlock(node);
         if (!m) break;
         const nodeParts = parseClauseNumberParts(m[1]);
         if (nodeParts.length !== depth || !isSameNumberSeries(nodeParts, parts)) break;
@@ -3865,7 +4249,7 @@ function deletePlainNumberedLineAndRenumber(jodit, block, numMatch) {
 
 function deleteSelectedPlainNumberedBlocks(jodit, blocks) {
     if (!blocks?.length) return false;
-    const firstMatch = (blocks[0].textContent || '').replace(/\u00a0/g, ' ').match(CLAUSE_PLAIN_NUMBER_RE);
+    const firstMatch = matchPlainNumberedBlock(blocks[0]);
     if (!firstMatch) return false;
     const startParts = parseClauseNumberParts(firstMatch[1]);
     const last = blocks[blocks.length - 1];
@@ -3891,7 +4275,7 @@ function mergePlainNumberedLineIntoPrevious(jodit, block, numMatch) {
     const body = getLineBodyText(block).trim();
     const deletedParts = parseClauseNumberParts(numMatch[1]);
     const next = getNextLineBlock(block);
-    const prevNumMatch = (prev.textContent || '').replace(/\u00a0/g, ' ').match(CLAUSE_PLAIN_NUMBER_RE);
+    const prevNumMatch = matchPlainNumberedBlock(prev);
     const prevBody = getLineBodyText(prev).trimEnd();
     const mergedBody = prevBody && body ? `${prevBody} ${body}` : prevBody || body;
 
@@ -3915,7 +4299,7 @@ function mergePlainNumberedLineIntoPrevious(jodit, block, numMatch) {
 }
 
 function mergeNextPlainNumberedLineIntoCurrent(jodit, block, numMatch, nextBlock) {
-    const nextMatch = (nextBlock.textContent || '').replace(/\u00a0/g, ' ').match(CLAUSE_PLAIN_NUMBER_RE);
+    const nextMatch = matchPlainNumberedBlock(nextBlock);
     if (!nextMatch) return false;
     const nextParts = parseClauseNumberParts(nextMatch[1]);
     const currentParts = parseClauseNumberParts(numMatch[1]);
@@ -3940,7 +4324,7 @@ function mergeNextPlainNumberedLineIntoCurrent(jodit, block, numMatch, nextBlock
 function dedupeMergedNumberPrefixesInBlock(block) {
     if (!block || block.closest?.('table')) return false;
     const text = (block.textContent || '').replace(/\u00a0/g, ' ');
-    const first = text.match(CLAUSE_PLAIN_NUMBER_RE);
+    const first = matchPlainNumberedBlock(block);
     if (!first) return false;
     const afterFirst = text.slice(first[0].length);
     const second = afterFirst.match(/^\s*(\d{1,2}(?:\.\d{1,2})*)\.\s*/);
@@ -4047,6 +4431,17 @@ function handleClauseListItemDelete(jodit, isBackspace) {
                 notifyEditorContentChange(jodit);
                 return true;
             }
+            /* Empty last sub-item ("4.4."): step back out to the parent list as the next item ("5." / bullet). */
+            if (!nested) {
+                let moved = false;
+                pinClauseEditorScrollDuring(root, () => {
+                    moved = demoteListItemFromSubLevel(li);
+                });
+                if (moved) {
+                    finishEnterContinuation(jodit, li, null);
+                    return true;
+                }
+            }
             return false;
         }
         if (labelEmpty && nested) {
@@ -4075,6 +4470,17 @@ function handleClauseListItemDelete(jodit, isBackspace) {
     return true;
 }
 
+/** Backspace on the empty last sub-line: "2.2.4. " steps back to the main series as "2.3. " (Word-like). */
+function outdentEmptyTrailingPlainSubLine(jodit, block) {
+    const parts = getPlainNumberParts(block);
+    if (!parts || parts.length < 2) return false;
+    const step =
+        Number(jodit.o?.indentMargin) > 0 ? Number(jodit.o.indentMargin) : EMS_LINE_INDENT_STEP_PX;
+    if (!demotePlainNumberedBlockFromSubLevel(block, step)) return false;
+    finishEnterContinuation(jodit, block, caretOffsetAfterPlainClauseMarker(block));
+    return true;
+}
+
 function handleClauseDeleteRenumber(jodit, isBackspace) {
     const root = getWysiwygEditor(jodit);
     if (!root) return false;
@@ -4093,7 +4499,7 @@ function handleClauseDeleteRenumber(jodit, isBackspace) {
     if (!block || block.tagName === 'LI') return false;
 
     const text = (block.textContent || '').replace(/\u00a0/g, ' ');
-    const numMatch = text.match(CLAUSE_PLAIN_NUMBER_RE);
+    const numMatch = matchPlainNumberedBlock(block);
     const bulletMatch = !numMatch ? text.match(CLAUSE_PLAIN_BULLET_RE) : null;
     if (!numMatch && !bulletMatch) return false;
 
@@ -4107,6 +4513,7 @@ function handleClauseDeleteRenumber(jodit, isBackspace) {
             const body = getLineBodyText(block).trim();
             if (!body) {
                 if (isLastInPlainNumberedSeries(block, numMatch)) {
+                    if (outdentEmptyTrailingPlainSubLine(jodit, block)) return true;
                     exitTrailingEmptyPlainMarkedLine(jodit, block);
                     return true;
                 }
@@ -4418,13 +4825,17 @@ function collectIndentBlocksInRange(root, range) {
             const tag = node.tagName;
             if (tag === 'TABLE') return;
             if (tag === 'UL' || tag === 'OL') {
+                /* A parent item only counts when its own line is selected — selecting its sub-items must not move it. */
                 [...node.children].forEach((li) => {
-                    if (li.tagName === 'LI' && rangeIntersectsNode(range, li)) add(li);
+                    if (li.tagName !== 'LI' || !rangeIntersectsNode(range, li)) return;
+                    if (rangeSelectsListItemLabel(range, li)) add(li);
+                    scan(li);
                 });
                 return;
             }
             if (tag === 'LI') {
-                if (rangeIntersectsNode(range, node)) add(node);
+                if (rangeIntersectsNode(range, node) && rangeSelectsListItemLabel(range, node)) add(node);
+                scan(node);
                 return;
             }
             if (!['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(tag)) return;
@@ -4441,6 +4852,25 @@ function collectIndentBlocksInRange(root, range) {
     };
 
     scan(root);
+
+    /* A drag that starts at the end of the line above (or ends at the start of the next) does not select that line. */
+    const selectedTextIn = (el) => {
+        try {
+            const r = el.ownerDocument.createRange();
+            r.selectNodeContents(el);
+            if (range.compareBoundaryPoints(Range.START_TO_START, r) > 0) {
+                r.setStart(range.startContainer, range.startOffset);
+            }
+            if (range.compareBoundaryPoints(Range.END_TO_END, r) < 0) {
+                r.setEnd(range.endContainer, range.endOffset);
+            }
+            return r.toString().replace(/\u00a0/g, ' ');
+        } catch {
+            return ' ';
+        }
+    };
+    while (blocks.length > 1 && !selectedTextIn(blocks[0])) blocks.shift();
+    while (blocks.length > 1 && !selectedTextIn(blocks[blocks.length - 1])) blocks.pop();
     return blocks;
 }
 
@@ -4470,8 +4900,7 @@ function clausePartsEqual(partsA, partsB) {
 
 function getPlainNumberParts(block) {
     if (!isPlainNumberedLineBlock(block)) return null;
-    const text = (block.textContent || '').replace(/\u00a0/g, ' ');
-    const m = text.match(CLAUSE_PLAIN_NUMBER_RE);
+    const m = matchPlainNumberedBlock(block);
     if (!m) return null;
     return parseClauseNumberParts(m[1]);
 }
@@ -4589,33 +5018,91 @@ function renumberFollowingSubSiblingsAfterRemove(parentParts, afterBlock, remove
     }
 }
 
-/** Word-like Tab: e.g. line "4." becomes "3.1." under the previous top-level item. */
+/** Last existing sub-line of parentParts between parentBlock and beforeBlock (sets indent / style for new subs). */
+function findLastPlainSubSibling(parentBlock, parentParts, beforeBlock) {
+    const targetDepth = parentParts.length + 1;
+    let found = null;
+    let node = parentBlock?.nextSibling || null;
+    while (node && node !== beforeBlock) {
+        const parts = getPlainNumberParts(node);
+        if (parts) {
+            if (parts.length <= parentParts.length) break;
+            if (parts.length === targetDepth && clausePartsSharePrefix(parts, parentParts)) found = node;
+        }
+        node = node.nextSibling;
+    }
+    return found;
+}
+
+/** Rendered width of "2.4. " on a numbered line, in unscaled CSS px. */
+function measurePlainMarkerWidthPx(block) {
+    const m = matchPlainNumberedBlock(block);
+    if (!m || !block?.isConnected) return 0;
+    try {
+        const start = resolveTextOffsetInRoot(block, 0);
+        const end = resolveTextOffsetInRoot(block, m[0].length);
+        if (!start?.node || !end?.node) return 0;
+        const r = block.ownerDocument.createRange();
+        r.setStart(start.node, start.offset);
+        r.setEnd(end.node, end.offset);
+        const w = r.getBoundingClientRect().width;
+        const blockRect = block.getBoundingClientRect();
+        const scale = block.offsetWidth > 0 && blockRect.width > 0 ? blockRect.width / block.offsetWidth : 1;
+        return w > 0 ? w / scale : 0;
+    } catch {
+        return 0;
+    }
+}
+
+/** Sub-line starts where the parent's text starts (in line with "2.4. Conditions…"). */
+function applyPlainSubLineIndent(block, parentBlock, newParts, step, siblingBlock) {
+    if (siblingBlock) {
+        setInlineMarginLeftPx(block, parseInlineMarginLeftPx(siblingBlock));
+        return;
+    }
+    const markerW = measurePlainMarkerWidthPx(parentBlock);
+    if (markerW > 0) {
+        const px = Math.round(parseInlineMarginLeftPx(parentBlock) + markerW);
+        setInlineMarginLeftPx(block, Math.min(EMS_LINE_INDENT_MAX_PX, px));
+        return;
+    }
+    setPlainNumberOutlineIndent(block, newParts, step);
+}
+
+/** Previous same-level line this numbered line would nest under on Tab, or null. */
+function findPlainPromoteParent(block) {
+    const currentParts = getPlainNumberParts(block);
+    if (!currentParts?.length) return null;
+    const depth = currentParts.length;
+    const parentBlock = findPreviousPlainBlockAtDepth(block, depth);
+    if (!parentBlock) return null;
+    const parentParts = getPlainNumberParts(parentBlock);
+    if (!parentParts || parentParts.length !== depth) return null;
+    if (depth > 1 && !clausePartsSharePrefix(currentParts, parentParts.slice(0, -1))) return null;
+    return parentBlock;
+}
+
+/** Word-like Tab: "4." becomes "3.1." and "2.5." becomes "2.4.1." under the previous item at the same level. */
 function promotePlainNumberedBlockToSubLevel(block, step) {
     if (!isPlainNumberedLineBlock(block)) return false;
     const currentParts = getPlainNumberParts(block);
     if (!currentParts?.length) return false;
+    const depth = currentParts.length;
 
-    let newParts;
-    if (currentParts.length === 1) {
-        const parentBlock = findPreviousPlainBlockAtDepth(block, 1);
-        if (!parentBlock) return false;
-        const parentParts = getPlainNumberParts(parentBlock);
-        if (!parentParts || parentParts.length !== 1) return false;
-        const maxSub = getMaxSubNumberBetween(parentParts, parentBlock, block);
-        newParts = [...parentParts, maxSub + 1];
-        const removedIndex = currentParts[currentParts.length - 1];
-        const body = getLineBodyText(block);
-        setPlainNumberedBlockBody(block, formatClauseNumberParts(newParts), body);
-        setPlainNumberOutlineIndent(block, newParts, step);
-        decrementFollowingPlainSiblingsAtDepth(block, 1, removedIndex);
-        return true;
-    }
+    const parentBlock = findPlainPromoteParent(block);
+    if (!parentBlock) return false;
+    const parentParts = getPlainNumberParts(parentBlock);
 
-    const maxSub = getMaxSubNumberBetween(currentParts, block, null);
-    newParts = [...currentParts, maxSub + 1];
+    const maxSub = getMaxSubNumberBetween(parentParts, parentBlock, block);
+    const newParts = [...parentParts, maxSub + 1];
+    const removedIndex = currentParts[depth - 1];
+    const sibling = findLastPlainSubSibling(parentBlock, parentParts, block);
     const body = getLineBodyText(block);
+
+    setPlainSubNumberStyle(block, sibling ? getPlainSubNumberStyle(sibling) : '');
     setPlainNumberedBlockBody(block, formatClauseNumberParts(newParts), body);
-    setPlainNumberOutlineIndent(block, newParts, step);
+    applyPlainSubLineIndent(block, parentBlock, newParts, step, sibling);
+    decrementFollowingPlainSiblingsAtDepth(block, depth, removedIndex);
     return true;
 }
 
@@ -4640,8 +5127,9 @@ function demotePlainNumberedBlockFromSubLevel(block, step) {
     const body = getLineBodyText(block);
 
     incrementFollowingPlainSiblingsAtDepth(block, demotedDepth, newParts[demotedDepth - 1]);
+    setPlainSubNumberStyle(block, getPlainSubNumberStyle(parentBlock));
     setPlainNumberedBlockBody(block, formatClauseNumberParts(newParts), body);
-    setPlainNumberOutlineIndent(block, newParts, step);
+    setInlineMarginLeftPx(block, parseInlineMarginLeftPx(parentBlock));
 
     if (insertAfter?.parentNode) {
         insertAfter.parentNode.insertBefore(block, insertAfter.nextSibling);
@@ -4762,10 +5250,34 @@ export function applyClauseEditorLineIndent(jodit, outdent = false) {
     const blocks = collectIndentBlocksInRange(root, range);
     if (!blocks.length) return false;
 
+    /* Caret is kept relative to the line body: renumbering ("2.5." → "2.4.1.") or Shift+Tab moving the line must not drift it. */
+    let caretInLine = null;
+    if (range.collapsed && blocks.length === 1) {
+        try {
+            const line = blocks[0];
+            const marker = line.tagName === 'LI' ? null : matchPlainNumberedBlock(line);
+            caretInLine = {
+                line,
+                offset: textOffsetInRoot(line, range.startContainer, range.startOffset),
+                markerLen: marker ? marker[0].length : 0,
+            };
+        } catch {
+            caretInLine = null;
+        }
+    }
+
+    /* Several lines selected: Tab / Shift+Tab shifts the group and keeps every number / bullet (no re-nesting). */
+    const shiftGroupOnly = blocks.length > 1;
+
     const marginFallback = [];
     let applied = false;
     blocks.forEach((block) => {
-        if (applyOutlineIndentToBlock(block, step, outdent)) {
+        const keepPrefix =
+            shiftGroupOnly ||
+            (block.tagName !== 'LI' && getPlainSubNumberStyle(block) && isPlainNumberedLineBlock(block));
+        if (keepPrefix) {
+            marginFallback.push(block);
+        } else if (applyOutlineIndentToBlock(block, step, outdent)) {
             applied = true;
         } else {
             marginFallback.push(block);
@@ -4783,6 +5295,39 @@ export function applyClauseEditorLineIndent(jodit, outdent = false) {
         requestAnimationFrame(() => {
             restoreTextRangeBookmark(jodit, selectionBookmark);
             rememberEditorListSelection(jodit);
+        });
+    } else if (caretInLine?.line?.isConnected) {
+        const restore = () => {
+            const { line, offset, markerLen } = caretInLine;
+            if (!line.isConnected) return;
+            if (line.tagName === 'LI' && !getListItemDirectText(line)) {
+                placeCaretInListItemBodyStart(jodit, line);
+                return;
+            }
+            const marker = line.tagName === 'LI' ? null : matchPlainNumberedBlock(line);
+            const newMarkerLen = marker ? marker[0].length : 0;
+            const target = offset >= markerLen ? offset - markerLen + newMarkerLen : Math.min(offset, newMarkerLen);
+            try {
+                const pos = resolveTextOffsetInRoot(line, Math.min(target, (line.textContent || '').length));
+                if (pos.node === line) {
+                    placeCaretInBlock(jodit, line, 0);
+                    return;
+                }
+                const r = line.ownerDocument.createRange();
+                r.setStart(pos.node, pos.offset);
+                r.collapse(true);
+                applyEditorRange(jodit, r);
+            } catch {
+                /* ignore */
+            }
+        };
+        restore();
+        requestAnimationFrame(() => {
+            restore();
+            requestAnimationFrame(() => {
+                restore();
+                rememberEditorListSelection(jodit);
+            });
         });
     } else if (caretOffset != null) {
         const restore = () => restoreIndentCaretOffset(jodit, caretOffset);
@@ -4941,6 +5486,9 @@ export const CLAUSE_LIST_STYLES_CSS = `
         padding-left: calc(${EMS_BULLET_MARKER_WIDTH} + ${EMS_LIST_MARKER_GAP}) !important;
         text-indent: 0 !important;
         overflow: visible !important;
+        height: auto !important;
+        max-height: none !important;
+        line-height: inherit !important;
     }
     .clause-editor-wrapper .jodit-wysiwyg ol[class*='ems-num-'] > li,
     #quote-preview .quote-clause-inline-editor .jodit-wysiwyg ol[class*='ems-num-'] > li,
@@ -4953,6 +5501,9 @@ export const CLAUSE_LIST_STYLES_CSS = `
         padding-left: calc(${EMS_NUM_MARKER_WIDTH} + ${EMS_LIST_MARKER_GAP}) !important;
         text-indent: 0 !important;
         overflow: visible !important;
+        height: auto !important;
+        max-height: none !important;
+        line-height: inherit !important;
     }
 
     .clause-editor-wrapper .jodit-wysiwyg ul[class*='ems-bullet-'] > li::before,
@@ -5064,6 +5615,43 @@ export const CLAUSE_LIST_STYLES_CSS = `
     #quote-preview .clause-content ol.ems-num-decimal > li > ol.ems-num-decimal > li::before {
         content: counter(ems-decimal) '.' counter(ems-decimal-sub) '.' !important;
     }
+    /* "6.1." / "6.1.1." need a wider marker box than "6." or the trailing dot wraps. */
+    .clause-editor-wrapper .jodit-wysiwyg ol[class*='ems-num-'] > li::before,
+    .clause-content ol[class*='ems-num-'] > li::before,
+    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg ol[class*='ems-num-'] > li::before,
+    #quote-preview .clause-content ol[class*='ems-num-'] > li::before {
+        white-space: nowrap !important;
+    }
+    .clause-editor-wrapper .jodit-wysiwyg ol.ems-num-decimal > li > ol.ems-num-decimal > li,
+    .clause-content ol.ems-num-decimal > li > ol.ems-num-decimal > li,
+    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg ol.ems-num-decimal > li > ol.ems-num-decimal > li,
+    #quote-preview .clause-content ol.ems-num-decimal > li > ol.ems-num-decimal > li {
+        padding-left: calc(${EMS_NUM_SUB_MARKER_WIDTH} + ${EMS_LIST_MARKER_GAP}) !important;
+    }
+    .clause-editor-wrapper .jodit-wysiwyg ol.ems-num-decimal > li > ol.ems-num-decimal > li::before,
+    .clause-content ol.ems-num-decimal > li > ol.ems-num-decimal > li::before,
+    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg ol.ems-num-decimal > li > ol.ems-num-decimal > li::before,
+    #quote-preview .clause-content ol.ems-num-decimal > li > ol.ems-num-decimal > li::before {
+        left: auto !important;
+        right: calc(100% - ${EMS_NUM_SUB_MARKER_WIDTH}) !important;
+        width: auto !important;
+        text-align: right !important;
+    }
+    .clause-editor-wrapper .jodit-wysiwyg ol.ems-num-decimal > li > ol.ems-num-decimal > li > ol.ems-num-decimal > li,
+    .clause-content ol.ems-num-decimal > li > ol.ems-num-decimal > li > ol.ems-num-decimal > li,
+    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg ol.ems-num-decimal > li > ol.ems-num-decimal > li > ol.ems-num-decimal > li,
+    #quote-preview .clause-content ol.ems-num-decimal > li > ol.ems-num-decimal > li > ol.ems-num-decimal > li {
+        padding-left: calc(${EMS_NUM_SUB2_MARKER_WIDTH} + ${EMS_LIST_MARKER_GAP}) !important;
+    }
+    .clause-editor-wrapper .jodit-wysiwyg ol.ems-num-decimal > li > ol.ems-num-decimal > li > ol.ems-num-decimal > li::before,
+    .clause-content ol.ems-num-decimal > li > ol.ems-num-decimal > li > ol.ems-num-decimal > li::before,
+    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg ol.ems-num-decimal > li > ol.ems-num-decimal > li > ol.ems-num-decimal > li::before,
+    #quote-preview .clause-content ol.ems-num-decimal > li > ol.ems-num-decimal > li > ol.ems-num-decimal > li::before {
+        left: auto !important;
+        right: calc(100% - ${EMS_NUM_SUB2_MARKER_WIDTH}) !important;
+        width: auto !important;
+        text-align: right !important;
+    }
 
     .clause-editor-wrapper .jodit-wysiwyg ol.ems-num-decimal ol.ems-num-decimal ol.ems-num-decimal,
     .clause-content ol.ems-num-decimal ol.ems-num-decimal ol.ems-num-decimal,
@@ -5143,6 +5731,45 @@ export function normalizeClauseListHtml(root) {
     cleanupNestedAndEmptyListItems(root);
     stripLeadingListMarkers(root);
     inferListClassesFromStyles(root);
+    collapseProseHardNewlines(root);
+    stripProseFixedBoxStyles(root);
+}
+
+/**
+ * Word paste leaves literal \\n inside <span>s inside list items. With forced wrapping those
+ * soft-wrap lines can paint without growing the <li> when combined with max-width on spans.
+ * Collapse hard newlines in prose text nodes (keep <br> / tables untouched).
+ */
+function collapseProseHardNewlines(root) {
+    if (!root || typeof document === 'undefined') return;
+    const doc = root.ownerDocument || document;
+    if (!doc.createTreeWalker) return;
+    const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) {
+        const parent = node.parentElement;
+        if (!parent) continue;
+        if (parent.closest('pre, code, textarea, table')) continue;
+        const t = node.nodeValue;
+        if (!t || !/[\r\n\u2028\u2029]/.test(t)) continue;
+        node.nodeValue = t.replace(/[\r\n\u2028\u2029]+/g, ' ').replace(/[ \t\u00a0]{2,}/g, ' ');
+    }
+}
+
+/** Drop Word fixed height / exact line-height on prose so wrapped lines expand the block. */
+function stripProseFixedBoxStyles(root) {
+    if (!root?.querySelectorAll) return;
+    root.querySelectorAll('p, div, li, span, font, b, strong, i, em, u, a').forEach((el) => {
+        if (el.closest?.('table')) return;
+        if (!el.style) return;
+        el.style.removeProperty('height');
+        el.style.removeProperty('min-height');
+        el.style.removeProperty('max-height');
+        el.style.removeProperty('line-height');
+        el.style.removeProperty('max-width');
+        el.removeAttribute('height');
+    });
 }
 
 /** Normalize clause HTML string before save / preview (merge lists + EMS classes). */

@@ -550,7 +550,7 @@ function pinQuoteA4SheetGridInline(sheetEl, { isCover = false } = {}) {
         logo.querySelectorAll('img').forEach((img) => {
             img.style.setProperty('height', 'auto', 'important');
             img.style.setProperty('width', 'auto', 'important');
-            img.style.setProperty('max-height', '21mm', 'important');
+            img.style.setProperty('max-height', '12.6mm', 'important');
             img.style.setProperty('max-width', '100%', 'important');
             img.style.setProperty('object-fit', 'contain', 'important');
             img.style.setProperty('object-position', 'right top', 'important');
@@ -1304,7 +1304,7 @@ ${HTML2PDF_PAGE_BREAK_OVERRIDES}
     display: block !important;
     height: auto !important;
     width: auto !important;
-    max-height: 21mm !important;
+    max-height: 12.6mm !important;
     max-width: 100% !important;
     object-fit: contain !important;
     object-position: right top !important;
@@ -1755,7 +1755,7 @@ html[data-preview-pdf="1"] .quote-sheet-logo-row img {
     display: block !important;
     height: auto !important;
     width: auto !important;
-    max-height: 21mm !important;
+    max-height: 12.6mm !important;
     max-width: 100% !important;
     object-fit: contain !important;
     object-position: right top !important;
@@ -2521,7 +2521,7 @@ html[data-preview-pdf="1"] .quote-continuation-header > div {
 }
 html[data-preview-pdf="1"] .quote-sheet-logo-row img,
 html[data-preview-pdf="1"] .quote-continuation-header img {
-    max-height: 21mm !important;
+    max-height: 12.6mm !important;
     height: auto !important;
     width: auto !important;
     max-width: 100% !important;
@@ -2653,7 +2653,7 @@ html[data-preview-pdf="1"] .quote-continuation-header > div {
 }
 html[data-preview-pdf="1"] .quote-sheet-logo-row img,
 html[data-preview-pdf="1"] .quote-continuation-header img {
-    max-height: 21mm !important;
+    max-height: 12.6mm !important;
     height: auto !important;
     width: auto !important;
     max-width: 100% !important;
@@ -3151,7 +3151,7 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote
     position: static !important;
     height: auto !important;
     width: auto !important;
-    max-height: 21mm !important;
+    max-height: 12.6mm !important;
     max-width: 100% !important;
     object-fit: contain !important;
     object-position: right top !important;

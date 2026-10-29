@@ -162,12 +162,18 @@ function buildWorkflowQuotePickSql(uEsc, uLocalEsc, columnExpr, alias) {
  * Enquiries with saved quotes visible via approval workflow (cross-division approvers + CC-division stakeholders).
  * Intentionally ignores the Quote UI division dropdown — approvers may belong to another division than the quote author.
  */
-async function runApprovalWorkflowQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '') {
+async function runApprovalWorkflowQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '', options = {}) {
+    const slim = options.slim !== false;
     let userEmail = rawUserEmail;
     if (userEmail) {
         userEmail = userEmail.toLowerCase().replace(/@almcg\.com/g, '@almoayyedcg.com').trim();
     }
-    const accessCtx = userEmail ? await resolvePricingAccessContext(userEmail) : null;
+    const accessCtx =
+        options.accessCtx != null
+            ? options.accessCtx
+            : userEmail
+              ? await resolvePricingAccessContext(userEmail)
+              : null;
     if (!userEmail || !accessCtx?.user) {
         return { enquiries: [], accessCtx: accessCtx || null, userEmail };
     }
@@ -179,9 +185,21 @@ async function runApprovalWorkflowQuoteListQuery(sqlConn, rawUserEmail, extraWhe
     const uLocalEsc = ((userEmail || '').split('@')[0] || '').trim().replace(/'/g, "''");
     const accessSql = buildApprovalWorkflowQuoteAccessSql(uEsc, uLocalEsc);
 
-    const query = `
-                SELECT DISTINCT
-                    E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName, E.EnquiryDate, E.DueDate, E.Status,
+    /* Slim: keep only ApprovalWorkflowQuoteId + access flag; mapper fills quote refs/totals in bulk. */
+    const heavySelectCols = slim
+        ? `
+                    CAST(NULL AS NVARCHAR(MAX)) AS ListQuoteRef,
+                    CAST(NULL AS DATETIME) AS ListQuoteDate,
+                    CAST(N'' AS NVARCHAR(255)) AS ListPreparedBy,
+                    CAST(N'' AS NVARCHAR(255)) AS ListQuoteOwnJob,
+                    CAST(0 AS DECIMAL(18,2)) AS ListQuoteTotalAmount,
+                    ${buildWorkflowQuotePickSql(uEsc, uLocalEsc, 'qtPick.ID', 'ApprovalWorkflowQuoteId')},
+                    CAST(1 AS BIT) as ApprovalWorkflowListAccess,
+                    CAST(NULL AS NVARCHAR(MAX)) AS QuotedCustomers,
+                    CAST(NULL AS NVARCHAR(MAX)) AS Divisions,
+                    CAST(NULL AS NVARCHAR(MAX)) AS PricingCustomerDetails,
+                    CAST(NULL AS NVARCHAR(MAX)) AS ScopedJobIDs`
+        : `
                     ${buildWorkflowQuotePickSql(uEsc, uLocalEsc, 'LTRIM(RTRIM(ISNULL(qtPick.QuoteNumber, N\'\')))', 'ListQuoteRef')},
                     ${buildWorkflowQuotePickSql(uEsc, uLocalEsc, 'qtPick.QuoteDate', 'ListQuoteDate')},
                     ${buildWorkflowQuotePickSql(uEsc, uLocalEsc, 'LTRIM(RTRIM(ISNULL(qtPick.PreparedBy, N\'\')))', 'ListPreparedBy')},
@@ -192,7 +210,12 @@ async function runApprovalWorkflowQuoteListQuery(sqlConn, rawUserEmail, extraWhe
                     ${quotedCustomersSub},
                     ${divisionsSub},
                     ${pricingDetailsSub},
-                    ${scopedJobIdsAdmin}
+                    ${scopedJobIdsAdmin}`;
+
+    const query = `
+                SELECT DISTINCT
+                    E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName, E.EnquiryDate, E.DueDate, E.Status, E.EnquiryStatus,
+                    ${heavySelectCols}
                 FROM EnquiryMaster E
                 WHERE ${accessSql}
                 ${extraWhereSql}

@@ -8,6 +8,9 @@ import {
     finalizeOfficePasteTableFormatting,
     snapshotOfficePasteCellPaint,
     EMS_OFFICE_PASTE_TABLE_QUERY,
+    isEmsPricingSummaryTable,
+    isOfficePasteTableEl,
+    bakeEmsCellSplitsInRoot,
 } from './clauseEditorTable';
 
 function isRootEmptyBlock(el) {
@@ -138,6 +141,9 @@ export function sanitizeClauseHtmlForPersist(html) {
         });
 
         root.querySelectorAll(OFFICE_TABLE_SELECTOR).forEach((table) => {
+            // Pricing tables gain data-ems-col-widths after column resize and match OFFICE_TABLE_SELECTOR;
+            // stamping paste-source / compactOfficePasteTableSpacing would wipe data-ems-row-heights.
+            if (isEmsPricingSummaryTable(table) || !isOfficePasteTableEl(table)) return;
             if (!table.getAttribute('data-ems-paste-source')) {
                 table.setAttribute('data-ems-paste-source', 'office');
             }
@@ -153,6 +159,8 @@ export function sanitizeClauseHtmlForPersist(html) {
         });
 
         normalizeClauseProseTextColors(root);
+        /* Re-bake H/V split borders into persisted HTML so they survive exit-edit. */
+        bakeEmsCellSplitsInRoot(root);
 
         return root.innerHTML.trim();
     } catch {

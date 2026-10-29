@@ -5,6 +5,7 @@ const {
     assertFinalApproverRules,
     truthyFinalFlag,
 } = require('./approvalWorkflowJson');
+const { normalizeApprovalMode, approvalModeColumnsAvailable } = require('./sequentialApproval');
 
 function isMissingQuoteApprovalHierarchyTableError(message) {
     const m = String(message || '');
@@ -28,14 +29,18 @@ async function fetchApprovalHierarchiesForUser(userEmail) {
     const owner = normalizeApprovalEmail(userEmail);
     if (!owner) return [];
 
-    const res = await sql.query`
+    const modeColumn = await approvalModeColumnsAvailable();
+    const request = new sql.Request();
+    request.input('owner', sql.NVarChar, owner);
+    const res = await request.query(`
         SELECT h.ID, h.HierarchyName, h.UpdatedAt,
+               ${modeColumn ? 'h.ApprovalMode' : 'CAST(NULL AS NVARCHAR(20)) AS ApprovalMode'},
                s.ApproverSequence, s.ApproverEmail, s.ApproverName, s.ApproverDesignation, s.IsFinalApprover
         FROM QuoteApprovalHierarchy h
         LEFT JOIN QuoteApprovalHierarchyStep s ON s.HierarchyId = h.ID
-        WHERE LOWER(LTRIM(RTRIM(ISNULL(h.OwnerEmail, N'')))) = ${owner}
+        WHERE LOWER(LTRIM(RTRIM(ISNULL(h.OwnerEmail, N'')))) = @owner
         ORDER BY h.HierarchyName ASC, s.ApproverSequence ASC, s.ID ASC
-    `;
+    `);
 
     const byId = new Map();
     for (const row of res.recordset || []) {
@@ -45,6 +50,7 @@ async function fetchApprovalHierarchiesForUser(userEmail) {
                 id,
                 name: String(row.HierarchyName || '').trim(),
                 updatedAt: row.UpdatedAt ? new Date(row.UpdatedAt).toISOString() : null,
+                approvalMode: normalizeApprovalMode(row.ApprovalMode),
                 steps: [],
             });
         }
@@ -59,8 +65,9 @@ async function fetchApprovalHierarchiesForUser(userEmail) {
     }));
 }
 
-async function saveApprovalHierarchy(userEmail, hierarchyName, steps = [], hierarchyId = null) {
+async function saveApprovalHierarchy(userEmail, hierarchyName, steps = [], hierarchyId = null, approvalMode = null) {
     const owner = normalizeApprovalEmail(userEmail);
+    const mode = normalizeApprovalMode(approvalMode) || 'parallel';
     const name = String(hierarchyName || '').trim();
     const idArg = hierarchyId != null && Number.isFinite(Number(hierarchyId)) ? Number(hierarchyId) : null;
     if (!owner) throw new Error('userEmail is required');
@@ -140,6 +147,11 @@ async function saveApprovalHierarchy(userEmail, hierarchyName, steps = [], hiera
         }
     }
 
+    const modeColumn = await approvalModeColumnsAvailable();
+    if (modeColumn) {
+        await sql.query`UPDATE QuoteApprovalHierarchy SET ApprovalMode = ${mode} WHERE ID = ${resolvedId}`;
+    }
+
     for (const step of normalizedSteps) {
         await sql.query`
             INSERT INTO QuoteApprovalHierarchyStep (
@@ -159,6 +171,7 @@ async function saveApprovalHierarchy(userEmail, hierarchyName, steps = [], hiera
     return {
         id: resolvedId,
         name,
+        approvalMode: modeColumn ? mode : null,
         steps: normalizedSteps,
         updatedAt: now.toISOString(),
     };

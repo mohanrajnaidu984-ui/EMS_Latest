@@ -14,6 +14,7 @@ import {
 } from './clauseEditorTable';
 import {
     restoreClauseEditorFormatSelection,
+    stashClauseEditorFormatSelection,
     captureClauseEditorSelectionBookmark,
     scheduleClauseEditorSelectionRestore,
 } from './clauseEditorListPresets';
@@ -93,6 +94,8 @@ function applyEmsColorPick(editor, command, value, close) {
         typeof editor?.__emsClauseEditorBody === 'function'
             ? editor.__emsClauseEditorBody
             : () => editor?.editor || null;
+    /* Color swatches steal the highlight. Put the selected words back first. */
+    restoreClauseEditorFormatSelection(editor);
     armTableToolbarCellStash(editor, getBody);
     const pickValue = isNoBackgroundColor(value) && command === 'background' ? '' : value;
     if (tryApplyTableCellFormatCommand(editor, getBody, command, pickValue)) {
@@ -167,6 +170,7 @@ function createEmsColorControl(name, command, tooltip, options = {}) {
         isVisible: (editor) => !editor?.o?.disablePlugins?.includes?.('color'),
         popup: (editor, _current, close) => {
             if (!editor?.c) return false;
+            stashClauseEditorFormatSelection(editor);
             return ColorPickerWidget(
                 editor,
                 (value) => applyEmsColorPick(editor, command, value, close),
@@ -229,6 +233,7 @@ export const EMS_BACKGROUND_CONTROL = {
     },
     popup: (editor, _current, close) => {
         if (!editor?.c) return false;
+        stashClauseEditorFormatSelection(editor);
         return buildEmsBackgroundColorPicker(
             editor,
             (value) => applyEmsColorPick(editor, 'background', value, close),

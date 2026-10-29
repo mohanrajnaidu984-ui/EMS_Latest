@@ -96,3 +96,38 @@ export async function appendQuoteDigitalStamp(quoteId, stamp) {
     const data = await res.json();
     return Array.isArray(data.stamps) ? data.stamps : [];
 }
+
+/** @returns {Array} placed stamps stored on EnquiryQuotesDraft */
+export async function fetchQuoteDraftDigitalStamps(draftId) {
+    const id = String(draftId ?? '').trim();
+    if (!id) return [];
+    const res = await fetch(apiUrl(`/api/quotes/quote-drafts/${encodeURIComponent(id)}/digital-signatures`), {
+        cache: 'no-store',
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.stamps) ? data.stamps : [];
+}
+
+/** Append one stamp to a quote draft (server keeps every stamp already placed by other users). */
+export async function appendQuoteDraftDigitalStamp(draftId, stamp) {
+    const id = String(draftId ?? '').trim();
+    if (!id) return { stamps: [], quoteId: null };
+    const res = await fetch(
+        apiUrl(`/api/quotes/quote-drafts/${encodeURIComponent(id)}/digital-signatures/stamps`),
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ stamp }),
+        }
+    );
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || err.details || res.statusText);
+    }
+    const data = await res.json();
+    return {
+        stamps: Array.isArray(data.stamps) ? data.stamps : [],
+        quoteId: data.quoteId ?? null,
+    };
+}

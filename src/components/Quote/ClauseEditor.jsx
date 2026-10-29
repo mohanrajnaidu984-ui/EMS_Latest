@@ -35,6 +35,7 @@ import {
     bindOfficePasteHistoryGuard,
 } from './clauseEditorTableHistory';
 import { stripClauseEditorExportEmptyNodes, inlineBlobImagesInDomRoot, normalizeClauseProseTextColors } from './clauseEditorExportHtml';
+import { sanitizeQuoteRichHtml } from './quoteSanitizeHtml';
 import {
     convertOfficeVmlShapesToImages,
     htmlNeedsOfficeImageRepair,
@@ -52,19 +53,26 @@ import {
     harmonizeInsertedTableCells,
     stabilizeClauseEditorTablesForExport,
     initializeAllOfficePastedTableColumns,
+    scheduleForceRepairOfficeScheduleTableColumns,
+    unscrambleOfficeScheduleTablesInRootLikeColumnDrag,
     initializeAllEmsPricingSummaryTableColumns,
     initializeEmsPricingSummaryTableColumns,
     EMS_AUTO_PRICE_SUMMARY_TABLE_ID,
     EMS_OFFICE_PASTE_TABLE_EDITOR_CSS,
     isEmsPricingSummaryTable,
+    isOfficePasteTableEl,
     initializeOfficePastedTableColumns,
+    syncOfficePasteTableColumnLayout,
     isTableStructureResizeActive,
     registerClauseEditorTableHooks,
+    pasteClipboardIntoActiveTableCell,
+    pasteClipboardTableIntoActiveTable,
     buildTableFormatToolbarControlOverrides,
     EMS_TABLE_REPEAT_HEADER_CONTROL,
     EMS_TABLE_BORDER_CONTROL,
     EMS_TABLE_VALIGN_CONTROL,
     EMS_TABLE_NO_BORDER_CELL_OVERRIDE_CSS,
+    EMS_CELL_SPLIT_TABLE_CSS,
     inlineOfficeTableCellBorders,
     markOfficePasteTableBorders,
     finalizeOfficePasteTableFormatting,
@@ -89,6 +97,7 @@ import { registerClauseEditorSpellcheck, stripSpellMarksFromHtml, rescanClauseEd
 import { registerClauseEditorImageResizerZoomSync } from './clauseEditorImageResizer';
 import {
     EMS_CLAUSE_EDITOR_FONT_STACK,
+    EMS_RESET_FONT_TOOLBAR_CONTROL,
     EMS_FONT_TOOLBAR_CONTROL,
     EMS_FONTSIZE_TOOLBAR_CONTROL,
 } from './clauseEditorFontPresets';
@@ -103,6 +112,7 @@ import {
 import {
     EMS_QUOTE_PRICING_TABLE_COLUMN_SYNC_CSS,
     EMS_QUOTE_PRICING_TABLE_PRESENTATION_CSS,
+    EMS_QUOTE_PRICING_TABLE_ALIGN_CSS,
     EMS_QUOTE_PRICING_TABLE_COMPACT_ROW_CSS,
     EMS_QUOTE_PRICING_TABLE_TOTAL_BG,
     EMS_QUOTE_PRICING_TABLE_DISCOUNT_BG,
@@ -449,8 +459,65 @@ const normalizePastedFontSizeToPt = (el) => {
     }
 };
 
+/**
+ * Word "Symbol" font stores Latin letters as Greek code points. Remap common
+ * lookalikes so "Τηε Μαιν Χοντραχτορ" becomes "The Main Contractor".
+ */
+const SYMBOL_FONT_GREEK_TO_LATIN = {
+    Α: 'A', Β: 'B', Ε: 'E', Ζ: 'Z', Η: 'H', Ι: 'I', Κ: 'K', Μ: 'M', Ν: 'N',
+    Ο: 'O', Ρ: 'P', Τ: 'T', Υ: 'Y', Χ: 'X',
+    α: 'a', β: 'b', γ: 'g', δ: 'd', ε: 'e', ζ: 'z', η: 'e', θ: 'th', ι: 'i',
+    κ: 'k', λ: 'l', μ: 'm', ν: 'n', ξ: 'x', ο: 'o', π: 'p', ρ: 'r', σ: 's',
+    ς: 's', τ: 't', υ: 'u', φ: 'f', χ: 'c', ψ: 'ps', ω: 'o',
+};
+
+const remapSymbolFontText = (text) =>
+    String(text || '')
+        .split('')
+        .map((ch) => SYMBOL_FONT_GREEK_TO_LATIN[ch] || ch)
+        .join('');
+
+const stripSymbolAndUnknownFonts = (root) => {
+    if (!root?.querySelectorAll) return;
+    const walk = (el) => {
+        if (!el || el.nodeType !== 1) return;
+        const ff = String(el.style?.fontFamily || el.getAttribute?.('face') || '').toLowerCase();
+        const isSymbol =
+            /\bsymbol\b/.test(ff) ||
+            /\bwingdings\b/.test(ff) ||
+            /\bwebdings\b/.test(ff);
+        if (isSymbol) {
+            el.style.removeProperty('font-family');
+            el.removeAttribute?.('face');
+            el.removeAttribute?.('data-ems-user-font');
+            const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            const texts = [];
+            let n = walker.nextNode();
+            while (n) {
+                texts.push(n);
+                n = walker.nextNode();
+            }
+            texts.forEach((tn) => {
+                tn.textContent = remapSymbolFontText(tn.textContent);
+            });
+        } else if (ff && el.getAttribute?.('data-ems-user-font') !== '1') {
+            /* Strip Word/Excel / Arial / Times etc. so paste inherits default Segoe UI (Selawik). */
+            el.style.removeProperty('font-family');
+            el.removeAttribute?.('face');
+        }
+        /* Justify + manual <br> creates large mid-line gaps — force left. */
+        const align = String(el.style?.textAlign || '').toLowerCase();
+        if (align === 'justify' && el.querySelector?.('br')) {
+            el.style.setProperty('text-align', 'left', 'important');
+        }
+    };
+    walk(root);
+    root.querySelectorAll('[style*="font-family"], [face], font, span, p, li, td, th').forEach(walk);
+};
+
 const preservePastedFontStyles = (root) => {
     if (!root?.querySelectorAll) return;
+    stripSymbolAndUnknownFonts(root);
     root.querySelectorAll('[style*="font-size"], [style*="font-family"]').forEach((el) => {
         normalizePastedFontSizeToPt(el);
     });
@@ -1296,7 +1363,9 @@ const applyOfficeClipboardHtml = (html, options = {}) => {
     }
 };
 
+/** Match clauseEditorTable.isOfficePasteTableEl — include excel/col-width markers. */
 const isOfficePastedTable = (table) =>
+    isOfficePasteTableEl(table) ||
     table?.getAttribute?.(OFFICE_PASTE_TABLE_ATTR) === OFFICE_PASTE_TABLE_VALUE ||
     table?.classList?.contains?.('ems-office-paste-table') ||
     Boolean(
@@ -1315,6 +1384,25 @@ const normalizeOfficePastedTable = (table) => {
     }
     if (!table.classList?.contains?.('ems-office-paste-table')) {
         table.classList.add('ems-office-paste-table');
+    }
+    const colCount = Math.max(
+        0,
+        ...[...table.querySelectorAll('tr')].map((r) => r.cells?.length || 0)
+    );
+    const inEditor = Boolean(table.closest?.('.jodit-wysiwyg'));
+    /*
+     * Edit open on BOQ/schedule: do not finalize/compact (colspan width scramble).
+     * Still apply the same column lock as a 0px resize — skipping that left Qty/Unit/Amount
+     * collapsed until the user dragged a column.
+     */
+    if (inEditor && colCount >= 4) {
+        /*
+         * Never syncOfficePasteTableColumnLayout here — that re-applied bad stored
+         * widths and scrambled the grid until the user dragged a column.
+         * Unscramble (clear colgroup → measure/bootstrap → apply) runs from initDom.
+         */
+        applyTableRowHeightModel(table);
+        return;
     }
     promoteOfficePasteCellStyles(table);
     table.querySelectorAll('td, th').forEach((cell) => {
@@ -1353,16 +1441,23 @@ const normalizeOfficePastedTable = (table) => {
 /** Excel/Word sometimes inlines cursor:none or transparent text — hides pointer / caret. */
 const stripPastedEditorArtifacts = (root) => {
     if (!root?.querySelectorAll) return;
-    root.querySelectorAll('table [style]').forEach((el) => {
+    // Tables AND free prose: Word may set white-space:nowrap / fixed widths on spans so
+    // long sentences paint past the editor border instead of wrapping to the next line.
+    root.querySelectorAll('[style]').forEach((el) => {
         if (!el.style) return;
         el.style.removeProperty('cursor');
-        // Word/Excel may paste white-space variants that prevent wrapping inside cells.
-        // Normalize to allow wrapping; we also enforce via CSS for safety.
-        if (el.style.whiteSpace) {
+        const ws = String(el.style.whiteSpace || '').toLowerCase();
+        if (ws && ws !== 'normal' && ws !== 'pre-line') {
             el.style.whiteSpace = 'normal';
         }
-        // Word may paste positioned/translated runs which can paint outside the cell box.
-        // Normalize these so content participates in normal flow and wraps within the cell.
+        el.style.removeProperty('word-break');
+        /*
+         * Inside table cells, overflow-wrap:anywhere collapses Qty/Unit/Amount to ~1ch
+         * under table-layout:fixed when col widths are mid-init — use break-word instead.
+         */
+        const inTableCell = Boolean(el.closest?.('td, th'));
+        el.style.setProperty('overflow-wrap', inTableCell ? 'break-word' : 'anywhere');
+        // Word may paste positioned/translated runs which can paint outside the cell/box.
         if (el.style.position && el.style.position !== 'static') {
             el.style.position = 'static';
         }
@@ -1371,12 +1466,34 @@ const stripPastedEditorArtifacts = (root) => {
         el.style.removeProperty('translate');
         el.style.removeProperty('float');
 
+        const tag = el.tagName || '';
+        const isTableStruct = /^(TABLE|THEAD|TBODY|TFOOT|TR|COL|COLGROUP)$/i.test(tag);
+        const isCell = /^(TD|TH)$/i.test(tag);
         const isCellDesc =
-            el.closest?.('td, th') && !/^(TD|TH|TR|TABLE|COL|COLGROUP|TBODY|THEAD|TFOOT)$/i.test(el.tagName);
-        if (isCellDesc) {
-            // Prevent wide inline boxes from overflowing into neighbor columns.
-            el.style.maxWidth = '100%';
-            if (el.style.width) el.style.width = 'auto';
+            el.closest?.('td, th') && !/^(TD|TH|TR|TABLE|COL|COLGROUP|TBODY|THEAD|TFOOT)$/i.test(tag);
+        const inTable = Boolean(el.closest?.('table'));
+        if (isCellDesc || (!isTableStruct && !isCell && !inTable)) {
+            // Prevent wide inline boxes from overflowing the editor / neighbor columns.
+            // Do NOT set max-width on inline spans — that causes wrap-without-grow overlap in lists.
+            const isInlineRun = /^(SPAN|FONT|B|STRONG|I|EM|U|A)$/i.test(tag);
+            if (!isInlineRun) {
+                el.style.maxWidth = '100%';
+            } else {
+                el.style.removeProperty('max-width');
+            }
+            /* Never strip width/min-width from runs inside table cells — column lock depends on them. */
+            if (!inTableCell) {
+                if (el.style.width && el.style.width !== '100%' && el.style.width !== 'auto') {
+                    el.style.width = 'auto';
+                }
+                el.style.removeProperty('min-width');
+            }
+            // Fixed height / exact line-height from Word → wrapped line overlaps next bullet.
+            el.style.removeProperty('height');
+            el.style.removeProperty('min-height');
+            el.style.removeProperty('max-height');
+            el.style.removeProperty('line-height');
+            el.removeAttribute('height');
         }
         const color = (el.style.color || '').replace(/\s/g, '').toLowerCase();
         const fill = (el.style.webkitTextFillColor || '').replace(/\s/g, '').toLowerCase();
@@ -1393,12 +1510,39 @@ const normalizePastedTables = (root) => {
     stripPastedEditorArtifacts(root);
     const tables = root.querySelectorAll('table');
     tables.forEach((table) => {
+        /*
+         * Multi-col BOQ / office schedules: do NOT sync stored widths here.
+         * Sync on enter-edit re-applied percent-like models and scrambled the grid;
+         * a later 0px column-drag path is what fixed it. Defer to unscramble.
+         */
+        const rows = table.rows?.length || table.querySelectorAll?.('tr')?.length || 0;
+        const roughCols = table.rows?.[0]?.cells?.length || 0;
+        const looksSchedule =
+            !isEmsPricingSummaryTable(table) &&
+            (roughCols >= 4 ||
+                isOfficePastedTable(table) ||
+                table.getAttribute('data-ems-col-widths') ||
+                table.querySelector?.('.ems-cell-split-v'));
+        if (looksSchedule && rows > 0) {
+            applyTableRowHeightModel(table);
+            return;
+        }
+        if (table.getAttribute('data-ems-edit-cols-locked') === '1') {
+            /* Schedules: skip sync — enter-edit unscramble owns column repair. */
+            applyTableRowHeightModel(table);
+            return;
+        }
         if (isOfficePastedTable(table)) {
             normalizeOfficePastedTable(table);
             return;
         }
         if (isEmsPricingSummaryTable(table)) {
             initializeEmsPricingSummaryTableColumns(table);
+            applyTableRowHeightModel(table);
+            return;
+        }
+        if (table.getAttribute('data-ems-col-widths')) {
+            syncOfficePasteTableColumnLayout(table);
             applyTableRowHeightModel(table);
             return;
         }
@@ -1473,8 +1617,12 @@ const normalizePastedBlockAlignment = (root) => {
 
     root.querySelectorAll('p, div, ul, ol, li, blockquote').forEach((el) => {
         if (isInsideTable(el)) return;
-        if (el.style) {
-            PASTE_BLOCK_ALIGN_KILL_PROPS.forEach((p) => el.style.removeProperty(p));
+        if (!el.style) return;
+        /* Our own Tab / sub-number indent (data-ems-indent) is not Office paste noise — keep it. */
+        const emsIndent = el.getAttribute('data-ems-indent');
+        PASTE_BLOCK_ALIGN_KILL_PROPS.forEach((p) => el.style.removeProperty(p));
+        if (emsIndent && /^\d+(\.\d+)?$/.test(emsIndent) && parseFloat(emsIndent) > 0) {
+            el.style.setProperty('margin-left', `${emsIndent}px`, 'important');
         }
     });
 };
@@ -1604,9 +1752,11 @@ const sanitizePastedHtmlString = (html) => {
     if (!root) return html;
     normalizePastedTables(root);
     normalizePastedBlockAlignment(root);
+    stripSymbolAndUnknownFonts(root);
     finalizeAllOfficePasteTablesFormatting(root, root.ownerDocument?.defaultView);
     unlockNestedContentEditable(root);
-    return root.innerHTML;
+    /* Strip Excel/Word <style>/xl classes/mso junk; pull BOQ Note out of tables. */
+    return sanitizeQuoteRichHtml(root.innerHTML);
 };
 
 /**
@@ -1786,6 +1936,13 @@ const ClauseEditor = ({
                     wrapperRef.current?.querySelector('.jodit-wysiwyg') ||
                     null;
                 initializeAllEmsPricingSummaryTableColumns(root);
+                scheduleForceRepairOfficeScheduleTableColumns(
+                    () =>
+                        jodit.editor ||
+                        wrapperRef.current?.querySelector('.jodit-wysiwyg') ||
+                        null,
+                    jodit
+                );
                 scheduleApplyAllTableRowHeightsInEditor(
                     () =>
                         jodit.editor ||
@@ -1801,6 +1958,17 @@ const ClauseEditor = ({
             return undefined;
         }
         if (isEditorFocused()) {
+            return undefined;
+        }
+        const joditGuard = joditInstRef.current;
+        /* Body-mounted col handle blurs the editor — do not replace DOM mid/after resize. */
+        if (
+            isJoditAlive(joditGuard) &&
+            (joditGuard.__emsColResizing ||
+                joditGuard.__emsRowResizing ||
+                (joditGuard.__emsUserColResizeUntil &&
+                    Date.now() < joditGuard.__emsUserColResizeUntil))
+        ) {
             return undefined;
         }
         lastEmittedRef.current = incoming;
@@ -1935,6 +2103,17 @@ const ClauseEditor = ({
         const jodit = joditInstRef.current || editor.current;
         const root = getEditorBody();
         if (!root) return;
+        /*
+         * In-table EMS row/cell paste already copied source typography. Skip office cleanup
+         * so px→pt / global font stripping cannot shrink the whole pricing table.
+         */
+        if (jodit?.__emsSkipHeavyPasteCleanup) {
+            jodit.__emsSkipHeavyPasteCleanup = false;
+            if (isJoditAlive(jodit) && typeof jodit.synchronizeValues === 'function') {
+                jodit.synchronizeValues();
+            }
+            return;
+        }
         const officePasteActive = Boolean(
             jodit?.__emsOfficePasteLock ||
                 jodit?.__emsOfficePastePostProcess ||
@@ -2112,6 +2291,23 @@ const ClauseEditor = ({
     const insertOfficeTableFromClipboard = useCallback(
         (e) => {
             const dt = e?.clipboardData;
+            const joditEarly = resolveJoditInstance(editor, joditInstRef);
+            /*
+             * In-cell paste (Amount ← Amount): never insert a nested office <table>.
+             * Our cell copy used to wrap one td as a pricing table → finalize painted it
+             * navy/white and Description often landed in Amount from stale selection.
+             */
+            if (
+                isJoditAlive(joditEarly) &&
+                dt &&
+                (pasteClipboardTableIntoActiveTable(joditEarly, getEditorBody, dt, e?.target) ||
+                    pasteClipboardIntoActiveTableCell(joditEarly, getEditorBody, dt, e?.target))
+            ) {
+                e.preventDefault();
+                e.stopImmediatePropagation?.();
+                cleanupAfterPaste();
+                return true;
+            }
             const wordListHtml = tryConvertWordListClipboard(dt);
             if (wordListHtml?.trim()) {
                 const jodit = resolveJoditInstance(editor, joditInstRef);
@@ -2233,21 +2429,81 @@ const ClauseEditor = ({
         };
         applyBox(container);
         applyBox(workplace);
+        let editorLooksEmpty = false;
         if (root) {
             applyBox(root);
             root.classList.add('clause-content');
             root.style.setProperty('height', 'auto', 'important');
-            root.style.setProperty('min-height', '0', 'important');
+            editorLooksEmpty =
+                !String(root.textContent || '').trim() &&
+                !root.querySelector?.('img, table, video, iframe, svg, object');
+            root.style.setProperty(
+                'min-height',
+                editorLooksEmpty ? '1.6em' : '0',
+                'important'
+            );
             root.style.setProperty('padding', '0', 'important');
             root.style.setProperty('margin', '0', 'important');
             root.style.setProperty('line-height', '1.6', 'important');
+            root.style.setProperty('cursor', 'text', 'important');
             root.style.setProperty('white-space', 'normal', 'important');
             root.style.setProperty('word-wrap', 'break-word', 'important');
-            root.style.setProperty('overflow-wrap', 'anywhere', 'important');
-            root.querySelectorAll?.('p, div:not(table div):not(td div):not(th div)').forEach((el) => {
-                if (el.closest?.('table')) return;
-                el.style.removeProperty('white-space');
-                if (el.style.width && el.style.width !== '100%') el.style.removeProperty('width');
+            /*
+             * anywhere on the editor root inherits into table cells and collapses
+             * Qty/Unit/Amount to 1ch when col locks lag — use break-word with tables.
+             */
+            const hasTable = Boolean(root.querySelector?.('table'));
+            root.style.setProperty(
+                'overflow-wrap',
+                hasTable ? 'break-word' : 'anywhere',
+                'important'
+            );
+            root.style.setProperty('word-break', hasTable ? 'normal' : 'break-word', 'important');
+            stripPastedEditorArtifacts(root);
+            if (hasTable) {
+                scheduleForceRepairOfficeScheduleTableColumns(() => root, jodit);
+                initializeAllEmsPricingSummaryTableColumns(root);
+            }
+            // Ensure a caret host exists — bare <p></p> / empty editor is otherwise unclickable.
+            if (editorLooksEmpty) {
+                const first = root.firstElementChild;
+                if (!first || (first.tagName === 'P' && !String(first.innerHTML || '').trim())) {
+                    root.innerHTML = '<p><br></p>';
+                } else if (
+                    first.tagName === 'P' &&
+                    !first.querySelector('br') &&
+                    !String(first.textContent || '').trim()
+                ) {
+                    first.innerHTML = '<br>';
+                }
+            }
+            root.querySelectorAll?.('p, div, li, span, font, b, strong, i, em, u, a').forEach((el) => {
+                if (el.closest?.('table')) {
+                    // Cell descendants are handled by table wrap CSS / stripPastedEditorArtifacts.
+                    const ws = String(el.style?.whiteSpace || '').toLowerCase();
+                    if (ws && ws !== 'normal' && ws !== 'pre-line') {
+                        el.style.whiteSpace = 'normal';
+                    }
+                    return;
+                }
+                el.style.setProperty('white-space', 'normal', 'important');
+                el.style.setProperty('overflow-wrap', 'anywhere', 'important');
+                el.style.setProperty('word-wrap', 'break-word', 'important');
+                el.style.setProperty('word-break', 'break-word', 'important');
+                const isInlineRun = /^(SPAN|FONT|B|STRONG|I|EM|U|A)$/i.test(el.tagName || '');
+                if (isInlineRun) {
+                    el.style.removeProperty('max-width');
+                    el.style.setProperty('line-height', 'inherit', 'important');
+                } else {
+                    el.style.setProperty('max-width', '100%', 'important');
+                    el.style.setProperty('height', 'auto', 'important');
+                }
+                if (el.style.width && el.style.width !== '100%' && el.style.width !== 'auto') {
+                    el.style.removeProperty('width');
+                }
+                el.style.removeProperty('min-width');
+                el.style.removeProperty('min-height');
+                el.style.removeProperty('max-height');
             });
         }
         container?.querySelectorAll?.('.jodit-toolbar, .jodit-toolbar__box').forEach((el) => {
@@ -2262,18 +2518,26 @@ const ClauseEditor = ({
             workplace.style.setProperty('display', 'block', 'important');
             workplace.style.setProperty('flex', 'none', 'important');
             workplace.style.setProperty('height', 'auto', 'important');
-            workplace.style.setProperty('min-height', '0', 'important');
+            workplace.style.setProperty(
+                'min-height',
+                editorLooksEmpty ? '1.6em' : '0',
+                'important'
+            );
             workplace.style.removeProperty('max-height');
         }
         if (container) {
             container.style.setProperty('display', 'block', 'important');
             container.style.setProperty('flex', 'none', 'important');
             container.style.setProperty('height', 'auto', 'important');
-            container.style.setProperty('min-height', '0', 'important');
+            container.style.setProperty(
+                'min-height',
+                editorLooksEmpty ? '1.6em' : '0',
+                'important'
+            );
             container.style.removeProperty('max-height');
         }
         if (root) {
-            const contentHeight = Math.max(root.scrollHeight || 0, root.offsetHeight || 0);
+            const contentHeight = Math.max(root.scrollHeight || 0, root.offsetHeight || 0, editorLooksEmpty ? 26 : 0);
             if (contentHeight > 0) {
                 workplace?.style.setProperty('min-height', `${contentHeight}px`, 'important');
                 container?.style.setProperty('min-height', `${contentHeight}px`, 'important');
@@ -2371,7 +2635,7 @@ const ClauseEditor = ({
         buttons: [
             'undo', 'redo', '|',
             'bold', 'italic', 'underline', 'strikethrough', '|',
-            'emsForeColor', 'emsBackground', 'font', 'fontsize', 'paragraph', '|',
+            'emsForeColor', 'emsBackground', 'font', 'fontsize', 'emsResetFont', 'paragraph', '|',
             'ul', 'ol', 'indent', 'outdent', '|',
             'image', 'table', 'emsTableBorder', 'emsRepeatHeader', 'link', '|',
             'left', 'center', 'right', 'justify', 'emsValign', '|',
@@ -2380,6 +2644,7 @@ const ClauseEditor = ({
         controls: {
             ...buildClauseToolbarTooltipControls(),
             ...buildTableFormatToolbarControlOverrides(),
+            emsResetFont: EMS_RESET_FONT_TOOLBAR_CONTROL,
             undo: {
                 mode: 1,
                 tooltip: 'Undo (Ctrl+Z)',
@@ -2566,6 +2831,17 @@ const ClauseEditor = ({
                 jodit.__emsClauseEditorBody = getBody;
                 registerClauseEditorListCommands(jodit);
                 registerClauseEditorTableHooks(jodit, getBody, { toolbarOnly });
+                /* Refresh resize/menu hooks on focus so HMR / long-lived editors pick up fixes. */
+                const hooksRefreshVer = 38;
+                if (jodit.__emsTableHooksFocusRefreshVer !== hooksRefreshVer) {
+                    jodit.e.off('focus.emsTableHooksRefresh');
+                    jodit.__emsTableHooksFocusRefreshVer = hooksRefreshVer;
+                    jodit.e.on('focus.emsTableHooksRefresh', () => {
+                        registerClauseEditorTableHooks(jodit, getBody, { toolbarOnly });
+                    });
+                    /* Immediate rebind after HMR so 1793 BOQ resize uses the latest handlers. */
+                    registerClauseEditorTableHooks(jodit, getBody, { toolbarOnly });
+                }
                 if (!toolbarOnly) {
                     registerClauseEditorImageResizerZoomSync(jodit);
                     registerClauseEditorSpellcheck(jodit, getBody);
@@ -2670,7 +2946,7 @@ const ClauseEditor = ({
                         if (root) {
                             requestAnimationFrame(() => {
                                 initializeAllEmsPricingSummaryTableColumns(root);
-                                initializeAllOfficePastedTableColumns(root);
+                                unscrambleOfficeScheduleTablesInRootLikeColumnDrag(root);
                                 scheduleApplyAllTableRowHeightsInEditor(getBody);
                                 finishApply();
                             });
@@ -2719,6 +2995,13 @@ const ClauseEditor = ({
                     );
                 }
 
+                const runEnterEditUnscramble = () => {
+                    const root = getBody();
+                    if (!root?.querySelector?.('table')) return;
+                    if (jodit.__emsColResizing || jodit.__emsRowResizing) return;
+                    unscrambleOfficeScheduleTablesInRootLikeColumnDrag(root);
+                };
+
                 const initDom = () => {
                     const root = getBody();
                     if (!root) return;
@@ -2740,6 +3023,10 @@ const ClauseEditor = ({
                         }
                         initializeAllEmsPricingSummaryTableColumns(r);
                         scheduleApplyAllTableRowHeightsInEditor(getBody);
+                        runEnterEditUnscramble();
+                        /* Second pass after chrome/layout settles (first paint often still wrong). */
+                        window.setTimeout(runEnterEditUnscramble, 80);
+                        window.setTimeout(runEnterEditUnscramble, 220);
                     });
                 };
                 if (!jodit.__emsClauseDomInit) {
@@ -2749,9 +3036,13 @@ const ClauseEditor = ({
                     requestAnimationFrame(() => {
                         const root = getBody();
                         if (!root) return;
+                        normalizePastedTables(root);
                         initializeAllEmsPricingSummaryTableColumns(root);
                         applyAllTableRowHeightsInRoot(root);
                         scheduleApplyAllTableRowHeightsInEditor(getBody);
+                        runEnterEditUnscramble();
+                        window.setTimeout(runEnterEditUnscramble, 80);
+                        window.setTimeout(runEnterEditUnscramble, 220);
                     });
                 }
 
@@ -2762,8 +3053,23 @@ const ClauseEditor = ({
                         requestAnimationFrame(() => {
                             applyPreviewInlineWorkplaceLayout(jodit);
                             scheduleApplyAllTableRowHeightsInEditor(getBody);
-                            const root = getBody();
+                            if (getBody()?.querySelector?.('table')) {
+                                runEnterEditUnscramble();
+                                window.setTimeout(runEnterEditUnscramble, 80);
+                            }
                             if (root?.focus) root.focus({ preventScroll: true });
+                            try {
+                                if (jodit.s?.focus) jodit.s.focus();
+                                const empty =
+                                    !String(root?.textContent || '').trim() &&
+                                    !root?.querySelector?.('img, table');
+                                if (empty && jodit.s?.setCursorIn) {
+                                    const p = root?.querySelector?.('p') || root;
+                                    if (p) jodit.s.setCursorIn(p, false);
+                                }
+                            } catch (_err) {
+                                /* ignore */
+                            }
                             onEditorReadyRef.current?.();
                         });
                     });
@@ -3604,20 +3910,33 @@ const ClauseEditor = ({
                     display: none !important;
                     pointer-events: none !important;
                 }
-                /* Column resize cursor only on the drag handle — not the whole cell. */
+                /* Narrow handle so text near borders can still be selected. */
                 .ems-table-col-resizer {
-                    position: fixed;
-                    z-index: 10000006;
-                    width: 10px;
-                    margin-left: -5px;
+                    position: fixed !important;
+                    z-index: 2147483000 !important;
+                    width: 6px !important;
+                    margin-left: -3px !important;
                     cursor: col-resize !important;
                     pointer-events: auto !important;
                     display: block !important;
-                    background: rgba(30, 136, 229, 0.12);
+                    visibility: visible !important;
+                    background: transparent !important;
+                    touch-action: none !important;
                 }
-                .ems-table-col-resizer:hover,
-                .ems-table-col-resizer_moved {
-                    background-color: rgba(30, 136, 229, 0.35);
+                .ems-table-col-resizer::after {
+                    content: '';
+                    position: absolute;
+                    left: 2px;
+                    top: 0;
+                    bottom: 0;
+                    width: 2px;
+                    background: rgba(30, 136, 229, 0.55);
+                    pointer-events: none;
+                }
+                .ems-table-col-resizer:hover::after,
+                .ems-table-col-resizer_moved::after {
+                    background: rgba(30, 136, 229, 0.9);
+                    width: 2px;
                 }
                 /* Row resize (EMS) — thin visual line; wider invisible hit area on the handle only. */
                 .ems-table-row-resizer {
@@ -3762,6 +4081,7 @@ const ClauseEditor = ({
                     border-collapse: collapse !important;
                 }
                 ${EMS_TABLE_NO_BORDER_CELL_OVERRIDE_CSS}
+                ${EMS_CELL_SPLIT_TABLE_CSS}
                 .clause-editor-wrapper .jodit-wysiwyg table:not([data-ems-paste-source="office"]):not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) thead th,
                 .clause-editor-wrapper .jodit-wysiwyg table:not([data-ems-paste-source="office"]):not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) thead td {
                     background-color: #f1f5f9 !important;
@@ -3771,22 +4091,22 @@ const ClauseEditor = ({
                     border-collapse: collapse !important;
                     border-spacing: 0 !important;
                     table-layout: fixed !important;
-                    /* Let inline px width from paste/resize win. */
+                    /* Let inline px width from paste/resize win — do not force max-width:none. */
                     width: auto;
-                    max-width: none !important;
                 }
                 .clause-editor-wrapper .jodit-wysiwyg table {
                     border-collapse: collapse !important;
                     border-spacing: 0 !important;
                     table-layout: fixed !important;
-                    /* Let inline px width from paste/resize win. */
                     width: auto;
-                    max-width: none !important;
                 }
                 .clause-editor-wrapper .jodit-wysiwyg table[data-ems-col-widths]:not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]),
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights]:not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]),
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights-custom]:not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]) {
-                    /* Let inline px width from paste/resize win. */
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-col-widths-custom="1"]:not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]) {
+                    table-layout: fixed !important;
+                    max-width: 100% !important;
+                }
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights]:not([data-ems-col-widths]):not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]),
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights-custom]:not([data-ems-col-widths]):not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]) {
                     width: auto;
                 }
                 /* EMS auto pricing summary (Clause 4): same column widths as right-side preview. */
@@ -3829,10 +4149,19 @@ const ClauseEditor = ({
                     font-size: 11px !important;
                     line-height: 1.25 !important;
                     border: 1px solid #cbd5e1 !important;
-                    width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
-                    max-width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
                     table-layout: fixed !important;
                     box-sizing: border-box !important;
+                }
+                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table:not([data-ems-col-widths]),
+                .clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]),
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"]:not([data-ems-col-widths]) {
+                    width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
+                    max-width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
+                }
+                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table[data-ems-col-widths],
+                .clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"][data-ems-col-widths],
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"][data-ems-col-widths] {
+                    max-width: 100% !important;
                 }
                 .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table th,
                 .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table td,
@@ -3870,37 +4199,48 @@ const ClauseEditor = ({
                     font-weight: 700 !important;
                     border-top: 1px solid #94a3b8 !important;
                 }
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table th:nth-child(2),
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table td:nth-child(2),
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table td[data-ems-amount],
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="total"] td:first-child,
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="discount"] td:first-child,
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td:first-child,
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="vat"] td:first-child,
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="grand-vat"] td:first-child,
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-row="grand"] td:first-child,
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] th:nth-child(2),
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] td:nth-child(2),
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] td[data-ems-amount],
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="total"] td:first-child,
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="discount"] td:first-child,
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="final-discounted"] td:first-child,
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="vat"] td:first-child,
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand-vat"] td:first-child,
-                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand"] td:first-child {
-                    text-align: right !important;
-                }
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table[data-ems-row-heights] tr,
+                ${EMS_QUOTE_PRICING_TABLE_ALIGN_CSS.replace(
+                    /table#ems-auto-price-summary-table/g,
+                    '.clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table'
+                ).replace(
+                    /table\[id\^="ems-auto-price-summary-table"\]/g,
+                    '.clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"]'
+                ).replace(
+                    /table\[data-ems-pricing-cols="fixed"\]/g,
+                    '.clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"]'
+                )}
                 .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table[data-ems-row-heights-custom] tr {
                     box-sizing: border-box !important;
                     overflow: hidden !important;
                 }
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table[data-ems-row-heights] td,
-                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table[data-ems-row-heights] th,
                 .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table[data-ems-row-heights-custom] td,
                 .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table[data-ems-row-heights-custom] th {
                     box-sizing: border-box !important;
                     overflow: hidden !important;
+                }
+                /* Pre-fit only: once data-ems-row-heights is set, inline / compact-row locks win. */
+                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) td,
+                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) th,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"]:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) td,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"]:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) th {
+                    white-space: normal !important;
+                    overflow-wrap: anywhere !important;
+                    word-break: break-word !important;
+                    overflow: visible !important;
+                    max-height: none !important;
+                    height: auto !important;
+                }
+                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-pricing-row-h="24"] > td,
+                .clause-editor-wrapper .jodit-wysiwyg table#ems-auto-price-summary-table tr[data-ems-pricing-row-h="24"] > th,
+                .clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"] tr[data-ems-pricing-row-h="24"] > td,
+                .clause-editor-wrapper .jodit-wysiwyg table[id^="ems-auto-price-summary-table"] tr[data-ems-pricing-row-h="24"] > th,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-pricing-row-h="24"] > td,
+                .clause-editor-wrapper .jodit-wysiwyg table[data-ems-pricing-cols="fixed"] tr[data-ems-pricing-row-h="24"] > th {
+                    height: 24px !important;
+                    min-height: 24px !important;
+                    max-height: 24px !important;
+                    overflow: hidden !important;
+                    line-height: 1.25 !important;
                 }
                 /* Pasted tables from Excel/Word should keep their source rhythm.
                    The cleanup runs in JS, but these rules act as a safety net so
@@ -3959,8 +4299,9 @@ const ClauseEditor = ({
                     box-sizing: border-box !important;
                     vertical-align: top !important;
                     white-space: normal !important;
-                    overflow-wrap: anywhere !important;
-                    word-break: break-word !important;
+                    /* anywhere collapses Qty/Unit/Amount to 1ch under table-layout:fixed */
+                    overflow-wrap: break-word !important;
+                    word-break: normal !important;
                     overflow: hidden !important;
                 }
                 /* Word often sets nowrap on nested spans/fonts; override at all depths. */
@@ -3973,9 +4314,9 @@ const ClauseEditor = ({
                 .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights-custom] td *,
                 .clause-editor-wrapper .jodit-wysiwyg table[data-ems-row-heights-custom] th * {
                     white-space: normal !important;
-                    overflow-wrap: anywhere !important;
-                    word-break: break-word !important;
-                    max-width: 100% !important;
+                    overflow-wrap: break-word !important;
+                    word-break: normal !important;
+                    max-width: none !important;
                 }
                 /* Jodit's default is padding: 0.4em (~6px each side) which inflates rows when source
                    inline padding is absent. Use a compact Word-typical default — written WITHOUT
@@ -4057,7 +4398,49 @@ const ClauseEditor = ({
                     white-space: normal !important;
                     word-wrap: break-word !important;
                     overflow-wrap: anywhere !important;
+                    word-break: break-word !important;
                     background: transparent !important;
+                }
+                /* Force wrap on nested Word spans/fonts so long sentences stay inside the editor border.
+                 * max-width only on block hosts — on inline spans it can wrap without growing the <li>. */
+                .clause-editor-wrapper .jodit-wysiwyg p,
+                .clause-editor-wrapper .jodit-wysiwyg div:not(table):not(thead):not(tbody):not(tfoot):not(tr),
+                .clause-editor-wrapper .jodit-wysiwyg li,
+                .clause-editor-external-toolbar .jodit-wysiwyg p,
+                .clause-editor-external-toolbar .jodit-wysiwyg div:not(table):not(thead):not(tbody):not(tfoot):not(tr),
+                .clause-editor-external-toolbar .jodit-wysiwyg li {
+                    white-space: normal !important;
+                    overflow-wrap: anywhere !important;
+                    word-wrap: break-word !important;
+                    word-break: break-word !important;
+                    max-width: 100% !important;
+                    height: auto !important;
+                    max-height: none !important;
+                    overflow: visible !important;
+                }
+                .clause-editor-wrapper .jodit-wysiwyg span,
+                .clause-editor-wrapper .jodit-wysiwyg font,
+                .clause-editor-wrapper .jodit-wysiwyg b,
+                .clause-editor-wrapper .jodit-wysiwyg strong,
+                .clause-editor-wrapper .jodit-wysiwyg i,
+                .clause-editor-wrapper .jodit-wysiwyg em,
+                .clause-editor-wrapper .jodit-wysiwyg u,
+                .clause-editor-wrapper .jodit-wysiwyg a,
+                .clause-editor-external-toolbar .jodit-wysiwyg span,
+                .clause-editor-external-toolbar .jodit-wysiwyg font,
+                .clause-editor-external-toolbar .jodit-wysiwyg b,
+                .clause-editor-external-toolbar .jodit-wysiwyg strong,
+                .clause-editor-external-toolbar .jodit-wysiwyg i,
+                .clause-editor-external-toolbar .jodit-wysiwyg em,
+                .clause-editor-external-toolbar .jodit-wysiwyg u,
+                .clause-editor-external-toolbar .jodit-wysiwyg a {
+                    white-space: normal !important;
+                    overflow-wrap: anywhere !important;
+                    word-wrap: break-word !important;
+                    word-break: break-word !important;
+                    max-width: none !important;
+                    height: auto !important;
+                    line-height: inherit !important;
                 }
                 .clause-editor-external-toolbar .jodit-workplace .jodit-wysiwyg {
                     height: auto !important;
@@ -4065,10 +4448,11 @@ const ClauseEditor = ({
                 .clause-editor-external-toolbar .jodit-wysiwyg p,
                 .clause-editor-external-toolbar .jodit-wysiwyg li {
                     margin-top: 0 !important;
-                    margin-bottom: 0 !important;
+                    margin-bottom: 0.35em !important;
                     line-height: 1.45 !important;
                     text-indent: 0 !important;
                     margin-right: 0 !important;
+                    height: auto !important;
                 }
                 .clause-editor-external-toolbar .jodit-wysiwyg > * + * {
                     margin-top: 1.6px !important;

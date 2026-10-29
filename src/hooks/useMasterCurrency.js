@@ -1,11 +1,15 @@
-import { useMemo, useEffect } from 'react';
+import { useMemo, useLayoutEffect } from 'react';
 import { useData } from '../context/DataContext';
 import {
     DEFAULT_CURRENCY,
     resolveCurrencyFromMasterRows,
+    resolveVatPercentFromMasterRows,
     setRuntimeCurrency,
+    setRuntimeVatPercent,
     getRuntimeCurrency,
     getCurrencyMeta,
+    getDefaultPricingVatPercent,
+    getVatPercentForCurrency,
     formatRuntimeCurrencyAmount,
     numberToWordsRuntimeCurrency,
     runtimeAmountColumnHeader,
@@ -14,8 +18,8 @@ import {
 } from '../utils/currency';
 
 /**
- * Resolve Master_EnquiryFor.Currency for the active division/company and publish it
- * as the session runtime currency used by formatters across EMS modules.
+ * Resolve Master_EnquiryFor.Currency + VAT_Per for the active division/company
+ * and publish them as session runtime values used by quote pricing formatters.
  */
 export function useMasterCurrency({
     division = '',
@@ -25,24 +29,39 @@ export function useMasterCurrency({
     const { masters } = useData();
     const enqItems = masters?.enqItems || [];
 
-    const currencyCode = useMemo(
-        () =>
-            resolveCurrencyFromMasterRows(enqItems, {
-                departmentName: division,
-                companyName,
-                itemName,
-            }),
-        [enqItems, division, companyName, itemName]
+    const keys = useMemo(
+        () => ({
+            departmentName: division,
+            companyName,
+            itemName,
+        }),
+        [division, companyName, itemName]
     );
 
-    useEffect(() => {
+    const currencyCode = useMemo(() => {
+        const code = resolveCurrencyFromMasterRows(enqItems, keys);
+        setRuntimeCurrency(code);
+        return code;
+    }, [enqItems, keys]);
+
+    const vatPercent = useMemo(() => {
+        const fromMaster = resolveVatPercentFromMasterRows(enqItems, keys);
+        const pct =
+            fromMaster != null ? fromMaster : getVatPercentForCurrency(currencyCode);
+        setRuntimeVatPercent(pct);
+        return pct;
+    }, [enqItems, keys, currencyCode]);
+
+    useLayoutEffect(() => {
         setRuntimeCurrency(currencyCode);
-    }, [currencyCode]);
+        setRuntimeVatPercent(vatPercent);
+    }, [currencyCode, vatPercent]);
 
     const meta = useMemo(() => getCurrencyMeta(currencyCode), [currencyCode]);
 
     return {
         currencyCode,
+        vatPercent,
         meta,
         symbol: meta.code,
         formatAmount: formatRuntimeCurrencyAmount,
@@ -51,7 +70,9 @@ export function useMasterCurrency({
         valueHeader: runtimeValueColumnHeader(),
         footerNote: runtimeCurrencyFooterNote(),
         label: `Currency: ${currencyCode}`,
+        vatLabel: `VAT: ${vatPercent}%`,
         getRuntimeCurrency,
+        getDefaultPricingVatPercent,
     };
 }
 

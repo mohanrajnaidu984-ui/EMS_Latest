@@ -71,6 +71,25 @@ export const EMS_QUOTE_COVER_SIGN_OFF_FOR_GAP_EM = 3.15;
 export const EMS_QUOTE_COVER_SIGN_OFF_BODY_PAD_BOTTOM_PREVIEW = `calc(12px * 1.69 * ${EMS_QUOTE_COVER_SIGN_OFF_PREVIEW_HEIGHT_SCALE})`;
 /** Lift signatory name + designation inside the sign-off panel (prevents bottom clipping). */
 export const EMS_QUOTE_COVER_SIGNATORY_BLOCK_BOTTOM_OFFSET = '24px';
+/**
+ * Shorten the Dear Sir panel and lift the whole signatory panel by the same amount.
+ * Clears the 72px footer so the names are not cropped. A4 page size and the footer stay as they are.
+ */
+export const EMS_QUOTE_COVER_SIGNATORY_LIFT_PX = 72;
+
+/**
+ * Continuation preview keeps this much more space between the last line and the footer
+ * than the PDF clip box. 48px is taken from the logo row (logo paints into the top padding).
+ * Footer position and A4 size are unchanged.
+ */
+/** Must stay 0 — non-zero shrank the PDF logo band and made PDF taller than preview (clip in preview). */
+export const EMS_QUOTE_PDF_PREVIEW_GAP_PX = 0;
+/**
+ * Extra room above the PDF footer so the last line keeps the preview's 24px gap.
+ * 15mm bottom padding is reduced by this amount inside the same A4 page.
+ */
+/** Must stay 0 — non-zero reduced bottom padding and pushed continuation footers off-band (~12mm). */
+export const EMS_QUOTE_PDF_FOOTER_GAP_EXTRA_PX = 0;
 
 /** Reserved print footer block height (page indicator + rule + company lines). */
 export const EMS_QUOTE_PRINT_FOOTER_MIN_HEIGHT = '72px';
@@ -132,59 +151,67 @@ export const EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX = 24;
 export const EMS_QUOTE_PRICING_TABLE_DESC_COL_WIDTH = '72%';
 export const EMS_QUOTE_PRICING_TABLE_AMOUNT_COL_WIDTH = '28%';
 
-/** Default column ratio before user resize; skipped when data-ems-col-widths is set (px drag-resize). */
+/**
+ * Default Description|Amount ratio — ONLY on EMS auto-price summary ids.
+ * Never use [data-ems-pricing-cols="fixed"] here: BOQ/SL.NO tables that pick up that
+ * attr were getting 72%/28% and looking completely scrambled in preview.
+ */
 export const EMS_QUOTE_PRICING_TABLE_COLUMN_SYNC_CSS = `
 table#ems-auto-price-summary-table:not([data-ems-col-widths]),
-table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]),
-table[data-ems-pricing-cols="fixed"]:not([data-ems-col-widths]) {
+table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]) {
     width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
     max-width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
     table-layout: fixed !important;
     box-sizing: border-box !important;
 }
-table#ems-auto-price-summary-table:not([data-ems-col-widths]),
-table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]),
-table[data-ems-pricing-cols="fixed"]:not([data-ems-col-widths]) {
-    table-layout: fixed !important;
-    box-sizing: border-box !important;
-}
-table#ems-auto-price-summary-table:not([data-ems-col-widths]) col:nth-child(1),
-table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]) col:nth-child(1),
-table[data-ems-pricing-cols="fixed"]:not([data-ems-col-widths]) col:nth-child(1) {
+/* 2-col Description|Amount */
+table#ems-auto-price-summary-table:not([data-ems-col-widths]):has(> colgroup > col:nth-child(2):last-child) > colgroup > col:nth-child(1),
+table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]):has(> colgroup > col:nth-child(2):last-child) > colgroup > col:nth-child(1) {
     width: ${EMS_QUOTE_PRICING_TABLE_DESC_COL_WIDTH} !important;
 }
-table#ems-auto-price-summary-table:not([data-ems-col-widths]) col:nth-child(2),
-table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]) col:nth-child(2),
-table[data-ems-pricing-cols="fixed"]:not([data-ems-col-widths]) col:nth-child(2) {
+table#ems-auto-price-summary-table:not([data-ems-col-widths]):has(> colgroup > col:nth-child(2):last-child) > colgroup > col:nth-child(2),
+table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]):has(> colgroup > col:nth-child(2):last-child) > colgroup > col:nth-child(2) {
     width: ${EMS_QUOTE_PRICING_TABLE_AMOUNT_COL_WIDTH} !important;
 }
-table#ems-auto-price-summary-table:not([data-ems-col-widths]) > thead > tr > th:nth-child(1),
-table#ems-auto-price-summary-table:not([data-ems-col-widths]) > tbody > tr > td:nth-child(1),
-table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]) > thead > tr > th:nth-child(1),
-table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]) > tbody > tr > td:nth-child(1),
-table[data-ems-pricing-cols="fixed"]:not([data-ems-col-widths]) > thead > tr > th:nth-child(1),
-table[data-ems-pricing-cols="fixed"]:not([data-ems-col-widths]) > tbody > tr > td:nth-child(1) {
+/* 3-col Sl.No|Description|Amount — same % in edit and browse */
+table#ems-auto-price-summary-table:not([data-ems-col-widths]):has(> colgroup > col:nth-child(3):last-child) > colgroup > col:nth-child(1),
+table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]):has(> colgroup > col:nth-child(3):last-child) > colgroup > col:nth-child(1) {
+    width: 10% !important;
+}
+table#ems-auto-price-summary-table:not([data-ems-col-widths]):has(> colgroup > col:nth-child(3):last-child) > colgroup > col:nth-child(2),
+table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]):has(> colgroup > col:nth-child(3):last-child) > colgroup > col:nth-child(2) {
+    width: 62% !important;
+}
+table#ems-auto-price-summary-table:not([data-ems-col-widths]):has(> colgroup > col:nth-child(3):last-child) > colgroup > col:nth-child(3),
+table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]):has(> colgroup > col:nth-child(3):last-child) > colgroup > col:nth-child(3) {
+    width: 28% !important;
+}
+table#ems-auto-price-summary-table:not([data-ems-col-widths]):has(> colgroup > col:nth-child(2):last-child) > thead > tr > th:nth-child(1),
+table#ems-auto-price-summary-table:not([data-ems-col-widths]):has(> colgroup > col:nth-child(2):last-child) > tbody > tr > td:nth-child(1),
+table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]):has(> colgroup > col:nth-child(2):last-child) > thead > tr > th:nth-child(1),
+table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]):has(> colgroup > col:nth-child(2):last-child) > tbody > tr > td:nth-child(1) {
     width: ${EMS_QUOTE_PRICING_TABLE_DESC_COL_WIDTH} !important;
 }
-table#ems-auto-price-summary-table:not([data-ems-col-widths]) > thead > tr > th:nth-child(2),
-table#ems-auto-price-summary-table:not([data-ems-col-widths]) > tbody > tr > td:nth-child(2),
-table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]) > thead > tr > th:nth-child(2),
-table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]) > tbody > tr > td:nth-child(2),
-table[data-ems-pricing-cols="fixed"]:not([data-ems-col-widths]) > thead > tr > th:nth-child(2),
-table[data-ems-pricing-cols="fixed"]:not([data-ems-col-widths]) > tbody > tr > td:nth-child(2) {
+table#ems-auto-price-summary-table:not([data-ems-col-widths]):has(> colgroup > col:nth-child(2):last-child) > thead > tr > th:nth-child(2),
+table#ems-auto-price-summary-table:not([data-ems-col-widths]):has(> colgroup > col:nth-child(2):last-child) > tbody > tr > td:nth-child(2),
+table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]):has(> colgroup > col:nth-child(2):last-child) > thead > tr > th:nth-child(2),
+table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]):has(> colgroup > col:nth-child(2):last-child) > tbody > tr > td:nth-child(2) {
     width: ${EMS_QUOTE_PRICING_TABLE_AMOUNT_COL_WIDTH} !important;
 }
+/* After user column-resize: width comes from inline px sum (only the dragged column changes). */
 table#ems-auto-price-summary-table[data-ems-col-widths],
-table[id^="ems-auto-price-summary-table"][data-ems-col-widths],
-table[data-ems-pricing-cols="fixed"][data-ems-col-widths] {
+table[id^="ems-auto-price-summary-table"][data-ems-col-widths] {
     table-layout: fixed !important;
     box-sizing: border-box !important;
-    width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
-    max-width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
+    max-width: 100% !important;
 }
 `;
 
-/** Compact 24px rows + neutralized cell paragraphs (editor, preview, PDF). */
+/**
+ * Compact padding; rows start at min 24px and may grow when Description wraps.
+ * JS (fitEmsPricingSummaryTableRowHeights) then sets single-line → 24px and
+ * multi-line → measured height. User-resized tables keep data-ems-row-heights-custom.
+ */
 export const EMS_QUOTE_PRICING_TABLE_COMPACT_ROW_CSS = `
 table#ems-auto-price-summary-table th,
 table#ems-auto-price-summary-table td,
@@ -206,36 +233,127 @@ table[data-ems-pricing-cols="fixed"] th p {
     padding: 0 !important;
     line-height: 1.25 !important;
 }
-table#ems-auto-price-summary-table:not([data-ems-row-heights-custom]) > thead > tr,
-table#ems-auto-price-summary-table:not([data-ems-row-heights-custom]) > tbody > tr,
-table[id^="ems-auto-price-summary-table"]:not([data-ems-row-heights-custom]) > thead > tr,
-table[id^="ems-auto-price-summary-table"]:not([data-ems-row-heights-custom]) > tbody > tr,
-table[data-ems-pricing-cols="fixed"]:not([data-ems-row-heights-custom]) > thead > tr,
-table[data-ems-pricing-cols="fixed"]:not([data-ems-row-heights-custom]) > tbody > tr {
-    height: ${EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX}px !important;
-    max-height: ${EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX}px !important;
+/* Pre-fit only: allow wrap/measure. Once data-ems-row-heights is set, inline locks win. */
+table#ems-auto-price-summary-table:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) > thead > tr,
+table#ems-auto-price-summary-table:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) > tbody > tr,
+table[id^="ems-auto-price-summary-table"]:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) > thead > tr,
+table[id^="ems-auto-price-summary-table"]:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) > tbody > tr,
+table[data-ems-pricing-cols="fixed"]:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) > thead > tr,
+table[data-ems-pricing-cols="fixed"]:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) > tbody > tr {
+    height: auto !important;
+    max-height: none !important;
     min-height: ${EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX}px !important;
     box-sizing: border-box !important;
+    overflow: visible !important;
+}
+table#ems-auto-price-summary-table:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) > thead > tr > th,
+table#ems-auto-price-summary-table:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) > tbody > tr > td,
+table[id^="ems-auto-price-summary-table"]:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) > thead > tr > th,
+table[id^="ems-auto-price-summary-table"]:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) > tbody > tr > td,
+table[data-ems-pricing-cols="fixed"]:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) > thead > tr > th,
+table[data-ems-pricing-cols="fixed"]:not([data-ems-row-heights]):not([data-ems-row-heights-custom]) > tbody > tr > td {
+    height: auto !important;
+    max-height: none !important;
+    min-height: ${EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX}px !important;
+    box-sizing: border-box !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-wrap: break-word !important;
+    word-break: break-word !important;
+}
+table#ems-auto-price-summary-table td:first-child,
+table[id^="ems-auto-price-summary-table"] td:first-child,
+table[data-ems-pricing-cols="fixed"] td:first-child {
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-wrap: break-word !important;
+    word-break: break-word !important;
+}
+/* Footer labels must stay on one line (72% desc col) — never "Discou" / "nt (0%)". */
+table#ems-auto-price-summary-table tr[data-ems-row="total"] > td:first-child,
+table#ems-auto-price-summary-table tr[data-ems-row="discount"] > td:first-child,
+table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] > td:first-child,
+table#ems-auto-price-summary-table tr[data-ems-row="vat"] > td:first-child,
+table#ems-auto-price-summary-table tr[data-ems-row="grand-vat"] > td:first-child,
+table#ems-auto-price-summary-table tr[data-ems-row="grand"] > td:first-child,
+table[id^="ems-auto-price-summary-table"] tr[data-ems-row="total"] > td:first-child,
+table[id^="ems-auto-price-summary-table"] tr[data-ems-row="discount"] > td:first-child,
+table[id^="ems-auto-price-summary-table"] tr[data-ems-row="final-discounted"] > td:first-child,
+table[id^="ems-auto-price-summary-table"] tr[data-ems-row="vat"] > td:first-child,
+table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand-vat"] > td:first-child,
+table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand"] > td:first-child,
+table[data-ems-pricing-cols="fixed"] tr[data-ems-row="total"] > td:first-child,
+table[data-ems-pricing-cols="fixed"] tr[data-ems-row="discount"] > td:first-child,
+table[data-ems-pricing-cols="fixed"] tr[data-ems-row="final-discounted"] > td:first-child,
+table[data-ems-pricing-cols="fixed"] tr[data-ems-row="vat"] > td:first-child,
+table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand-vat"] > td:first-child,
+table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand"] > td:first-child {
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+}
+/* Single-line / footer: hard 24px (table cells ignore height without max-height). */
+table#ems-auto-price-summary-table tr[data-ems-pricing-row-h="24"],
+table[id^="ems-auto-price-summary-table"] tr[data-ems-pricing-row-h="24"],
+table[data-ems-pricing-cols="fixed"] tr[data-ems-pricing-row-h="24"] {
+    height: ${EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX}px !important;
+    min-height: ${EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX}px !important;
+    max-height: ${EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX}px !important;
     overflow: hidden !important;
 }
-table#ems-auto-price-summary-table:not([data-ems-row-heights-custom]) > thead > tr > th,
-table#ems-auto-price-summary-table:not([data-ems-row-heights-custom]) > tbody > tr > td,
-table[id^="ems-auto-price-summary-table"]:not([data-ems-row-heights-custom]) > thead > tr > th,
-table[id^="ems-auto-price-summary-table"]:not([data-ems-row-heights-custom]) > tbody > tr > td,
-table[data-ems-pricing-cols="fixed"]:not([data-ems-row-heights-custom]) > thead > tr > th,
-table[data-ems-pricing-cols="fixed"]:not([data-ems-row-heights-custom]) > tbody > tr > td {
+table#ems-auto-price-summary-table tr[data-ems-pricing-row-h="24"] > th,
+table#ems-auto-price-summary-table tr[data-ems-pricing-row-h="24"] > td,
+table[id^="ems-auto-price-summary-table"] tr[data-ems-pricing-row-h="24"] > th,
+table[id^="ems-auto-price-summary-table"] tr[data-ems-pricing-row-h="24"] > td,
+table[data-ems-pricing-cols="fixed"] tr[data-ems-pricing-row-h="24"] > th,
+table[data-ems-pricing-cols="fixed"] tr[data-ems-pricing-row-h="24"] > td {
     height: ${EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX}px !important;
+    min-height: ${EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX}px !important;
     max-height: ${EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX}px !important;
-    box-sizing: border-box !important;
     overflow: hidden !important;
+    line-height: 1.25 !important;
+    padding: ${EMS_QUOTE_PRICING_TABLE_CELL_PADDING} !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-wrap: break-word !important;
+    word-break: break-word !important;
+}
+/* Multi-line fitted rows: keep wrap; height comes from data-ems-pricing-row-h + inline lock. */
+table#ems-auto-price-summary-table tr[data-ems-pricing-row-h]:not([data-ems-pricing-row-h="24"]) > td,
+table[id^="ems-auto-price-summary-table"] tr[data-ems-pricing-row-h]:not([data-ems-pricing-row-h="24"]) > td,
+table[data-ems-pricing-cols="fixed"] tr[data-ems-pricing-row-h]:not([data-ems-pricing-row-h="24"]) > td {
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+    overflow: visible !important;
+    max-height: none !important;
+    line-height: 1.25 !important;
+}
+.clause-content table#ems-auto-price-summary-table td p,
+.clause-content table#ems-auto-price-summary-table th p,
+.clause-content table[id^="ems-auto-price-summary-table"] td p,
+.clause-content table[id^="ems-auto-price-summary-table"] th p,
+.clause-content table[data-ems-pricing-cols="fixed"] td p,
+.clause-content table[data-ems-pricing-cols="fixed"] th p {
+    line-height: 1.25 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+    max-height: none !important;
 }
 `;
 
-/** Navy header row — id and data-ems-pricing-cols (when Jodit drops id). Editor, preview, PDF. */
+/** Navy header row — id and data-ems-pricing-cols (when Jodit drops id). Editor, preview, PDF.
+ * Include thead td: column-insert may create td in the header row. */
 export const EMS_QUOTE_PRICING_TABLE_PRESENTATION_CSS = `
 table#ems-auto-price-summary-table thead th,
+table#ems-auto-price-summary-table thead td,
 table[id^="ems-auto-price-summary-table"] thead th,
-table[data-ems-pricing-cols="fixed"] thead th {
+table[id^="ems-auto-price-summary-table"] thead td,
+table[data-ems-pricing-cols="fixed"] thead th,
+table[data-ems-pricing-cols="fixed"] thead td {
     background: ${EMS_QUOTE_PRICING_TABLE_HEADER_BG} !important;
     background-color: ${EMS_QUOTE_PRICING_TABLE_HEADER_BG} !important;
     color: ${EMS_QUOTE_PRICING_TABLE_HEADER_COLOR} !important;
@@ -243,6 +361,130 @@ table[data-ems-pricing-cols="fixed"] thead th {
     border: ${EMS_QUOTE_PRICING_TABLE_HEAD_CELL_BORDER} !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
+}
+`;
+
+/**
+ * Pricing text-align — 2-col Desc|Amount; 3-col Sl.No|Desc|Amount.
+ * Defaults skip [data-ems-align-custom] so toolbar Left/Center/Right/Justify sticks.
+ */
+export const EMS_QUOTE_PRICING_TABLE_ALIGN_CSS = `
+/* Vertical middle for all pricing cells */
+table#ems-auto-price-summary-table th,
+table#ems-auto-price-summary-table td,
+table[id^="ems-auto-price-summary-table"] th,
+table[id^="ems-auto-price-summary-table"] td,
+table[data-ems-pricing-cols="fixed"] th,
+table[data-ems-pricing-cols="fixed"] td {
+    vertical-align: middle !important;
+}
+/* Inner nodes inherit cell align; kill Word boxes that looked like mis-aligned overlays */
+table#ems-auto-price-summary-table td > *,
+table#ems-auto-price-summary-table th > *,
+table[id^="ems-auto-price-summary-table"] td > *,
+table[id^="ems-auto-price-summary-table"] th > *,
+table[data-ems-pricing-cols="fixed"] td > *,
+table[data-ems-pricing-cols="fixed"] th > *,
+table#ems-auto-price-summary-table td p,
+table#ems-auto-price-summary-table th p,
+table[id^="ems-auto-price-summary-table"] td p,
+table[id^="ems-auto-price-summary-table"] th p,
+table[data-ems-pricing-cols="fixed"] td p,
+table[data-ems-pricing-cols="fixed"] th p {
+    text-align: inherit !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    background-image: none !important;
+    width: auto !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+}
+/* User toolbar align — highest priority */
+table#ems-auto-price-summary-table td[data-ems-align-custom="1"][data-ems-align="left"],
+table#ems-auto-price-summary-table th[data-ems-align-custom="1"][data-ems-align="left"],
+table[id^="ems-auto-price-summary-table"] td[data-ems-align-custom="1"][data-ems-align="left"],
+table[id^="ems-auto-price-summary-table"] th[data-ems-align-custom="1"][data-ems-align="left"],
+table[data-ems-pricing-cols="fixed"] td[data-ems-align-custom="1"][data-ems-align="left"],
+table[data-ems-pricing-cols="fixed"] th[data-ems-align-custom="1"][data-ems-align="left"] {
+    text-align: left !important;
+}
+table#ems-auto-price-summary-table td[data-ems-align-custom="1"][data-ems-align="center"],
+table#ems-auto-price-summary-table th[data-ems-align-custom="1"][data-ems-align="center"],
+table[id^="ems-auto-price-summary-table"] td[data-ems-align-custom="1"][data-ems-align="center"],
+table[id^="ems-auto-price-summary-table"] th[data-ems-align-custom="1"][data-ems-align="center"],
+table[data-ems-pricing-cols="fixed"] td[data-ems-align-custom="1"][data-ems-align="center"],
+table[data-ems-pricing-cols="fixed"] th[data-ems-align-custom="1"][data-ems-align="center"] {
+    text-align: center !important;
+}
+table#ems-auto-price-summary-table td[data-ems-align-custom="1"][data-ems-align="right"],
+table#ems-auto-price-summary-table th[data-ems-align-custom="1"][data-ems-align="right"],
+table[id^="ems-auto-price-summary-table"] td[data-ems-align-custom="1"][data-ems-align="right"],
+table[id^="ems-auto-price-summary-table"] th[data-ems-align-custom="1"][data-ems-align="right"],
+table[data-ems-pricing-cols="fixed"] td[data-ems-align-custom="1"][data-ems-align="right"],
+table[data-ems-pricing-cols="fixed"] th[data-ems-align-custom="1"][data-ems-align="right"] {
+    text-align: right !important;
+}
+table#ems-auto-price-summary-table td[data-ems-align-custom="1"][data-ems-align="justify"],
+table#ems-auto-price-summary-table th[data-ems-align-custom="1"][data-ems-align="justify"],
+table[id^="ems-auto-price-summary-table"] td[data-ems-align-custom="1"][data-ems-align="justify"],
+table[id^="ems-auto-price-summary-table"] th[data-ems-align-custom="1"][data-ems-align="justify"],
+table[data-ems-pricing-cols="fixed"] td[data-ems-align-custom="1"][data-ems-align="justify"],
+table[data-ems-pricing-cols="fixed"] th[data-ems-align-custom="1"][data-ems-align="justify"] {
+    text-align: justify !important;
+}
+/* 3-col Sl.No center — first of exactly 3 cells */
+table#ems-auto-price-summary-table tr > th:first-child:nth-last-child(3):not([data-ems-align-custom="1"]),
+table#ems-auto-price-summary-table tr > td:first-child:nth-last-child(3):not([data-ems-align-custom="1"]),
+table[id^="ems-auto-price-summary-table"] tr > th:first-child:nth-last-child(3):not([data-ems-align-custom="1"]),
+table[id^="ems-auto-price-summary-table"] tr > td:first-child:nth-last-child(3):not([data-ems-align-custom="1"]),
+table[data-ems-pricing-cols="fixed"] tr > th:first-child:nth-last-child(3):not([data-ems-align-custom="1"]),
+table[data-ems-pricing-cols="fixed"] tr > td:first-child:nth-last-child(3):not([data-ems-align-custom="1"]) {
+    text-align: center !important;
+}
+/* Description left — 2-col first, or 3-col middle */
+table#ems-auto-price-summary-table tr > th:first-child:nth-last-child(2):not([data-ems-align-custom="1"]),
+table#ems-auto-price-summary-table tr > td:first-child:nth-last-child(2):not([data-ems-align-custom="1"]),
+table[id^="ems-auto-price-summary-table"] tr > th:first-child:nth-last-child(2):not([data-ems-align-custom="1"]),
+table[id^="ems-auto-price-summary-table"] tr > td:first-child:nth-last-child(2):not([data-ems-align-custom="1"]),
+table[data-ems-pricing-cols="fixed"] tr > th:first-child:nth-last-child(2):not([data-ems-align-custom="1"]),
+table[data-ems-pricing-cols="fixed"] tr > td:first-child:nth-last-child(2):not([data-ems-align-custom="1"]),
+table#ems-auto-price-summary-table tr > th:nth-child(2):nth-last-child(2):not([data-ems-align-custom="1"]),
+table#ems-auto-price-summary-table tr > td:nth-child(2):nth-last-child(2):not([data-ems-align-custom="1"]),
+table[id^="ems-auto-price-summary-table"] tr > th:nth-child(2):nth-last-child(2):not([data-ems-align-custom="1"]),
+table[id^="ems-auto-price-summary-table"] tr > td:nth-child(2):nth-last-child(2):not([data-ems-align-custom="1"]),
+table[data-ems-pricing-cols="fixed"] tr > th:nth-child(2):nth-last-child(2):not([data-ems-align-custom="1"]),
+table[data-ems-pricing-cols="fixed"] tr > td:nth-child(2):nth-last-child(2):not([data-ems-align-custom="1"]) {
+    text-align: left !important;
+}
+/* Amount = last cell (+ data-ems-amount). Footer labels right on first cell. */
+table#ems-auto-price-summary-table th:last-child:not([data-ems-align-custom="1"]),
+table#ems-auto-price-summary-table td:last-child:not([data-ems-align-custom="1"]),
+table[id^="ems-auto-price-summary-table"] th:last-child:not([data-ems-align-custom="1"]),
+table[id^="ems-auto-price-summary-table"] td:last-child:not([data-ems-align-custom="1"]),
+table[data-ems-pricing-cols="fixed"] th:last-child:not([data-ems-align-custom="1"]),
+table[data-ems-pricing-cols="fixed"] td:last-child:not([data-ems-align-custom="1"]),
+table#ems-auto-price-summary-table td[data-ems-amount]:not([data-ems-align-custom="1"]),
+table[id^="ems-auto-price-summary-table"] td[data-ems-amount]:not([data-ems-align-custom="1"]),
+table[data-ems-pricing-cols="fixed"] td[data-ems-amount]:not([data-ems-align-custom="1"]),
+table#ems-auto-price-summary-table tr[data-ems-row="total"] td:first-child:not([data-ems-align-custom="1"]),
+table#ems-auto-price-summary-table tr[data-ems-row="discount"] td:first-child:not([data-ems-align-custom="1"]),
+table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td:first-child:not([data-ems-align-custom="1"]),
+table#ems-auto-price-summary-table tr[data-ems-row="vat"] td:first-child:not([data-ems-align-custom="1"]),
+table#ems-auto-price-summary-table tr[data-ems-row="grand-vat"] td:first-child:not([data-ems-align-custom="1"]),
+table#ems-auto-price-summary-table tr[data-ems-row="grand"] td:first-child:not([data-ems-align-custom="1"]),
+table[id^="ems-auto-price-summary-table"] tr[data-ems-row="total"] td:first-child:not([data-ems-align-custom="1"]),
+table[id^="ems-auto-price-summary-table"] tr[data-ems-row="vat"] td:first-child:not([data-ems-align-custom="1"]),
+table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand-vat"] td:first-child:not([data-ems-align-custom="1"]),
+table[id^="ems-auto-price-summary-table"] tr[data-ems-row="discount"] td:first-child:not([data-ems-align-custom="1"]),
+table[id^="ems-auto-price-summary-table"] tr[data-ems-row="final-discounted"] td:first-child:not([data-ems-align-custom="1"]),
+table[data-ems-pricing-cols="fixed"] tr[data-ems-row="total"] td:first-child:not([data-ems-align-custom="1"]),
+table[data-ems-pricing-cols="fixed"] tr[data-ems-row="vat"] td:first-child:not([data-ems-align-custom="1"]),
+table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand-vat"] td:first-child:not([data-ems-align-custom="1"]),
+table[data-ems-pricing-cols="fixed"] tr[data-ems-row="discount"] td:first-child:not([data-ems-align-custom="1"]),
+table[data-ems-pricing-cols="fixed"] tr[data-ems-row="final-discounted"] td:first-child:not([data-ems-align-custom="1"]) {
+    text-align: right !important;
 }
 `;
 

@@ -5,6 +5,7 @@
 
 import {
     formatRuntimeCurrencyAmount,
+    getDefaultPricingVatPercent,
     runtimeAmountColumnHeader,
 } from '../../utils/currency';
 
@@ -16,6 +17,14 @@ export function escapeHtmlAttr(s) {
         .replace(/"/g, '&quot;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
+}
+
+function formatVatPercentDisplay(pct) {
+    const n = Number(pct);
+    if (!Number.isFinite(n) || n < 0) return String(getDefaultPricingVatPercent());
+    const rounded = Math.round(n * 100) / 100;
+    if (Number.isInteger(rounded)) return String(rounded);
+    return String(rounded).replace(/\.?0+$/, '');
 }
 
 export function slugPricingOptionKey(name) {
@@ -114,7 +123,8 @@ export function buildMultiOptionPricingTablesHtml({
     const buildOne = (optionName, tableIndex) => {
         const opt = String(optionName || '').trim() || 'Base Price';
         const tableId = pricingOptionTableId(opt, tableIndex);
-        let tableHtml = `<table id="${tableId}" data-ems-pricing-cols="fixed" data-ems-price-option="${escapeHtmlAttr(opt)}" style="width:${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;max-width:${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;table-layout:fixed;border-collapse:collapse;margin-top:${EMS_QUOTE_PRICING_TABLE_MARGIN_TOP};margin-bottom:6px;font-size:11px;line-height:1.25;border:${EMS_QUOTE_PRICING_TABLE_OUTER_BORDER};box-sizing:border-box;">`;
+        const defaultVatPct = getDefaultPricingVatPercent();
+        let tableHtml = `<table id="${tableId}" data-ems-pricing-cols="fixed" data-ems-price-option="${escapeHtmlAttr(opt)}" data-ems-vat-pct="${escapeHtmlAttr(String(defaultVatPct))}" style="width:${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;max-width:${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;table-layout:fixed;border-collapse:collapse;margin-top:${EMS_QUOTE_PRICING_TABLE_MARGIN_TOP};margin-bottom:6px;font-size:11px;line-height:1.25;border:${EMS_QUOTE_PRICING_TABLE_OUTER_BORDER};box-sizing:border-box;">`;
         tableHtml += colgroup;
         tableHtml +=
             `<thead><tr><th style="padding:${pad};border:${cellBorder};text-align:left;font-size:11px;font-weight:600;background:${EMS_QUOTE_PRICING_TABLE_HEADER_BG};color:${EMS_QUOTE_PRICING_TABLE_HEADER_COLOR};">Description</th><th style="padding:${pad};border:${cellBorder};text-align:right;font-size:11px;font-weight:600;background:${EMS_QUOTE_PRICING_TABLE_HEADER_BG};color:${EMS_QUOTE_PRICING_TABLE_HEADER_COLOR};">${amountHeader}</th></tr></thead>`;
@@ -135,13 +145,17 @@ export function buildMultiOptionPricingTablesHtml({
 
         let htmlGrandTotalWithVat = 0;
         if (htmlGrandTotal > 0) {
-            const { vat, grandWithVat } = calcPricingTotalsFromBase(htmlGrandTotal);
+            const { vat, grandWithVat, vatPercent } = calcPricingTotalsFromBase(
+                htmlGrandTotal,
+                defaultVatPct
+            );
+            const pctDisp = formatVatPercentDisplay(vatPercent ?? defaultVatPct);
             htmlGrandTotalWithVat = grandWithVat;
             const footerStyle = `padding:${pad};border:${cellBorder};border-top:1px solid #94a3b8;text-align:right;font-size:11px;font-weight:700;background:${EMS_QUOTE_PRICING_TABLE_TOTAL_BG};color:#0f172a;`;
             const totalLabel = formatPricingTotalRowLabel(opt);
             tableHtml += `<tr data-ems-row="total"><td style="${footerStyle}">${totalLabel}</td><td data-ems-amount="total" style="${footerStyle}">${fmtBhd(htmlGrandTotal)}</td></tr>`;
-            tableHtml += `<tr data-ems-row="vat"><td style="${footerStyle}">VAT 10%</td><td data-ems-amount="vat" style="${footerStyle}">${fmtBhd(vat)}</td></tr>`;
-            tableHtml += `<tr data-ems-row="grand-vat"><td style="${footerStyle}">Grand Total with VAT 10%</td><td data-ems-amount="grand-vat" style="${footerStyle}">${fmtBhd(grandWithVat)}</td></tr>`;
+            tableHtml += `<tr data-ems-row="vat"><td style="${footerStyle}">VAT ${pctDisp}%</td><td data-ems-amount="vat" style="${footerStyle}">${fmtBhd(vat)}</td></tr>`;
+            tableHtml += `<tr data-ems-row="grand-vat"><td style="${footerStyle}">Grand Total with VAT ${pctDisp}%</td><td data-ems-amount="grand-vat" style="${footerStyle}">${fmtBhd(grandWithVat)}</td></tr>`;
         }
         tableHtml += '</tbody></table>';
         return { tableHtml, htmlGrandTotal, htmlGrandTotalWithVat, optionName: opt };

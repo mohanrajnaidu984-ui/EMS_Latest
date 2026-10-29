@@ -9,9 +9,18 @@ import {
     EMS_QUOTE_PDF_FOOTER_GAP_EXTRA_PX,
     EMS_QUOTE_PRINT_FOOTER_MIN_HEIGHT,
 } from '../../constants/emsTheme.js';
+import {
+    QUOTE_PAGE_GEOMETRY,
+    QUOTE_A4_SHEET_PADDING_MM,
+    QUOTE_A4_LOGO_BAND_MM,
+    QUOTE_A4_FOOTER_BAND_MM,
+    QUOTE_A4_LANDSCAPE_WIDTH_MM,
+    QUOTE_A4_LANDSCAPE_HEIGHT_MM,
+} from './quotePageGeometry.js';
 
-/** Printable body height inside one A4 sheet (mm): 297 − vertical padding. */
-export const QUOTE_A4_INNER_HEIGHT_MM = 297 - 15 * 2;
+/** Printable body height inside one A4 sheet (mm): page − vertical padding. */
+export const QUOTE_A4_INNER_HEIGHT_MM =
+    QUOTE_PAGE_GEOMETRY.pageHeightMm - QUOTE_A4_SHEET_PADDING_MM * 2;
 
 /**
  * Unified export overrides — hoisted preview layout CSS is stripped; sheets use grid like QuoteForm.
@@ -41,12 +50,12 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet:not(.quote-a4-sheet--l
     width: 210mm !important;
     min-width: 210mm !important;
     max-width: 210mm !important;
-    padding: 15mm !important;
+    padding: ${QUOTE_A4_SHEET_PADDING_MM}mm !important;
     margin: 0 !important;
     background: #fff !important;
-    min-height: 297mm !important;
-    height: 297mm !important;
-    max-height: 297mm !important;
+    min-height: ${QUOTE_PAGE_GEOMETRY.pageHeightMm}mm !important;
+    height: ${QUOTE_PAGE_GEOMETRY.pageHeightMm}mm !important;
+    max-height: ${QUOTE_PAGE_GEOMETRY.pageHeightMm}mm !important;
     display: grid !important;
     grid-template-columns: minmax(0, 1fr) !important;
     grid-template-rows: auto minmax(0, 1fr) auto !important;
@@ -72,15 +81,15 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation=
 [data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet--landscape,
 [data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"] {
     box-sizing: border-box !important;
-    width: 297mm !important;
-    min-width: 297mm !important;
-    max-width: 297mm !important;
-    padding: 15mm !important;
+    width: ${QUOTE_A4_LANDSCAPE_WIDTH_MM}mm !important;
+    min-width: ${QUOTE_A4_LANDSCAPE_WIDTH_MM}mm !important;
+    max-width: ${QUOTE_A4_LANDSCAPE_WIDTH_MM}mm !important;
+    padding: ${QUOTE_A4_SHEET_PADDING_MM}mm !important;
     margin: 0 !important;
     background: #fff !important;
-    min-height: 210mm !important;
-    height: 210mm !important;
-    max-height: 210mm !important;
+    min-height: ${QUOTE_A4_LANDSCAPE_HEIGHT_MM}mm !important;
+    height: ${QUOTE_A4_LANDSCAPE_HEIGHT_MM}mm !important;
+    max-height: ${QUOTE_A4_LANDSCAPE_HEIGHT_MM}mm !important;
     display: grid !important;
     grid-template-columns: minmax(0, 1fr) !important;
     grid-template-rows: auto minmax(0, 1fr) auto !important;
@@ -96,7 +105,7 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet.quote-a4-sheet--contin
 [data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet.quote-a4-sheet--continuation:not(.quote-a4-sheet--landscape):not([data-page-orientation="landscape"]),
 [data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet.quote-a4-sheet--continuation.quote-a4-sheet--landscape,
 [data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet.quote-a4-sheet--continuation[data-page-orientation="landscape"] {
-    grid-template-rows: 21mm minmax(0, 1fr) 26mm !important;
+    grid-template-rows: ${QUOTE_A4_LOGO_BAND_MM}mm minmax(0, 1fr) ${QUOTE_A4_FOOTER_BAND_MM}mm !important;
 }
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote-sheet-logo-row,
 [data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet--continuation > .quote-sheet-logo-row {
@@ -104,18 +113,18 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote
     flex-direction: row !important;
     justify-content: flex-end !important;
     align-items: flex-start !important;
-    height: 21mm !important;
-    min-height: 21mm !important;
-    max-height: 21mm !important;
+    height: ${QUOTE_A4_LOGO_BAND_MM}mm !important;
+    min-height: ${QUOTE_A4_LOGO_BAND_MM}mm !important;
+    max-height: ${QUOTE_A4_LOGO_BAND_MM}mm !important;
     margin-bottom: 0 !important;
     box-sizing: border-box !important;
     width: 100% !important;
 }
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .footer-section,
 [data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet--continuation > .footer-section {
-    height: 26mm !important;
-    min-height: 26mm !important;
-    max-height: 26mm !important;
+    height: ${QUOTE_A4_FOOTER_BAND_MM}mm !important;
+    min-height: ${QUOTE_A4_FOOTER_BAND_MM}mm !important;
+    max-height: ${QUOTE_A4_FOOTER_BAND_MM}mm !important;
     justify-content: flex-end !important;
     box-sizing: border-box !important;
 }
@@ -166,7 +175,7 @@ html[data-preview-pdf="1"] #quote-preview .quote-sheet-logo-row img,
     display: block !important;
     height: auto !important;
     width: auto !important;
-    max-height: 21mm !important;
+    max-height: 12.6mm !important;
     max-width: 100% !important;
     object-fit: contain !important;
     object-position: right top !important;
@@ -226,7 +235,7 @@ html[data-preview-pdf="1"] #quote-print-root[data-print-with-header='1'] .quote-
     visibility: visible !important;
     display: block !important;
     opacity: 1 !important;
-    max-height: 21mm !important;
+    max-height: 12.6mm !important;
     height: auto !important;
     width: auto !important;
     max-width: 100% !important;
@@ -280,12 +289,18 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation .quote-s
 }
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation .content-section,
 [data-ems-pdf-export="1"] .quote-a4-sheet--continuation .content-section {
-    flex: 0 1 auto !important;
+    flex: 0 0 auto !important;
     min-height: 0 !important;
-    max-height: 100% !important;
+    height: ${QUOTE_PAGE_GEOMETRY.contentHeightMm}mm !important;
+    max-height: ${QUOTE_PAGE_GEOMETRY.contentHeightMm}mm !important;
     overflow: hidden !important;
     padding-top: 1px;
     box-sizing: border-box;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape.quote-a4-sheet--continuation .content-section,
+[data-ems-pdf-export="1"] .quote-a4-sheet--landscape.quote-a4-sheet--continuation .content-section {
+    height: ${QUOTE_PAGE_GEOMETRY.contentHeightLandscapeMm}mm !important;
+    max-height: ${QUOTE_PAGE_GEOMETRY.contentHeightLandscapeMm}mm !important;
 }
 html[data-preview-pdf="1"] #quote-preview .clause-content > p[data-ems-para-continue="1"],
 html[data-preview-pdf="1"] #quote-preview .clause-content > table[data-ems-clause-row-continue="1"],
@@ -310,8 +325,8 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation table th
 [data-ems-pdf-export="1"] .quote-a4-sheet--continuation table th {
     padding-top: 1px !important;
     padding-bottom: 1px !important;
-    font-size: 12.5px !important;
-    line-height: 15px !important;
+    font-size: 13px !important;
+    line-height: 1.4 !important;
     overflow: visible !important;
 }
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation .clause-content,
@@ -323,16 +338,16 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation .clause-
     line-height: 1.4 !important;
     overflow: visible !important;
 }
-/* Same geometry as preview: 21mm logo / 220mm content / 26mm footer, 15mm padding. */
+/* Same geometry as preview: logo / content / footer bands from quotePageGeometry. */
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote-sheet-logo-row,
 [data-ems-pdf-export="1"] .quote-a4-sheet--continuation > .quote-sheet-logo-row {
     display: flex !important;
     flex-direction: row !important;
     justify-content: flex-end !important;
     align-items: flex-start !important;
-    height: 21mm !important;
-    min-height: 21mm !important;
-    max-height: 21mm !important;
+    height: ${QUOTE_A4_LOGO_BAND_MM}mm !important;
+    min-height: ${QUOTE_A4_LOGO_BAND_MM}mm !important;
+    max-height: ${QUOTE_A4_LOGO_BAND_MM}mm !important;
     margin-bottom: 0 !important;
     overflow: hidden !important;
     box-sizing: border-box !important;
@@ -345,7 +360,7 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote
     justify-content: flex-end !important;
     align-items: flex-start !important;
     height: auto !important;
-    max-height: 21mm !important;
+    max-height: ${QUOTE_A4_LOGO_BAND_MM}mm !important;
     min-height: 0 !important;
     width: 100% !important;
     text-align: right !important;
@@ -356,7 +371,7 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote
     position: static !important;
     height: auto !important;
     width: auto !important;
-    max-height: 21mm !important;
+    max-height: ${QUOTE_A4_LOGO_BAND_MM * 0.6}mm !important;
     max-width: 100% !important;
     object-fit: contain !important;
     object-position: right top !important;
@@ -366,8 +381,8 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote
 }
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation:not(.quote-a4-sheet--landscape):not([data-page-orientation="landscape"]),
 [data-ems-pdf-export="1"] .quote-a4-sheet--continuation:not(.quote-a4-sheet--landscape):not([data-page-orientation="landscape"]) {
-    padding: 15mm !important;
-    padding-bottom: 15mm !important;
+    padding: ${QUOTE_A4_SHEET_PADDING_MM}mm !important;
+    padding-bottom: ${QUOTE_A4_SHEET_PADDING_MM}mm !important;
 }
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet:not(:has(~ .quote-a4-sheet)),
 [data-ems-pdf-export="1"] .quote-a4-sheet:not(:has(~ .quote-a4-sheet)) {

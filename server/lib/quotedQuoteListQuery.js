@@ -66,11 +66,68 @@ const existsLatestPositiveQuoteSql = `
                   AND ISNULL(qt.TotalAmount, 0) > 0
             )`;
 
+/** Optional list columns — omitted in slim mode; mapQuoteListingRows loads quotes/prices in bulk instead. */
+function buildQuotedListHeavySelectColumns(slim, scopedJobIdsSelectSql) {
+    if (slim) {
+        return `
+                    CAST(NULL AS NVARCHAR(MAX)) AS ListQuoteRef,
+                    CAST(NULL AS DATETIME) AS ListQuoteDate,
+                    CAST(N'' AS NVARCHAR(255)) AS ListPreparedBy,
+                    CAST(N'' AS NVARCHAR(255)) AS ListQuoteOwnJob,
+                    CAST(0 AS DECIMAL(18,2)) AS ListQuoteTotalAmount,
+                    CAST(NULL AS NVARCHAR(MAX)) AS QuotedCustomers,
+                    CAST(NULL AS NVARCHAR(MAX)) AS Divisions,
+                    CAST(NULL AS NVARCHAR(MAX)) AS PricingCustomerDetails,
+                    CAST(NULL AS NVARCHAR(MAX)) AS ScopedJobIDs`;
+    }
+    return `
+                    (
+                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtRef.QuoteNumber, N'')))
+                        FROM EnquiryQuotes qtRef
+                        WHERE qtRef.RequestNo = E.RequestNo
+                          AND qtRef.QuoteNo = (SELECT MAX(qtMx.QuoteNo) FROM EnquiryQuotes qtMx WHERE qtMx.RequestNo = E.RequestNo)
+                        ORDER BY qtRef.RevisionNo DESC
+                    ) as ListQuoteRef,
+                    (
+                        SELECT TOP 1 qtDt.QuoteDate
+                        FROM EnquiryQuotes qtDt
+                        WHERE qtDt.RequestNo = E.RequestNo
+                          AND qtDt.QuoteNo = (SELECT MAX(qtMx2.QuoteNo) FROM EnquiryQuotes qtMx2 WHERE qtMx2.RequestNo = E.RequestNo)
+                        ORDER BY qtDt.RevisionNo DESC
+                    ) as ListQuoteDate,
+                    (
+                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtPb.PreparedBy, N'')))
+                        FROM EnquiryQuotes qtPb
+                        WHERE qtPb.RequestNo = E.RequestNo
+                          AND qtPb.QuoteNo = (SELECT MAX(qtMx3.QuoteNo) FROM EnquiryQuotes qtMx3 WHERE qtMx3.RequestNo = E.RequestNo)
+                        ORDER BY qtPb.RevisionNo DESC
+                    ) as ListPreparedBy,
+                    (
+                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtOj.OwnJob, N'')))
+                        FROM EnquiryQuotes qtOj
+                        WHERE qtOj.RequestNo = E.RequestNo
+                          AND qtOj.QuoteNo = (SELECT MAX(qtMx4.QuoteNo) FROM EnquiryQuotes qtMx4 WHERE qtMx4.RequestNo = E.RequestNo)
+                        ORDER BY qtOj.RevisionNo DESC
+                    ) as ListQuoteOwnJob,
+                    (
+                        SELECT TOP 1 ISNULL(qtTa.TotalAmount, 0)
+                        FROM EnquiryQuotes qtTa
+                        WHERE qtTa.RequestNo = E.RequestNo
+                          AND qtTa.QuoteNo = (SELECT MAX(qtMx5.QuoteNo) FROM EnquiryQuotes qtMx5 WHERE qtMx5.RequestNo = E.RequestNo)
+                        ORDER BY qtTa.RevisionNo DESC
+                    ) as ListQuoteTotalAmount,
+                    ${quotedCustomersSub},
+                    ${divisionsSub},
+                    ${pricingDetailsSub},
+                    ${scopedJobIdsSelectSql}`;
+}
+
 /**
  * Enquiries the user can see that already have a completed quote line (latest revision TotalAmount > 0).
  */
 async function runQuotedQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '', divisionFilter = '', options = {}) {
     const requirePositiveAmount = options.requirePositiveAmount !== false;
+    const slim = options.slim !== false;
     const existsQuoteSql = requirePositiveAmount
         ? existsLatestPositiveQuoteSql
         : `EXISTS (SELECT 1 FROM EnquiryQuotes qt WHERE qt.RequestNo = E.RequestNo)`;
@@ -81,7 +138,12 @@ async function runQuotedQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = ''
     if (userEmail) {
         userEmail = userEmail.toLowerCase().replace(/@almcg\.com/g, '@almoayyedcg.com').trim();
     }
-    const accessCtx = userEmail ? await resolvePricingAccessContext(userEmail) : null;
+    const accessCtx =
+        options.accessCtx != null
+            ? options.accessCtx
+            : userEmail
+              ? await resolvePricingAccessContext(userEmail)
+              : null;
     if (userEmail && (!accessCtx || !accessCtx.user)) {
         return { enquiries: [], accessCtx: accessCtx || null, userEmail };
     }
@@ -232,48 +294,11 @@ async function runQuotedQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = ''
                 AND ${concernedSeEmailExistsSql}
                 `
               : '';
+        const heavySelectCols = buildQuotedListHeavySelectColumns(slim, scopedJobIdsSelect);
         query = `
                 SELECT DISTINCT
-                    E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName, E.EnquiryDate, E.DueDate, E.Status,
-                    (
-                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtRef.QuoteNumber, N'')))
-                        FROM EnquiryQuotes qtRef
-                        WHERE qtRef.RequestNo = E.RequestNo
-                          AND qtRef.QuoteNo = (SELECT MAX(qtMx.QuoteNo) FROM EnquiryQuotes qtMx WHERE qtMx.RequestNo = E.RequestNo)
-                        ORDER BY qtRef.RevisionNo DESC
-                    ) as ListQuoteRef,
-                    (
-                        SELECT TOP 1 qtDt.QuoteDate
-                        FROM EnquiryQuotes qtDt
-                        WHERE qtDt.RequestNo = E.RequestNo
-                          AND qtDt.QuoteNo = (SELECT MAX(qtMx2.QuoteNo) FROM EnquiryQuotes qtMx2 WHERE qtMx2.RequestNo = E.RequestNo)
-                        ORDER BY qtDt.RevisionNo DESC
-                    ) as ListQuoteDate,
-                    (
-                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtPb.PreparedBy, N'')))
-                        FROM EnquiryQuotes qtPb
-                        WHERE qtPb.RequestNo = E.RequestNo
-                          AND qtPb.QuoteNo = (SELECT MAX(qtMx3.QuoteNo) FROM EnquiryQuotes qtMx3 WHERE qtMx3.RequestNo = E.RequestNo)
-                        ORDER BY qtPb.RevisionNo DESC
-                    ) as ListPreparedBy,
-                    (
-                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtOj.OwnJob, N'')))
-                        FROM EnquiryQuotes qtOj
-                        WHERE qtOj.RequestNo = E.RequestNo
-                          AND qtOj.QuoteNo = (SELECT MAX(qtMx4.QuoteNo) FROM EnquiryQuotes qtMx4 WHERE qtMx4.RequestNo = E.RequestNo)
-                        ORDER BY qtOj.RevisionNo DESC
-                    ) as ListQuoteOwnJob,
-                    (
-                        SELECT TOP 1 ISNULL(qtTa.TotalAmount, 0)
-                        FROM EnquiryQuotes qtTa
-                        WHERE qtTa.RequestNo = E.RequestNo
-                          AND qtTa.QuoteNo = (SELECT MAX(qtMx5.QuoteNo) FROM EnquiryQuotes qtMx5 WHERE qtMx5.RequestNo = E.RequestNo)
-                        ORDER BY qtTa.RevisionNo DESC
-                    ) as ListQuoteTotalAmount,
-                    ${quotedCustomersSub},
-                    ${divisionsSub},
-                    ${pricingDetailsSub},
-                    ${scopedJobIdsSelect}
+                    E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName, E.EnquiryDate, E.DueDate, E.Status, E.EnquiryStatus,
+                    ${heavySelectCols}
                 FROM EnquiryMaster E
                 JOIN EnquiryFor EF ON E.RequestNo = EF.RequestNo
                 JOIN Master_EnquiryFor MEF ON (
@@ -290,48 +315,11 @@ async function runQuotedQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = ''
                 ORDER BY E.DueDate DESC, E.RequestNo DESC
             `;
     } else {
+        const heavySelectCols = buildQuotedListHeavySelectColumns(slim, scopedJobIdsAdmin);
         query = `
                 SELECT DISTINCT
-                    E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName, E.EnquiryDate, E.DueDate, E.Status,
-                    (
-                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtRef.QuoteNumber, N'')))
-                        FROM EnquiryQuotes qtRef
-                        WHERE qtRef.RequestNo = E.RequestNo
-                          AND qtRef.QuoteNo = (SELECT MAX(qtMx.QuoteNo) FROM EnquiryQuotes qtMx WHERE qtMx.RequestNo = E.RequestNo)
-                        ORDER BY qtRef.RevisionNo DESC
-                    ) as ListQuoteRef,
-                    (
-                        SELECT TOP 1 qtDt.QuoteDate
-                        FROM EnquiryQuotes qtDt
-                        WHERE qtDt.RequestNo = E.RequestNo
-                          AND qtDt.QuoteNo = (SELECT MAX(qtMx2.QuoteNo) FROM EnquiryQuotes qtMx2 WHERE qtMx2.RequestNo = E.RequestNo)
-                        ORDER BY qtDt.RevisionNo DESC
-                    ) as ListQuoteDate,
-                    (
-                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtPb.PreparedBy, N'')))
-                        FROM EnquiryQuotes qtPb
-                        WHERE qtPb.RequestNo = E.RequestNo
-                          AND qtPb.QuoteNo = (SELECT MAX(qtMx3.QuoteNo) FROM EnquiryQuotes qtMx3 WHERE qtMx3.RequestNo = E.RequestNo)
-                        ORDER BY qtPb.RevisionNo DESC
-                    ) as ListPreparedBy,
-                    (
-                        SELECT TOP 1 LTRIM(RTRIM(ISNULL(qtOj.OwnJob, N'')))
-                        FROM EnquiryQuotes qtOj
-                        WHERE qtOj.RequestNo = E.RequestNo
-                          AND qtOj.QuoteNo = (SELECT MAX(qtMx4.QuoteNo) FROM EnquiryQuotes qtMx4 WHERE qtMx4.RequestNo = E.RequestNo)
-                        ORDER BY qtOj.RevisionNo DESC
-                    ) as ListQuoteOwnJob,
-                    (
-                        SELECT TOP 1 ISNULL(qtTa.TotalAmount, 0)
-                        FROM EnquiryQuotes qtTa
-                        WHERE qtTa.RequestNo = E.RequestNo
-                          AND qtTa.QuoteNo = (SELECT MAX(qtMx5.QuoteNo) FROM EnquiryQuotes qtMx5 WHERE qtMx5.RequestNo = E.RequestNo)
-                        ORDER BY qtTa.RevisionNo DESC
-                    ) as ListQuoteTotalAmount,
-                    ${quotedCustomersSub},
-                    ${divisionsSub},
-                    ${pricingDetailsSub},
-                    ${scopedJobIdsAdmin}
+                    E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName, E.EnquiryDate, E.DueDate, E.Status, E.EnquiryStatus,
+                    ${heavySelectCols}
                 FROM EnquiryMaster E
                 WHERE ${existsQuoteSql}
                 ${divisionClause}

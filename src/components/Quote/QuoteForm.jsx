@@ -196,19 +196,34 @@ import {
     reflowContinuationPagesTopDown,
     compactPackHeightsPx,
     ensureSegmentPageGroupsCoverAll,
+    keepHeadingsWithFollowingContent,
     assertSegmentPageGroupsIntegrity,
     assertSegmentVisibilityOnSheets,
+    measureLiveContentFit,
+    getQuotePreviewZoomFactor,
     PACK_HEIGHT_SAFETY_PX,
     quoteA4InnerContentMm,
     quoteContinuationContentPx,
     QUOTE_A4_LOGO_BAND_MM,
     QUOTE_A4_FOOTER_BAND_MM,
     segmentPageGroupsEqual,
+    softSplitOversizedUnitHtml,
+    detectRepeatedPackState,
     splitClauseHtmlToSegments,
 } from './quoteClausePagination';
+import {
+    QUOTE_PAGE_GEOMETRY,
+    QUOTE_PACK_MEASURE_TABLE_CELL_CSS,
+} from './quotePageGeometry.js';
+const EMS_QUOTE_SHOW_CONTENT_MARKS =
+    typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV);
 import { QUOTE_PACK_FONT_STACK, buildQuotePackFontFaceCss } from './quotePackFonts.js';
 import { remapSymbolFontGreekInHtml } from './quoteSymbolFont';
 import { sanitizeQuoteRichHtml } from './quoteSanitizeHtml';
+import {
+    isEmsFillPackEnabled,
+    packSegmentsByRealDomFit,
+} from './quoteRealDomFitPack.js';
 import {
     SignatureVaultModal,
     QuoteSignatureStamp,
@@ -2837,6 +2852,45 @@ function sanitizeMisplacedPricingFooterAttrsInTableHtml(html) {
  * Sum line-item rows in this table fragment only (ignores stamp / siblings).
  * Stops at Total / VAT / Grand footer rows.
  */
+/**
+ * Format user-typed line Amount cells as "BHD #,###.###" (or active currency).
+ * Skips footer rows and the cell still being edited.
+ */
+function normalizePricingLineAmountCellsInTable(table, opts = {}) {
+    if (!table?.querySelectorAll) return;
+    const skipCell = opts.skipCell || null;
+    const activeCell = opts.activeCell || null;
+    for (const row of getPricingTableDataRows(table)) {
+        const cells = row.cells || [];
+        if (cells.length < 2) continue;
+        const label = String(cells[0].textContent || '').trim();
+        const rowKind = String(row.getAttribute('data-ems-row') || '').trim();
+        if (isPricingTableFooterLabel(label)) break;
+        if (isEmsPricingFooterRowEl(rowKind, label)) continue;
+        if (isPricingTableFooterRow(row)) continue;
+
+        const amtCell = cells[cells.length - 1];
+        if (!amtCell) continue;
+        if (skipCell && (amtCell === skipCell || amtCell.contains(skipCell))) continue;
+        if (
+            activeCell &&
+            (amtCell === activeCell || amtCell.contains(activeCell) || activeCell.contains?.(amtCell))
+        ) {
+            continue;
+        }
+
+        const raw = amtCell.textContent;
+        if (!String(raw || '').trim()) continue;
+        if (isIncompleteBhdAmountText(raw)) continue;
+        const parsed = parseBhdAmountText(raw);
+        if (parsed == null || !Number.isFinite(parsed)) continue;
+        const formatted = formatBhdAmount(roundBhdAmount(parsed));
+        if ((amtCell.textContent || '').trim() !== formatted) {
+            amtCell.textContent = formatted;
+        }
+    }
+}
+
 function sumPricingLineRowsFromTableElement(table) {
     if (!table?.querySelectorAll) return null;
     sanitizeMisplacedPricingFooterAttrsInTable(table);
@@ -2870,58 +2924,67 @@ function readStampedPricingBaseTotal(table) {
 
 /**
  * Sum every line-item row above the footer (division, optional, user-inserted rows).
- * For page-split pricing tables, prefer the stamped full-table base (or sibling
- * fragments with the same data-ems-split-id) so Total is not recomputed from
- * only the rows visible on the current page.
+ *
+ * Full (non-split) tables: always sum live rows so newly added amounts update Total.
+ * Stale data-ems-pricing-base-total must not freeze Total after the user inserts a row.
+ *
+ * Page-split fragments: prefer the stamped full-table base (or sibling fragments)
+ * so Total is not recomputed from only the rows visible on the current page.
  */
 function parseBaseTotalFromPricingTableElement(table) {
     if (!table?.querySelectorAll) return null;
 
+    const isSplit = table.getAttribute('data-ems-table-split') === '1';
+
+    /* Editing / single-sheet table: live line sum wins over any stamp. */
+    if (!isSplit) {
+        const live = sumPricingLineRowsFromTableElement(table);
+        if (live != null && Number.isFinite(live)) return live;
+        return readStampedPricingBaseTotal(table);
+    }
+
     const stamped = readStampedPricingBaseTotal(table);
     if (stamped != null) return stamped;
 
-    const isSplit = table.getAttribute('data-ems-table-split') === '1';
-    if (isSplit) {
-        const splitId = String(table.getAttribute('data-ems-split-id') || '').trim();
-        const doc = table.ownerDocument;
-        if (splitId && doc?.querySelectorAll) {
-            let siblingSum = 0;
-            let siblingFound = false;
-            let escaped = splitId;
-            try {
-                escaped =
-                    typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
-                        ? CSS.escape(splitId)
-                        : splitId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-            } catch (_e) {
-                /* use raw id */
-            }
-            const siblings = [
-                ...doc.querySelectorAll(`table[data-ems-split-id="${escaped}"]`),
-            ];
-            for (const sib of siblings) {
-                const sibStamp = readStampedPricingBaseTotal(sib);
-                if (sibStamp != null) return sibStamp;
-                const part = sumPricingLineRowsFromTableElement(sib);
-                if (part == null || !Number.isFinite(part)) continue;
-                siblingSum += part;
-                siblingFound = true;
-            }
-            if (siblingFound) return siblingSum;
+    const splitId = String(table.getAttribute('data-ems-split-id') || '').trim();
+    const doc = table.ownerDocument;
+    if (splitId && doc?.querySelectorAll) {
+        let siblingSum = 0;
+        let siblingFound = false;
+        let escaped = splitId;
+        try {
+            escaped =
+                typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+                    ? CSS.escape(splitId)
+                    : splitId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        } catch (_e) {
+            /* use raw id */
         }
+        const siblings = [
+            ...doc.querySelectorAll(`table[data-ems-split-id="${escaped}"]`),
+        ];
+        for (const sib of siblings) {
+            const sibStamp = readStampedPricingBaseTotal(sib);
+            if (sibStamp != null) return sibStamp;
+            const part = sumPricingLineRowsFromTableElement(sib);
+            if (part == null || !Number.isFinite(part)) continue;
+            siblingSum += part;
+            siblingFound = true;
+        }
+        if (siblingFound) return siblingSum;
+    }
 
-        /* Prefer an existing Total cell over summing this page's lines alone. */
-        const totalRow = findPricingTableRowByKindOrLabel(table, {
-            rowKind: 'total',
-            labelTest: isPricingTotalRowLabel,
-        });
-        if (totalRow?.cells?.length >= 2) {
-            const fromTotal = parseBhdAmountText(
-                totalRow.cells[totalRow.cells.length - 1].textContent
-            );
-            if (fromTotal != null && Number.isFinite(fromTotal) && fromTotal >= 0) {
-                return fromTotal;
-            }
+    /* Prefer an existing Total cell over summing this page's lines alone. */
+    const totalRow = findPricingTableRowByKindOrLabel(table, {
+        rowKind: 'total',
+        labelTest: isPricingTotalRowLabel,
+    });
+    if (totalRow?.cells?.length >= 2) {
+        const fromTotal = parseBhdAmountText(
+            totalRow.cells[totalRow.cells.length - 1].textContent
+        );
+        if (fromTotal != null && Number.isFinite(fromTotal) && fromTotal >= 0) {
+            return fromTotal;
         }
     }
 
@@ -4357,7 +4420,15 @@ function applyPricingTableRecalcDomPatches(liveTable, baseTotal) {
     const activeCell = getActivePricingTableCell(liveTable);
     const activeAmountCell = getActivePricingTableAmountCell(liveTable);
     const run = () => {
-        patchPricingTableFooterDom(liveTable, baseTotal, {
+        const typing = Boolean(jodit && isClauseEditorTypingActive(jodit));
+        normalizePricingLineAmountCellsInTable(liveTable, {
+            skipCell: typing ? activeAmountCell : null,
+            activeCell: typing ? activeCell : null,
+        });
+        const liveBase = parseBaseTotalFromPricingTableElement(liveTable);
+        const nextBase =
+            liveBase != null && Number.isFinite(liveBase) ? liveBase : baseTotal;
+        patchPricingTableFooterDom(liveTable, nextBase, {
             activeCell,
             skipDiscountAmountCell: activeAmountCell,
             lockMismatchedAmount: true,
@@ -5035,6 +5106,7 @@ function updatePricingTableFooterCellsInHtml(html, baseTotal) {
                     ),
                 ];
                 tables.forEach((table) => {
+                    normalizePricingLineAmountCellsInTable(table);
                     const lineBase = parseBaseTotalFromPricingTableElement(table);
                     const useBase =
                         lineBase != null && Number.isFinite(lineBase)
@@ -5771,10 +5843,12 @@ function resolveQuoteLogoSrc(logo) {
     return withApiBaseForUploads(encodeAppStaticPath(`/${s}`));
 }
 
+/* 60% of prior 21 mm max — band stays 21 mm; logo top/right edges unchanged. */
+const QUOTE_HEADER_LOGO_MAX_HEIGHT = '12.6mm';
 const QUOTE_HEADER_LOGO_STYLE = {
     height: 'auto',
     width: 'auto',
-    maxHeight: '21mm',
+    maxHeight: QUOTE_HEADER_LOGO_MAX_HEIGHT,
     maxWidth: '100%',
     objectFit: 'contain',
     objectPosition: 'right top',
@@ -10266,8 +10340,21 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const [quoteAlignPageBusy, setQuoteAlignPageBusy] = useState(false);
     /** True when pack integrity failed after recovery — PDF download must be blocked. */
     const [quotePackIntegrityFailed, setQuotePackIntegrityFailed] = useState(false);
+    /** Dev-only: allow PDF download despite a failing integrity gate (after confirm). */
+    const [quotePackDownloadAnyway, setQuotePackDownloadAnyway] = useState(false);
     /** One-shot: bump pack bottom reserve after a visibility failure, then give up. */
     const packVisibilityRecoveryRef = useRef(0);
+    /** Live overlap-peel epoch — pack apply aborts if peel advanced during measure. */
+    const livePeelEpochRef = useRef(0);
+    /** Soft-split parts for units that alone exceed one page (keyed by segment key). */
+    const oversizedSoftSplitPartsRef = useRef(/** @type {Map<string, string[]>} */ (new Map()));
+    const softSplitMembershipRef = useRef('');
+    const [oversizedSoftSplitNonce, setOversizedSoftSplitNonce] = useState(0);
+    /** Peel/pack repeated-state detector (JSON of groups). */
+    const peelSeenStatesRef = useRef(/** @type {Set<string>} */ (new Set()));
+    const footerClipPeelCountRef = useRef(0);
+    const skipOverflowPeelRef = useRef(false);
+    const [footerClipPeelKick, setFooterClipPeelKick] = useState(0);
     const [coverLetterExtraPadPx, setCoverLetterExtraPadPx] = useState(0);
     /** When true, cover letter gap equalization must not move the signatory block (user-placed signature). */
     const coverSignatoryLayoutLockedRef = useRef(false);
@@ -10452,7 +10539,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         /* Incremental: rebuild only clauses whose content/split mode changed (exit-edit + load). */
         const cache = clauseSegmentBuildCacheRef.current;
         /* Bump when split/pack rules change so in-memory segment cache cannot keep stale layouts. */
-        const splitModeKey = `${clausePackSplitMode ? 'fine' : 'fast'}:v45-row-metrics-nbsp`;
+        const splitModeKey = `${clausePackSplitMode ? 'fine' : 'fast'}:v46-fill-pack-${isEmsFillPackEnabled() ? 'on' : 'off'}`;
         /** @type {typeof frozen} */
         const next = [];
         const keepKeys = new Set();
@@ -10500,6 +10587,35 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         [...cache.keys()].forEach((k) => {
             if (!keepKeys.has(k)) cache.delete(k);
         });
+        /* Drop soft-splits when checked clause set changes (stale keys otherwise). */
+        const prevSoftMem = softSplitMembershipRef.current;
+        if (prevSoftMem && prevSoftMem !== clausePreviewMembershipSig) {
+            oversizedSoftSplitPartsRef.current.clear();
+        }
+        softSplitMembershipRef.current = clausePreviewMembershipSig;
+        /* Expand units that soft-split recovered after a sole-tall-unit peel failure. */
+        const softMap = oversizedSoftSplitPartsRef.current;
+        if (softMap.size > 0) {
+            /** @type {typeof next} */
+            const expanded = [];
+            next.forEach((seg) => {
+                const parts = softMap.get(seg.key);
+                if (!parts?.length || parts.length < 2) {
+                    expanded.push(seg);
+                    return;
+                }
+                parts.forEach((html, partIdx) => {
+                    expanded.push({
+                        ...seg,
+                        html,
+                        showHeading: seg.showHeading && partIdx === 0,
+                        key: `${seg.key}~soft${partIdx}`,
+                    });
+                });
+            });
+            clauseSegmentsFrozenWhileEditingRef.current = expanded;
+            return expanded;
+        }
         clauseSegmentsFrozenWhileEditingRef.current = next;
         return next;
     }, [
@@ -10509,6 +10625,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         clausePackSplitMode,
         expandedClause,
         clausePreviewMembershipSig,
+        oversizedSoftSplitNonce,
     ]);
 
     const isQuotePreviewVisible = quoteShellReady;
@@ -10559,6 +10676,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         lastClausePackSigRef.current = '';
         clausePackMeasureRetryRef.current = 0;
         clausePackRetryCountRef.current = 0;
+        peelSeenStatesRef.current.clear();
         const alignGen = clausePackAlignGenRef.current;
         const releaseAlignFlag = () => {
             if (clausePackAlignGenRef.current === alignGen) {
@@ -10653,7 +10771,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const measureHeights = () => {
             const heightCache = clausePackSegmentHeightCacheRef.current;
             return clauseSegmentsForPagination.map((seg, i) => {
-                const cacheKey = `v45-row-metrics-nbsp:${seg?.key || i}:${String(seg?.html || '').length}:${String(seg?.html || '').slice(0, 48)}`;
+                const cacheKey = `v46-fill-pack:${seg?.key || i}:${String(seg?.html || '').length}:${String(seg?.html || '').slice(0, 48)}`;
                 if (heightCache.has(cacheKey)) return heightCache.get(cacheKey);
                 const emptySeg =
                     !String(seg?.html || '').trim() && !seg?.showHeading;
@@ -10718,6 +10836,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         const applyPack = () => {
             if (cancelled) return;
+            const peelEpochAtStart = livePeelEpochRef.current;
             const previewRoot = quotePreviewLayoutRef.current;
             const heights = measureHeights();
             /* Wait only when measure nodes are missing — empty segments are height 1, not "not ready". */
@@ -10779,28 +10898,32 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
             /*
              * Pack measure shell must NOT use .quote-a4-sheet--continuation (fixed 297mm).
-             * That class + .quote-sheet-main-flex { height:100% } stretched content to a full
-             * page, so every group measured ~page-tall → 1 pricing row per sheet + blank space.
-             */
-            mergeMeasureEl.innerHTML = `<div data-pack-measure-shell data-ems-pack-measure="1" style="width:${Math.max(280, defaultInnerW)}px;box-sizing:border-box;overflow:visible;display:block;height:auto;max-height:none;min-height:0">
-                <div class="quote-sheet-logo-row" aria-hidden="true" style="width:100%;min-height:56px;height:auto;margin-bottom:${EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM}"></div>
-                <div data-pack-measure-main style="display:block;width:100%;height:auto;max-height:none;min-height:0">
-                <div data-pack-measure-content class="content-section" style="width:100%;box-sizing:border-box;overflow:visible;height:auto;max-height:none;min-height:0"></div>
-                </div>
-                ${buildQuotePackMeasureFooterHtml(EMS_QUOTE_PRINT_FOOTER_MIN_HEIGHT)}
-            </div>`;
-
-            const measureContent = mergeMeasureEl.querySelector('[data-pack-measure-content]');
-
-            /*
-             * Fixed content area for Align Page and normal pack:
-             * 15mm margins, 21mm logo, 26mm footer → 180×220mm (832px).
-             * Live logo/footer measurement was a different box on each Align click.
+             * Content measure box is a fixed usablePx height with overflow:hidden so fit
+             * equals last painted bottom — never an auto-growing scrollHeight box.
              */
             const computeContUsablePx = (isLandscape) =>
                 Math.max(quoteContinuationContentPx(isLandscape), 200);
-
             const portraitContUsablePx = computeContUsablePx(false);
+            const fillPackUsablePx = portraitContUsablePx;
+            /* Measure fonts/line-heights MUST match live continuation paint (13px/1.4). */
+            mergeMeasureEl.innerHTML = `<div data-pack-measure-shell data-ems-pack-measure="1" class="quote-clause-measure-host" style="width:${Math.max(280, defaultInnerW)}px;box-sizing:border-box;overflow:visible;display:block;height:auto;max-height:none;min-height:0;font-family:${QUOTE_PACK_FONT_STACK};font-size:13px;line-height:1.4">
+                <style>
+                  [data-pack-measure-content] table td,
+                  [data-pack-measure-content] table th {
+                    ${QUOTE_PACK_MEASURE_TABLE_CELL_CSS}
+                  }
+                  [data-pack-measure-content] .clause-content,
+                  [data-pack-measure-content] .clause-content p,
+                  [data-pack-measure-content] .clause-content li {
+                    font-size: 13px !important;
+                    line-height: 1.4 !important;
+                    overflow: visible !important;
+                  }
+                </style>
+                <div data-pack-measure-content class="content-section" style="display:block;position:relative;width:100%;box-sizing:border-box;height:${fillPackUsablePx}px;max-height:${fillPackUsablePx}px;min-height:${fillPackUsablePx}px;overflow:hidden"></div>
+            </div>`;
+
+            const measureContent = mergeMeasureEl.querySelector('[data-pack-measure-content]');
 
             const usablePxForContinuationPage = (continuationPageIdx) =>
                 computeContUsablePx(isContinuationSheetLandscape(continuationPageIdx));
@@ -10810,22 +10933,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     usablePxForContinuationPage(continuationPageIdx) - PACK_HEIGHT_SAFETY_PX,
                     200
                 );
-
-            /** True when rejoined content would clip into the footer band. */
-            const overflowTestForPage = (continuationPageIdx, groupIndices) => {
-                if (!groupIndices?.length || !measureContent) return false;
-                preparePackMeasureContent(groupIndices, continuationPageIdx);
-                const limit = packContentLimitPxForPage(continuationPageIdx);
-                const natural = Math.round(
-                    Math.max(
-                        measureContent.scrollHeight || 0,
-                        measureContent.offsetHeight || 0,
-                        measureContent.firstElementChild?.scrollHeight || 0
-                    )
-                );
-                /* Require a clear overshoot — tiny 1–2px noise was over-peeling pricing rows. */
-                return natural > limit + 8;
-            };
 
             const renderBlocksHtml = (groupIndices) => {
                 const blocks = mergeSegmentsIntoSheetBlocks(
@@ -10877,9 +10984,20 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 void measureContent.offsetHeight;
             };
 
-            /** Content-sized height only — ignore flex/A4 stretch on offsetHeight. */
+            /** Legacy auto-height scrollHeight (fallback packer only). */
             const readPackMeasureContentPx = () => {
                 if (!measureContent) return 0;
+                const prev = {
+                    height: measureContent.style.height,
+                    maxHeight: measureContent.style.maxHeight,
+                    minHeight: measureContent.style.minHeight,
+                    overflow: measureContent.style.overflow,
+                };
+                measureContent.style.height = 'auto';
+                measureContent.style.maxHeight = 'none';
+                measureContent.style.minHeight = '0';
+                measureContent.style.overflow = 'visible';
+                void measureContent.offsetHeight;
                 const inner = measureContent.firstElementChild;
                 const candidates = [measureContent, inner].filter(Boolean);
                 let h = 0;
@@ -10890,7 +11008,52 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         Math.round(el.offsetHeight || 0)
                     );
                 }
+                measureContent.style.height = prev.height;
+                measureContent.style.maxHeight = prev.maxHeight;
+                measureContent.style.minHeight = prev.minHeight;
+                measureContent.style.overflow = prev.overflow;
                 return h;
+            };
+
+            /**
+             * Fill-pack fit: same measureLiveContentFit as the integrity gate,
+             * on a fixed usablePx clone box (zoom=1, identical content CSS).
+             */
+            const measureFitFixedBox = (groupIndices, continuationPageIdx = 0) => {
+                const usable = usablePxForContinuationPage(continuationPageIdx);
+                const limitPx = Math.max(usable - PACK_HEIGHT_SAFETY_PX, 200);
+                if (!groupIndices?.length || !measureContent) {
+                    return {
+                        ok: true,
+                        bottomPx: 0,
+                        limitPx,
+                        scrollHeight: 0,
+                        clientHeight: usable,
+                        rule: 'empty',
+                    };
+                }
+                preparePackMeasureContent(groupIndices, continuationPageIdx);
+                measureContent.style.display = 'block';
+                measureContent.style.position = 'relative';
+                measureContent.style.height = `${usable}px`;
+                measureContent.style.maxHeight = `${usable}px`;
+                measureContent.style.minHeight = `${usable}px`;
+                measureContent.style.overflow = 'hidden';
+                measureContent.style.width = '100%';
+                measureContent.style.boxSizing = 'border-box';
+                void measureContent.offsetHeight;
+                const fit = measureLiveContentFit(measureContent, {
+                    usablePx: usable,
+                    reservePx: PACK_HEIGHT_SAFETY_PX,
+                });
+                return {
+                    ok: fit.ok,
+                    bottomPx: fit.lastBottomPx,
+                    limitPx: fit.limitPx,
+                    scrollHeight: fit.scrollHeight,
+                    clientHeight: fit.clientHeight,
+                    rule: fit.ok ? 'fits' : 'overflow',
+                };
             };
 
             /** Cache merged measures within one pack run — fill/enforce re-ask the same groups. */
@@ -10902,18 +11065,36 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     return mergedMeasureCache.get(cacheKey);
                 }
                 preparePackMeasureContent(groupIndices, continuationPageIdx);
-                measureContent.style.maxHeight = 'none';
-                measureContent.style.overflow = 'visible';
-                measureContent.style.height = 'auto';
-                void measureContent.offsetHeight;
                 const contentH = readPackMeasureContentPx();
                 const h =
                     contentH > 0
                         ? contentH
                         : groupIndices.reduce((s, gi) => s + Math.max(heights[gi] || 0, 1), 0);
-                /* Trust natural rejoined height after relaxTableRowHeights (no estimate cap). */
                 mergedMeasureCache.set(cacheKey, h);
                 return h;
+            };
+
+            const measureFitCached = (() => {
+                const cache = new Map();
+                return (groupIndices, continuationPageIdx = 0) => {
+                    const key = `${continuationPageIdx}|${groupIndices.join(',')}`;
+                    if (cache.has(key)) return cache.get(key);
+                    const r = measureFitFixedBox(groupIndices, continuationPageIdx);
+                    cache.set(key, r);
+                    return r;
+                };
+            })();
+
+            const overflowTestForPage = (continuationPageIdx, groupIndices) => {
+                if (!groupIndices?.length || !measureContent) return false;
+                if (isEmsFillPackEnabled()) {
+                    const fit = measureFitFixedBox(groupIndices, continuationPageIdx);
+                    return !fit.ok;
+                }
+                const limit = packContentLimitPxForPage(continuationPageIdx);
+                preparePackMeasureContent(groupIndices, continuationPageIdx);
+                const natural = readPackMeasureContentPx();
+                return natural > limit + 8;
             };
 
             const packOptions = {
@@ -10927,15 +11108,23 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             };
 
             const remaining = clauseSegmentsForPagination.map((_, i) => i);
-            /* Always greedy-fill by rejoined DOM height at the real 180mm content width. */
-            let continuation = packClauseSegmentsForContinuationPages(
-                remaining,
-                measureMergedGroupPx,
-                portraitContUsablePx,
-                clauseSegmentsForPagination,
-                packOptions,
-                heights
-            );
+            const useFillPack = isEmsFillPackEnabled();
+
+            let continuation = useFillPack
+                ? packSegmentsByRealDomFit(remaining, {
+                      segments: clauseSegmentsForPagination,
+                      measureFit: measureFitCached,
+                      usablePx: portraitContUsablePx,
+                      reservePx: PACK_HEIGHT_SAFETY_PX,
+                  })
+                : packClauseSegmentsForContinuationPages(
+                      remaining,
+                      measureMergedGroupPx,
+                      portraitContUsablePx,
+                      clauseSegmentsForPagination,
+                      packOptions,
+                      heights
+                  );
             if (!continuation.length) {
                 continuation = reflowContinuationPagesTopDown(
                     clauseSegmentsForPagination,
@@ -10945,17 +11134,30 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             }
             const sig = JSON.stringify(continuation);
             if (cancelled) return;
+            /* Peel advanced during measure — do not overwrite newer peel with stale pack. */
+            if (livePeelEpochRef.current !== peelEpochAtStart) {
+                setQuoteAlignPageBusy((busy) => (busy ? false : busy));
+                return;
+            }
             if (lastClausePackSigRef.current === sig) {
                 clausePackTightFitRef.current = false;
+                /* Same pack — still kick overlap peel in case paint still bleeds past CONTENT END. */
+                footerClipPeelCountRef.current = 0;
+                setFooterClipPeelKick((k) => k + 1);
                 setQuoteAlignPageBusy((busy) => (busy ? false : busy));
                 return;
             }
             lastClausePackSigRef.current = sig;
             clausePackRenderVerifyRef.current = 0;
             packedGroupsAwaitingPaintRef.current = continuation;
+            peelSeenStatesRef.current.clear();
             setClauseSegmentPageGroups((prev) =>
                 segmentPageGroupsEqual(prev, continuation) ? prev : continuation
             );
+            /* New pack result — reset overlap peel so footer bleed is cleared after paint. */
+            footerClipPeelCountRef.current = 0;
+            livePeelEpochRef.current += 1;
+            setFooterClipPeelKick((k) => k + 1);
             releaseAlignFlag();
             setQuoteAlignPageBusy((busy) => (busy ? false : busy));
         };
@@ -10990,7 +11192,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     );
                 }
                 if (!cancelled && clausePackRunGenRef.current === packGen) {
-                    setQuotePackIntegrityFailed(!integrity.ok);
+                    /* Coverage-only OK must NOT clear the banner — visibility peel owns clear. */
+                    if (!integrity.ok) setQuotePackIntegrityFailed(true);
                 }
             };
             /* Wait for Selawik faces before measuring — avoids system Segoe metrics. */
@@ -11140,24 +11343,24 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     }, [clauseSegmentPageGroups, clauseSegmentsForPagination, quotePageOrientations]);
 
     /**
-     * Geometry verify-down (max 3 iterations): move units whose painted bottom
-     * exceeds contentTop + usable - 12px onto the next sheet. Never pull up.
+     * Overlap-only verify-down: move units past CONTENT END to the next sheet.
+     * Does not re-pack. Keeps kicking until fit or safety cap so a single skipped
+     * frame cannot leave BOQ rows painted over the footer.
      */
     const CONTENT_END_GAP_PX = PACK_HEIGHT_SAFETY_PX;
     const footerClipPeelKeyRef = useRef('');
-    const pagePackFillCountRef = useRef(0);
-    const footerClipPeelCountRef = useRef(0);
-    const skipOverflowPeelRef = useRef(false);
+    const MAX_FOOTER_CLIP_PEELS = 64;
     useLayoutEffect(() => {
         if (!isQuotePreviewVisible || expandedClause) return;
-        const packKey = `${clausePaginationLayoutKey}|${quoteAlignPageNonce}|live-pack-v11-geom`;
+        if (skipOverflowPeelRef.current) return;
+        const packKey = `${clausePaginationLayoutKey}|${quoteAlignPageNonce}|live-pack-v15-geom`;
         if (footerClipPeelKeyRef.current !== packKey) {
             footerClipPeelKeyRef.current = packKey;
             footerClipPeelCountRef.current = 0;
-            pagePackFillCountRef.current = 0;
         }
         if (!sanitizedClauseSegmentPageGroups?.length) return;
         const root = document.getElementById('quote-preview');
+        if (!root) return;
         /* C2: detach orphaned col/row resizers left on document.body after exit-edit. */
         if (!expandedClause && typeof document !== 'undefined') {
             document
@@ -11168,116 +11371,330 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     if (!el.closest?.('.quote-a4-sheet--clause-editing')) el.remove();
                 });
         }
-        if (root) {
-            root.querySelectorAll(
+        root
+            .querySelectorAll(
                 '.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)'
-            ).forEach((sheet) => relaxTableRowHeightsForClausePackMeasure(sheet));
-        }
-        if (pagePackFillCountRef.current >= 1 || skipOverflowPeelRef.current) {
-            /* After verify settles, run visibility integrity once per pack key. */
-            if (root && footerClipPeelCountRef.current >= 0) {
-                const vis = assertSegmentVisibilityOnSheets(
-                    root,
-                    sanitizedClauseSegmentPageGroups,
-                    clauseSegmentsForPagination.length,
-                    {
-                        reservePx: CONTENT_END_GAP_PX,
-                        usablePx: EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
-                    }
-                );
-                if (!vis.ok && vis.clipped?.length) {
-                    if (footerClipPeelCountRef.current < 3) {
-                        /* Still clipped — allow another verify-down peel. */
-                        pagePackFillCountRef.current = 0;
-                    } else {
-                        setQuotePackIntegrityFailed(true);
-                    }
-                } else if (vis.ok) {
-                    setQuotePackIntegrityFailed(false);
-                    packVisibilityRecoveryRef.current = 0;
-                } else if (
-                    !vis.ok &&
-                    packVisibilityRecoveryRef.current < 1 &&
-                    footerClipPeelCountRef.current >= 3
-                ) {
-                    packVisibilityRecoveryRef.current = 1;
-                    clausePackSegmentHeightCacheRef.current.clear();
-                    setClausePackRetryNonce((n) => n + 1);
-                }
-            }
-            return;
-        }
-        pagePackFillCountRef.current = 1;
-        if (!root) return;
+            )
+            .forEach((sheet) => relaxTableRowHeightsForClausePackMeasure(sheet));
+
         const contSheets = [
             ...root.querySelectorAll(
                 '.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)'
             ),
         ];
         if (!contSheets.length) return;
+
         /** @type {number[][]} */
         let nextGroups = sanitizedClauseSegmentPageGroups.map((g) => [...g]);
         let changed = false;
-        for (let si = 0; si < contSheets.length; si += 1) {
-            const sheet = contSheets[si];
+
+        const resolvePackGroupIdx = (sheet, fallbackSi) => {
+            const packAttr = sheet.getAttribute('data-pack-group');
+            if (packAttr != null && packAttr !== '') {
+                const n = parseInt(packAttr, 10);
+                if (Number.isInteger(n) && n >= 0) return n;
+            }
+            return fallbackSi;
+        };
+
+        /**
+         * Measure against the painted CONTENT END mark in viewport px.
+         * Temporarily un-clip so overflow:hidden cannot hide failing unit bottoms
+         * (that left 8.01 / matrix rows "missing" while still in the page group).
+         */
+        const measureSheetFit = (sheet) => {
             const content = sheet.querySelector('.content-section');
-            if (!content) continue;
+            if (!content) return null;
             const usable = quoteContinuationContentPx(
                 sheet.classList.contains('quote-a4-sheet--landscape')
             );
+            const prevOverflow = content.style.overflow;
+            const prevMaxH = content.style.maxHeight;
+            content.style.overflow = 'visible';
+            content.style.maxHeight = 'none';
+            void content.offsetHeight;
+
+            const endMark = sheet.querySelector('.quote-content-area-mark--end');
+            const zoom = Math.max(getQuotePreviewZoomFactor(content) || 1, 0.05);
             const cRect = content.getBoundingClientRect();
-            const limitBottom = cRect.top + usable - CONTENT_END_GAP_PX;
-            const overScroll = content.scrollHeight > content.clientHeight + 2;
-            let overUnit = false;
-            const stamped = content.querySelectorAll('[data-ems-pack-seg]');
-            const checkNodes = stamped.length
-                ? [...stamped]
+            let markTopViewport = null;
+            if (endMark && typeof endMark.getBoundingClientRect === 'function') {
+                markTopViewport = endMark.getBoundingClientRect().top;
+            }
+            const limitPx = markTopViewport != null
+                ? (markTopViewport - cRect.top) / zoom - 0.5
+                : Math.max(usable - CONTENT_END_GAP_PX, 200);
+            const markTop = markTopViewport != null
+                ? markTopViewport
+                : cRect.top + limitPx * zoom;
+
+            const stamped = [...content.querySelectorAll('[data-ems-pack-seg]')];
+            const nodes = stamped.length
+                ? stamped
                 : [...content.querySelectorAll('.quote-clause-block')];
-            for (const el of checkNodes) {
+            /** @type {Array<{ seg: number, bottomPx: number, topPx: number, overshootPx: number, tag: string, reason: string, measurement: string }>} */
+            const failures = [];
+            let lastBottomPx = 0;
+            nodes.forEach((el) => {
                 const r = el.getBoundingClientRect();
-                if (r.height < 1) continue;
-                if (r.bottom > limitBottom + 1.5) {
-                    overUnit = true;
+                const topPx = (r.top - cRect.top) / zoom;
+                const bottomPx = (r.bottom - cRect.top) / zoom;
+                if (bottomPx > lastBottomPx) lastBottomPx = bottomPx;
+                /* Straddle or fully past CONTENT END — must move (never half-cut / hide). */
+                if (r.bottom <= markTop + 0.5) return;
+                const segAttr = el.getAttribute('data-ems-pack-seg');
+                const seg = segAttr != null ? parseInt(segAttr, 10) : -1;
+                failures.push({
+                    seg: Number.isInteger(seg) ? seg : -1,
+                    bottomPx,
+                    topPx,
+                    overshootPx: bottomPx - limitPx,
+                    tag: el.tagName?.toLowerCase?.() || '?',
+                    reason: 'extends-below-content-end-reserve',
+                    measurement: 'viewport-mark-unclipped',
+                });
+            });
+
+            content.style.overflow = prevOverflow;
+            content.style.maxHeight = prevMaxH;
+
+            return {
+                content,
+                fit: {
+                    ok: failures.length === 0,
+                    limitPx,
+                    lastBottomPx,
+                    failures,
+                    zoom,
+                    usablePx: usable,
+                },
+            };
+        };
+
+        /**
+         * Move units from `moveFrom` onward onto the next sheet.
+         * moveFrom may be 0 — a unit that straddles CONTENT END must leave this page.
+         */
+        const peelGroupAt = (packGroupIdx, moveFrom) => {
+            const group = nextGroups[packGroupIdx];
+            if (!group?.length) return false;
+            const from = Math.max(0, Math.min(moveFrom, group.length - 1));
+            const moved = group.splice(from);
+            if (!moved.length) return false;
+            const destIdx = packGroupIdx + 1;
+            if (destIdx < nextGroups.length) {
+                nextGroups[destIdx] = [...moved, ...nextGroups[destIdx]];
+            } else {
+                nextGroups.push([...moved]);
+            }
+            return true;
+        };
+
+        /** If cut would orphan a heading-only unit, include that heading in the move. */
+        const backUpOrphanHeading = (group, cutPos) => {
+            if (cutPos <= 0 || !group?.length) return cutPos;
+            const prevIdx = group[cutPos - 1];
+            const prev = clauseSegmentsForPagination[prevIdx];
+            if (!prev) return cutPos;
+            if (prev.showHeading) {
+                const plain = String(prev.html || '')
+                    .replace(/<[^>]+>/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                if (plain.length < 8) return cutPos - 1;
+            }
+            /* Heading segment that only carries the title (body lives in following units). */
+            if (prev.showHeading && cutPos === 1) return 0;
+            return cutPos;
+        };
+
+        for (let si = 0; si < contSheets.length; si += 1) {
+            const sheet = contSheets[si];
+            const measured = measureSheetFit(sheet);
+            if (!measured || measured.fit.ok) continue;
+
+            let packGroupIdx = resolvePackGroupIdx(sheet, si);
+            let group = nextGroups[packGroupIdx];
+
+            const failingSegs = (measured.fit.failures || [])
+                .map((f) => f.seg)
+                .filter((seg) => Number.isInteger(seg) && seg >= 0);
+
+            if ((!group || !group.length) && failingSegs.length) {
+                for (let gi = 0; gi < nextGroups.length; gi += 1) {
+                    const g = nextGroups[gi];
+                    if (!g?.length) continue;
+                    if (g.some((idx) => failingSegs.includes(idx))) {
+                        packGroupIdx = gi;
+                        group = g;
+                        break;
+                    }
+                }
+            }
+            if (!group?.length) continue;
+
+            let cutPos = -1;
+            for (let gi = 0; gi < group.length; gi += 1) {
+                if (failingSegs.includes(group[gi])) {
+                    cutPos = gi;
                     break;
                 }
             }
-            if (!overScroll && !overUnit) continue;
-            const group = nextGroups[si];
-            if (!group || group.length <= 1) continue;
-            const moved = group.pop();
-            if (moved == null) continue;
-            if (si + 1 < nextGroups.length) {
-                nextGroups[si + 1] = [moved, ...nextGroups[si + 1]];
-            } else {
-                nextGroups.push([moved]);
+            let moveFrom = cutPos;
+            if (moveFrom < 0 || moveFrom >= group.length) {
+                const overshootPx = Math.max(
+                    0,
+                    (measured.fit.lastBottomPx || 0) - (measured.fit.limitPx || 0)
+                );
+                const n = Math.min(
+                    group.length,
+                    Math.max(1, Math.ceil(overshootPx / 16) || 1)
+                );
+                moveFrom = Math.max(0, group.length - n);
             }
-            changed = true;
-            break; /* one segment per paint frame — avoid long sync loops */
+            moveFrom = backUpOrphanHeading(group, moveFrom);
+
+            if (group.length === 1) {
+                const f0 = measured.fit.failures?.[0];
+                const unitH =
+                    f0 && Number.isFinite(f0.topPx)
+                        ? f0.bottomPx - f0.topPx
+                        : measured.fit.lastBottomPx || 0;
+                if (unitH > (measured.fit.limitPx || 0) + 2) {
+                    /*
+                     * Sole unit taller than one page — soft-split at safe HTML boundaries.
+                     * Never abandon to overflow:hidden clipping.
+                     */
+                    const segIdx = group[0];
+                    const seg = clauseSegmentsForPagination[segIdx];
+                    const baseKey = String(seg?.key || `seg-${segIdx}`);
+                    if (!oversizedSoftSplitPartsRef.current.has(baseKey)) {
+                        const parts = softSplitOversizedUnitHtml(seg?.html || '', {
+                            maxParts: 12,
+                        });
+                        if (parts.length >= 2) {
+                            oversizedSoftSplitPartsRef.current.set(baseKey, parts);
+                            livePeelEpochRef.current += 1;
+                            setQuotePackIntegrityFailed(true);
+                            setOversizedSoftSplitNonce((n) => n + 1);
+                            /* Segment list rebuilds; skip group peel this frame. */
+                            return;
+                        }
+                    }
+                    /* Unsplittable oversized unit — fail loudly; PDF stays blocked. */
+                    console.error(
+                        '[EMS pack] unsplittable oversized unit',
+                        { sheet: si + 1, seg: segIdx, unitH, limitPx: measured.fit.limitPx }
+                    );
+                    setQuotePackIntegrityFailed(true);
+                    continue;
+                }
+                if (peelGroupAt(packGroupIdx, 0)) {
+                    changed = true;
+                    break;
+                }
+                continue;
+            }
+            if (peelGroupAt(packGroupIdx, moveFrom)) {
+                changed = true;
+                break;
+            }
+            if (peelGroupAt(packGroupIdx, group.length - 1)) {
+                changed = true;
+                break;
+            }
         }
+
         if (changed) {
+            nextGroups = keepHeadingsWithFollowingContent(
+                nextGroups.filter((g) => g.length > 0),
+                clauseSegmentsForPagination
+            );
             nextGroups = ensureSegmentPageGroupsCoverAll(
                 nextGroups.filter((g) => g.length > 0),
                 clauseSegmentsForPagination.length
             );
-            packedGroupsAwaitingPaintRef.current = nextGroups;
-            setClauseSegmentPageGroups(nextGroups);
-            pagePackFillCountRef.current = 0;
-            footerClipPeelCountRef.current += 1;
-            if (footerClipPeelCountRef.current >= 3) {
-                pagePackFillCountRef.current = 1;
+            if (detectRepeatedPackState(peelSeenStatesRef.current, nextGroups)) {
+                console.error('[EMS pack] repeated peel state — stopping', {
+                    peels: footerClipPeelCountRef.current,
+                });
+                setQuotePackIntegrityFailed(true);
+                return;
             }
-        } else {
-            const vis = assertSegmentVisibilityOnSheets(
-                root,
-                nextGroups,
-                clauseSegmentsForPagination.length,
-                {
-                    reservePx: CONTENT_END_GAP_PX,
-                    usablePx: EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
-                }
+            livePeelEpochRef.current += 1;
+            lastClausePackSigRef.current = JSON.stringify(nextGroups);
+            packedGroupsAwaitingPaintRef.current = nextGroups;
+            footerClipPeelCountRef.current += 1;
+            /* Groups change re-runs this effect — do NOT also kick (that caused max update depth). */
+            if (footerClipPeelCountRef.current >= MAX_FOOTER_CLIP_PEELS) {
+                setQuotePackIntegrityFailed(true);
+            }
+            setClauseSegmentPageGroups((prev) =>
+                segmentPageGroupsEqual(prev, nextGroups) ? prev : nextGroups
             );
-            setQuotePackIntegrityFailed(!vis.ok);
+            return;
         }
+
+        const vis = assertSegmentVisibilityOnSheets(
+            root,
+            nextGroups,
+            clauseSegmentsForPagination.length,
+            {
+                reservePx: CONTENT_END_GAP_PX,
+                usablePx: EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
+                segments: clauseSegmentsForPagination,
+            }
+        );
+        if (vis.ok) {
+            setQuotePackIntegrityFailed(false);
+            setQuotePackDownloadAnyway(false);
+            packVisibilityRecoveryRef.current = 0;
+            return;
+        }
+        if (vis.missingFromDom?.length) {
+            /*
+             * Segments assigned to a page but not painted (clipped away / skipped).
+             * Pull them onto a fresh trailing sheet so nothing stays hidden.
+             */
+            const missingSet = new Set(vis.missingFromDom);
+            /** @type {number[]} */
+            const rescued = [];
+            nextGroups = nextGroups.map((g) => {
+                const keep = [];
+                for (const idx of g) {
+                    if (missingSet.has(idx)) rescued.push(idx);
+                    else keep.push(idx);
+                }
+                return keep;
+            });
+            if (rescued.length) {
+                nextGroups.push(rescued);
+                nextGroups = keepHeadingsWithFollowingContent(
+                    nextGroups.filter((g) => g.length > 0),
+                    clauseSegmentsForPagination
+                );
+                nextGroups = ensureSegmentPageGroupsCoverAll(
+                    nextGroups.filter((g) => g.length > 0),
+                    clauseSegmentsForPagination.length
+                );
+                livePeelEpochRef.current += 1;
+                lastClausePackSigRef.current = JSON.stringify(nextGroups);
+                packedGroupsAwaitingPaintRef.current = nextGroups;
+                footerClipPeelCountRef.current += 1;
+                setClauseSegmentPageGroups((prev) =>
+                    segmentPageGroupsEqual(prev, nextGroups) ? prev : nextGroups
+                );
+                return;
+            }
+            if (packVisibilityRecoveryRef.current < 1) {
+                packVisibilityRecoveryRef.current = 1;
+                clausePackSegmentHeightCacheRef.current.clear();
+                setClausePackRetryNonce((n) => n + 1);
+                return;
+            }
+        }
+        /* No peel progress possible this frame — stop. Never kick without a group change. */
+        setQuotePackIntegrityFailed(true);
     }, [
         sanitizedClauseSegmentPageGroups,
         clauseSegmentsForPagination,
@@ -11286,21 +11703,24 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         clausePaginationLayoutKey,
         quoteAlignPageNonce,
         clausePackSplitMode,
+        footerClipPeelKick,
     ]);
 
     const sheets = React.useMemo(() => {
         const res = [{ isFirstPage: true, blocks: [] }];
         sanitizedClauseSegmentPageGroups.forEach((group, groupIdx) => {
+            /* Never drop a non-empty pack group — skipping hid mid-table rows (e.g. matrix
+             * 12–19) and desynced DOM sheet order from data-pack-group / peel indices. */
+            if (!group?.length) return;
             const blocks = mergeSegmentsIntoSheetBlocks(group, clauseSegmentsForPagination);
-            if (!blocks.length) return;
-            const hasBody = blocks.some((block) => {
-                const plain = String(block.bodyHtml || '')
-                    .replace(/<[^>]+>/g, ' ')
-                    .replace(/\s+/g, ' ')
-                    .trim();
-                return plain.length > 0 || block.showHeading;
-            });
-            if (!hasBody) return;
+            if (!blocks.length) {
+                res.push({
+                    isFirstPage: false,
+                    blocks: [],
+                    packGroupIdx: groupIdx,
+                });
+                return;
+            }
             // While editing, skip VAT reconcile — DOMParser on every sheet rebuild freezes typing.
             // Reconcile pricing VAT even while another clause is open (skip only when pricing itself is open).
             const skipVatReconcile = expandedClause === 'pricingTerms';
@@ -26502,20 +26922,34 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         {
                             reservePx: CONTENT_END_GAP_PX,
                             usablePx: EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
+                            segments: clauseSegmentsForPagination,
                         }
                     );
-                    if (!vis.ok) {
+                    if (!vis.ok && !quotePackDownloadAnyway) {
                         setQuotePackIntegrityFailed(true);
                         skipOverflowPeelRef.current = false;
+                        const detail =
+                            vis.clipped?.[0] != null
+                                ? ` (page ${vis.clipped[0].sheet}, unit ${vis.clipped[0].seg})`
+                                : vis.missingFromDom?.length
+                                  ? ` (missing units: ${vis.missingFromDom.slice(0, 8).join(', ')})`
+                                  : '';
                         throw new Error(
-                            'Quote pagination integrity check failed — some content may be clipped. PDF download is disabled until pagination succeeds.'
+                            `Quote pagination integrity check failed — some content may be clipped or missing${detail}. PDF download is disabled until pagination succeeds.`
                         );
                     }
-                    setQuotePackIntegrityFailed(false);
+                    if (vis.ok) setQuotePackIntegrityFailed(false);
                     skipOverflowPeelRef.current = false;
                 }
             } catch (packErr) {
                 skipOverflowPeelRef.current = false;
+                /* Never swallow integrity failures — abort this download. */
+                if (
+                    packErr &&
+                    /pagination integrity check failed/i.test(String(packErr.message || packErr))
+                ) {
+                    throw packErr;
+                }
                 console.warn('[PDF] pre-capture paint flush skipped', packErr);
             }
 
@@ -26750,7 +27184,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
      * Falls back to html2pdf, then browser Print / Save as PDF.
      */
     const downloadPDF = async () => {
-        if (quotePackIntegrityFailed) {
+        if (quotePackIntegrityFailed && !quotePackDownloadAnyway) {
             alert(
                 'Quote pagination integrity check failed — some content may be missing. PDF download is disabled until pagination succeeds.'
             );
@@ -28413,6 +28847,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             {/* 1. Enquiry Input */}
                             <div style={{ flex: '0 0 50%', position: 'relative', display: 'flex', flexDirection: 'column', gap: '1px' }}>
                                 <span style={{ fontSize: '10.8px', fontWeight: 600, color: '#374151', lineHeight: 1.15 }}>Enquiry No</span>
+                                {(() => {
+                                    const isInactiveEnquiry =
+                                        String(
+                                            enquiryData?.enquiry?.EnquiryStatus ??
+                                                enquiryData?.enquiry?.enquiryStatus ??
+                                                ''
+                                        )
+                                            .trim()
+                                            .toLowerCase() === 'inactive';
+                                    return (
+                                        <>
                                 <input
                                     type="text"
                                     placeholder="Enq. no / project / customer"
@@ -28436,8 +28881,27 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         height: '28px',
                                         lineHeight: 1.2,
                                         boxSizing: 'border-box',
+                                        ...(isInactiveEnquiry
+                                            ? { color: '#dc3545', fontWeight: 700 }
+                                            : {}),
                                     }}
                                 />
+                                {isInactiveEnquiry ? (
+                                    <div
+                                        style={{
+                                            color: '#dc3545',
+                                            fontWeight: 700,
+                                            fontSize: '11px',
+                                            lineHeight: 1.2,
+                                            marginTop: 2,
+                                        }}
+                                    >
+                                        Inactive
+                                    </div>
+                                ) : null}
+                                        </>
+                                    );
+                                })()}
                                 {showSuggestions && suggestions.length > 0 && !enquiryDivisionScopeNotice && (
                                     <div style={{
                                         position: 'absolute', top: '100%', left: 0, right: 0,
@@ -30365,8 +30829,40 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         const sideSerial = clauseSidebarSerialByIndex[index] || 0;
                                         const isEditingInPreview = isChecked && expandedClause === contentKey;
 
+                                        const customRowBg = isEditingInPreview
+                                            ? '#fff7ed'
+                                            : isChecked
+                                              ? '#fffbeb'
+                                              : '#fffdf7';
+                                        const customRowBorder = isEditingInPreview
+                                            ? '#fb923c'
+                                            : isChecked
+                                              ? '#fbbf24'
+                                              : '#fde68a';
+                                        const standardRowBg = isEditingInPreview
+                                            ? '#eef2ff'
+                                            : isChecked
+                                              ? '#f0fdf4'
+                                              : '#f8fafc';
+                                        const standardRowBorder = isEditingInPreview
+                                            ? '#818cf8'
+                                            : isChecked
+                                              ? '#86efac'
+                                              : '#e2e8f0';
+
                                         return (
-                                            <div key={id} style={{ marginBottom: '5px', padding: '2px', background: isCustom ? '#fff' : 'transparent', borderBottom: '1px solid #f1f5f9' }}>
+                                            <div
+                                                key={id}
+                                                style={{
+                                                    marginBottom: '5px',
+                                                    padding: '2px',
+                                                    background: isCustom ? '#fffbeb' : 'transparent',
+                                                    borderBottom: isCustom
+                                                        ? '1px solid #fde68a'
+                                                        : '1px solid #f1f5f9',
+                                                    borderRadius: isCustom ? '6px' : 0,
+                                                }}
+                                            >
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                                     {/* Reorder Buttons */}
                                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
@@ -30396,18 +30892,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                             gap: '6px',
                                                             cursor: 'pointer',
                                                             padding: '5px 8px',
-                                                            background: isEditingInPreview
-                                                                ? '#eef2ff'
-                                                                : isChecked
-                                                                  ? '#f0fdf4'
-                                                                  : '#f8fafc',
+                                                            background: isCustom ? customRowBg : standardRowBg,
                                                             borderRadius: '6px',
                                                             border: `1px solid ${
-                                                                isEditingInPreview
-                                                                    ? '#818cf8'
-                                                                    : isChecked
-                                                                      ? '#86efac'
-                                                                      : '#e2e8f0'
+                                                                isCustom ? customRowBorder : standardRowBorder
                                                             }`,
                                                         }}
                                                         onMouseDown={(e) => {
@@ -30419,6 +30907,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                 return;
                                                             }
                                                             if (e.target.closest('input[type="checkbox"]')) return;
+                                                            if (e.target.closest('input[data-ems-custom-clause-title]')) {
+                                                                return;
+                                                            }
                                                             if (expandedClause !== contentKey) {
                                                                 e.preventDefault();
                                                                 switchClausePreviewEdit(contentKey);
@@ -30427,6 +30918,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                         onClick={(e) => {
                                                             if (!quotePreviewClauseEditAllowed || !isChecked) return;
                                                             if (e.target.closest('input[type="checkbox"]')) return;
+                                                            if (e.target.closest('input[data-ems-custom-clause-title]')) {
+                                                                return;
+                                                            }
                                                             if (
                                                                 Date.now() -
                                                                     clausePreviewSwitchStampRef.current <
@@ -30445,10 +30939,68 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                             onChange={() => isCustom ? updateCustomClause(id, 'isChecked', !isChecked) : toggleClause(id)}
                                                             style={{ width: '15px', height: '15px', flexShrink: 0 }}
                                                         />
-                                                        <span style={{ fontSize: '11.05px', fontWeight: '500', lineHeight: 1.35 }}>
-                                                            {sideSerial ? `${sideSerial}. ` : ''}
-                                                            {title}
-                                                        </span>
+                                                        {isCustom ? (
+                                                            <span
+                                                                style={{
+                                                                    flex: 1,
+                                                                    display: 'flex',
+                                                                    alignItems: 'center',
+                                                                    gap: '4px',
+                                                                    minWidth: 0,
+                                                                }}
+                                                            >
+                                                                {sideSerial ? (
+                                                                    <span
+                                                                        style={{
+                                                                            fontSize: '11.05px',
+                                                                            fontWeight: 600,
+                                                                            color: '#b45309',
+                                                                            flexShrink: 0,
+                                                                        }}
+                                                                    >
+                                                                        {sideSerial}.
+                                                                    </span>
+                                                                ) : null}
+                                                                <input
+                                                                    type="text"
+                                                                    data-ems-custom-clause-title="1"
+                                                                    value={title || ''}
+                                                                    placeholder="Clause heading"
+                                                                    title="Rename custom clause"
+                                                                    onClick={(e) => e.stopPropagation()}
+                                                                    onMouseDown={(e) => e.stopPropagation()}
+                                                                    onChange={(e) => {
+                                                                        const nextTitle = e.target.value;
+                                                                        updateCustomClause(id, 'title', nextTitle);
+                                                                        /* Drop cached heading HTML so preview uses the new title. */
+                                                                        setClauseHeadingHtml((prev) => {
+                                                                            if (!prev?.[id]) return prev;
+                                                                            const next = { ...prev };
+                                                                            delete next[id];
+                                                                            return next;
+                                                                        });
+                                                                    }}
+                                                                    style={{
+                                                                        flex: 1,
+                                                                        minWidth: 0,
+                                                                        fontSize: '11.05px',
+                                                                        fontWeight: 600,
+                                                                        lineHeight: 1.35,
+                                                                        color: '#92400e',
+                                                                        background: '#fff',
+                                                                        border: '1px solid #f59e0b',
+                                                                        borderRadius: '4px',
+                                                                        padding: '2px 6px',
+                                                                        outline: 'none',
+                                                                    }}
+                                                                />
+                                                            </span>
+                                                        ) : (
+                                                            <span style={{ fontSize: '11.05px', fontWeight: '500', lineHeight: 1.35 }}>
+                                                                {sideSerial ? `${sideSerial}. ` : ''}
+                                                                {title}
+                                                            </span>
+                                                        )}
                                                     </label>
 
                                                     {isCustom && (
@@ -31120,9 +31672,31 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         fontSize: 13,
                                         fontWeight: 600,
                                         boxShadow: '0 2px 8px rgba(15,23,42,0.12)',
+                                        display: 'flex',
+                                        flexWrap: 'wrap',
+                                        alignItems: 'center',
+                                        gap: 8,
                                     }}
                                 >
-                                    Pagination error — some content is clipped or missing. PDF download is disabled. Click Align Page, then try again.
+                                    <span>
+                                        Pagination error — some content is clipped or missing. PDF download is disabled. Click Align Page, then try again.
+                                    </span>
+                                    {typeof import.meta !== 'undefined' && import.meta.env?.DEV ? (
+                                        <button
+                                            type="button"
+                                            className="btn btn-sm btn-outline-danger"
+                                            style={{ fontWeight: 600, whiteSpace: 'nowrap' }}
+                                            onClick={() => {
+                                                const ok = window.confirm(
+                                                    'Download PDF anyway without a passing pagination check?\n\nContent may be clipped or missing. Dev only.'
+                                                );
+                                                if (!ok) return;
+                                                setQuotePackDownloadAnyway(true);
+                                            }}
+                                        >
+                                            Download anyway (unverified)
+                                        </button>
+                                    ) : null}
                                 </div>
                             ) : null}
                             {(quotePreviewUpdating || quoteAlignPageBusy) && !expandedClause ? (
@@ -32500,11 +33074,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         min-height: 0 !important;
                                         overflow: hidden !important;
                                     }
-                                    /* TEMP: content-area start (36mm) and end (41mm from the bottom). */
+                                    /* DEV-only CONTENT START/END geometry guides. */
+                                    ${
+                                        EMS_QUOTE_SHOW_CONTENT_MARKS
+                                            ? `
                                     #quote-preview .quote-content-area-mark {
                                         position: absolute;
-                                        left: 15mm;
-                                        right: 15mm;
+                                        left: ${QUOTE_PAGE_GEOMETRY.paddingMm}mm;
+                                        right: ${QUOTE_PAGE_GEOMETRY.paddingMm}mm;
                                         z-index: 40;
                                         pointer-events: none;
                                         height: 0;
@@ -32517,15 +33094,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         white-space: nowrap;
                                     }
                                     #quote-preview .quote-content-area-mark--start {
-                                        top: 36mm;
+                                        top: ${QUOTE_PAGE_GEOMETRY.contentStartMm}mm;
                                     }
                                     #quote-preview .quote-content-area-mark--end {
-                                        top: 256mm;
+                                        top: ${QUOTE_PAGE_GEOMETRY.contentEndMm}mm;
                                         border-top-color: #2563eb;
                                         color: #2563eb;
                                     }
                                     #quote-preview .quote-a4-sheet--landscape .quote-content-area-mark--end {
-                                        top: 169mm;
+                                        top: ${QUOTE_PAGE_GEOMETRY.contentEndLandscapeMm}mm;
                                     }
                                     #quote-preview .quote-content-area-mark span {
                                         position: absolute;
@@ -32533,6 +33110,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         left: 0;
                                         background: #fff;
                                         padding: 0 4px;
+                                    }
+                                    `
+                                            : `
+                                    #quote-preview .quote-content-area-mark { display: none !important; }
+                                    `
                                     }
                                     .quote-a4-sheet--landscape {
                                         width: 297mm !important;
@@ -32589,21 +33171,25 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     }
                                     ${EMS_OFFICE_PASTE_TABLE_PREVIEW_EDIT_CSS}
                                     #quote-preview .quote-a4-sheet--continuation .content-section {
-                                        flex: 0 1 auto !important;
-                                        max-height: 100% !important;
-                                        /* Dev: never hide overpack — verify/integrity must catch it. */
-                                        overflow: ${typeof import.meta !== 'undefined' && import.meta.env?.DEV ? 'visible' : 'hidden'};
+                                        flex: 0 0 auto !important;
+                                        height: ${QUOTE_PAGE_GEOMETRY.contentHeightMm}mm !important;
+                                        max-height: ${QUOTE_PAGE_GEOMETRY.contentHeightMm}mm !important;
+                                        min-height: 0 !important;
+                                        /* Hard clip at CONTENT END — never paint into the footer. */
+                                        overflow: hidden !important;
                                         padding-top: 1px;
                                         box-sizing: border-box;
                                     }
-                                    ${typeof import.meta !== 'undefined' && import.meta.env?.DEV
-                                        ? `#quote-preview .quote-a4-sheet--continuation {
-                                        overflow: visible !important;
+                                    #quote-preview .quote-a4-sheet--landscape.quote-a4-sheet--continuation .content-section {
+                                        height: ${QUOTE_PAGE_GEOMETRY.contentHeightLandscapeMm}mm !important;
+                                        max-height: ${QUOTE_PAGE_GEOMETRY.contentHeightLandscapeMm}mm !important;
+                                    }
+                                    #quote-preview .quote-a4-sheet--continuation {
+                                        overflow: hidden !important;
                                     }
                                     #quote-preview .quote-a4-sheet--continuation > .quote-sheet-main-flex {
-                                        overflow: visible !important;
-                                    }`
-                                        : ''}
+                                        overflow: hidden !important;
+                                    }
                                     #quote-preview .ems-boq-note-label {
                                         margin: 0 0 4px !important;
                                         font-weight: 600;
@@ -32686,7 +33272,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     #quote-preview .quote-continuation-header img {
                                         height: auto !important;
                                         width: auto !important;
-                                        max-height: 21mm !important;
+                                        max-height: 12.6mm !important;
                                         max-width: 100% !important;
                                         object-fit: contain !important;
                                         object-position: right top !important;
@@ -32818,7 +33404,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         display: block;
                                         height: auto;
                                         width: auto;
-                                        max-height: 21mm;
+                                        max-height: 12.6mm;
                                         max-width: 100%;
                                         object-fit: contain;
                                         object-position: right top;
@@ -33836,7 +34422,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         .quote-continuation-header img {
                                             height: auto !important;
                                             width: auto !important;
-                                            max-height: 21mm !important;
+                                            max-height: 12.6mm !important;
                                             max-width: 100% !important;
                                             object-fit: contain !important;
                                             object-position: right top !important;
@@ -34052,12 +34638,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                             onDragOver={handleQuoteSheetSignatureDragOver}
                                             onDrop={handleQuotePreviewSignatureDrop}
                                         >
-                                            <div className="quote-content-area-mark quote-content-area-mark--start no-print" aria-hidden="true">
-                                                <span>CONTENT START</span>
-                                            </div>
-                                            <div className="quote-content-area-mark quote-content-area-mark--end no-print" aria-hidden="true">
-                                                <span>CONTENT END</span>
-                                            </div>
+                                            {EMS_QUOTE_SHOW_CONTENT_MARKS ? (
+                                                <>
+                                                    <div className="quote-content-area-mark quote-content-area-mark--start no-print" aria-hidden="true">
+                                                        <span>CONTENT START</span>
+                                                    </div>
+                                                    <div className="quote-content-area-mark quote-content-area-mark--end no-print" aria-hidden="true">
+                                                        <span>CONTENT END</span>
+                                                    </div>
+                                                </>
+                                            ) : null}
                                             {!sheetHasEditingBlock ? (
                                             <div className="quote-sheet-logo-row" style={{ width: '100%' }}>
                                                 <div

@@ -230,8 +230,18 @@ const TOP_JOB_TABLE_CONFIG = {
 
 const TOP_JOB_QUOTE_TYPE_STATUSES = new Set(['Quoted', 'Won', 'Lost', 'Follow Up']);
 const TOP_JOB_PROB_QUOTE_REF_DATE_STATUSES = new Set(['Won', 'Lost', 'Follow Up']);
-/** Total + chart % use highest line value per enquiry; value column shows each customer row. */
+/**
+ * Quoted / Follow Up: Total + chart % use aggregate group value
+ * (Quoted = per project+division: latest RevisionNo, then highest value at that rev;
+ *  Follow Up = max per enquiry).
+ * Quoted display: multi-division → that one customer row; single division → all customers.
+ */
 const TOP_JOB_MAX_PER_ENQUIRY_VALUE_STATUSES = new Set(['Quoted', 'Follow Up']);
+
+/** Empty / All / 2+ divisions → multi-division Quoted display mode. */
+function isQuotedMultiDivisionSelection(selectedDivisions) {
+    return !Array.isArray(selectedDivisions) || selectedDivisions.length !== 1;
+}
 
 const SR_STORAGE_LEGACY = {
     year: 'reports_year',
@@ -400,38 +410,196 @@ function topJobEnquiryKey(row) {
     return String(row?.RequestNo || row?.EnquiryNo || '').trim();
 }
 
+/** Quoted totals: highest Net Quoted per project + division. */
+function topJobQuotedProjectDivisionKey(row) {
+    const enq = String(row?.RequestNo || row?.EnquiryNo || '').trim();
+    if (!enq) return '';
+    const div = String(row?.Division || row?.LeadJob || row?.OwnJob || '')
+        .trim()
+        .toLowerCase();
+    return `${enq}::${div}`;
+}
+
+/** Aggregate key for Total / chart when status collapses multiple customer lines. */
+function topJobValueAggregateKey(row, topJobStatus) {
+    if (topJobStatus === 'Quoted') return topJobQuotedProjectDivisionKey(row);
+    return topJobEnquiryKey(row);
+}
+
+/** Revision from API field, or trailing -R# / R# on Quote Ref. */
+function quotedRowRevisionNo(row) {
+    const raw = row?.RevisionNo;
+    if (raw != null && raw !== '') {
+        const fromField = Number(raw);
+        if (Number.isFinite(fromField) && fromField >= 0) return fromField;
+    }
+    const ref = String(row?.QuoteRef || '');
+    const m = ref.match(/[-_/]?R(\d+)\s*$/i);
+    return m ? Number(m[1]) || 0 : 0;
+}
+
+/**
+ * Quoted aggregate value for one project + division:
+ * 1) latest RevisionNo among customers (each row is already that customer's latest rev)
+ * 2) highest Net Quoted among rows at that RevisionNo
+ */
+function quotedValueAtLatestRevision(rowsInGroup) {
+    let maxRev = -1;
+    (Array.isArray(rowsInGroup) ? rowsInGroup : []).forEach((row) => {
+        const rev = quotedRowRevisionNo(row);
+        if (rev > maxRev) maxRev = rev;
+    });
+    let maxVal = 0;
+    let has = false;
+    (Array.isArray(rowsInGroup) ? rowsInGroup : []).forEach((row) => {
+        if (quotedRowRevisionNo(row) !== maxRev) return;
+        const value = Number(row.JobValue) || 0;
+        if (!has || value > maxVal) {
+            maxVal = value;
+            has = true;
+        }
+    });
+    return has ? maxVal : 0;
+}
+
+/**
+ * Multi-division Quoted list: one row per project + division —
+ * latest RevisionNo first, then highest value at that revision.
+ */
+function pickHighestQuotedPerProjectDivision(rows) {
+    const byKey = new Map();
+    (Array.isArray(rows) ? rows : []).forEach((row) => {
+        const key = topJobQuotedProjectDivisionKey(row);
+        if (!key) return;
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push(row);
+    });
+    const picked = [];
+    byKey.forEach((groupRows) => {
+        let maxRev = -1;
+        groupRows.forEach((row) => {
+            const rev = quotedRowRevisionNo(row);
+            if (rev > maxRev) maxRev = rev;
+        });
+        const atLatestRev = groupRows.filter((row) => quotedRowRevisionNo(row) === maxRev);
+        let best = null;
+        atLatestRev.forEach((row, idx) => {
+            const value = Number(row.JobValue) || 0;
+            const quoteNo = Number(row.QuoteNo) || 0;
+            const quoteTs = row.QuoteDate ? new Date(row.QuoteDate).getTime() : 0;
+            const quoteTime = Number.isFinite(quoteTs) ? quoteTs : 0;
+            if (!best) {
+                best = { row, value, quoteNo, quoteTime, idx };
+                return;
+            }
+            if (value > best.value) {
+                best = { row, value, quoteNo, quoteTime, idx };
+                return;
+            }
+            if (value < best.value) return;
+            if (quoteTime > best.quoteTime) {
+                best = { row, value, quoteNo, quoteTime, idx };
+                return;
+            }
+            if (quoteTime < best.quoteTime) return;
+            if (quoteNo > best.quoteNo) {
+                best = { row, value, quoteNo, quoteTime, idx };
+                return;
+            }
+            if (quoteNo < best.quoteNo) return;
+            const nameCmp = String(row.CustomerName || '').localeCompare(String(best.row.CustomerName || ''), undefined, {
+                sensitivity: 'base',
+            });
+            if (nameCmp < 0 || (nameCmp === 0 && idx < best.idx)) {
+                best = { row, value, quoteNo, quoteTime, idx };
+            }
+        });
+        if (best) picked.push(best.row);
+    });
+    return picked;
+}
+
 /** Keep all lines for one enquiry adjacent; order groups by highest line value in the group. */
-function sortTopJobRowsWithEnquiryGroups(rows, topJobStatus) {
+function sortTopJobRowsWithEnquiryGroups(rows, topJobStatus, opts = {}) {
     const list = Array.isArray(rows) ? rows : [];
-    const maxByEnquiry = new Map();
+    const keepEnquiryTogether = opts.keepEnquiryTogether === true;
+    const rowsByGroup = new Map();
     list.forEach((r) => {
-        const k = topJobEnquiryKey(r);
-        const v = Number(r.JobValue) || 0;
+        const k = topJobValueAggregateKey(r, topJobStatus);
         if (!k) return;
-        maxByEnquiry.set(k, Math.max(maxByEnquiry.get(k) ?? 0, v));
+        if (!rowsByGroup.has(k)) rowsByGroup.set(k, []);
+        rowsByGroup.get(k).push(r);
+    });
+    const maxByGroup = new Map();
+    rowsByGroup.forEach((groupRows, k) => {
+        if (topJobStatus === 'Quoted') {
+            maxByGroup.set(k, quotedValueAtLatestRevision(groupRows));
+        } else {
+            let maxV = 0;
+            groupRows.forEach((r) => {
+                maxV = Math.max(maxV, Number(r.JobValue) || 0);
+            });
+            maxByGroup.set(k, maxV);
+        }
     });
     const groupMax = (r) => {
-        const k = topJobEnquiryKey(r);
-        return k ? (maxByEnquiry.get(k) ?? (Number(r.JobValue) || 0)) : (Number(r.JobValue) || 0);
+        const k = topJobValueAggregateKey(r, topJobStatus);
+        return k ? (maxByGroup.get(k) ?? (Number(r.JobValue) || 0)) : (Number(r.JobValue) || 0);
     };
     const byValue = (a, b) => (Number(b.JobValue) || 0) - (Number(a.JobValue) || 0);
-    if (topJobStatus === 'Follow Up') {
+    if (topJobStatus === 'Follow Up' || (topJobStatus === 'Quoted' && keepEnquiryTogether)) {
+        const enquiryScore = new Map();
+        list.forEach((r) => {
+            const ek = topJobEnquiryKey(r);
+            if (!ek) return;
+            /* Quoted multi-div: score enquiry by sum of per-division highs so divisions stay under one enquiry. */
+            if (topJobStatus === 'Quoted' && keepEnquiryTogether) {
+                const gk = topJobQuotedProjectDivisionKey(r);
+                if (!gk) return;
+                const contrib = maxByGroup.get(gk) ?? (Number(r.JobValue) || 0);
+                if (!enquiryScore.has(ek)) enquiryScore.set(ek, new Map());
+                enquiryScore.get(ek).set(gk, contrib);
+            } else {
+                enquiryScore.set(ek, Math.max(enquiryScore.get(ek) ?? 0, groupMax(r)));
+            }
+        });
+        const enquiryTotal = (ek) => {
+            const v = enquiryScore.get(ek);
+            if (v instanceof Map) {
+                let sum = 0;
+                v.forEach((n) => {
+                    sum += Number(n) || 0;
+                });
+                return sum;
+            }
+            return Number(v) || 0;
+        };
         const chancePct = (row) => {
             const m = String(row.ProbabilityChance || '').match(/(\d+(?:\.\d+)?)\s*%/);
             return m ? Number(m[1]) : -1;
         };
         return [...list].sort((a, b) => {
-            const pctDiff = chancePct(b) - chancePct(a);
-            if (pctDiff !== 0) return pctDiff;
+            if (topJobStatus === 'Follow Up') {
+                const pctDiff = chancePct(b) - chancePct(a);
+                if (pctDiff !== 0) return pctDiff;
+            }
             const ka = topJobEnquiryKey(a);
             const kb = topJobEnquiryKey(b);
             if (ka !== kb) {
-                const maxDiff = groupMax(b) - groupMax(a);
-                if (maxDiff !== 0) return maxDiff;
+                const scoreDiff = enquiryTotal(kb) - enquiryTotal(ka);
+                if (scoreDiff !== 0) return scoreDiff;
                 if (!ka) return 1;
                 if (!kb) return -1;
                 return ka.localeCompare(kb, undefined, { numeric: true });
             }
+            const maxDiff = groupMax(b) - groupMax(a);
+            if (maxDiff !== 0) return maxDiff;
+            const divCmp = String(a.Division || a.OwnJob || '').localeCompare(
+                String(b.Division || b.OwnJob || ''),
+                undefined,
+                { sensitivity: 'base' }
+            );
+            if (divCmp !== 0) return divCmp;
             const valDiff = byValue(a, b);
             if (valDiff !== 0) return valDiff;
             return String(a.CustomerName || '').localeCompare(String(b.CustomerName || ''), undefined, {
@@ -442,8 +610,8 @@ function sortTopJobRowsWithEnquiryGroups(rows, topJobStatus) {
     return [...list].sort((a, b) => {
         const maxDiff = groupMax(b) - groupMax(a);
         if (maxDiff !== 0) return maxDiff;
-        const ka = topJobEnquiryKey(a);
-        const kb = topJobEnquiryKey(b);
+        const ka = topJobValueAggregateKey(a, topJobStatus);
+        const kb = topJobValueAggregateKey(b, topJobStatus);
         if (ka !== kb) {
             if (!ka) return 1;
             if (!kb) return -1;
@@ -457,21 +625,29 @@ function sortTopJobRowsWithEnquiryGroups(rows, topJobStatus) {
     });
 }
 
-function buildTopJobEnquiryGroupMeta(rows) {
+function buildTopJobGroupMeta(rows, keyFn) {
     const continuation = new Set();
     const rowSpanAt = new Map();
     let i = 0;
     while (i < rows.length) {
-        const key = topJobEnquiryKey(rows[i]);
+        const key = keyFn(rows[i]);
         let j = i + 1;
         if (key) {
-            while (j < rows.length && topJobEnquiryKey(rows[j]) === key) j += 1;
+            while (j < rows.length && keyFn(rows[j]) === key) j += 1;
         }
         rowSpanAt.set(i, j - i);
         for (let k = i + 1; k < j; k++) continuation.add(k);
         i = j;
     }
     return { continuation, rowSpanAt };
+}
+
+function buildTopJobEnquiryGroupMeta(rows, topJobStatus, opts = {}) {
+    const spanByEnquiry = opts.spanByEnquiry === true;
+    const keyFn = spanByEnquiry
+        ? (row) => topJobEnquiryKey(row)
+        : (row) => topJobValueAggregateKey(row, topJobStatus);
+    return buildTopJobGroupMeta(rows, keyFn);
 }
 
 function renderTopJobEnquiryGroupCell(isContinuation, rowSpan, className, content, style) {
@@ -504,6 +680,7 @@ const DEFAULT_TOP_JOB_COL_WIDTHS = {
     clientName: 250,
     consultantName: 250,
     quoteType: 110,
+    erpJobNo: 110,
     concernSe: 150,
     extra: 180,
 };
@@ -519,6 +696,7 @@ const TOP_JOB_CLIP_COLS = new Set([
     'clientName',
     'consultantName',
     'quoteType',
+    'erpJobNo',
     'concernSe',
     'extra',
 ]);
@@ -1022,6 +1200,8 @@ const SalesReport = () => {
 
     const fetchTopJobBooked = useCallback(async (signal) => {
         setTopJobsLoading(true);
+        /* Drop prior status rows immediately so Quoted does not keep showing Won totals. */
+        setReportData((prev) => ({ ...prev, topJobBooked: [] }));
         try {
             const params = new URLSearchParams();
             params.append('year', year);
@@ -1033,16 +1213,21 @@ const SalesReport = () => {
             if (email) params.append('email', email);
 
             const res = await fetch(`/api/sales-report/top-job-booked?${params.toString()}`, { signal });
+            if (signal.aborted) return;
             if (res.ok) {
                 const data = await res.json();
                 setReportData((prev) => ({
                     ...prev,
                     topJobBooked: data.topJobBooked || []
                 }));
+            } else {
+                console.error('Failed to fetch top jobs', res.status);
+                setReportData((prev) => ({ ...prev, topJobBooked: [] }));
             }
         } catch (e) {
             if (e?.name === 'AbortError') return;
             console.error('Failed to fetch top jobs', e);
+            setReportData((prev) => ({ ...prev, topJobBooked: [] }));
         } finally {
             if (!signal.aborted) setTopJobsLoading(false);
         }
@@ -1356,10 +1541,19 @@ const SalesReport = () => {
         };
     }, []);
 
-    const topRows = useMemo(
-        () => sortTopJobRowsWithEnquiryGroups(reportData.topJobBooked || [], topJobStatus),
-        [reportData.topJobBooked, topJobStatus]
-    );
+    const quotedMultiDivisionMode =
+        topJobStatus === 'Quoted' && isQuotedMultiDivisionSelection(selectedDivisions);
+
+    const topRows = useMemo(() => {
+        let rows = reportData.topJobBooked || [];
+        /* Multi-division Quoted: list only highest customer per project + division. */
+        if (quotedMultiDivisionMode) {
+            rows = pickHighestQuotedPerProjectDivision(rows);
+        }
+        return sortTopJobRowsWithEnquiryGroups(rows, topJobStatus, {
+            keepEnquiryTogether: quotedMultiDivisionMode,
+        });
+    }, [reportData.topJobBooked, topJobStatus, quotedMultiDivisionMode]);
 
     const getTopJobMetricFilterValue = (row) => {
         if (topJobStatus === 'Quoted') return String(row.QuoteRef || '—');
@@ -1404,6 +1598,7 @@ const SalesReport = () => {
         if (key === 'clientName') return String(row.ClientName || '—');
         if (key === 'consultantName') return String(row.ConsultantName || '—');
         if (key === 'quoteType') return String(row.QuoteType || '—').trim() || '—';
+        if (key === 'erpJobNo') return String(row.ERPJobNo || '').trim() || '—';
         if (key === 'concernSe') return String(row.ConcernSEEEQS || '—');
         if (key === 'extra') return String(row.ReasonForLost || row.FollowUpRemarks || '—');
         return '';
@@ -1437,6 +1632,10 @@ const SalesReport = () => {
         if (TOP_JOB_QUOTE_TYPE_STATUSES.has(topJobStatus)) {
             const concernIdx = cols.findIndex((c) => c.key === 'concernSe');
             cols.splice(concernIdx, 0, { key: 'quoteType', label: 'Quote Type' });
+        }
+        if (topJobStatus === 'Won') {
+            const concernIdx = cols.findIndex((c) => c.key === 'concernSe');
+            cols.splice(concernIdx, 0, { key: 'erpJobNo', label: 'ERP Job.' });
         }
         if ((TOP_JOB_TABLE_CONFIG[topJobStatus] || TOP_JOB_TABLE_CONFIG.Won)?.extraHeader) {
             cols.push({ key: 'extra', label: 'Extra' });
@@ -1480,20 +1679,43 @@ const SalesReport = () => {
         topJobGrossMarginFilter
     ]);
 
-    const topJobEnquiryGroupMeta = useMemo(
-        () => buildTopJobEnquiryGroupMeta(topRowsFiltered),
-        [topRowsFiltered]
+    /** Enq No / Project Name rowspan: multi-div Quoted keeps all divisions under one enquiry. */
+    const topJobIdentityGroupMeta = useMemo(
+        () =>
+            buildTopJobEnquiryGroupMeta(topRowsFiltered, topJobStatus, {
+                spanByEnquiry: quotedMultiDivisionMode,
+            }),
+        [topRowsFiltered, topJobStatus, quotedMultiDivisionMode]
+    );
+    /** Chart rowspan: always per project+division (or per enquiry for Follow Up). */
+    const topJobValueGroupMeta = useMemo(
+        () => buildTopJobEnquiryGroupMeta(topRowsFiltered, topJobStatus),
+        [topRowsFiltered, topJobStatus]
     );
     const topJobEnquiryMaxValueByKey = useMemo(() => {
+        if (topJobStatus === 'Quoted') {
+            const byGroup = new Map();
+            topRowsFiltered.forEach((row) => {
+                const k = topJobQuotedProjectDivisionKey(row);
+                if (!k) return;
+                if (!byGroup.has(k)) byGroup.set(k, []);
+                byGroup.get(k).push(row);
+            });
+            const maxBy = new Map();
+            byGroup.forEach((groupRows, k) => {
+                maxBy.set(k, Math.abs(quotedValueAtLatestRevision(groupRows)) || 0);
+            });
+            return maxBy;
+        }
         const maxBy = new Map();
         topRowsFiltered.forEach((row) => {
-            const k = topJobEnquiryKey(row);
+            const k = topJobValueAggregateKey(row, topJobStatus);
             if (!k) return;
             const val = Math.abs(Number(row.JobValue)) || 0;
             maxBy.set(k, Math.max(maxBy.get(k) ?? 0, val));
         });
         return maxBy;
-    }, [topRowsFiltered]);
+    }, [topRowsFiltered, topJobStatus]);
 
     useEffect(() => {
         const onDocDown = (e) => {
@@ -1536,6 +1758,20 @@ const SalesReport = () => {
     useLayoutEffect(() => {
         updateFilterPanelPosition();
     }, [updateFilterPanelPosition]);
+
+    /** Keep Total row stuck just under the column header while the jobs table scrolls. */
+    useLayoutEffect(() => {
+        const wrap = tableScrollWrapRef.current;
+        if (!wrap) return undefined;
+        const measure = () => {
+            const headerRow = wrap.querySelector('.sr-detail-table thead tr:first-child');
+            const h = headerRow ? Math.round(headerRow.getBoundingClientRect().height) : 0;
+            wrap.style.setProperty('--sr-jobs-thead-h', `${h > 0 ? h : 28}px`);
+        };
+        measure();
+        window.addEventListener('resize', measure);
+        return () => window.removeEventListener('resize', measure);
+    }, [topJobStatus, topRowsFiltered.length, topJobColWidths, tableExpanded]);
 
     useEffect(() => {
         if (!activeHeaderFilter) return undefined;
@@ -1634,23 +1870,41 @@ const SalesReport = () => {
         () => topRowsFiltered.reduce((acc, row) => acc + (Number(row.JobValue) || 0), 0),
         [topRowsFiltered]
     );
+    /**
+     * Quoted: per project+division — latest RevisionNo, then highest value at that rev.
+     * Follow Up: max per enquiry.
+     */
     const topRowsFilteredQuotedMaxPerEnquiryTotal = useMemo(() => {
-        const maxByEnquiry = new Map();
+        if (topJobStatus === 'Quoted') {
+            const byGroup = new Map();
+            topRowsFiltered.forEach((row) => {
+                const key = topJobQuotedProjectDivisionKey(row);
+                if (!key) return;
+                if (!byGroup.has(key)) byGroup.set(key, []);
+                byGroup.get(key).push(row);
+            });
+            let total = 0;
+            byGroup.forEach((groupRows) => {
+                total += quotedValueAtLatestRevision(groupRows);
+            });
+            return total;
+        }
+        const maxByGroup = new Map();
         topRowsFiltered.forEach((row) => {
-            const enquiryNo = String(row.RequestNo || row.EnquiryNo || '').trim();
-            if (!enquiryNo) return;
+            const key = topJobValueAggregateKey(row, topJobStatus);
+            if (!key) return;
             const value = Number(row.JobValue) || 0;
-            const currentMax = maxByEnquiry.get(enquiryNo);
+            const currentMax = maxByGroup.get(key);
             if (currentMax === undefined || value > currentMax) {
-                maxByEnquiry.set(enquiryNo, value);
+                maxByGroup.set(key, value);
             }
         });
         let total = 0;
-        maxByEnquiry.forEach((v) => {
+        maxByGroup.forEach((v) => {
             total += Number(v) || 0;
         });
         return total;
-    }, [topRowsFiltered]);
+    }, [topRowsFiltered, topJobStatus]);
     /** Unique enquiries in the filtered table (multiple quote lines per enquiry count once). */
     const topRowsFilteredDistinctProjectCount = useMemo(() => {
         const keys = new Set();
@@ -2840,34 +3094,13 @@ const SalesReport = () => {
                                         {TOP_JOB_QUOTE_TYPE_STATUSES.has(topJobStatus)
                                             ? renderFilterableHeader('quoteType', 'Quote Type')
                                             : null}
+                                        {topJobStatus === 'Won'
+                                            ? renderFilterableHeader('erpJobNo', 'ERP Job.', 'text-nowrap')
+                                            : null}
                                         {renderFilterableHeader('concernSe', 'Concern SE/EE/TE/QS')}
                                         {topJobsTableConfig.extraHeader ? renderFilterableHeader('extra', topJobsTableConfig.extraHeader) : null}
                                     </tr>
-                                </thead>
-                                <tbody
-                                    className={topJobsLoading ? 'sr-detail-table__body-loading' : undefined}
-                                    aria-busy={topJobsLoading}
-                                >
-                                    {topRowsFiltered.length === 0 ? (
-                                        <tr>
-                                            <td
-                                                colSpan={
-                                                    10 +
-                                                    (topJobStatus === 'Quoted' ? 2 : 0) +
-                                                    (topJobStatus === 'Won' || topJobStatus === 'Lost' || topJobStatus === 'Follow Up' ? 1 : 0) +
-                                                    (topJobStatus === 'Follow Up' ? 1 : 0) +
-                                                    (topJobStatus === 'Pending' ? 2 : 0) +
-                                                    (TOP_JOB_PROB_QUOTE_REF_DATE_STATUSES.has(topJobStatus) ? 2 : 0) +
-                                                    (TOP_JOB_QUOTE_TYPE_STATUSES.has(topJobStatus) ? 1 : 0) +
-                                                    (topJobsTableConfig.extraHeader ? 1 : 0)
-                                                }
-                                                className="text-center text-muted py-2"
-                                            >
-                                                No job booked rows for the selected filters.
-                                            </td>
-                                        </tr>
-                                    ) : (
-                                        <>
+                                    {topRowsFiltered.length > 0 ? (
                                         <tr className="sr-detail-table__total-row">
                                             <td style={getTopJobColStyle('slNo')} />
                                             <td style={getTopJobColStyle('requestNo')} />
@@ -2946,15 +3179,49 @@ const SalesReport = () => {
                                             <td />
                                             <td />
                                             {TOP_JOB_QUOTE_TYPE_STATUSES.has(topJobStatus) ? <td /> : null}
+                                            {topJobStatus === 'Won' ? <td /> : null}
                                             <td />
                                             {topJobsTableConfig.extraHeader ? <td /> : null}
                                         </tr>
+                                    ) : null}
+                                </thead>
+                                <tbody
+                                    className={topJobsLoading ? 'sr-detail-table__body-loading' : undefined}
+                                    aria-busy={topJobsLoading}
+                                >
+                                    {topRowsFiltered.length === 0 ? (
+                                        <tr>
+                                            <td
+                                                colSpan={
+                                                    10 +
+                                                    (topJobStatus === 'Quoted' ? 2 : 0) +
+                                                    (topJobStatus === 'Won' || topJobStatus === 'Lost' || topJobStatus === 'Follow Up' ? 1 : 0) +
+                                                    (topJobStatus === 'Follow Up' ? 1 : 0) +
+                                                    (topJobStatus === 'Pending' ? 2 : 0) +
+                                                    (TOP_JOB_PROB_QUOTE_REF_DATE_STATUSES.has(topJobStatus) ? 2 : 0) +
+                                                    (TOP_JOB_QUOTE_TYPE_STATUSES.has(topJobStatus) ? 1 : 0) +
+                                                    (topJobStatus === 'Won' ? 1 : 0) +
+                                                    (topJobsTableConfig.extraHeader ? 1 : 0)
+                                                }
+                                                className="text-center text-muted py-2"
+                                            >
+                                                No job booked rows for the selected filters.
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        <>
                                         {topRowsFiltered.map((row, idx) => {
-                                            const enquiryKey = topJobEnquiryKey(row);
-                                            const isEnquiryGroupContinuation =
-                                                topJobEnquiryGroupMeta.continuation.has(idx);
-                                            const enquiryGroupRowSpan =
-                                                topJobEnquiryGroupMeta.rowSpanAt.get(idx) || 1;
+                                            const enquiryKey = topJobValueAggregateKey(row, topJobStatus);
+                                            const isIdentityGroupContinuation =
+                                                topJobIdentityGroupMeta.continuation.has(idx);
+                                            const identityGroupRowSpan =
+                                                topJobIdentityGroupMeta.rowSpanAt.get(idx) || 1;
+                                            const isValueGroupContinuation =
+                                                topJobValueGroupMeta.continuation.has(idx);
+                                            const valueGroupRowSpan =
+                                                topJobValueGroupMeta.rowSpanAt.get(idx) || 1;
+                                            const isEnquiryGroupContinuation = isIdentityGroupContinuation;
+                                            const enquiryGroupRowSpan = identityGroupRowSpan;
                                             const rowValue = Math.abs(Number(row.JobValue)) || 0;
                                             const chartValue =
                                                 TOP_JOB_MAX_PER_ENQUIRY_VALUE_STATUSES.has(topJobStatus) &&
@@ -3021,8 +3288,8 @@ const SalesReport = () => {
                                                     </td>
                                                     {TOP_JOB_MAX_PER_ENQUIRY_VALUE_STATUSES.has(topJobStatus) ? (
                                                         renderTopJobEnquiryGroupCell(
-                                                            isEnquiryGroupContinuation,
-                                                            enquiryGroupRowSpan,
+                                                            isValueGroupContinuation,
+                                                            valueGroupRowSpan,
                                                             'sr-job-bar-cell',
                                                             <div className="sr-job-bar-wrap">
                                                                 <span className="sr-job-bar-pct" title={pctTitle}>
@@ -3076,8 +3343,8 @@ const SalesReport = () => {
                                                                 {formatDateShort(row.QuoteDate)}
                                                             </td>
                                                             {renderTopJobEnquiryGroupCell(
-                                                                isEnquiryGroupContinuation,
-                                                                enquiryGroupRowSpan,
+                                                                isValueGroupContinuation,
+                                                                valueGroupRowSpan,
                                                                 'text-nowrap sr-detail-table__clip',
                                                                 <span title={String(row.LeadJob || '').trim() || undefined}>
                                                                     {row.LeadJob || '—'}
@@ -3167,16 +3434,25 @@ const SalesReport = () => {
                                                     )}
                                                     {TOP_JOB_QUOTE_TYPE_STATUSES.has(topJobStatus)
                                                         ? renderTopJobEnquiryGroupCell(
-                                                              isEnquiryGroupContinuation,
-                                                              enquiryGroupRowSpan,
+                                                              isValueGroupContinuation,
+                                                              valueGroupRowSpan,
                                                               null,
                                                               row.QuoteType || '—',
                                                               getTopJobColStyle('quoteType')
                                                           )
                                                         : null}
+                                                    {topJobStatus === 'Won' ? (
+                                                        <td
+                                                            className="text-nowrap sr-detail-table__clip"
+                                                            style={getTopJobColStyle('erpJobNo')}
+                                                            title={String(row.ERPJobNo || '').trim() || undefined}
+                                                        >
+                                                            {String(row.ERPJobNo || '').trim() || '—'}
+                                                        </td>
+                                                    ) : null}
                                                     {renderTopJobEnquiryGroupCell(
-                                                        isEnquiryGroupContinuation,
-                                                        enquiryGroupRowSpan,
+                                                        isValueGroupContinuation,
+                                                        valueGroupRowSpan,
                                                         'sr-detail-table__clip',
                                                         <span title={String(row.ConcernSEEEQS || '').trim() || undefined}>
                                                             {row.ConcernSEEEQS || '—'}

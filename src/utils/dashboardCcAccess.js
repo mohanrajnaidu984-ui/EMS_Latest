@@ -230,15 +230,69 @@ export function isManagementDepartmentUser(currentUser) {
 
 /** True if logged-in user's email appears on any Master_EnquiryFor.CCMailIds */
 export function isCcMailUser(userEmail, enqItems) {
-    const e = String(userEmail || '').trim().toLowerCase();
+    const e = normalizeCcEmail(userEmail);
     if (!e) return false;
     return (enqItems || []).some((item) => {
-        const cc = String(item.CCMailIds || '')
-            .split(/[,;]/)
-            .map((x) => x.trim().toLowerCase())
-            .filter(Boolean);
+        const cc = parseCcMailList(item.CCMailIds).map((x) => normalizeCcEmail(x));
         return cc.includes(e);
     });
+}
+
+/**
+ * Enquiry Status (Active/Inactive) may be changed by the enquiry creator
+ * or a CCMailIds user for any division on this enquiry (or the creator's department).
+ */
+export function canEditEnquiryActiveStatus({
+    currentUser,
+    createdBy,
+    enquiryForItems = [],
+    enqItems = [],
+    masterUsers = [],
+    isNewEnquiry = false,
+}) {
+    if (isNewEnquiry) return true;
+    if (!currentUser) return false;
+
+    const creatorName = String(createdBy || '').trim().toLowerCase();
+    const userName = String(currentUser.name || currentUser.FullName || '').trim().toLowerCase();
+    if (creatorName && userName && creatorName === userName) return true;
+
+    const email = normalizeCcEmail(currentUser.EmailId || currentUser.email);
+    if (!email) return false;
+
+    const divisionLabels = (enquiryForItems || [])
+        .map((item) => (typeof item === 'string' ? item : item?.itemName || item?.ItemName || ''))
+        .map((s) => String(s || '').trim())
+        .filter(Boolean);
+
+    for (const label of divisionLabels) {
+        for (const item of enqItems || []) {
+            if (!masterEnquiryForMatchesDivision(item, label)) continue;
+            if (parseCcMailList(item.CCMailIds).some((raw) => normalizeCcEmail(raw) === email)) {
+                return true;
+            }
+        }
+    }
+
+    // Creator's department CC users ("his CCMailIds")
+    if (creatorName) {
+        const creatorUser = (masterUsers || []).find(
+            (u) => String(u.FullName || u.name || '').trim().toLowerCase() === creatorName
+        );
+        const creatorDepts = parseUserDepartments(
+            creatorUser?.Department || creatorUser?.Division || creatorUser?.DivisionName || ''
+        );
+        for (const dept of creatorDepts) {
+            for (const item of enqItems || []) {
+                if (!masterEnquiryForMatchesDivision(item, dept)) continue;
+                if (parseCcMailList(item.CCMailIds).some((raw) => normalizeCcEmail(raw) === email)) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
 }
 
 /** Admin, Management department, or CC-mail coordinator — division/SE pickers enabled with coordinator behaviour. */

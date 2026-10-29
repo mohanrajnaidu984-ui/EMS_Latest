@@ -655,6 +655,31 @@ function splitSubJobPricesForListColumns(subJobPricesStr) {
     };
 }
 
+function isInactiveEnquiryStatus(status) {
+    return String(status || '').trim().toLowerCase() === 'inactive';
+}
+
+/** Soft rose tint for inactive/cancelled enquiry list rows. */
+const INACTIVE_ENQUIRY_ROW_BG = '#fde8e8';
+const INACTIVE_ENQUIRY_ROW_HOVER_BG = '#f8cfcf';
+
+/** Red "Inactive" label under Enquiry No. (list + form). */
+function PricingInactiveTag({ style }) {
+    return (
+        <div
+            style={{
+                color: '#dc3545',
+                fontWeight: 700,
+                fontSize: '11px',
+                lineHeight: 1.2,
+                ...style,
+            }}
+        >
+            Inactive
+        </div>
+    );
+}
+
 /** Department spec status from `getEnquiryPricingList` (Partial / None / All Priced / Revision Required). */
 function pricingListSpecStatusMeta(enq) {
     const rawSpecStatus = enq?.UserSpecPricingSummaryStatus ?? enq?.userSpecPricingSummaryStatus;
@@ -4812,6 +4837,16 @@ const PricingForm = ({ openContext = null }) => {
     const sortedSearchResultsForTable = pricingSearchColFilters.filteredRows;
     const sortedPendingForTable = pricingPendingColFilters.filteredRows;
 
+    const pricingSearchTotalProjects = React.useMemo(() => {
+        const list = Array.isArray(sortedSearchResultsForTable) ? sortedSearchResultsForTable : [];
+        const reqSet = new Set();
+        for (const enq of list) {
+            const rn = String(enq?.RequestNo ?? '').trim();
+            if (rn) reqSet.add(rn);
+        }
+        return reqSet.size;
+    }, [sortedSearchResultsForTable]);
+
     const handlePricingListExcelDownload = async () => {
         const isSearch = pricingListCategory === PRICING_LIST_CATEGORY.SEARCH;
         const rows = isSearch ? sortedSearchResultsForTable : sortedPendingForTable;
@@ -5427,10 +5462,24 @@ const PricingForm = ({ openContext = null }) => {
                                 <h3 style={{ margin: 0, fontSize: '13px', color: '#374151', fontWeight: '600' }}>
                                     <span style={{ fontWeight: '600', color: '#64748b' }}>Project Name: </span>
                                     {pricingData.enquiry.projectName || '—'}
-                                    <span style={{ fontWeight: '400', color: '#64748b', marginLeft: '4px', fontSize: '12px' }}>
+                                    <span
+                                        style={{
+                                            fontWeight: isInactiveEnquiryStatus(pricingData.enquiry.enquiryStatus)
+                                                ? 700
+                                                : 400,
+                                            color: isInactiveEnquiryStatus(pricingData.enquiry.enquiryStatus)
+                                                ? '#dc3545'
+                                                : '#64748b',
+                                            marginLeft: '4px',
+                                            fontSize: '12px',
+                                        }}
+                                    >
                                         (Enquiry {pricingData.enquiry.requestNo ?? '—'})
                                     </span>
                                 </h3>
+                                {isInactiveEnquiryStatus(pricingData.enquiry.enquiryStatus) ? (
+                                    <PricingInactiveTag style={{ marginTop: '4px' }} />
+                                ) : null}
                             </div>
                             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                                 <MasterCurrencyBadge
@@ -5681,6 +5730,7 @@ const PricingForm = ({ openContext = null }) => {
             {
                 pricingListCategory === PRICING_LIST_CATEGORY.SEARCH && searchResults.length > 0 && !pricingData && (
                     <div
+                        className="ems-cf-scope"
                         style={{
                             background: 'white',
                             borderRadius: '8px',
@@ -5698,7 +5748,40 @@ const PricingForm = ({ openContext = null }) => {
                         }}
                     >
                         <div
-                            className="ems-cf-scope"
+                            className="flex-shrink-0 px-2 py-1 d-flex align-items-center justify-content-between gap-2 flex-wrap"
+                            role="status"
+                            aria-live="polite"
+                            style={{ borderBottom: '1px solid #e2e8f0' }}
+                        >
+                            <div className="d-flex align-items-center gap-2 flex-wrap">
+                                <span
+                                    className="small fw-semibold text-dark d-inline-flex align-items-center gap-1"
+                                    style={{ letterSpacing: '0.02em' }}
+                                >
+                                    <span>
+                                        Total projects:{' '}
+                                        <span className="text-primary">{pricingSearchTotalProjects}</span>
+                                    </span>
+                                    {pricingSearchTotalProjects > 0 ? (
+                                        <button
+                                            type="button"
+                                            className="ems-cf-clear-filters-btn"
+                                            onClick={() => pricingSearchColFilters.clearAllColumnFilters?.()}
+                                            title="Clear all column filters"
+                                            aria-label="Clear all column filters"
+                                            disabled={!pricingSearchColFilters.hasColumnFilters}
+                                        >
+                                            <FilterX size={13} strokeWidth={2} aria-hidden="true" />
+                                        </button>
+                                    ) : null}
+                                </span>
+                            </div>
+                            <span className="small text-muted" style={{ fontSize: '10px' }}>
+                                Unique enquiry numbers in the current search list
+                                {pricingSearchColFilters.hasColumnFilters ? ' (after column filters)' : ''}
+                            </span>
+                        </div>
+                        <div
                             style={{
                                 flex: listFillsViewport ? 1 : undefined,
                                 minHeight: listFillsViewport ? 0 : undefined,
@@ -5795,10 +5878,15 @@ const PricingForm = ({ openContext = null }) => {
                                         const priceSplit = structured ? null : splitSubJobPricesForListColumns(enq.SubJobPrices);
                                         const specMeta = pricingListSpecStatusMeta(enq);
                                         const statusLines = pricingListSpecStatusTwoLines(specMeta);
-                                        const zebraBg = idx % 2 === 0 ? '#ffffff' : '#f1f5f9';
+                                        const isInactiveRow = isInactiveEnquiryStatus(enq.EnquiryStatus);
+                                        const zebraBg = isInactiveRow
+                                            ? INACTIVE_ENQUIRY_ROW_BG
+                                            : idx % 2 === 0
+                                              ? '#ffffff'
+                                              : '#f1f5f9';
                                         const tdPad = '10px 12px';
                                         const tdBg = { backgroundColor: 'transparent' };
-                                        const hoverGrey = '#cbd5e1';
+                                        const hoverGrey = isInactiveRow ? INACTIVE_ENQUIRY_ROW_HOVER_BG : '#cbd5e1';
                                         return (
                                         <tr
                                             key={enq.RequestNo || idx}
@@ -5827,7 +5915,18 @@ const PricingForm = ({ openContext = null }) => {
                                                     whiteSpace: 'nowrap',
                                                 }}
                                             >
-                                                <div>{enq.RequestNo}</div>
+                                            <div
+                                                    style={
+                                                        isInactiveRow
+                                                            ? { color: '#dc3545', fontWeight: 700 }
+                                                            : undefined
+                                                    }
+                                                >
+                                                    {enq.RequestNo}
+                                                </div>
+                                                {isInactiveRow ? (
+                                                    <PricingInactiveTag style={{ marginTop: '4px' }} />
+                                                ) : null}
                                                 {statusLines && (
                                                     <div
                                                         style={{
@@ -6084,10 +6183,15 @@ const PricingForm = ({ openContext = null }) => {
                                             const priceSplit = structured ? null : splitSubJobPricesForListColumns(enq.SubJobPrices);
                                             const specMeta = pricingListSpecStatusMeta(enq);
                                             const statusLines = pricingListSpecStatusTwoLines(specMeta);
-                                            const zebraBg = idx % 2 === 0 ? '#ffffff' : '#f1f5f9';
+                                            const isInactiveRow = isInactiveEnquiryStatus(enq.EnquiryStatus);
+                                            const zebraBg = isInactiveRow
+                                                ? INACTIVE_ENQUIRY_ROW_BG
+                                                : idx % 2 === 0
+                                                  ? '#ffffff'
+                                                  : '#f1f5f9';
                                             const tdPad = '10px 12px';
                                             const tdBg = { backgroundColor: 'transparent' };
-                                            const hoverGrey = '#cbd5e1';
+                                            const hoverGrey = isInactiveRow ? INACTIVE_ENQUIRY_ROW_HOVER_BG : '#cbd5e1';
                                             return (
                                             <tr
                                                 key={enq.RequestNo || idx}
@@ -6116,7 +6220,18 @@ const PricingForm = ({ openContext = null }) => {
                                                         whiteSpace: 'nowrap',
                                                     }}
                                                 >
-                                                    <div>{enq.RequestNo}</div>
+                                                    <div
+                                                        style={
+                                                            isInactiveRow
+                                                                ? { color: '#dc3545', fontWeight: 700 }
+                                                                : undefined
+                                                        }
+                                                    >
+                                                        {enq.RequestNo}
+                                                    </div>
+                                                    {isInactiveRow ? (
+                                                        <PricingInactiveTag style={{ marginTop: '4px' }} />
+                                                    ) : null}
                                                     {statusLines && (
                                                         <div
                                                             style={{

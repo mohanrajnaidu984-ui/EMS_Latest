@@ -31,6 +31,53 @@ function normDept(s) {
         .replace(/\s+/g, ' ');
 }
 
+/**
+ * Known SE Department ↔ Master_EnquiryFor ItemName/DepartmentName aliases.
+ * Master_ConcernedSE sometimes uses short/legacy labels that do not match MEF.
+ * Each group is bidirectional: any member expands to every member.
+ */
+const DEPARTMENT_ALIAS_GROUPS = [
+    ['YK Property', 'Almoayyed Property', 'Property'],
+];
+
+const DEPARTMENT_ALIAS_MAP = (() => {
+    /** @type {Map<string, string[]>} */
+    const map = new Map();
+    for (const group of DEPARTMENT_ALIAS_GROUPS) {
+        const labels = [...new Set(group.map((s) => String(s || '').trim()).filter(Boolean))];
+        for (const label of labels) {
+            map.set(normDept(label), labels);
+        }
+    }
+    return map;
+})();
+
+/**
+ * Expand a department CSV/token list with known aliases (e.g. "YK Property" → also "Almoayyed Property").
+ * Original tokens are kept first; aliases are appended without duplicates.
+ */
+function expandDepartmentAliases(departmentCsvOrList) {
+    const tokens = parseUserDepartments(departmentCsvOrList);
+    if (!tokens.length) return [];
+    const out = [];
+    const seen = new Set();
+    for (const tok of tokens) {
+        const key = normDept(tok);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(tok);
+        const aliases = DEPARTMENT_ALIAS_MAP.get(key);
+        if (!aliases) continue;
+        for (const alias of aliases) {
+            const ak = normDept(alias);
+            if (!ak || seen.has(ak)) continue;
+            seen.add(ak);
+            out.push(alias);
+        }
+    }
+    return out;
+}
+
 function userHasDepartment(departmentCsv, divisionLabel) {
     const target = normDept(divisionLabel);
     if (!target) return false;
@@ -150,6 +197,7 @@ module.exports = {
     userHasManagementDepartment,
     userDepartmentMatchesAny,
     expandDivisionLabels,
+    expandDepartmentAliases,
     sqlMasterDepartmentContains,
     sqlMasterDepartmentIsManagement,
     anyDepartmentTokenMatchesJobName,

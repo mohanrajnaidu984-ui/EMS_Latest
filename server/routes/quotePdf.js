@@ -94,9 +94,10 @@ function useFileHtmlLoad(htmlLength) {
 }
 
 /**
- * Block slow/hanging network loads (fonts, external images). Logos are embedded from disk after load.
+ * Block slow/hanging network loads (external fonts/images). Bundled /fonts and /vendor/pagedjs allowed.
+ * Logos under /uploads are embedded from disk after load when not already data: URLs.
  */
-async function setupPdfRequestInterception(page) {
+async function setupPdfRequestInterception(page, { allowBundledFonts = false } = {}) {
     await page.setRequestInterception(true);
     page.on('request', (req) => {
         try {
@@ -108,6 +109,15 @@ async function setupPdfRequestInterception(page) {
             }
             if (/fonts\.googleapis\.com|fonts\.gstatic\.com/i.test(url)) {
                 req.abort();
+                return;
+            }
+            /** Bundled Selawik (/fonts) always — preview==PDF face. Paged.js vendor when allowed. */
+            if (/\/fonts\//i.test(url)) {
+                req.continue();
+                return;
+            }
+            if (allowBundledFonts && /\/vendor\/pagedjs\//i.test(url)) {
+                req.continue();
                 return;
             }
             /** Rewritten /uploads URLs — disk embed handles logos; do not wait on loopback HTTP. */
@@ -126,6 +136,37 @@ async function setupPdfRequestInterception(page) {
             } catch {
                 /* ignore */
             }
+        }
+    });
+}
+
+/** Wait until Paged.js marks the document ready (or times out). */
+async function waitForPagedJsReady(page, timeoutMs = 20000) {
+    await page
+        .waitForFunction(
+            () => {
+                const ready = document.documentElement?.getAttribute('data-ems-paged-ready');
+                if (ready === '1') return true;
+                if (ready === '0') return true;
+                return document.querySelectorAll('.pagedjs_page').length > 0;
+            },
+            { timeout: timeoutMs }
+        )
+        .catch(() => {});
+    await page.evaluate(async () => {
+        if (document.fonts && document.fonts.ready) {
+            await Promise.race([
+                document.fonts.ready,
+                new Promise((r) => setTimeout(r, 3000)),
+            ]);
+        }
+        try {
+            const loaded = [...(document.fonts || [])]
+                .filter((f) => f.status === 'loaded')
+                .map((f) => `${f.family}:${f.weight}`);
+            console.info('[EMS paged PDF] fonts', loaded.slice(0, 16));
+        } catch {
+            /* ignore */
         }
     });
 }
@@ -318,9 +359,8 @@ router.get('/health', async (req, res) => {
 
 const serverListenPort = () => String(process.env.PORT || 5002);
 
-/** Same font as on-screen #quote-preview (QuoteForm.jsx) — do not switch to Inter in PDF. */
-const QUOTE_PREVIEW_FONT_STACK =
-    "'Segoe UI', 'Segoe UI Web (West European)', system-ui, -apple-system, sans-serif";
+/** Same font as on-screen #quote-preview — Segoe UI name maps to bundled Selawik via @font-face. */
+const QUOTE_PREVIEW_FONT_STACK = "'Segoe UI', Selawik, system-ui, Arial, sans-serif";
 
 const { QUOTE_UNIFIED_SHEET_EXPORT_CSS } = require('../lib/quotePrintExportCss.cjs');
 
@@ -482,7 +522,8 @@ function extractBaseHrefFromHtml(html) {
     return u || undefined;
 }
 
-const QUOTE_LOGO_IMG_SELECTOR = '.quote-sheet-logo-row img, .quote-continuation-header img';
+const QUOTE_LOGO_IMG_SELECTOR =
+    '.quote-sheet-logo-row img, .quote-continuation-header img, .ems-cover-logo img, .ems-running-logo img';
 
 function mimeForLogoPath(filePath) {
     const ext = path.extname(filePath).toLowerCase();
@@ -619,17 +660,33 @@ async function waitForImagesLoaded(page) {
  * Replaces three serial page.evaluate calls.
  */
 async function prepareLoadedHtmlForPdf(page) {
-    return page.evaluate(async () => {
+    const prep = await page.evaluate(async () => {
         if (document.fonts && document.fonts.ready) {
-            await Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 800))]);
+            await Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 5000))]);
+        }
+        try {
+            const sample =
+                document.querySelector('#quote-preview .clause-content, #quote-preview .quote-cover-letter') ||
+                document.body;
+            const cs = sample ? getComputedStyle(sample) : null;
+            const faces = [...(document.fonts || [])]
+                .filter((f) => /segoe|selawik/i.test(f.family))
+                .map((f) => `${f.family}:${f.weight}:${f.status}`);
+            console.info('[EMS quote fonts] pdf ready', {
+                computedFamily: cs?.fontFamily || null,
+                loadedFaces: faces.slice(0, 12),
+            });
+        } catch {
+            /* ignore */
         }
 
         const root = document.getElementById('quote-print-root');
         if (root) {
             root.querySelectorAll('[style]').forEach((el) => {
                 if (!el.style) return;
+                if (el.getAttribute('data-ems-user-font') === '1') return;
                 const fam = el.style.fontFamily || '';
-                if (/inter|calibri|arial/i.test(fam)) {
+                if (/inter|calibri|arial|times|helvetica|mso/i.test(fam)) {
                     el.style.removeProperty('font-family');
                 }
                 if (el.style.transform && el.style.transform !== 'none') {
@@ -742,6 +799,9 @@ async function prepareLoadedHtmlForPdf(page) {
             sheetEl.style.setProperty('min-width', sheetW, 'important');
             sheetEl.style.setProperty('max-width', sheetW, 'important');
             sheetEl.style.setProperty('padding', '15mm', 'important');
+            if (!isCover && !isLandscape) {
+                sheetEl.style.setProperty('padding-bottom', 'calc(15mm - 48px)', 'important');
+            }
             sheetEl.style.setProperty('margin', '0', 'important');
             sheetEl.style.setProperty('height', sheetH, 'important');
             sheetEl.style.setProperty('min-height', sheetH, 'important');
@@ -925,6 +985,24 @@ async function prepareLoadedHtmlForPdf(page) {
 
         return { removed };
     });
+    try {
+        await peelPdfSheetsThatOverflowFooter(page);
+    } catch (err) {
+        console.warn(
+            '[quote-pdf] overflow peel skipped:',
+            err && err.message ? err.message : err
+        );
+    }
+    return prep;
+}
+
+async function peelPdfSheetsThatOverflowFooter(page) {
+    const { peelQuoteSheetsThatOverflowFooter } = await import(
+        pathToFileURL(
+            path.join(__dirname, '../../src/components/Quote/quoteSheetOverflowPeel.js')
+        ).href
+    );
+    await page.evaluate(peelQuoteSheetsThatOverflowFooter);
 }
 
 /**
@@ -964,16 +1042,22 @@ async function loadHtmlInPage(page, html) {
 /**
  * Portrait-only render — proven stable path (all sheets portrait).
  */
-async function renderPortraitPdfBuffer(page) {
+async function renderPortraitPdfBuffer(page, { preferCssPageSize = false } = {}) {
     const timeoutMs = quotePdfPageTimeoutMs();
     await page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 1 });
-    pdfStepLog('page.pdf start (portrait-only)', { timeoutMs });
+    pdfStepLog('page.pdf start (portrait-only)', { timeoutMs, preferCssPageSize });
+    const opts = {
+        printBackground: true,
+        format: 'A4',
+        margin: { top: '0', right: '0', bottom: '0', left: '0' },
+        preferCSSPageSize: !!preferCssPageSize,
+    };
     const buf = await Promise.race([
-        page.pdf({ printBackground: true, format: 'A4', margin: { top: '0', right: '0', bottom: '0', left: '0' }, preferCSSPageSize: false }),
+        page.pdf(opts),
         new Promise((_, reject) => setTimeout(() => reject(new Error(`page.pdf timed out after ${timeoutMs}ms`)), timeoutMs)),
     ]).catch(async (e1) => {
         console.warn('[quote-pdf] portrait retry:', e1 && e1.message);
-        return page.pdf({ printBackground: true, format: 'A4', margin: { top: '0', right: '0', bottom: '0', left: '0' } });
+        return page.pdf(opts);
     });
     pdfStepLog('page.pdf done (portrait-only)', { bytes: buf?.length || 0 });
     return buf;
@@ -1207,9 +1291,10 @@ async function renderPdfBuffer(page, { hasLandscapeSheets = false } = {}) {
 }
 
 router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
-    const { html, filename, emulateScreen, delivery } = req.body || {};
+    const { html, filename, emulateScreen, delivery, pagedMode } = req.body || {};
+    const isPagedMode = pagedMode === true || pagedMode === 1 || pagedMode === '1';
     /** When true (default), @media print is ignored — layout matches Quote tab on-screen CSS (grid/flex A4 sheets). */
-    const useScreenMedia = emulateScreen !== false;
+    const useScreenMedia = isPagedMode ? false : emulateScreen !== false;
     /**
      * delivery=link → generate PDF, store temp file, return JSON with short-lived GET URL.
      * Browser then downloads via GET (native streaming; works through IIS/ARR with responseBufferLimit=0).
@@ -1240,7 +1325,24 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
 
     const tPrep = Date.now();
     let htmlForPdf = rewriteHtmlAssetHostsForPuppeteer(html);
-    htmlForPdf = injectPdfSharpTextHead(htmlForPdf);
+    if (!isPagedMode) {
+        htmlForPdf = injectPdfSharpTextHead(htmlForPdf);
+    } else {
+        /* Keep Paged.js @page margins + bundled @font-face; only strip Google font links. */
+        htmlForPdf = String(htmlForPdf)
+            .replace(/<link[^>]*fonts\.googleapis\.com[^>]*>\s*/gi, '')
+            .replace(/<link[^>]*fonts\.gstatic\.com[^>]*>\s*/gi, '');
+        const port = serverListenPort();
+        const local = (process.env.QUOTE_PDF_ASSET_ORIGIN || `http://127.0.0.1:${port}`).replace(
+            /\/$/,
+            ''
+        );
+        /* Vite-dev absolute /fonts and /vendor → Express static (Puppeteer reachability). */
+        htmlForPdf = htmlForPdf.replace(
+            /https?:\/\/(?:localhost|127\.0\.0\.1|[\w.-]+):\s*(?:5173|5174|5175|5176|5177|5178|5179)\/(fonts|vendor)\//gi,
+            `${local}/$1/`
+        );
+    }
     perf.dataPrepMs = msSince(tPrep);
     logStage('generate', 'Stage 1 Data prep (rewrite/inject)', perf.dataPrepMs, { htmlChars: perf.htmlChars });
 
@@ -1338,8 +1440,12 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
             console.warn('[quote-pdf] browser.version probe failed:', verErr && verErr.message);
         }
 
-        pdfStepLog('page.setup', { emulateScreen: useScreenMedia, viewport: '1200x1700' });
-        await setupPdfRequestInterception(page);
+        pdfStepLog('page.setup', {
+            emulateScreen: useScreenMedia,
+            viewport: '1200x1700',
+            pagedMode: isPagedMode,
+        });
+        await setupPdfRequestInterception(page, { allowBundledFonts: isPagedMode });
         await Promise.all([
             page.emulateMediaType(useScreenMedia ? 'screen' : 'print'),
             // 1200px wide covers landscape A4 (≈1123px at 96dpi); height is just a viewport hint.
@@ -1370,34 +1476,53 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
         logStage('generate', 'Stage 2 Images/logos', perf.imagesMs);
 
         const tLayout = Date.now();
-        try {
-            pdfStepLog('prepareLoadedHtmlForPdf start');
-            const prep = await prepareLoadedHtmlForPdf(page);
-            if (prep && prep.removed > 0) {
-                console.log(`[quote-pdf] Removed ${prep.removed} empty continuation sheet(s).`);
+        if (isPagedMode) {
+            try {
+                pdfStepLog('waitForPagedJsReady start');
+                await waitForPagedJsReady(page, Math.min(quotePdfPageTimeoutMs(), 45000));
+                const pageCount = await page.evaluate(
+                    () => document.querySelectorAll('.pagedjs_page').length
+                );
+                pdfStepLog('waitForPagedJsReady done', { pageCount });
+                perf.sheetCount = pageCount;
+            } catch (pagedErr) {
+                console.warn('[quote-pdf] paged wait warning:', pagedErr && pagedErr.message);
             }
-            pdfStepLog('prepareLoadedHtmlForPdf done', { removed: prep?.removed || 0 });
-        } catch (prepErr) {
-            console.warn('[quote-pdf] layout prep warning:', prepErr && prepErr.message);
+        } else {
+            try {
+                pdfStepLog('prepareLoadedHtmlForPdf start');
+                const prep = await prepareLoadedHtmlForPdf(page);
+                if (prep && prep.removed > 0) {
+                    console.log(`[quote-pdf] Removed ${prep.removed} empty continuation sheet(s).`);
+                }
+                pdfStepLog('prepareLoadedHtmlForPdf done', { removed: prep?.removed || 0 });
+            } catch (prepErr) {
+                console.warn('[quote-pdf] layout prep warning:', prepErr && prepErr.message);
+            }
+            try {
+                const pagStats = await logQuotePdfPaginationDiagnostics(page);
+                if (pagStats && isPerfLogEnabled()) {
+                    perf.sheetCount = pagStats.sheetCount;
+                }
+            } catch (pagLogErr) {
+                console.warn('[quote-pdf] pagination diagnostics warning:', pagLogErr && pagLogErr.message);
+            }
         }
         perf.layoutPrepMs = msSince(tLayout);
         logStage('generate', 'Stage 2 Layout prep', perf.layoutPrepMs);
 
-        try {
-            const pagStats = await logQuotePdfPaginationDiagnostics(page);
-            if (pagStats && isPerfLogEnabled()) {
-                perf.sheetCount = pagStats.sheetCount;
-            }
-        } catch (pagLogErr) {
-            console.warn('[quote-pdf] pagination diagnostics warning:', pagLogErr && pagLogErr.message);
-        }
-
         const tRender = Date.now();
-        const hasLandscapeSheets = await page.evaluate(() =>
-            document.querySelector('.quote-a4-sheet--landscape') !== null
-        ).catch(() => false);
-        pdfStepLog('landscape detection', { hasLandscapeSheets });
-        let buf = Buffer.from(await renderPdfBuffer(page, { hasLandscapeSheets }));
+        let buf;
+        if (isPagedMode) {
+            pdfStepLog('pagedMode render (preferCSSPageSize)');
+            buf = Buffer.from(await renderPortraitPdfBuffer(page, { preferCssPageSize: true }));
+        } else {
+            const hasLandscapeSheets = await page
+                .evaluate(() => document.querySelector('.quote-a4-sheet--landscape') !== null)
+                .catch(() => false);
+            pdfStepLog('landscape detection', { hasLandscapeSheets });
+            buf = Buffer.from(await renderPdfBuffer(page, { hasLandscapeSheets }));
+        }
         perf.renderMs = msSince(tRender);
         logStage('generate', 'Stage 2 PDF render', perf.renderMs);
 

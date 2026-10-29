@@ -80,6 +80,15 @@ function serializeUserSignatureMaster({ defaultSignatureId, signatures }) {
     });
 }
 
+/** Cover stamps positioned relative to the sign-off block (mm offsets); see QuoteDigitalSignature.jsx. */
+function stampAnchorFields(s) {
+    if (s?.anchor !== 'cover-signoff') return {};
+    const dx = Number(s.anchorDxMm);
+    const dy = Number(s.anchorDyMm);
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return {};
+    return { anchor: 'cover-signoff', anchorDxMm: dx, anchorDyMm: dy };
+}
+
 /** Quote stamps array (multiple users). */
 function parseQuoteDigitalStamps(raw) {
     return parseJsonArray(raw)
@@ -92,6 +101,7 @@ function parseQuoteDigitalStamps(raw) {
             })(),
             xPct: typeof s.xPct === 'number' && Number.isFinite(s.xPct) ? s.xPct : 82,
             yPct: typeof s.yPct === 'number' && Number.isFinite(s.yPct) ? s.yPct : 38,
+            ...stampAnchorFields(s),
             imageDataUrl: s.imageDataUrl || '',
             displayName: String(s.displayName || '').trim(),
             designation: String(s.designation || '').trim(),
@@ -115,6 +125,7 @@ function serializeQuoteDigitalStamps(stamps) {
                 sheetIndex: s.sheetIndex,
                 xPct: s.xPct,
                 yPct: s.yPct,
+                ...stampAnchorFields(s),
                 imageDataUrl: s.imageDataUrl,
                 displayName: s.displayName,
                 designation: s.designation,
@@ -136,6 +147,21 @@ function mergeQuoteStamp(existingRaw, newStamp) {
     return list;
 }
 
+/**
+ * Union of stored stamps and incoming stamps. Stored stamps always win (position/content
+ * never change once placed); incoming stamps are only added when their id is new.
+ */
+function mergeQuoteStampLists(existingRaw, incoming) {
+    const list = parseQuoteDigitalStamps(existingRaw);
+    const seen = new Set(list.map((s) => s.id));
+    for (const s of parseQuoteDigitalStamps(incoming)) {
+        if (s.inheritedFromSubJob || seen.has(s.id)) continue;
+        seen.add(s.id);
+        list.push(s);
+    }
+    return list;
+}
+
 module.exports = {
     MAX_USER_SIGNATURES,
     normalizeUserEmail,
@@ -145,4 +171,5 @@ module.exports = {
     parseQuoteDigitalStamps,
     serializeQuoteDigitalStamps,
     mergeQuoteStamp,
+    mergeQuoteStampLists,
 };

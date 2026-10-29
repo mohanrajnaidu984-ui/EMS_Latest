@@ -192,6 +192,22 @@
     background: #f3f7fd !important;
 }
 
+/* Inactive enquiry — must follow zebra rules so the rose tint wins */
+.enquiry-results-table-root .enquiry-search-table-wrap tbody tr.enquiry-row-inactive td,
+.enquiry-results-table-root .enquiry-search-table-wrap tbody tr.enquiry-row-inactive:nth-child(odd) td,
+.enquiry-results-table-root .enquiry-search-table-wrap tbody tr.enquiry-row-inactive:nth-child(even) td {
+    background: #fecaca !important;
+}
+
+.enquiry-results-table-root .enquiry-search-table-wrap tbody tr.enquiry-row-inactive:hover td,
+.enquiry-results-table-root .enquiry-search-table-wrap tbody tr.enquiry-search-row-open.enquiry-row-inactive:hover td {
+    background: #fca5a5 !important;
+}
+
+.enquiry-results-table-root tbody tr.enquiry-search-row-open.enquiry-row-inactive:hover {
+    background-color: #fca5a5 !important;
+}
+
 /* Column header filters (Search Enquiry — same pattern as Sales Report Jobs table) */
 .enquiry-results-table-root .ert-filterable-th {
     position: sticky;

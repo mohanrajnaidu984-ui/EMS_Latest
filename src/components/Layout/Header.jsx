@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import emsMarkLogo from '../../assets/ems_logo2.png';
 import { getAcgBrandLogoSrc } from '../../utils/acgBrandLogo';
 import NotificationDropdown from './NotificationDropdown';
 import UserProfile from './UserProfile';
-import { isQuoteModuleTab, QUOTE_TAB_B2B, QUOTE_TAB_B2C } from '../../utils/quoteNav';
+import { isQuoteModuleTab, QUOTE_TAB_B2B } from '../../utils/quoteNav';
 import { EMS_PENDING_APPROVALS_CHANGED } from '../../constants/approvalEvents';
 import { EMS_CHATBOX_UNREAD_CHANGED } from '../../constants/chatboxEvents';
 import { isChatboxEnabled, disconnectChatboxSocket } from '../../utils/chatboxSocket';
@@ -16,7 +16,18 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
   const [openSubmenuId, setOpenSubmenuId] = useState(null);
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const [chatUnreadTotal, setChatUnreadTotal] = useState(0);
+  const [accentPath, setAccentPath] = useState('');
+  const [accentSvgSize, setAccentSvgSize] = useState({ w: 0, h: 72 });
+  const [menuBand, setMenuBand] = useState({ left: 0, right: 0, sideInset: 0 });
   const navStripRef = useRef(null);
+  const navBarRef = useRef(null);
+  const menuPillRef = useRef(null);
+
+  const EMS_ACCENT = '#FF0066';
+  const ACCENT_STROKE = 2.4;
+  const ACCENT_GAP = 2.24;
+  const MENU_TOP_RADIUS = 18;
+  const BLUE_BAR_H = 6;
 
   const userEmail = String(currentUser?.email || currentUser?.EmailId || currentUser?.MailId || '').trim();
   const onQuoteModule = isQuoteModuleTab(activeTab);
@@ -45,7 +56,14 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
     fetchPendingApprovalCount();
     // Slow poll — heavy SQL; event EMS_PENDING_APPROVALS_CHANGED refreshes sooner.
     const interval = setInterval(fetchPendingApprovalCount, onQuoteModule ? 120000 : 90000);
-    const onApprovalsChanged = () => {
+    const onApprovalsChanged = (event) => {
+      const detail = event?.detail || {};
+      const delta = Number(detail.delta);
+      if (Number.isFinite(delta) && delta !== 0) {
+        setPendingApprovalCount((prev) => Math.max(0, (Number(prev) || 0) + delta));
+      }
+      // Optimistic approve/reject: badge moves now; wait for API before recount.
+      if (detail.skipRefresh) return;
       void fetchPendingApprovalCount();
     };
     window.addEventListener(EMS_PENDING_APPROVALS_CHANGED, onApprovalsChanged);
@@ -139,15 +157,7 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
     { id: 'Dashboard', label: 'Dashboard', icon: 'bi-speedometer2' },
     { id: 'Enquiry', label: 'Enquiry', icon: 'bi-clipboard-data' },
     { id: 'Pricing', label: 'Pricing', icon: 'bi-calculator' },
-    {
-      id: 'Quote',
-      label: 'Quote',
-      icon: 'bi-file-earmark-text',
-      children: [
-        { id: QUOTE_TAB_B2B, label: 'B2B' },
-        { id: QUOTE_TAB_B2C, label: 'B2C' },
-      ],
-    },
+    { id: QUOTE_TAB_B2B, label: 'Quote', icon: 'bi-file-earmark-text' },
     { id: 'Approvals', label: 'Approvals', icon: 'bi-check2-square' },
     { id: 'Probability', label: 'Probability', icon: 'bi-graph-up' },
     { id: 'Sales Report', label: 'Sales Report', icon: 'bi-file-earmark-bar-graph' },
@@ -182,7 +192,7 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
     // Granular Role Checks
     if (item.id === 'Enquiry' && userRoles.includes('enquiry')) return true;
     if (item.id === 'Pricing' && userRoles.includes('pricing')) return true;
-    if (item.id === 'Quote' && userRoles.includes('quote')) return true;
+    if (item.id === QUOTE_TAB_B2B && userRoles.includes('quote')) return true;
     if (item.id === 'Probability' && userRoles.includes('probability')) return true;
     if (item.id === 'Sales Report' && (userRoles.includes('sales target') || userRoles.includes('sales report'))) return true;
     if (item.id === 'Reports' && (userRoles.includes('report') || userRoles.includes('sales target'))) return true;
@@ -192,9 +202,75 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
   const visibleMenuCount = visibleItems.length;
   const menuStripPadding = visibleMenuCount <= 2 ? '0 10px' : visibleMenuCount <= 4 ? '0 8px' : '0 4px';
 
+  /**
+   * Magenta rail: flat CSS bars on left/right (exact same gap as above the menu),
+   * SVG only for the verticals + smooth corner curves around the menu.
+   */
+  useLayoutEffect(() => {
+    const measure = () => {
+      const nav = navBarRef.current;
+      const menu = menuPillRef.current;
+      if (!nav || !menu) return;
+      const navRect = nav.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
+      const w = navRect.width;
+      const h = navRect.height;
+      if (w <= 0 || h <= 0) return;
+
+      const dpr = window.devicePixelRatio || 1;
+      const snap = (n) => Math.round(n * dpr) / dpr;
+      /* Stroke centreline offset so clear gap between edges = ACCENT_GAP */
+      const off = ACCENT_GAP + ACCENT_STROKE / 2;
+      const yLow = snap(h - (BLUE_BAR_H + off));
+      const mL = snap(menuRect.left - navRect.left);
+      const mR = snap(menuRect.right - navRect.left);
+      const menuTop = snap(menuRect.top - navRect.top);
+      const yHigh = snap(menuTop - off);
+      const cs = window.getComputedStyle(menu);
+      const rMenu = Math.min(
+        MENU_TOP_RADIUS,
+        parseFloat(cs.borderTopLeftRadius) || MENU_TOP_RADIUS,
+        menuRect.height,
+        menuRect.width / 2
+      );
+      const rOut = rMenu + off;
+      const xLeft = snap(mL - off);
+      const xRight = snap(mR + off);
+      const cLx = snap(mL + rMenu);
+      const cRx = snap(mR - rMenu);
+      const cLy = snap(menuTop + rMenu);
+      const k = 0.5522847498307936;
+      const kr = k * rOut;
+
+      /* Bump only — left/right horizontals are CSS so gap matches the menu top exactly */
+      const path = [
+        `M ${xLeft} ${yLow}`,
+        `L ${xLeft} ${cLy}`,
+        `C ${xLeft} ${cLy - kr} ${cLx - kr} ${yHigh} ${cLx} ${yHigh}`,
+        `L ${cRx} ${yHigh}`,
+        `C ${cRx + kr} ${yHigh} ${xRight} ${cLy - kr} ${xRight} ${cLy}`,
+        `L ${xRight} ${yLow}`,
+      ].join(' ');
+
+      setAccentSvgSize({ w, h });
+      setAccentPath(path);
+      setMenuBand({ left: mL, right: mR, sideInset: off });
+    };
+
+    measure();
+    window.addEventListener('resize', measure);
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    if (navBarRef.current) ro?.observe(navBarRef.current);
+    if (menuPillRef.current) ro?.observe(menuPillRef.current);
+    return () => {
+      window.removeEventListener('resize', measure);
+      ro?.disconnect();
+    };
+  }, [visibleMenuCount, menuStripPadding, isScrolled]);
+
   return (
     <>
-      <nav className="navbar navbar-light" style={{
+      <nav ref={navBarRef} className="navbar navbar-light" style={{
         backgroundColor: '#ffffff',
         backdropFilter: 'saturate(180%) blur(20px)',
         WebkitBackdropFilter: 'saturate(180%) blur(20px)',
@@ -223,7 +299,10 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
         }}>
           <div className="d-flex align-items-end w-100 h-100" style={{ position: 'relative' }}>
             {/* Left: EMS Text */}
-            <div className="d-flex align-items-center logo-container" style={{ animation: 'fadeInLeft 1s ease-out' }}>
+            <div
+              className="d-flex align-items-center logo-container"
+              style={{ animation: 'fadeInLeft 1s ease-out', paddingBottom: '6px' }}
+            >
               <span className="ems-brand-text d-flex align-items-center">
                 <img src={emsMarkLogo} alt="" className="ems-brand-mark me-1" aria-hidden="true" />
                 <span className="ems-brand-word">EMS</span>
@@ -253,6 +332,7 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
               }}
             >
               <div
+                ref={menuPillRef}
                 className="d-flex justify-content-center align-items-center"
                 style={{
                   background: 'linear-gradient(180deg, #2f5fae 0%, #203f75 100%)',
@@ -319,14 +399,19 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
                     );
                   }
 
+                  const isActive =
+                    item.id === QUOTE_TAB_B2B
+                      ? isQuoteModuleTab(activeTab)
+                      : activeTab === item.id;
+
                   return (
                     <li className="nav-item" key={item.id}>
                       <button
                         type="button"
-                        className={`nav-link bg-transparent border-0 d-flex align-items-center shadow-none ems-top-nav-link position-relative${activeTab === item.id ? ' active' : ''}`}
+                        className={`nav-link bg-transparent border-0 d-flex align-items-center shadow-none ems-top-nav-link position-relative${isActive ? ' active' : ''}`}
                         onClick={() => onNavigate(item.id)}
-                        aria-current={activeTab === item.id ? 'page' : undefined}
-                        data-ems-main-nav-id={item.id}
+                        aria-current={isActive ? 'page' : undefined}
+                        data-ems-main-nav-id={item.id === QUOTE_TAB_B2B ? 'Quote' : item.id}
                       >
                         <i className={`bi ${item.icon} me-2 ems-top-nav-link__icon`}></i>
                         {item.label}
@@ -373,7 +458,7 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
                 className="ems-header-notif-slot d-flex align-items-center"
                 style={{
                   height: '35px',
-                  paddingBottom: '2px',
+                  paddingBottom: '26px',
                   flexShrink: 0,
                   zIndex: 3,
                 }}
@@ -382,7 +467,7 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
               </div>
             </div>
 
-            {/* Right: ACG logo + user controls — absolute slots so only the logo moves down */}
+            {/* Right: user name above, ACG logo below */}
             <div
               className="acg-header-right"
               style={{
@@ -395,11 +480,25 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
               }}
             >
               <div
+                className="acg-header-controls d-flex align-items-center gap-2"
+                style={{
+                  position: 'absolute',
+                  right: 0,
+                  bottom: '36px',
+                  zIndex: 2,
+                }}
+              >
+                <div style={{ transform: 'scale(0.9)', transformOrigin: 'right bottom' }}>
+                  <UserProfile activeTab={activeTab} />
+                </div>
+              </div>
+
+              <div
                 className="acg-header-logo-slot"
                 style={{
                   position: 'absolute',
                   right: 0,
-                  bottom: '34px',
+                  bottom: '10px',
                   lineHeight: 0,
                   zIndex: 1,
                 }}
@@ -420,36 +519,90 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
                   }}
                 />
               </div>
-
-              <div
-                className="acg-header-controls d-flex align-items-center gap-2"
-                style={{
-                  position: 'absolute',
-                  right: 0,
-                  bottom: '4px',
-                  zIndex: 2,
-                }}
-              >
-                <div style={{ transform: 'scale(0.9)', transformOrigin: 'right bottom' }}>
-                  <UserProfile activeTab={activeTab} />
-                </div>
-              </div>
             </div>
           </div>
         </div>
+        {/* Blue base bar — left + right only (cleared under menu) */}
         <div
           aria-hidden="true"
           style={{
             position: 'absolute',
             left: 0,
-            right: 0,
             bottom: 0,
-            height: '6px',
+            height: `${BLUE_BAR_H}px`,
+            width: Math.max(0, menuBand.left),
             background: 'linear-gradient(180deg, #2f5fae 0%, #203f75 100%)',
             zIndex: 0,
-            pointerEvents: 'none'
+            pointerEvents: 'none',
           }}
         />
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: menuBand.right,
+            right: 0,
+            bottom: 0,
+            height: `${BLUE_BAR_H}px`,
+            background: 'linear-gradient(180deg, #2f5fae 0%, #203f75 100%)',
+            zIndex: 0,
+            pointerEvents: 'none',
+          }}
+        />
+        {/* Flat magenta on left/right — same gap as above the menu (ACCENT_GAP) */}
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: 0,
+            bottom: `${BLUE_BAR_H + ACCENT_GAP}px`,
+            height: `${ACCENT_STROKE}px`,
+            width: Math.max(0, menuBand.left - (menuBand.sideInset || 0)),
+            background: EMS_ACCENT,
+            zIndex: 3,
+            pointerEvents: 'none',
+          }}
+        />
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: menuBand.right + (menuBand.sideInset || 0),
+            right: 0,
+            bottom: `${BLUE_BAR_H + ACCENT_GAP}px`,
+            height: `${ACCENT_STROKE}px`,
+            background: EMS_ACCENT,
+            zIndex: 3,
+            pointerEvents: 'none',
+          }}
+        />
+        {/* SVG bump around menu (verticals + smooth corners + top) */}
+        {accentPath ? (
+          <svg
+            aria-hidden="true"
+            width={accentSvgSize.w}
+            height={accentSvgSize.h}
+            viewBox={`0 0 ${accentSvgSize.w} ${accentSvgSize.h}`}
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              zIndex: 4,
+              pointerEvents: 'none',
+              overflow: 'visible',
+              shapeRendering: 'geometricPrecision',
+            }}
+          >
+            <path
+              d={accentPath}
+              fill="none"
+              stroke={EMS_ACCENT}
+              strokeWidth={ACCENT_STROKE}
+              strokeLinecap="square"
+              strokeLinejoin="round"
+            />
+          </svg>
+        ) : null}
       </nav>
     </>
   );

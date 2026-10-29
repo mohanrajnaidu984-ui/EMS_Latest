@@ -1,10 +1,16 @@
 'use strict';
 
+/**
+ * Attachment visibility (Enquiry + Quote):
+ *
+ * Public  → assigned ConcernedSE + CCMailIds for jobs on this enquiry + Approvers + Admin
+ * Private → own-job ConcernedSE (ownjob matches file Division) + CCMailIds for that
+ *           division only + Approvers + Admin
+ *           — nobody else (no uploader / Management / department fallbacks)
+ */
+
 const { sql } = require('../dbConfig');
-const {
-    userHasDepartment,
-    userHasManagementDepartment,
-} = require('./userDepartments');
+const { userHasDepartment } = require('./userDepartments');
 
 function normalizeAttachmentEmail(raw) {
     return String(raw || '')
@@ -26,13 +32,56 @@ function roleIsAdmin(roleString) {
         .some((r) => r === 'admin' || r === 'system');
 }
 
+/** CC / Common mail list contains this user (domain + local-part). */
+function ccMailIdsContainsUser(ccMailIdsStr, userEmail) {
+    const e = normalizeAttachmentEmail(userEmail);
+    if (!e) return false;
+    const raw = String(ccMailIdsStr || '').replace(/@almcg\.com/gi, '@almoayyedcg.com');
+    const list = `,${raw.replace(/\s/g, '').replace(/;/g, ',').toLowerCase()},`;
+    if (list.includes(`,${e},`)) return true;
+    const local = e.split('@')[0];
+    return local.length > 0 && list.includes(`,${local},`);
+}
+
+function divisionLabelsMatch(userLabel, targetLabel) {
+    const a = String(userLabel || '').trim();
+    const b = String(targetLabel || '').trim();
+    if (!a || !b) return false;
+    return userHasDepartment(a, b) || normText(a) === normText(b);
+}
+
+function userMatchesAnyDivision(userLabels, targetDivision) {
+    const target = String(targetDivision || '').trim();
+    if (!target) return false;
+    return (userLabels || []).some((lab) => divisionLabelsMatch(lab, target));
+}
+
+function emptyAccess(reason) {
+    return {
+        allowed: false,
+        reason,
+        user: null,
+        isAdmin: false,
+        isAssigned: false,
+        isCcUser: false,
+        isApprover: false,
+        canSeePublic: false,
+        canSeePrivate: false,
+        assignedOwnJobs: [],
+        ccDivisions: [],
+        fullAccess: false,
+    };
+}
+
 /**
- * Enquiry attachment access: assigned ConcernedSE + CCMailIds / Management / creator / Admin.
- * Same rules used by Enquiry Attachments and Quote Attachments.
+ * Build access context for an enquiry's attachments.
+ * @param {string} requestNo
+ * @param {string} rawUserEmail
+ * @param {string} [userRole]
  */
 async function getAttachmentAccessContext(requestNo, rawUserEmail, userRole) {
     const email = normalizeAttachmentEmail(rawUserEmail);
-    if (!email) return { allowed: false, reason: 'Missing userEmail', user: null, fullAccess: false };
+    if (!email) return emptyAccess('Missing userEmail');
 
     const isAdminFromRole = roleIsAdmin(userRole) || email === 'ranigovardhan@gmail.com';
 
@@ -45,64 +94,104 @@ async function getAttachmentAccessContext(requestNo, rawUserEmail, userRole) {
                   = LOWER(LTRIM(RTRIM(@email)))
         `);
     const user = userRes.recordset?.[0];
-    if (!user && !isAdminFromRole) {
-        return { allowed: false, reason: 'User not found', user: null, fullAccess: false };
-    }
+    if (!user && !isAdminFromRole) return emptyAccess('User not found');
 
     const fullName = String(user?.FullName || '').trim();
     const department = String(user?.Department || '').trim();
+    // Strict Admin / System only — Management is NOT blanket private access
     const isAdmin = isAdminFromRole || roleIsAdmin(user?.Roles);
-    const isManagement = userHasManagementDepartment(department);
-
-    const ccRes = await new sql.Request()
-        .input('email', sql.NVarChar, email)
-        .query(`
-            SELECT TOP 1 1 AS ok
-            FROM Master_EnquiryFor
-            WHERE ',' + REPLACE(REPLACE(ISNULL(CCMailIds, ''), ' ', ''), ';', ',') + ','
-                  LIKE '%,' + @email + ',%'
-        `);
-    const isCcUser = (ccRes.recordset || []).length > 0 || isManagement;
 
     const reqNo = String(requestNo || '').trim();
-    const enqRes = await new sql.Request()
-        .input('requestNo', sql.NVarChar, reqNo)
-        .query(`
-            SELECT TOP 1 CreatedBy
-            FROM EnquiryMaster
-            WHERE LTRIM(RTRIM(RequestNo)) = LTRIM(RTRIM(@requestNo))
-        `);
-    const createdBy = String(enqRes.recordset?.[0]?.CreatedBy || '').trim();
-    let isCreator = false;
-    if (createdBy) {
-        if (createdBy.includes('@')) {
-            isCreator = normalizeAttachmentEmail(createdBy) === email;
-        } else if (fullName) {
-            isCreator = createdBy.toUpperCase().trim() === fullName.toUpperCase().trim();
-        }
-    }
 
+    // --- Assigned ConcernedSE (ownjob drives Private scope) ---
     const assignedRes = await new sql.Request()
         .input('requestNo', sql.NVarChar, reqNo)
         .input('fullName', sql.NVarChar, fullName)
+        .input('email', sql.NVarChar, email)
         .query(`
-            SELECT TOP 1 1 AS ok
+            SELECT ownjob, SEName, emailID
             FROM ConcernedSE
             WHERE LTRIM(RTRIM(RequestNo)) = LTRIM(RTRIM(@requestNo))
-              AND LOWER(LTRIM(RTRIM(ISNULL(SEName, '')))) = LOWER(LTRIM(RTRIM(ISNULL(@fullName, ''))))
+              AND (
+                    LOWER(LTRIM(RTRIM(ISNULL(SEName, '')))) = LOWER(LTRIM(RTRIM(ISNULL(@fullName, ''))))
+                 OR LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(emailID, ''), '@almcg.com', '@almoayyedcg.com'), '@ALMCG.COM', '@almoayyedcg.com'))))
+                    = LOWER(LTRIM(RTRIM(@email)))
+              )
         `);
-    const isAssigned = (assignedRes.recordset || []).length > 0;
+    const assignedRows = assignedRes.recordset || [];
+    const isAssigned = assignedRows.length > 0;
+    const assignedOwnJobs = [
+        ...new Set(assignedRows.map((r) => String(r.ownjob || '').trim()).filter(Boolean)),
+    ];
 
-    const fullAccess = isAdmin || isCcUser || isCreator;
-    const allowed = fullAccess || isAssigned;
+    // --- CCMailIds for jobs present on this enquiry (scoped by division for Private) ---
+    const jobsCcRes = await new sql.Request()
+        .input('requestNo', sql.NVarChar, reqNo)
+        .query(`
+            SELECT DISTINCT
+                LTRIM(RTRIM(ISNULL(EF.ItemName, N''))) AS ItemName,
+                LTRIM(RTRIM(ISNULL(EF.LeadJobName, N''))) AS LeadJobName,
+                LTRIM(RTRIM(ISNULL(MEF.DepartmentName, N''))) AS DepartmentName,
+                MEF.CCMailIds
+            FROM EnquiryFor EF
+            LEFT JOIN Master_EnquiryFor MEF
+                ON LTRIM(RTRIM(ISNULL(MEF.ItemName, N''))) = LTRIM(RTRIM(ISNULL(EF.ItemName, N'')))
+                OR LTRIM(RTRIM(ISNULL(MEF.DepartmentName, N''))) = LTRIM(RTRIM(ISNULL(EF.ItemName, N'')))
+            WHERE LTRIM(RTRIM(EF.RequestNo)) = LTRIM(RTRIM(@requestNo))
+        `);
+
+    const ccDivisions = [];
+    let isCcUser = false;
+    for (const row of jobsCcRes.recordset || []) {
+        if (!ccMailIdsContainsUser(row.CCMailIds, email)) continue;
+        isCcUser = true;
+        for (const lab of [row.DepartmentName, row.ItemName, row.LeadJobName]) {
+            const t = String(lab || '').trim();
+            if (t && !ccDivisions.some((x) => normText(x) === normText(t))) {
+                ccDivisions.push(t);
+            }
+        }
+    }
+
+    // --- Approvers (QuoteApprovalSteps for this RequestNo) ---
+    let isApprover = false;
+    try {
+        const apprRes = await new sql.Request()
+            .input('requestNo', sql.NVarChar, reqNo)
+            .input('email', sql.NVarChar, email)
+            .query(`
+                SELECT TOP 1 1 AS ok
+                FROM QuoteApprovalSteps
+                WHERE LTRIM(RTRIM(ISNULL(RequestNo, N''))) = LTRIM(RTRIM(@requestNo))
+                  AND LOWER(LTRIM(RTRIM(REPLACE(REPLACE(ISNULL(ApproverEmail, N''), '@almcg.com', '@almoayyedcg.com'), '@ALMCG.COM', '@almoayyedcg.com'))))
+                      = LOWER(LTRIM(RTRIM(@email)))
+            `);
+        isApprover = (apprRes.recordset || []).length > 0;
+    } catch (_) {
+        isApprover = false;
+    }
+
+    const canSeePublic = isAdmin || isAssigned || isCcUser || isApprover;
+    // Private audience (API gate): admin, approver, own-job assigned, or CC on any enquiry job
+    // (per-file Division still enforced in canReadAttachmentByVisibility)
+    const canSeePrivate =
+        isAdmin ||
+        isApprover ||
+        (isAssigned && assignedOwnJobs.length > 0) ||
+        (isCcUser && ccDivisions.length > 0);
+    const allowed = canSeePublic || canSeePrivate;
 
     return {
         allowed,
-        fullAccess,
+        fullAccess: isAdmin,
         isAdmin,
         isCcUser,
-        isCreator,
         isAssigned,
+        isApprover,
+        canSeePublic,
+        canSeePrivate,
+        assignedOwnJobs,
+        ccDivisions,
         reason: allowed ? null : 'Not assigned to enquiry',
         user: {
             fullName,
@@ -112,27 +201,52 @@ async function getAttachmentAccessContext(requestNo, rawUserEmail, userRole) {
     };
 }
 
+/**
+ * Per-file filter after Gate A (allowed).
+ *
+ * Public  → assigned ConcernedSE | CC on enquiry jobs | Approvers | Admin
+ * Private → own-job ConcernedSE (ownjob ≡ Division) | CC for that Division | Approvers | Admin
+ *           — no other paths
+ */
 function canReadAttachmentByVisibility(att, accessCtx) {
     if (!accessCtx?.allowed) return false;
-    if (accessCtx.fullAccess || accessCtx.isAdmin) return true;
+    if (accessCtx.isAdmin) return true;
 
     const visibility = normText(att.Visibility || 'Public');
-    if (visibility !== 'private') return true;
+    const isPrivate = visibility === 'private';
 
-    const uploadedBy = normText(att.UploadedBy || '');
-    const userName = normText(accessCtx.user?.fullName || '');
-    if (uploadedBy && userName && uploadedBy === userName) return true;
+    // Approvers: Public + Private for this enquiry
+    if (accessCtx.isApprover) return true;
 
+    if (!isPrivate) {
+        return !!(accessCtx.isAssigned || accessCtx.isCcUser);
+    }
+
+    // --- Private only ---
     const attDivision = String(att.Division || '').trim();
-    const userDept = String(accessCtx.user?.department || '').trim();
-    if (!attDivision || !userDept) return false;
-    return userHasDepartment(userDept, attDivision) || normText(attDivision) === normText(userDept);
+    if (!attDivision) return false;
+
+    // Own-job ConcernedSE only (must match ConcernedSE.ownjob ↔ file Division)
+    if (
+        accessCtx.isAssigned &&
+        userMatchesAnyDivision(accessCtx.assignedOwnJobs, attDivision)
+    ) {
+        return true;
+    }
+
+    // CCMailIds users only for the same division as the file
+    if (userMatchesAnyDivision(accessCtx.ccDivisions, attDivision)) {
+        return true;
+    }
+
+    return false;
 }
 
 module.exports = {
     normalizeAttachmentEmail,
     normText,
     roleIsAdmin,
+    ccMailIdsContainsUser,
     getAttachmentAccessContext,
     canReadAttachmentByVisibility,
 };

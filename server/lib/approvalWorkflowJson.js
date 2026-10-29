@@ -76,6 +76,8 @@ function normalizeStep(raw, idx = 0) {
         status,
         actionAt: raw.actionAt ?? raw.ActionAt ?? null,
         comments: String(raw.comments ?? raw.Comments ?? '').trim(),
+        digitalSignatureJson:
+            raw.digitalSignatureJson ?? raw.ApproverDigitalSignatureJson ?? null,
         isFinalApprover: truthyFinalFlag(
             raw.isFinalApprover ?? raw.IsFinalApprover ?? raw.isFinal ?? raw.IsFinal
         ),

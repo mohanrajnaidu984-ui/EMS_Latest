@@ -196,7 +196,7 @@ const Help = () => {
               <strong>Purpose:</strong> Manage customer quotations and revisions, preview A4 layout, run internal approval, and deliver PDF or Outlook mail to the customer.
             </p>
             <p className="mb-1">
-              <strong>Key activities:</strong> select enquiry, lead job, and customer; create quote reference and revisions; edit clauses; map pricing summary; preview A4 layout; download PDF; send via Outlook; configure and send approval workflow.
+              <strong>Key activities:</strong> select enquiry, lead job, and customer; prepare the quote (draft); edit clauses; map pricing summary; preview A4 layout; download PDF; send via Outlook; configure approval hierarchy and send for approval. The official quote number / revision is created when the <strong>final approver</strong> approves.
             </p>
             <p className="mb-1">
               <strong>Preview and PDF:</strong> Use A4 preview to verify cover letter, headers, clause content, and pricing summary tables before download. PDF download produces a protected document (editing/copying restricted; printing allowed). Preview styling matches the generated PDF. While pricing or quote context is refreshing, a centred <em>Updating preview…</em> indicator appears over the preview area.
@@ -205,36 +205,80 @@ const Help = () => {
               <strong>Outlook email:</strong> On Windows with classic Outlook, open a draft or send the quote PDF as an attachment from the quote screen. Ensure Outlook is running and the EMS server (or local helper on port 39281) can reach Outlook.
             </p>
             <p className="mb-1">
-              <strong>Approval workflow (Quote screen):</strong> Available when <strong>Previous Quotes / Revisions</strong> is enabled and a <strong>saved quote revision</strong> is active (not draft-only mode). The <strong>Approval Workflow</strong> panel on the right supports the full internal sign-off path:
+              <strong>Attachments:</strong>
+            </p>
+            <ul className="mb-2" style={{ paddingLeft: '1.1rem' }}>
+              <li><strong>Public</strong> — visible to assigned ConcernedSE, their CCMailIds, Approvers, and Admin.</li>
+              <li><strong>Private</strong> — visible only to own-job ConcernedSE, CCMailIds for that division, Approvers, and Admin.</li>
+            </ul>
+
+            <p className="mb-1">
+              <strong>Approval workflow — where:</strong> On the Quote screen, open the right-hand <strong>Workflow</strong> tab. Approval is available for the current draft / quote path (hierarchy is required before Send for Approval). Approvers then use <strong>Quote → Approvals</strong> to review and act.
+            </p>
+
+            <p className="mb-1">
+              <strong>How to create an approval hierarchy (procedure):</strong>
             </p>
             <ol className="mb-2" style={{ paddingLeft: '1.1rem' }}>
-              <li>
-                <strong>Set or update hierarchy:</strong> Click <strong>Set hierarchy</strong> to open the hierarchy manager. Create a named approval path, add approvers in sequence (order matters), reorder or remove steps, and save. Saved hierarchies are personal templates you can reload later.
-              </li>
-              <li>
-                <strong>Select approvers:</strong> Pick a saved hierarchy from the dropdown to load its approver list, or build the list step-by-step in the workflow panel. Each step shows approver name and pending/approved status.
-              </li>
-              <li>
-                <strong>Send for Approval:</strong> After the quote revision is saved and at least one approver with a valid email is on the path, click <strong>Send for Approval</strong>. EMS saves the workflow to the quote revision and sends an <strong>email notification (SMTP)</strong> to all pending approvers with quote/enquiry context. The approval path is then locked from further hierarchy edits until the workflow is reset or completed.
-              </li>
-              <li>
-                <strong>Sequential approval:</strong> Approvers act in step order. Only the current pending approver can approve. Each approval is recorded with timestamp and optional comments. When all steps are approved, the quote originator and relevant stakeholders can be notified of completion.
-              </li>
+              <li>Select enquiry → lead job → customer, prepare the quote content, and <strong>save the draft</strong> (or ensure the draft is saved so the workflow can attach to it).</li>
+              <li>Open the <strong>Workflow</strong> tab on the right.</li>
+              <li>Click <strong>Set hierarchy</strong> (hierarchy manager).</li>
+              <li>Enter a <strong>Hierarchy name</strong> (for example &quot;IFM standard path&quot;) so you can reuse it later.</li>
+              <li>Under <strong>Add approvers</strong>, pick each person from the list and click <strong>Add approver</strong>. You can reorder steps with up/down (except the final approver stays last) and remove steps if needed.</li>
+              <li>If there is <strong>more than one approver</strong>, mark <strong>exactly one</strong> person as the <strong>Final Approver</strong> (checkbox / flag on that step). With only one approver, that person is treated as final automatically.</li>
+              <li>Click <strong>Save</strong> in the hierarchy manager to store the template against your login.</li>
+              <li>Back on the Workflow panel, select the saved hierarchy from the dropdown (or keep the steps you just applied). Confirm every step shows name, designation, and email.</li>
+              <li>Click <strong>Send for Approval</strong>. EMS stores the path on the quote/draft and emails pending approvers (SMTP). Hierarchy editing on that path is then locked until the workflow is reset or completed.</li>
             </ol>
             <p className="mb-1">
-              <strong>Quote approval prerequisites:</strong> Save the quote revision first (Save or + Revision). Enquiry number must be present. Every approver on the path needs a registered email in master user data.
+              <strong>Reuse a hierarchy:</strong> Open <strong>Set hierarchy</strong>, load a previously saved name from the picker, adjust if needed, save, then apply it on the Workflow panel. You can also pick a saved hierarchy directly from the Workflow dropdown without opening the manager.
+            </p>
+
+            <p className="mb-1">
+              <strong>What “Final Approver” means:</strong>
+            </p>
+            <ul className="mb-2" style={{ paddingLeft: '1.1rem' }}>
+              <li>The final approver is the person whose approval <strong>commits</strong> the quote: EMS issues / advances the official <strong>quote number and revision (R#)</strong> and treats the workflow as finalized for locking purposes.</li>
+              <li>Other approvers may approve in <strong>any order</strong> (parallel). Their approvals are recorded with timestamps and optional comments, and their digital signatures appear on the cover when they approve (if a signature is stored in their profile).</li>
+              <li>When there is more than one step, EMS requires exactly one final approver. That person is shown last in the Workflow list and labelled <strong>Final Approver</strong>.</li>
+              <li>After the final approver has approved, non-final pending steps may still Approve (to record their sign-off), but <strong>Reject</strong> / <strong>Correction required</strong> from remaining steps is no longer allowed for a finalized quote.</li>
+            </ul>
+
+            <p className="mb-1">
+              <strong>When editing is locked:</strong>
+            </p>
+            <ul className="mb-2" style={{ paddingLeft: '1.1rem' }}>
+              <li>
+                <strong>After Send for Approval:</strong> The approval <strong>path / hierarchy</strong> on that draft or quote is locked — you cannot change, reorder, or replace approvers until the workflow is completed or unlocked (for example after rejection / correction that returns the quote for rework).
+              </li>
+              <li>
+                <strong>After Final Approver approval:</strong> Quote content edit is locked for normal authoring (clauses, commercial fields, signatories, etc.). The quote number/revision is committed. Private/public attachment rules still apply; removing existing attachments after final approval is restricted (new files may still be allowed where the UI permits).
+              </li>
+              <li>
+                <strong>Previous Quotes / browse mode:</strong> Opening a saved revision in browse/previous-quotes mode is view-oriented; do not expect free draft editing on a committed revision.
+              </li>
+              <li>
+                <strong>Approvals module:</strong> Approvers work in read-and-approve mode — they can approve/reject/request correction (when allowed) and view preview/attachments per rights, but they do not edit quote content.
+              </li>
+              <li>
+                <strong>To edit again after lock:</strong> Typically create a <strong>new revision</strong> (or follow the correction/reject path that unlocks the draft for rework), set hierarchy again if required, and Send for Approval once more. The next R# is assigned when the final approver approves that round.
+              </li>
+            </ul>
+
+            <p className="mb-1">
+              <strong>Quote approval prerequisites:</strong> Draft/quote context must be saved. Enquiry number must be present. Every approver needs a registered email in master user data. Final approver must be marked when there is more than one step.
             </p>
             <p className="mb-0">
-              <strong>Example:</strong> Enable Previous Quotes, open revision R1, set hierarchy &quot;Division Manager path&quot;, click Send for Approval, then ask approvers to use Quote &rarr; Approvals to review and approve.
+              <strong>Example:</strong> Save draft for enquiry 1483, open Workflow → Set hierarchy → name it &quot;IFM Civil path&quot; → add Manivannan, Sanal, and Irshad → mark Irshad as Final Approver → Save → Send for Approval. After Irshad approves, the quote number/revision is issued and content edit is locked.
             </p>
             <p className="mb-0 mt-1">
-              <strong>Step process:</strong> Select enquiry &rarr; lead job &rarr; customer &rarr; create/save quote revision &rarr; edit clauses and pricing summary &rarr; preview &rarr; configure approval hierarchy &rarr; Send for Approval &rarr; track status in Approvals tab &rarr; download PDF or Outlook draft after approval (if required).
+              <strong>Step process:</strong> Select enquiry &rarr; lead job &rarr; customer &rarr; prepare/save draft &rarr; edit clauses and pricing summary &rarr; preview &rarr; create/select hierarchy &amp; mark final approver &rarr; Send for Approval &rarr; track status in Approvals tab &rarr; after final approval, download PDF or Outlook draft as required.
             </p>
             <p className="mb-0 mt-1">
               <strong>Validation notes:</strong> Confirm latest revision before Probability updates. Creating any quote removes the enquiry from Dashboard Due/Lapsed counts. Rejection requires approver comments.
             </p>
             <p className="mb-0 mt-1">
-              <strong>Expected output:</strong> Complete quote trail with aligned preview/PDF, documented approval history, email notifications to approvers, and optional customer delivery via Outlook.
+              <strong>Expected output:</strong> Complete quote trail with aligned preview/PDF, documented approval history (including digital signatures where placed), email notifications to approvers, and optional customer delivery via Outlook.
             </p>
           </div>
 
@@ -260,10 +304,10 @@ const Help = () => {
             <ol className="mb-2" style={{ paddingLeft: '1.1rem' }}>
               <li>Open <strong>Quote &rarr; Approvals</strong> and confirm <strong>Pending for Approval</strong> is selected.</li>
               <li>Select a quote row from the list on the left.</li>
-              <li>Review the quote in <strong>Read and Approve Mode</strong> — full A4 preview with zoom, page navigation, download, print, and email actions where permitted.</li>
-              <li>Check the <strong>Approval Workflow</strong> panel on the right for your step number and overall path status.</li>
-              <li>Enter optional <strong>Comments</strong>, then click <strong>Approve</strong> when satisfied.</li>
-              <li>After approval, the item leaves your pending list and the next approver in sequence becomes active (they receive workflow visibility in their pending list).</li>
+              <li>Review the quote in <strong>Read and Approve Mode</strong> — full A4 preview with zoom, page navigation, download, print, and email actions where permitted. Public/Private attachments appear according to your access rights.</li>
+              <li>Check the <strong>Approval Workflow</strong> panel on the right for your step, status ticks, and who is marked <strong>Final Approver</strong>.</li>
+              <li>Enter optional <strong>Comments</strong>, then click <strong>Approve</strong> (your stored digital signature is applied when available). Use <strong>Reject</strong> only with comments, or <strong>Correction required</strong> when that action is still allowed (before the final approver commits the quote).</li>
+              <li>Approvers may act in <strong>any order</strong>. When the <strong>final approver</strong> approves, the quote number/revision is committed and author editing locks. Other pending non-final steps can still Approve to complete their sign-off.</li>
             </ol>
             <p className="mb-1">
               <strong>Cross-division access:</strong> If you are assigned in the workflow on a quote from another division, you can still open and approve it. Visibility is workflow-tied and enquiry-context-aware; broad division-only access is intentionally restricted.
@@ -275,10 +319,10 @@ const Help = () => {
               <strong>Loading:</strong> While a quote preview is loading or refreshing, a centred loading indicator appears so you can wait for the update to complete.
             </p>
             <p className="mb-0">
-              <strong>Example:</strong> A BMS approver sees an AAC quote in Pending for Approval, opens it, reads clauses and pricing in the preview, adds a comment &quot;Commercial terms OK&quot;, and clicks Approve.
+              <strong>Example:</strong> An IFM approver sees a quote in Pending for Approval, opens it, reads clauses and pricing in the preview, confirms their signature appears after Approve, and completes the step.
             </p>
             <p className="mb-0 mt-1">
-              <strong>Expected output:</strong> Your approval step is recorded with timestamp; the workflow advances to the next approver or completes when all steps are approved.
+              <strong>Expected output:</strong> Your approval step is recorded with timestamp (and signature when available); the workflow progresses; when the final approver approves, the quote is committed and content edit is locked for the author.
             </p>
           </div>
 
@@ -432,8 +476,8 @@ const Help = () => {
             <p className="mb-1"><strong>Common Process Controls</strong></p>
             <ul className="mb-0" style={{ paddingLeft: '1.1rem' }}>
               <li>Use the same enquiry reference across Pricing, Quote, and Probability to avoid data mismatch.</li>
-              <li>Save a quote revision before sending it for internal approval; confirm approver emails are current in master data.</li>
-              <li>Approvers should use Quote &rarr; Approvals for pending items; quote authors track workflow status on the saved revision.</li>
+              <li>Save a quote draft before sending it for internal approval; configure hierarchy and mark a final approver when there is more than one step; confirm approver emails are current in master data.</li>
+              <li>Approvers should use Quote &rarr; Approvals for pending items; quote authors track workflow status on the draft/quote. Edit locks after Send for Approval (hierarchy) and after Final Approver approval (content / quote number).</li>
               <li>Update Probability immediately after any commercial or customer response change.</li>
               <li>Use the latest quote revision when entering Won/Lost/Follow Up decisions.</li>
               <li>Review Sales Report after status updates to confirm values are reflected correctly.</li>
@@ -549,8 +593,8 @@ const Help = () => {
               <li>Enquiry `ENQ-1024` is created for a new project.</li>
               <li>Pricing prepares estimate and confirms commercial baseline.</li>
               <li>Quote issues `Q-1024-R0`; customer requests changes.</li>
-              <li>Quote issues `Q-1024-R1` with revised value; author configures approval hierarchy and sends for approval.</li>
-              <li>Sequential approvers review in Quote &rarr; Approvals and approve each step.</li>
+              <li>Quote issues a draft; author configures approval hierarchy (marks final approver), sends for approval.</li>
+              <li>Approvers review in Quote &rarr; Approvals (any order); when the final approver approves, quote number/revision is committed and editing locks.</li>
               <li>Probability is updated to Follow Up with expected date.</li>
               <li>After confirmation, status changes to Won with booked date and GP%.</li>
               <li>Sales Report reflects the win; Sales Target shows achievement impact.</li>

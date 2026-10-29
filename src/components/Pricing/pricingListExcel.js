@@ -170,8 +170,13 @@ function individualSubjobColumnText(enq) {
 
 function enquiryNoColumnText(enq) {
     const no = dash(enq.RequestNo);
+    const inactive =
+        String(enq.EnquiryStatus || '').trim().toLowerCase() === 'inactive';
     const status = formatSpecStatusText(enq);
-    return status ? `${no}\n${status}` : no;
+    const parts = [no];
+    if (inactive && no !== '—') parts.push('Inactive');
+    if (status) parts.push(status);
+    return parts.join('\n');
 }
 
 function getColumns(mode) {

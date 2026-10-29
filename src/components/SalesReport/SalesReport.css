@@ -1517,8 +1517,10 @@
     line-height: 1.15;
     position: sticky;
     top: 0;
-    z-index: 1;
+    z-index: 3;
+    background-color: #e2e8f0 !important;
     border-color: #cbd5e1 !important;
+    border-bottom-width: 0 !important;
     white-space: nowrap;
 }
 
@@ -1571,8 +1573,11 @@
     overflow: hidden;
 }
 
+/* Keep sticky (do not use relative — that un-freezes the header while scrolling). */
 .sr-detail-table th.sr-resizable-th {
-    position: relative;
+    position: sticky;
+    top: 0;
+    z-index: 3;
 }
 
 .sr-detail-table .sr-col-resize-handle {
@@ -1597,11 +1602,41 @@
     table-layout: fixed;
 }
 
+.sr-detail-table thead tr.sr-detail-table__total-row td {
+    position: sticky;
+    /* Sit flush under header (overlap 1px so sticky rounding leaves no gap) */
+    top: calc(var(--sr-jobs-thead-h, 2rem) - 1px);
+    z-index: 2;
+    background: #6f8ee8 !important;
+    color: #ffffff !important;
+    border-color: #5f7dd6 !important;
+    border-top-width: 0 !important;
+    box-shadow: 0 1px 0 #5f7dd6;
+    /* Same type size as column header names; row still ~10% shorter via padding */
+    font-size: calc(0.68rem * var(--sr-header-font-scale, 1.1) * var(--sr-section-header-font-factor, 0.9)) !important;
+    font-weight: 400 !important;
+    padding: calc(0.225rem * 0.95 * 0.9) calc(0.315rem * 0.95) !important;
+    line-height: 1.15 !important;
+    vertical-align: middle;
+    height: calc(var(--sr-jobs-thead-h, 2rem) * 0.9);
+    max-height: calc(var(--sr-jobs-thead-h, 2rem) * 0.9);
+}
+
 .sr-detail-table__total-row td {
     background: #6f8ee8 !important;
     color: #ffffff !important;
     border-color: #5f7dd6 !important;
-    font-weight: 600;
+    border-top-width: 0 !important;
+    font-weight: 400 !important;
+    font-size: calc(0.68rem * var(--sr-header-font-scale, 1.1) * var(--sr-section-header-font-factor, 0.9)) !important;
+    padding: calc(0.225rem * 0.95 * 0.9) calc(0.315rem * 0.95) !important;
+    line-height: 1.15 !important;
+}
+
+.sr-detail-table__total-row td.small,
+.sr-detail-table__total-row td.fw-semibold {
+    font-size: inherit !important;
+    font-weight: 400 !important;
 }
 
 /* Top Jobs table: alternate soft background per enquiry (RequestNo group) */
@@ -1619,6 +1654,8 @@
 
 .sr-filterable-th {
     position: sticky;
+    top: 0;
+    z-index: 3;
 }
 
 .sr-th-filter-btn {

@@ -6,7 +6,8 @@
  *
  * Sources:
  * 1) Client heartbeat (AuthContext) every ~60s
- * 2) Any /api request that carries an email / userEmail (covers users who never hit Usage)
+ * 2) Any /api request that carries userEmail / UserEmail (logged-in actor only —
+ *    never customer EmailId fields such as Master_ReceivedFrom contacts)
  */
 
 const ONLINE_TTL_MS = 4 * 60 * 1000; // 4 minutes — matches ~60s heartbeat + idle cushion
@@ -56,6 +57,11 @@ function listOnline(now = Date.now()) {
             presence.delete(key);
             continue;
         }
+        // Drop customer/contact false positives (EMS users always have Roles in Master_ConcernedSE)
+        if (!String(row.roles || '').trim()) {
+            presence.delete(key);
+            continue;
+        }
         online.push({
             email: row.email,
             name: row.name,
@@ -71,18 +77,11 @@ function listOnline(now = Date.now()) {
 }
 
 function extractEmailFromRequest(req) {
+    // Only the logged-in actor. Generic `email` / `EmailId` are often customer
+    // or Master_ReceivedFrom contacts and must not appear as "online" users.
     const q = req.query || {};
     const b = req.body && typeof req.body === 'object' ? req.body : {};
-    const candidates = [
-        b.email,
-        b.EmailId,
-        b.userEmail,
-        b.UserEmail,
-        q.email,
-        q.EmailId,
-        q.userEmail,
-        q.UserEmail,
-    ];
+    const candidates = [b.userEmail, b.UserEmail, q.userEmail, q.UserEmail];
     for (const c of candidates) {
         const e = normalizeEmail(c);
         if (e && e.includes('@')) return e;
@@ -149,7 +148,11 @@ async function enrichPresenceFromDb(email) {
             WHERE LOWER(REPLACE(REPLACE(LTRIM(RTRIM(ISNULL(EmailId, N''))), N'@almcg.com', N'@almoayyedcg.com'), N'@ALMCG.COM', N'@almoayyedcg.com')) = ${key}
         `;
         const u = result.recordset?.[0];
-        if (!u) return;
+        if (!u) {
+            // Not an EMS user (e.g. customer EmailId wrongly touched) — drop from online list
+            removePresence(key);
+            return;
+        }
         touchPresence({
             email: key,
             name: u.FullName || '',

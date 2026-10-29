@@ -17,14 +17,14 @@ function edCeoReminderFromEmail() {
     return String(process.env.EMS_ED_CEO_DUE_REMINDER_FROM || getSmtpFromEmail() || 'ems@almoayyedcg.com').trim();
 }
 
-const DEFAULT_ED_CEO_REMINDER_TO =
-    'hala@almoayyedcg.com,mathews@almoayyedcg.com,lohidas@almoayyedcg.com,biju@almoayyedcg.com,mohanan.pillai@almoayyedcg.com,mepgm@almoayyedcg.com';
 const DEFAULT_ED_CEO_REMINDER_BCC = 'mohan.naidu@almoayyedcg.com';
 
-function edCeoReminderToEmails() {
-    const raw = String(process.env.EMS_ED_CEO_DUE_REMINDER_TO || DEFAULT_ED_CEO_REMINDER_TO).trim();
-    return splitRecipients(raw).map((e) => e.toLowerCase());
-}
+/** Seeded once when the recipient table is empty. Later edits in the table are kept. */
+const ED_CEO_REMINDER_RECIPIENT_SEED = [
+    { email: 'hala@almoayyedcg.com', sortOrder: 1 },
+    { email: 'mathews@almoayyedcg.com', sortOrder: 2 },
+    { email: 'lohidas@almoayyedcg.com', sortOrder: 3 },
+];
 
 function edCeoReminderBccEmails() {
     const raw = String(process.env.EMS_ED_CEO_DUE_REMINDER_BCC || DEFAULT_ED_CEO_REMINDER_BCC).trim();
@@ -71,7 +71,7 @@ function buildEdCeoReminderSubject(kind, dueYmd) {
     if (kind === REMINDER_KIND_TODAY) {
         return `Tender/Quote Submission due on Today ${dueLabel}`;
     }
-    return `Tender/Quote Submission due on ${dueLabel} - 2 working`;
+    return `Tender/Quote Submission due in 2 Working days on ${dueLabel}`;
 }
 
 function buildEdCeoEnquiryListTableHtml(rows) {
@@ -80,7 +80,7 @@ function buildEdCeoEnquiryListTableHtml(rows) {
 
     const thStyle = [
         'padding:6px 8px',
-        'background-color:#d9d9d9',
+        'background-color:#8fbdd9',
         'color:#000000',
         'font-family:' + FONT_FAMILY,
         'font-size:10pt',
@@ -168,6 +168,97 @@ ${tableHtml}
 function isSqlUniqueViolation(err) {
     const n = err?.number ?? err?.originalError?.number;
     return n === 2627 || n === 2601;
+}
+
+async function lookupPersonnelFullName(email) {
+    const normalized = String(email || '').trim().toLowerCase();
+    if (!normalized) return null;
+
+    try {
+        const se = await sql.query`
+            SELECT TOP 1 FullName
+            FROM Master_ConcernedSE
+            WHERE LOWER(LTRIM(RTRIM(ISNULL(EmailId, N'')))) = ${normalized}
+              AND FullName IS NOT NULL
+              AND LTRIM(RTRIM(FullName)) <> N''
+        `;
+        const seName = String(se.recordset?.[0]?.FullName || '').trim();
+        if (seName) return seName;
+    } catch (_) {
+        /* Master_ConcernedSE may be absent in some environments */
+    }
+
+    try {
+        const user = await sql.query`
+            SELECT TOP 1 FullName
+            FROM Users
+            WHERE LOWER(LTRIM(RTRIM(ISNULL(Email, N'')))) = ${normalized}
+              AND FullName IS NOT NULL
+              AND LTRIM(RTRIM(FullName)) <> N''
+        `;
+        const userName = String(user.recordset?.[0]?.FullName || '').trim();
+        if (userName) return userName;
+    } catch (_) {
+        /* Users may be absent in some environments */
+    }
+
+    return null;
+}
+
+async function ensureEdCeoDueSubmissionReminderRecipientTable() {
+    await sql.query(`
+        IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'EdCeoDueSubmissionReminderRecipient' AND schema_id = SCHEMA_ID('dbo'))
+        BEGIN
+            CREATE TABLE dbo.EdCeoDueSubmissionReminderRecipient (
+                ID INT IDENTITY(1, 1) NOT NULL PRIMARY KEY,
+                Email NVARCHAR(320) NOT NULL,
+                FullName NVARCHAR(255) NULL,
+                SortOrder INT NOT NULL CONSTRAINT DF_EdCeoDueSubmissionReminderRecipient_SortOrder DEFAULT (0),
+                IsActive BIT NOT NULL CONSTRAINT DF_EdCeoDueSubmissionReminderRecipient_IsActive DEFAULT (1),
+                CreatedAt DATETIME NOT NULL CONSTRAINT DF_EdCeoDueSubmissionReminderRecipient_CreatedAt DEFAULT (GETDATE()),
+                CONSTRAINT UQ_EdCeoDueSubmissionReminderRecipient_Email UNIQUE (Email)
+            );
+        END
+    `);
+
+    const countRes = await sql.query`
+        SELECT COUNT(1) AS Cnt
+        FROM dbo.EdCeoDueSubmissionReminderRecipient
+    `;
+    const existing = Number(countRes.recordset?.[0]?.Cnt || 0);
+    if (existing > 0) return;
+
+    for (const row of ED_CEO_REMINDER_RECIPIENT_SEED) {
+        const fullName = await lookupPersonnelFullName(row.email);
+        try {
+            await sql.query`
+                INSERT INTO dbo.EdCeoDueSubmissionReminderRecipient (Email, FullName, SortOrder, IsActive)
+                VALUES (${row.email}, ${fullName}, ${row.sortOrder}, 1)
+            `;
+        } catch (err) {
+            if (!isSqlUniqueViolation(err)) throw err;
+        }
+    }
+}
+
+/** Active To addresses for the ED/CEO due reminder, in table order. */
+async function loadEdCeoReminderRecipientEmails() {
+    await ensureEdCeoDueSubmissionReminderRecipientTable();
+    const res = await sql.query`
+        SELECT Email
+        FROM dbo.EdCeoDueSubmissionReminderRecipient
+        WHERE IsActive = 1
+        ORDER BY SortOrder, ID
+    `;
+    const seen = new Set();
+    const emails = [];
+    for (const row of res.recordset || []) {
+        const email = String(row.Email || '').trim().toLowerCase();
+        if (!email || seen.has(email)) continue;
+        seen.add(email);
+        emails.push(email);
+    }
+    return emails;
 }
 
 async function ensureEdCeoDueSubmissionReminderLogTable() {
@@ -279,7 +370,7 @@ async function releaseEdCeoReminderClaim(kind, dueYmd) {
 }
 
 async function sendEdCeoDueReminder(kind, dueYmd, enquiryRows, options = {}) {
-    const toEmails = edCeoReminderToEmails();
+    const toEmails = await loadEdCeoReminderRecipientEmails();
     const bccEmails = edCeoReminderBccEmails();
     if (!toEmails.length) {
         return { sent: false, reason: 'no-recipient' };
@@ -324,10 +415,12 @@ async function sendEdCeoDueReminder(kind, dueYmd, enquiryRows, options = {}) {
 }
 
 /**
- * ED/CEO signature required — consolidated due-date reminders (EMS_ED_CEO_DUE_REMINDER_TO / _BCC).
+ * ED/CEO signature required — consolidated due-date reminders.
+ * To addresses come from dbo.EdCeoDueSubmissionReminderRecipient. BCC stays EMS_ED_CEO_DUE_REMINDER_BCC.
  * @param {{ todayYmd?: string, force?: boolean }} [options]
  */
 async function runEdCeoDueSubmissionReminders(options = {}) {
+    await ensureEdCeoDueSubmissionReminderRecipientTable();
     await ensureEdCeoDueSubmissionReminderLogTable();
 
     const todayYmd = String(options.todayYmd || todayYmdInSchedulerTz()).trim();
@@ -400,6 +493,8 @@ async function runEdCeoDueSubmissionReminders(options = {}) {
 
 module.exports = {
     runEdCeoDueSubmissionReminders,
+    ensureEdCeoDueSubmissionReminderRecipientTable,
+    loadEdCeoReminderRecipientEmails,
     buildEdCeoDueEnquiryRows,
     buildEdCeoReminderSubject,
     buildEdCeoReminderEmailHtml,

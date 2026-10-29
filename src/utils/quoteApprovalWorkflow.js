@@ -120,6 +120,11 @@ export function normalizeApprovalStep(raw, idx = 0) {
     if (!Number.isFinite(sequence) || sequence < 1) return null;
     const statusRaw = String(raw.status ?? raw.Status ?? 'pending').trim().toLowerCase();
     const status = ['approved', 'rejected', 'pending'].includes(statusRaw) ? statusRaw : 'pending';
+    const digitalSignatureJson =
+        raw.digitalSignatureJson ??
+        raw.ApproverDigitalSignatureJson ??
+        raw.digital_signature_json ??
+        null;
     return {
         sequence: Math.floor(sequence),
         approverEmail: String(raw.approverEmail ?? raw.ApproverEmail ?? '').trim(),
@@ -128,9 +133,77 @@ export function normalizeApprovalStep(raw, idx = 0) {
         status,
         actionAt: raw.actionAt ?? raw.ActionAt ?? null,
         comments: String(raw.comments ?? raw.Comments ?? '').trim(),
+        digitalSignatureJson,
         isFinalApprover: truthyFinalFlag(
             raw.isFinalApprover ?? raw.IsFinalApprover ?? raw.isFinal ?? raw.IsFinal
         ),
+    };
+}
+
+/** Extract image data URL from ApproverDigitalSignatureJson / vault payload. */
+export function extractApprovalSignatureImageUrl(raw) {
+    if (raw == null || raw === '') return '';
+    let obj = raw;
+    if (typeof raw === 'string') {
+        const trimmed = raw.trim();
+        if (trimmed.startsWith('data:image')) return trimmed;
+        try {
+            obj = JSON.parse(trimmed);
+        } catch {
+            return '';
+        }
+    }
+    if (!obj || typeof obj !== 'object') return '';
+    if (obj.imageDataUrl) return String(obj.imageDataUrl);
+    if (Array.isArray(obj.signatures) && obj.signatures.length) {
+        const defId = obj.defaultSignatureId;
+        const hit =
+            (defId && obj.signatures.find((s) => s && s.id === defId)) || obj.signatures[0];
+        return hit?.imageDataUrl ? String(hit.imageDataUrl) : '';
+    }
+    return '';
+}
+
+function normalizePersonKey(nameOrEmail) {
+    return String(nameOrEmail || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ');
+}
+
+/**
+ * Find approved-step signature image for a cover signatory / co-signatory name (or email).
+ * Only exact name/email match — never borrow another approver's signature onto this line.
+ */
+export function findApprovedSignatureImageForPerson(steps, personName, personEmail = '') {
+    const nameKey = normalizePersonKey(personName);
+    const emailKey = normalizeApprovalEmail(personEmail);
+    if (!nameKey && !emailKey) return '';
+    const list = Array.isArray(steps) ? steps : [];
+    for (const step of list) {
+        if (String(step?.status || '').toLowerCase() !== 'approved') continue;
+        const stepName = normalizePersonKey(step.approverName);
+        const stepEmail = normalizeApprovalEmail(step.approverEmail);
+        const nameOk = nameKey && stepName && stepName === nameKey;
+        const emailOk = emailKey && stepEmail && emailKey === stepEmail;
+        if (!nameOk && !emailOk) continue;
+        const url = extractApprovalSignatureImageUrl(step.digitalSignatureJson);
+        if (url) return url;
+    }
+    return '';
+}
+
+/**
+ * Signatory / Co-Signatory cover images from approved workflow steps.
+ * Shows an image only when that exact person has Approved and has a stored
+ * ApproverDigitalSignatureJson — no sequence fallback (avoids placing
+ * Lakshmanan's signature on Mohanraj's signatory line).
+ */
+export function resolveApprovalCoverSignatureImages(steps, signatoryName, coSignatoryName) {
+    const list = Array.isArray(steps) ? steps : [];
+    return {
+        signatory: findApprovedSignatureImageForPerson(list, signatoryName) || '',
+        coSignatory: findApprovedSignatureImageForPerson(list, coSignatoryName) || '',
     };
 }
 
@@ -193,8 +266,57 @@ function approverMatchesUser(step, userEmail, userName = '') {
     return userNormName.length > 0 && userNormName === stepNormName;
 }
 
-/** Pending step assigned to the signed-in user (parallel approval — no sequence gate). */
-export function getUserPendingApprovalStep(steps, userEmail, userName = '') {
+/** 'parallel' | 'sequential' | null. */
+export function normalizeApprovalMode(raw) {
+    const v = String(raw || '').trim().toLowerCase();
+    if (v === 'sequential') return 'sequential';
+    if (v === 'parallel') return 'parallel';
+    return null;
+}
+
+export const APPROVAL_MODE_LABELS = {
+    parallel: 'Parallel',
+    sequential: 'One after another',
+};
+
+/** Divisions (quote OwnJob) whose approvers act one after another; keep in sync with server/lib/sequentialApproval.js. */
+export const SEQUENTIAL_APPROVAL_DIVISIONS = ['ac maint-elec', 'ac maint-hvac'];
+
+export function isSequentialApprovalDivision(ownJob, leadJobName = '') {
+    const raw = String(String(ownJob || '').trim() || leadJobName || '').trim().toLowerCase();
+    if (!raw) return false;
+    const dash = raw.lastIndexOf(' - ');
+    const key = dash >= 0 ? raw.slice(dash + 3).trim() : raw;
+    return SEQUENTIAL_APPROVAL_DIVISIONS.includes(key);
+}
+
+/** Sequential mode: step whose turn it is (non-final by sequence, final last); null when rejected or complete. */
+export function getSequentialActiveApprovalStep(steps) {
+    const ordered = sortApprovalStepsFinalLast(steps);
+    if (ordered.some((s) => String(s.status || '').toLowerCase() === 'rejected')) return null;
+    return ordered.find((s) => String(s.status || '').toLowerCase() !== 'approved') || null;
+}
+
+/** Sequential mode: true once this approver's turn has come (already approved or currently active). */
+export function hasSequentialApprovalTurnReached(steps, userEmail, userName = '') {
+    for (const step of sortApprovalStepsFinalLast(steps)) {
+        if (approverMatchesUser(step, userEmail, userName)) return true;
+        if (String(step.status || '').toLowerCase() !== 'approved') return false;
+    }
+    return false;
+}
+
+/**
+ * Pending step assigned to the signed-in user. Parallel by default; with `sequential`
+ * only the step whose turn it is can be returned.
+ */
+export function getUserPendingApprovalStep(steps, userEmail, userName = '', { sequential = false } = {}) {
+    if (sequential) {
+        const active = getSequentialActiveApprovalStep(steps);
+        return active && active.status === 'pending' && approverMatchesUser(active, userEmail, userName)
+            ? active
+            : null;
+    }
     const sorted = coerceFinalApproverFlags([...(steps || [])].sort((a, b) => a.sequence - b.sequence));
     if (isFinalApproverApproved(sorted)) {
         // Final already approved: remaining non-final pending steps may still Approve (no Correction).
@@ -289,6 +411,8 @@ export function normalizeApprovalStepsFromApi(rows) {
                         status: r.status ?? r.Status,
                         actionAt: r.actionAt ?? r.ApprovedAt,
                         comments: r.comments ?? r.Comments,
+                        digitalSignatureJson:
+                            r.digitalSignatureJson ?? r.ApproverDigitalSignatureJson ?? null,
                         isFinalApprover: r.isFinalApprover ?? r.IsFinalApprover,
                     },
                     i

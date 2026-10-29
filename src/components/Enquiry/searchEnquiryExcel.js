@@ -55,8 +55,12 @@ function joinLines(lines) {
 
 function cellValue(col, row, users) {
     switch (col.key) {
-        case 'requestNo':
-            return dash(row.RequestNo);
+        case 'requestNo': {
+            const no = dash(row.RequestNo);
+            const inactive =
+                String(row.EnquiryStatus || '').trim().toLowerCase() === 'inactive';
+            return inactive && no !== '—' ? `${no}\nInactive` : no;
+        }
         case 'enquiryDate':
             return toExcelDate(row.EnquiryDate);
         case 'project':

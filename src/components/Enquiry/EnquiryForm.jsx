@@ -14,6 +14,7 @@ import EnquiryItemModal from '../Modals/EnquiryItemModal';
 import DateInput from './DateInput';
 import ValidationTooltip from '../Common/ValidationTooltip';
 import { parseUserDepartments, userHasDepartment } from '../../utils/userDepartments';
+import { canEditEnquiryActiveStatus } from '../../utils/dashboardCcAccess';
 import CollaborativeNotes from './CollaborativeNotes';
 import { inferAssignedSEsForEnquiryForItem } from '../../utils/inferAssignedSEsForEnquiryForItem';
 import { isChatboxEnabled } from '../../utils/chatboxSocket';
@@ -483,6 +484,27 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
         setCanEdit(true);
         setIsLimitedEdit(true);
     };
+
+    /** Active/Inactive: creator or division/creator CCMailIds user only (not general limited edit). */
+    const canEditEnquiryStatus = useMemo(
+        () =>
+            canEditEnquiryActiveStatus({
+                currentUser,
+                createdBy: formData.CreatedBy,
+                enquiryForItems: enqForList,
+                enqItems: masters.enqItems || [],
+                masterUsers: masters.users || [],
+                isNewEnquiry: !isModifyMode,
+            }),
+        [
+            currentUser,
+            formData.CreatedBy,
+            enqForList,
+            masters.enqItems,
+            masters.users,
+            isModifyMode,
+        ]
+    );
 
     const handleInputChange = (field, value) => {
         setFormData(prev => ({ ...prev, [field]: value }));
@@ -1266,6 +1288,8 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
             AcknowledgementSE: ackSEList[0] || '',
             CreatedBy: isModifyMode ? formData.CreatedBy : (currentUser?.name || 'System'),
             ModifiedBy: currentUser?.name || 'System',
+            userEmail: currentUser?.EmailId || currentUser?.email || '',
+            userName: currentUser?.name || currentUser?.FullName || '',
             // Only trigger email if EnquiryStatus is Active
             AutoAck: formData.EnquiryStatus === 'Active' ? formData.AutoAck : false,
         };
@@ -1595,6 +1619,7 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                 eqpschedule: enq.Doc_EquipmentSchedule !== undefined ? !!enq.Doc_EquipmentSchedule : !!enq.eqpschedule,
                 ceosign: enq.ED_CEOSignatureRequired !== undefined ? !!enq.ED_CEOSignatureRequired : !!enq.ceosign,
                 AutoAck: enq.SendAcknowledgementMail !== undefined ? !!enq.SendAcknowledgementMail : !!enq.AutoAck,
+                EnquiryStatus: enq.EnquiryStatus === 'Inactive' ? 'Inactive' : 'Active',
                 // FIX: inputs should be empty on load, lists are populated separately
                 CustomerName: '',
                 ReceivedFrom: ''
@@ -2219,10 +2244,32 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                                     <div className="row">
                                         <div className="col-md-3">
                                             <label className="form-label">Enquiry No.<span className="text-danger">*</span></label>
-                                            <input type="text" className="form-control" placeholder="e.g. EYS/2025/11/001"
+                                            <input
+                                                type="text"
+                                                className="form-control"
+                                                placeholder="e.g. EYS/2025/11/001"
                                                 value={modifyRequestNo}
                                                 onChange={(e) => setModifyRequestNo(e.target.value)}
-                                                onKeyDown={(e) => e.key === 'Enter' && handleLoadEnquiry()} />
+                                                onKeyDown={(e) => e.key === 'Enter' && handleLoadEnquiry()}
+                                                style={
+                                                    isModifyMode && formData.EnquiryStatus === 'Inactive'
+                                                        ? { color: '#dc3545', fontWeight: 700 }
+                                                        : undefined
+                                                }
+                                            />
+                                            {isModifyMode && formData.EnquiryStatus === 'Inactive' ? (
+                                                <div
+                                                    style={{
+                                                        color: '#dc3545',
+                                                        fontWeight: 700,
+                                                        fontSize: '11px',
+                                                        lineHeight: 1.2,
+                                                        marginTop: 4,
+                                                    }}
+                                                >
+                                                    Inactive
+                                                </div>
+                                            ) : null}
                                         </div>
                                         {isModifyMode && (
                                             <div className="col-md-3">
@@ -2909,7 +2956,7 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                                                             {/* 1. Public Attachments */}
                                                             <div className="mb-4">
                                                                 <h6 className="fw-bold text-primary mb-2" style={{ fontSize: '14px' }}>
-                                                                    <i className="bi bi-globe me-2"></i>1. Public Attachments <span className="text-muted fw-normal" style={{ fontSize: '11px' }}>(Visible to all subjobs)</span>
+                                                                    <i className="bi bi-globe me-2"></i>1. Public Attachments <span className="text-muted fw-normal" style={{ fontSize: '11px' }}>(Assigned ConcernedSE + their CCMailIds + Approvers + Admin)</span>
                                                                 </h6>
                                                                 <div className="d-flex align-items-center mb-2 gap-2 ps-3">
                                                                     <input type="file" id="publicFileInput" style={{ display: 'none' }} multiple onChange={(e) => handleFileUpload(e, 'Public')} />
@@ -2937,7 +2984,7 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                                                             {/* 2. Private Attachments */}
                                                             <div className="mb-4">
                                                                 <h6 className="fw-bold text-danger mb-2" style={{ fontSize: '14px' }}>
-                                                                    <i className="bi bi-lock me-2"></i>2. Private Attachments <span className="text-muted fw-normal" style={{ fontSize: '11px' }}>(Visible only to own division users)</span>
+                                                                    <i className="bi bi-lock me-2"></i>2. Private Attachments <span className="text-muted fw-normal" style={{ fontSize: '11px' }}>(Own-job ConcernedSE + their CCMailIds + Approvers + Admin)</span>
                                                                 </h6>
                                                                 <div className="d-flex align-items-center mb-2 gap-2 ps-3">
                                                                     <input type="file" id="privateFileInput" style={{ display: 'none' }} multiple onChange={(e) => handleFileUpload(e, 'Private')} />
@@ -3119,7 +3166,7 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                                                     <label className="form-check-label" htmlFor="ceoSign">ED/CEO Signature required</label>
                                                 </div>
 
-                                                {/* Enquiry Status Dropdown */}
+                                                {/* Enquiry Status Dropdown — creator or CCMailIds user only */}
                                                 <div className="d-flex align-items-center gap-2 mt-2" style={{ fontSize: '13px' }}>
                                                     <label className="mb-0">Enquiry Status:</label>
                                                     <select
@@ -3127,7 +3174,12 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                                                         style={{ width: '120px', fontSize: '13px' }}
                                                         value={formData.EnquiryStatus}
                                                         onChange={(e) => handleInputChange('EnquiryStatus', e.target.value)}
-                                                        disabled={!canEdit || isLimitedEdit}
+                                                        disabled={!canEdit || !canEditEnquiryStatus}
+                                                        title={
+                                                            canEditEnquiryStatus
+                                                                ? undefined
+                                                                : 'Only the enquiry creator or their CC mail user can change Active/Inactive'
+                                                        }
                                                     >
                                                         <option value="Active">Active</option>
                                                         <option value="Inactive">Inactive</option>

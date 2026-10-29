@@ -15,6 +15,11 @@ import {
     orderApprovalStepsFinalLast,
     sortApprovalStepsFinalLast,
     formatApprovalActionAt,
+    isSequentialApprovalDivision,
+    getSequentialActiveApprovalStep,
+    hasSequentialApprovalTurnReached,
+    normalizeApprovalMode,
+    APPROVAL_MODE_LABELS,
 } from '../../utils/quoteApprovalWorkflow';
 
 const selectStyles = {
@@ -61,10 +66,21 @@ export default function QuoteApprovalWorkflow({
     leadJobName = '',
     ownJob = '',
     quoteNumber = '',
+    approvalMode: approvalModeProp = null,
     onApprovalSent = null,
     beforeSendApproval = null,
     disabledHint = null,
 }) {
+    const divisionDefaultMode = isSequentialApprovalDivision(ownJob, leadJobName) ? 'sequential' : 'parallel';
+    /** Mode of the hierarchy picked in this session (before sending). */
+    const [pickedApprovalMode, setPickedApprovalMode] = useState(null);
+    const serverApprovalMode = normalizeApprovalMode(approvalModeProp);
+    /* Once sent, the stored workflow mode wins; while building, the picked hierarchy wins. */
+    const effectiveApprovalMode =
+        approvalPathLocked || approvalReviewMode
+            ? serverApprovalMode || pickedApprovalMode || divisionDefaultMode
+            : pickedApprovalMode || serverApprovalMode || divisionDefaultMode;
+    const isSequential = effectiveApprovalMode === 'sequential';
     const workflowDisabled = Boolean(disabledHint);
     const showHierarchyControls =
         canEditHierarchy && !viewOnly && !workflowDisabled && !approvalPathLocked;
@@ -195,6 +211,7 @@ export default function QuoteApprovalWorkflow({
                 value: h.id,
                 label: h.name,
                 steps: h.steps || [],
+                approvalMode: normalizeApprovalMode(h.approvalMode),
             })),
         [hierarchies]
     );
@@ -206,9 +223,18 @@ export default function QuoteApprovalWorkflow({
     const pendingStep = useMemo(
         () =>
             approvalReviewMode
-                ? getUserPendingApprovalStep(orderedSteps, currentUserEmail, currentUserName)
-                : getCurrentPendingApprovalStep(orderedSteps),
-        [approvalReviewMode, orderedSteps, currentUserEmail, currentUserName]
+                ? getUserPendingApprovalStep(orderedSteps, currentUserEmail, currentUserName, {
+                      sequential: isSequential,
+                  })
+                : isSequential
+                  ? getSequentialActiveApprovalStep(orderedSteps)
+                  : getCurrentPendingApprovalStep(orderedSteps),
+        [approvalReviewMode, orderedSteps, currentUserEmail, currentUserName, isSequential]
+    );
+    /** Sequential mode: approver whose turn it is (drives "Waiting for previous approval" labels). */
+    const sequentialActiveStep = useMemo(
+        () => (isSequential ? getSequentialActiveApprovalStep(orderedSteps) : null),
+        [isSequential, orderedSteps]
     );
 
     const pendingWithEmail = useMemo(
@@ -276,8 +302,22 @@ export default function QuoteApprovalWorkflow({
         if (!approvalReviewMode) return false;
         if (!quoteId && !draftQuoteId) return false;
         if (workflowFinalized) return false;
-        return userIsAssignedApprover;
-    }, [approvalReviewMode, quoteId, draftQuoteId, workflowFinalized, userIsAssignedApprover]);
+        if (!userIsAssignedApprover) return false;
+        if (isSequential) {
+            return hasSequentialApprovalTurnReached(orderedSteps, currentUserEmail, currentUserName);
+        }
+        return true;
+    }, [
+        approvalReviewMode,
+        quoteId,
+        draftQuoteId,
+        workflowFinalized,
+        userIsAssignedApprover,
+        isSequential,
+        orderedSteps,
+        currentUserEmail,
+        currentUserName,
+    ]);
 
     const updateSteps = (next) => {
         onChange(resequenceApprovalSteps(next));
@@ -307,6 +347,7 @@ export default function QuoteApprovalWorkflow({
 
     const handleSelectHierarchy = (opt) => {
         setHierarchyPicker(opt);
+        setPickedApprovalMode(opt ? normalizeApprovalMode(opt.approvalMode) || divisionDefaultMode : null);
         if (!opt) {
             // Cleared — empty the list so only a selected hierarchy supplies approvers.
             updateSteps([]);
@@ -329,8 +370,10 @@ export default function QuoteApprovalWorkflow({
                 value: saved.id,
                 label: saved.name,
                 steps: saved.steps || [],
+                approvalMode: normalizeApprovalMode(saved.approvalMode),
             };
             setHierarchyPicker(opt);
+            setPickedApprovalMode(opt.approvalMode || divisionDefaultMode);
             applyHierarchySteps(saved.steps);
         }
         void loadHierarchies();
@@ -403,6 +446,7 @@ export default function QuoteApprovalWorkflow({
                     leadJobName: String(leadJobName || '').trim(),
                     ownJob: String(ownJob || '').trim(),
                     quoteNumber: String(quoteNumber || '').trim(),
+                    approvalMode: effectiveApprovalMode,
                     steps: stepsForSend,
                 }),
             });
@@ -429,7 +473,11 @@ export default function QuoteApprovalWorkflow({
                 : emails.length
                   ? emails.join(', ')
                   : 'all approvers';
-            alert(`Approval request sent to ${recipientLabel}.`);
+            alert(
+                data.sequentialApproval
+                    ? `Approval request sent to ${recipientLabel}. The next approvers will be notified one after another as each approval is completed.`
+                    : `Approval request sent to ${recipientLabel}.`
+            );
         } catch (e) {
             console.warn('[QuoteApprovalWorkflow] send approval', e);
             alert('Could not send approval request email.');
@@ -465,6 +513,12 @@ export default function QuoteApprovalWorkflow({
             draftQuoteId: draftQuoteId || null,
             optimistic: true,
         });
+        /* Badge: decrement now (list already drops via parent). Skip recount until API commits. */
+        window.dispatchEvent(
+            new CustomEvent(EMS_PENDING_APPROVALS_CHANGED, {
+                detail: { delta: -1, skipRefresh: true },
+            })
+        );
 
         setActing(true);
         try {
@@ -585,9 +639,10 @@ export default function QuoteApprovalWorkflow({
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '8px',
-                flex: approvalReviewMode ? '1 1 60%' : '1 1 50%',
+                flex: approvalReviewMode ? '1 1 auto' : '1 1 50%',
                 minHeight: 0,
                 overflowY: approvalReviewMode ? 'hidden' : 'auto',
+                height: approvalReviewMode ? '100%' : undefined,
                 paddingBottom: '4px',
             }}
         >
@@ -722,28 +777,56 @@ export default function QuoteApprovalWorkflow({
                         overflowY: approvalReviewMode ? 'auto' : undefined,
                     }}
                 >
+                    {orderedSteps.length > 1 ? (
+                        <div
+                            style={{ fontSize: '10px', color: '#475569', fontWeight: 600 }}
+                            title={
+                                isSequential
+                                    ? 'Each approver is notified after the previous one approves'
+                                    : 'All approvers are notified together and can approve in any order'
+                            }
+                        >
+                            Approval process:{' '}
+                            <span style={{ color: isSequential ? '#7c3aed' : '#2563eb' }}>
+                                {APPROVAL_MODE_LABELS[effectiveApprovalMode]}
+                            </span>
+                        </div>
+                    ) : null}
                     {orderedSteps.map((rawStep, index) => {
                         const step = normalizeApprovalStep(rawStep, index) || rawStep;
                         const isPending = pendingStep?.sequence === step.sequence;
                         const isApproved = step.status === 'approved';
                         const isRejected = step.status === 'rejected';
+                        const waitingForTurn =
+                            isSequential &&
+                            step.status === 'pending' &&
+                            !!sequentialActiveStep &&
+                            sequentialActiveStep.sequence !== step.sequence;
+                        const pendingLabel = waitingForTurn
+                            ? 'Waiting for previous approval'
+                            : 'Pending for Approval';
                         const stepEmailKey = normalizeApprovalEmail(step.approverEmail);
                         const stepCorrections = stepEmailKey
                             ? correctionsByRequesterEmail.get(stepEmailKey) || []
                             : [];
                         const isCorrectionRequester = stepCorrections.length > 0;
                         const isFinal = !!step.isFinalApprover;
+                        // Final Approver keeps maroon styling even after approval (do not turn green).
+                        const finalMaroonBorder = '#800000';
+                        const finalMaroonBg = '#f5d0d6';
+                        const finalMaroonBadge = '#800000';
+                        const finalMaroonRing = '#5c0000';
                         return (
                             <div
                                 key={`${step.sequence}-${step.approverEmail}`}
                                 style={{
                                     border: `1px solid ${
-                                        isApproved
-                                            ? '#6ee7b7'
-                                            : isRejected
-                                              ? '#fca5a5'
-                                              : isFinal
-                                                ? '#800000'
+                                        isFinal
+                                            ? finalMaroonBorder
+                                            : isApproved
+                                              ? '#6ee7b7'
+                                              : isRejected
+                                                ? '#fca5a5'
                                                 : isCorrectionRequester
                                                   ? '#fdba74'
                                                   : isPending
@@ -752,12 +835,12 @@ export default function QuoteApprovalWorkflow({
                                     }`,
                                     borderRadius: '5px',
                                     padding: '3px 8px',
-                                    background: isApproved
-                                        ? '#f0fdf4'
-                                        : isRejected
-                                          ? '#fef2f2'
-                                          : isFinal
-                                            ? '#f5d0d6'
+                                    background: isFinal
+                                        ? finalMaroonBg
+                                        : isApproved
+                                          ? '#f0fdf4'
+                                          : isRejected
+                                            ? '#fef2f2'
                                             : isCorrectionRequester
                                               ? '#fff7ed'
                                               : isPending
@@ -772,12 +855,12 @@ export default function QuoteApprovalWorkflow({
                                             width: '20px',
                                             height: '20px',
                                             borderRadius: '999px',
-                                            background: isApproved
-                                                ? '#16a34a'
-                                                : isRejected
-                                                  ? '#dc2626'
-                                                  : isFinal
-                                                    ? '#800000'
+                                            background: isFinal
+                                                ? finalMaroonBadge
+                                                : isApproved
+                                                  ? '#16a34a'
+                                                  : isRejected
+                                                    ? '#dc2626'
                                                     : isCorrectionRequester
                                                       ? '#fb923c'
                                                       : '#e2e8f0',
@@ -794,26 +877,28 @@ export default function QuoteApprovalWorkflow({
                                             alignItems: 'center',
                                             justifyContent: 'center',
                                             flexShrink: 0,
-                                            boxShadow: isApproved
-                                                ? '0 0 0 1px #15803d'
-                                                : isRejected
-                                                  ? '0 0 0 1px #b91c1c'
-                                                  : isFinal
-                                                    ? '0 0 0 1px #5c0000'
+                                            boxShadow: isFinal
+                                                ? `0 0 0 1px ${finalMaroonRing}`
+                                                : isApproved
+                                                  ? '0 0 0 1px #15803d'
+                                                  : isRejected
+                                                    ? '0 0 0 1px #b91c1c'
                                                     : isCorrectionRequester
                                                       ? '0 0 0 1px #ea580c'
                                                       : 'none',
                                         }}
                                             title={
-                                            isApproved
-                                                ? 'Approved'
-                                                : isRejected
-                                                  ? 'Rejected'
-                                                  : isFinal
-                                                ? 'Final Approver'
-                                                : isCorrectionRequester
-                                                    ? 'Correction Required'
-                                                    : `Step ${index + 1}`
+                                            isFinal
+                                                ? isApproved
+                                                    ? 'Final Approver — Approved'
+                                                    : 'Final Approver'
+                                                : isApproved
+                                                  ? 'Approved'
+                                                  : isRejected
+                                                    ? 'Rejected'
+                                                    : isCorrectionRequester
+                                                      ? 'Correction Required'
+                                                      : `Step ${index + 1}`
                                         }
                                     >
                                         {isApproved ? (
@@ -963,7 +1048,7 @@ export default function QuoteApprovalWorkflow({
                                                         fontStyle: 'italic',
                                                     }}
                                                 >
-                                                    Pending for Approval
+                                                    {pendingLabel}
                                                 </div>
                                                 {step.isFinalApprover ? (
                                                     <div
@@ -990,7 +1075,7 @@ export default function QuoteApprovalWorkflow({
                                                         fontStyle: 'italic',
                                                     }}
                                                 >
-                                                    Pending for Approval
+                                                    {pendingLabel}
                                                 </div>
                                                 {step.isFinalApprover ? (
                                                     <div
@@ -1492,6 +1577,7 @@ export default function QuoteApprovalWorkflow({
                 onSaved={handleHierarchySaved}
                 onDeleted={handleHierarchyDeleted}
                 onRefresh={loadHierarchies}
+                defaultApprovalMode={divisionDefaultMode}
             />
                 </>
             )}

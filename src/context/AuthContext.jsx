@@ -16,13 +16,12 @@ export const useAuth = () => {
     return context;
 };
 
-/** Exact email saved at login (session-first, then persistent remember-me). Use for API `userEmail`. */
+/**
+ * Email saved for this tab only. Closing the tab ends the login;
+ * a new tab must sign in again. Remember me does not keep a live session.
+ */
 export function getStoredLoginEmail() {
-    return (
-        sessionStorage.getItem(STORAGE_EMAIL_KEY) ||
-        localStorage.getItem(STORAGE_EMAIL_KEY) ||
-        ''
-    ).trim();
+    return (sessionStorage.getItem(STORAGE_EMAIL_KEY) || '').trim();
 }
 
 /** Prefill helpers for the login screen (survives logout). */
@@ -36,10 +35,6 @@ export function getRememberedLoginEmail() {
 
 export { STORAGE_EMAIL_KEY as LOGIN_EMAIL_STORAGE_KEY };
 
-function isRememberMeEnabled() {
-    return localStorage.getItem(STORAGE_REMEMBER_KEY) === '1';
-}
-
 function setRememberMePreference(enabled, email = '') {
     if (enabled) {
         localStorage.setItem(STORAGE_REMEMBER_KEY, '1');
@@ -51,36 +46,36 @@ function setRememberMePreference(enabled, email = '') {
     }
 }
 
-function setStoredLoginEmail(email, { persistent = false } = {}) {
+/** Drop a live login left in localStorage by older Remember-me sessions. */
+function clearPersistedLiveSession() {
+    localStorage.removeItem(STORAGE_USER_KEY);
+    localStorage.removeItem(STORAGE_EMAIL_KEY);
+}
+
+function setStoredLoginEmail(email) {
     const v = String(email || '').trim();
+    clearPersistedLiveSession();
     if (!v) {
         sessionStorage.removeItem(STORAGE_EMAIL_KEY);
-        localStorage.removeItem(STORAGE_EMAIL_KEY);
         return;
     }
     sessionStorage.setItem(STORAGE_EMAIL_KEY, v);
-    if (persistent) localStorage.setItem(STORAGE_EMAIL_KEY, v);
-    else localStorage.removeItem(STORAGE_EMAIL_KEY);
 }
 
-function setStoredCurrentUser(user, { persistent = false } = {}) {
+function setStoredCurrentUser(user) {
+    clearPersistedLiveSession();
     if (!user) {
         sessionStorage.removeItem(STORAGE_USER_KEY);
-        localStorage.removeItem(STORAGE_USER_KEY);
         return;
     }
-    const json = JSON.stringify(user);
-    sessionStorage.setItem(STORAGE_USER_KEY, json);
-    if (persistent) localStorage.setItem(STORAGE_USER_KEY, json);
-    else localStorage.removeItem(STORAGE_USER_KEY);
+    sessionStorage.setItem(STORAGE_USER_KEY, JSON.stringify(user));
 }
 
 /** End the signed-in session. Keeps Remember-me checkbox + email for the next login form. */
 function clearSessionAuthStorage() {
     sessionStorage.removeItem(STORAGE_USER_KEY);
     sessionStorage.removeItem(STORAGE_EMAIL_KEY);
-    localStorage.removeItem(STORAGE_USER_KEY);
-    localStorage.removeItem(STORAGE_EMAIL_KEY);
+    clearPersistedLiveSession();
 }
 
 async function fetchProfileByEmail(email) {
@@ -141,16 +136,15 @@ export const AuthProvider = ({ children }) => {
         setCurrentUser((prev) => {
             const base = prev || {};
             const merged = applyRgiAdmin(applyProfileMerge(base, profile));
-            setStoredCurrentUser(merged, { persistent: isRememberMeEnabled() });
+            setStoredCurrentUser(merged);
             return merged;
         });
     }, []);
 
     useEffect(() => {
-        const persistent = isRememberMeEnabled();
-        const storedUser =
-            sessionStorage.getItem(STORAGE_USER_KEY) ||
-            (persistent ? localStorage.getItem(STORAGE_USER_KEY) : null);
+        // A new tab has no sessionStorage. Never revive a login from localStorage.
+        clearPersistedLiveSession();
+        const storedUser = sessionStorage.getItem(STORAGE_USER_KEY);
 
         let userData = null;
         if (storedUser) {
@@ -161,12 +155,6 @@ export const AuthProvider = ({ children }) => {
             }
         }
 
-        // Stale local user without remember-me flag — drop it (session-only policy).
-        if (!persistent && !sessionStorage.getItem(STORAGE_USER_KEY)) {
-            localStorage.removeItem(STORAGE_USER_KEY);
-            localStorage.removeItem(STORAGE_EMAIL_KEY);
-        }
-
         if (userData) {
             const stored = getStoredLoginEmail();
             const patched = stored
@@ -174,18 +162,18 @@ export const AuthProvider = ({ children }) => {
                 : userData;
             const migrated = applyRgiAdmin(patched);
             setCurrentUser(migrated);
-            setStoredCurrentUser(migrated, { persistent });
-            if (stored) setStoredLoginEmail(stored, { persistent });
+            setStoredCurrentUser(migrated);
+            if (stored) setStoredLoginEmail(stored);
         }
 
         // Older sessions: `currentUser` JSON had email but `currentUserEmail` was never set — backfill for pricing API.
         const emailFromUser = (userData?.EmailId || userData?.email || userData?.MailId || '').trim();
         if (emailFromUser && !getStoredLoginEmail()) {
-            setStoredLoginEmail(emailFromUser, { persistent });
+            setStoredLoginEmail(emailFromUser);
         }
 
-        const email = getStoredLoginEmail() || userData?.EmailId || userData?.email || userData?.MailId;
-        if (email) {
+        const email = getStoredLoginEmail() || (userData ? (userData.EmailId || userData.email || userData.MailId) : '');
+        if (email && userData) {
             mergeProfileForEmail(email);
         }
     }, [mergeProfileForEmail]);
@@ -238,11 +226,11 @@ export const AuthProvider = ({ children }) => {
         if (storedEmail) {
             finalUserData.EmailId = storedEmail;
             finalUserData.email = storedEmail;
-            setStoredLoginEmail(storedEmail, { persistent });
+            setStoredLoginEmail(storedEmail);
         }
 
         setCurrentUser(finalUserData);
-        setStoredCurrentUser(finalUserData, { persistent });
+        setStoredCurrentUser(finalUserData);
 
         if (storedEmail) {
             mergeProfileForEmail(storedEmail);
@@ -293,7 +281,7 @@ export const AuthProvider = ({ children }) => {
             if (currentUser) {
                 const updatedUser = { ...currentUser, ProfileImage: base64 };
                 setCurrentUser(updatedUser);
-                setStoredCurrentUser(updatedUser, { persistent: isRememberMeEnabled() });
+                setStoredCurrentUser(updatedUser);
             }
         } catch (err) {
             console.error('Failed to update profile image:', err);

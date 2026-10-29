@@ -5,6 +5,11 @@
  * muhammara is a native addon — must be built on the same Node major as production (22 LTS).
  * If unavailable, restriction is skipped when QUOTE_PDF_RESTRICT=0 or module fails to load.
  */
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
+
 let muhammara = null;
 let muhammaraLoadError = null;
 
@@ -49,24 +54,38 @@ function restrictQuotePdfBuffer(pdfBuffer) {
         throw new Error('Invalid PDF buffer');
     }
 
-    const inStream = new mm.PDFRStreamForBuffer(pdfBuffer);
-    const outStream = new mm.PDFWStreamForBuffer();
-
     const ownerPassword =
         String(process.env.QUOTE_PDF_OWNER_PASSWORD || '').trim() ||
         'EMS-Quote-Owner-Do-Not-Share';
 
-    mm.recrypt(inStream, outStream, {
-        userPassword: '',
-        ownerPassword,
-        userProtectionFlag: buildQuotePdfUserProtectionFlag(),
-    });
-
-    const restricted = outStream.buffer;
-    if (!restricted || !Buffer.isBuffer(restricted) || restricted.length < 5) {
-        throw new Error('PDF restriction produced empty output');
+    // Native file I/O: PDFRStreamForBuffer/PDFWStreamForBuffer copy byte arrays through JS and take
+    // minutes on PDFs with signature images (blocking the event loop); file paths take milliseconds.
+    const dir = path.join(os.tmpdir(), 'ems-quote-pdf');
+    fs.mkdirSync(dir, { recursive: true });
+    const base = path.join(dir, `restrict-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`);
+    const inPath = `${base}-in.pdf`;
+    const outPath = `${base}-out.pdf`;
+    try {
+        fs.writeFileSync(inPath, pdfBuffer);
+        mm.recrypt(inPath, outPath, {
+            userPassword: '',
+            ownerPassword,
+            userProtectionFlag: buildQuotePdfUserProtectionFlag(),
+        });
+        const restricted = fs.readFileSync(outPath);
+        if (!restricted || restricted.length < 5) {
+            throw new Error('PDF restriction produced empty output');
+        }
+        return restricted;
+    } finally {
+        for (const p of [inPath, outPath]) {
+            try {
+                fs.unlinkSync(p);
+            } catch {
+                /* ignore */
+            }
+        }
     }
-    return restricted;
 }
 
 /**

@@ -215,23 +215,30 @@ router.post('/heartbeat', async (req, res) => {
         let department = String(req.body?.department || '').trim();
         let roles = String(req.body?.roles || req.body?.role || '').trim();
 
-        // Fill profile from DB when client sends incomplete data
-        if (!name || !roles) {
-            try {
-                const result = await sql.query`
-                    SELECT TOP 1 FullName, Roles, Department
-                    FROM Master_ConcernedSE
-                    WHERE LOWER(REPLACE(REPLACE(LTRIM(RTRIM(ISNULL(EmailId, N''))), N'@almcg.com', N'@almoayyedcg.com'), N'@ALMCG.COM', N'@almoayyedcg.com')) = ${email}
-                `;
-                const u = result.recordset?.[0];
-                if (u) {
-                    name = name || u.FullName || '';
-                    department = department || u.Department || '';
-                    roles = roles || u.Roles || '';
-                }
-            } catch (_) {
-                /* ignore lookup errors */
+        // Only Master_ConcernedSE (EMS) users belong on the online list —
+        // never customer/contact emails (e.g. Master_ReceivedFrom).
+        let knownUser = false;
+        try {
+            const result = await sql.query`
+                SELECT TOP 1 FullName, Roles, Department
+                FROM Master_ConcernedSE
+                WHERE LOWER(REPLACE(REPLACE(LTRIM(RTRIM(ISNULL(EmailId, N''))), N'@almcg.com', N'@almoayyedcg.com'), N'@ALMCG.COM', N'@almoayyedcg.com')) = ${email}
+            `;
+            const u = result.recordset?.[0];
+            if (u) {
+                knownUser = true;
+                name = name || u.FullName || '';
+                department = department || u.Department || '';
+                roles = roles || u.Roles || '';
             }
+        } catch (_) {
+            /* ignore lookup errors — still allow heartbeat if client sent profile */
+            knownUser = !!(name || roles);
+        }
+
+        if (!knownUser) {
+            removePresence(email);
+            return res.json({ ok: true, ignored: true, reason: 'not_an_ems_user' });
         }
 
         const row = touchPresence({

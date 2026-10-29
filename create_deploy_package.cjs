@@ -16,7 +16,7 @@ const skipUploads = process.argv.includes('--skip-uploads');
 const withNodeModules = process.argv.includes('--with-node-modules');
 /** Optional: pin puppeteer@19.4.0 for Windows Server 2012 R2 (regenerates package-lock). Default: keep lock in sync. */
 const pinPuppeteer2012R2 = process.argv.includes('--ws2012');
-const BASELINE_VERSION = '2026-09-23-v1';
+const BASELINE_VERSION = '2026-10-28-v1';
 /** Must match server/routes/quotePdf.js quotePdfCssVersion */
 const PDF_CSS_VERSION = '2026-09-13-v7';
 const FRONTEND_BUNDLE_MARKERS = [
@@ -61,6 +61,8 @@ const REQUIRED_BACKEND_PATHS = [
     'lib/enquiryCustomerAckData.js',
     'lib/loadEnquiryEmailRow.js',
     'lib/buildQuoteListSearchExtraWhere.js',
+    'lib/quoteListSearchQuery.js',
+    'lib/sequentialApproval.js',
     'lib/siteVisitReminder.js',
     'lib/siteVisitReminderScheduler.js',
     'emailService.js',

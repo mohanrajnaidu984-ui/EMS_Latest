@@ -2,7 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Select from 'react-select';
 import { X, Plus, Trash2, ChevronUp, ChevronDown, Save } from 'lucide-react';
-import { normalizeApprovalEmail, orderApprovalStepsFinalLast } from '../../utils/quoteApprovalWorkflow';
+import {
+    normalizeApprovalEmail,
+    orderApprovalStepsFinalLast,
+    normalizeApprovalMode,
+    APPROVAL_MODE_LABELS,
+} from '../../utils/quoteApprovalWorkflow';
 
 const selectStyles = {
     control: (base) => ({
@@ -46,10 +51,13 @@ export default function QuoteApprovalHierarchyModal({
     onSaved,
     onDeleted,
     onRefresh,
+    defaultApprovalMode = 'parallel',
 }) {
+    const fallbackMode = normalizeApprovalMode(defaultApprovalMode) || 'parallel';
     const [editingId, setEditingId] = useState(null);
     const [loadPicker, setLoadPicker] = useState(null);
     const [hierarchyName, setHierarchyName] = useState('');
+    const [approvalMode, setApprovalMode] = useState(fallbackMode);
     const [draftSteps, setDraftSteps] = useState([]);
     const [pickerValue, setPickerValue] = useState(null);
     const [saving, setSaving] = useState(false);
@@ -59,6 +67,7 @@ export default function QuoteApprovalHierarchyModal({
         setEditingId(null);
         setLoadPicker(null);
         setHierarchyName('');
+        setApprovalMode(fallbackMode);
         setDraftSteps([]);
         setPickerValue(null);
     };
@@ -94,6 +103,7 @@ export default function QuoteApprovalHierarchyModal({
         const h = opt.hierarchy;
         setEditingId(h.id);
         setHierarchyName(h.name || '');
+        setApprovalMode(normalizeApprovalMode(h.approvalMode) || fallbackMode);
         setDraftSteps(cloneSteps(h.steps));
         setPickerValue(null);
     };
@@ -148,7 +158,8 @@ export default function QuoteApprovalHierarchyModal({
                 return prev;
             }
             [next[index], next[target]] = [next[target], next[index]];
-            return orderApprovalStepsFinalLast(next);
+            // orderApprovalStepsFinalLast sorts by `sequence`, so renumber to keep the swap.
+            return orderApprovalStepsFinalLast(next.map((s, i) => ({ ...s, sequence: i + 1 })));
         });
     };
 
@@ -192,6 +203,7 @@ export default function QuoteApprovalHierarchyModal({
                     userEmail: email,
                     id: editingId || null,
                     name,
+                    approvalMode,
                     steps: draftSteps,
                 }),
             });
@@ -346,12 +358,51 @@ export default function QuoteApprovalHierarchyModal({
                     </label>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 600, color: '#475569' }}>Approval process</span>
+                        <div style={{ display: 'flex', gap: '6px' }} role="radiogroup" aria-label="Approval process">
+                            {['parallel', 'sequential'].map((mode) => {
+                                const active = approvalMode === mode;
+                                return (
+                                    <label
+                                        key={mode}
+                                        style={{
+                                            flex: 1,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '6px',
+                                            padding: '6px 8px',
+                                            border: `1px solid ${active ? '#3b82f6' : '#cbd5e1'}`,
+                                            background: active ? '#eff6ff' : '#ffffff',
+                                            borderRadius: '6px',
+                                            cursor: 'pointer',
+                                            fontSize: '12px',
+                                            fontWeight: active ? 700 : 500,
+                                            color: active ? '#1d4ed8' : '#334155',
+                                        }}
+                                    >
+                                        <input
+                                            type="radio"
+                                            name="approval-process-mode"
+                                            checked={active}
+                                            onChange={() => setApprovalMode(mode)}
+                                        />
+                                        {APPROVAL_MODE_LABELS[mode]}
+                                    </label>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                         <span style={{ fontSize: '11px', fontWeight: 600, color: '#475569' }}>
-                            Add approvers (parallel)
+                            Add approvers ({approvalMode === 'sequential' ? 'one after another' : 'parallel'})
                         </span>
                         <span style={{ fontSize: '10px', color: '#64748b', lineHeight: 1.35 }}>
-                            Approvers can act in any order. If more than one, mark exactly one as the final approver —
-                            their approval generates the quote number and locks editing.
+                            {approvalMode === 'sequential'
+                                ? 'Approvers act in the order listed below. Each approver is emailed only after the previous one approves; the final approver is always last.'
+                                : 'Approvers can act in any order and are all emailed together.'}{' '}
+                            If more than one, mark exactly one as the final approver — their approval generates the
+                            quote number and locks editing.
                         </span>
                         <Select
                             options={availableOptions}
@@ -399,7 +450,14 @@ export default function QuoteApprovalHierarchyModal({
                         </div>
                     ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                            {draftSteps.map((step, index) => (
+                            {draftSteps.map((step, index) => {
+                                const canMoveUp =
+                                    index > 0 && !step.isFinalApprover && !draftSteps[index - 1]?.isFinalApprover;
+                                const canMoveDown =
+                                    index < draftSteps.length - 1 &&
+                                    !step.isFinalApprover &&
+                                    !draftSteps[index + 1]?.isFinalApprover;
+                                return (
                                 <div
                                     key={`${step.approverEmail}-${index}`}
                                     style={{
@@ -473,18 +531,22 @@ export default function QuoteApprovalHierarchyModal({
                                     <button
                                         type="button"
                                         onClick={() => moveDraftStep(index, -1)}
-                                        disabled={index === 0}
-                                        style={{ border: 'none', background: 'transparent', cursor: index === 0 ? 'not-allowed' : 'pointer', color: '#64748b', padding: 0 }}
-                                        title="Move up"
+                                        disabled={!canMoveUp}
+                                        style={{ border: 'none', background: 'transparent', cursor: canMoveUp ? 'pointer' : 'not-allowed', color: canMoveUp ? '#64748b' : '#cbd5e1', padding: 0 }}
+                                        title={step.isFinalApprover ? 'Final approver always stays last' : 'Move up'}
                                     >
                                         <ChevronUp size={14} />
                                     </button>
                                     <button
                                         type="button"
                                         onClick={() => moveDraftStep(index, 1)}
-                                        disabled={index === draftSteps.length - 1}
-                                        style={{ border: 'none', background: 'transparent', cursor: index === draftSteps.length - 1 ? 'not-allowed' : 'pointer', color: '#64748b', padding: 0 }}
-                                        title="Move down"
+                                        disabled={!canMoveDown}
+                                        style={{ border: 'none', background: 'transparent', cursor: canMoveDown ? 'pointer' : 'not-allowed', color: canMoveDown ? '#64748b' : '#cbd5e1', padding: 0 }}
+                                        title={
+                                            step.isFinalApprover || draftSteps[index + 1]?.isFinalApprover
+                                                ? 'Final approver always stays last'
+                                                : 'Move down'
+                                        }
                                     >
                                         <ChevronDown size={14} />
                                     </button>
@@ -497,7 +559,8 @@ export default function QuoteApprovalHierarchyModal({
                                         <Trash2 size={13} />
                                     </button>
                                 </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     )}
 

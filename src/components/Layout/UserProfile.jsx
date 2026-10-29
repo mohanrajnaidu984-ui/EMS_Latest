@@ -9,10 +9,12 @@ import {
     loadDefaultSignatureId,
     saveDefaultSignatureId,
     EMS_QUOTE_PLACE_STAMP_EVENT,
+    EMS_SIGNATURE_LIBRARY_CHANGED_EVENT,
+    waitForSignatureLibrarySave,
     migrateLocalSignatureLibraryToServer,
     resolveSignatureStampPrefs,
 } from '../Quote/QuoteDigitalSignature';
-import { fetchUserSignatureLibrary } from '../../utils/quoteSignatureApi';
+import { fetchUserSignatureLibrary, normalizeSignatureEmail } from '../../utils/quoteSignatureApi';
 
 import { QUOTE_TAB_B2B } from '../../utils/quoteNav';
 
@@ -65,6 +67,7 @@ const UserProfile = ({ activeTab = '' }) => {
         let cancelled = false;
         (async () => {
             try {
+                await waitForSignatureLibrarySave();
                 let master = await migrateLocalSignatureLibraryToServer(displayEmail);
                 if (!master) master = await fetchUserSignatureLibrary(displayEmail);
                 if (cancelled) return;
@@ -84,6 +87,18 @@ const UserProfile = ({ activeTab = '' }) => {
             cancelled = true;
         };
     }, [dropdownOpen, displayEmail]);
+
+    useEffect(() => {
+        const onLibraryChanged = (e) => {
+            const d = e?.detail || {};
+            if (!displayEmail || d.email !== normalizeSignatureEmail(displayEmail)) return;
+            const sigs = Array.isArray(d.signatures) ? d.signatures : [];
+            setSignatureQuickList(sigs);
+            setDefaultSignatureId(d.defaultSignatureId || sigs[0]?.id || '');
+        };
+        window.addEventListener(EMS_SIGNATURE_LIBRARY_CHANGED_EVENT, onLibraryChanged);
+        return () => window.removeEventListener(EMS_SIGNATURE_LIBRARY_CHANGED_EVENT, onLibraryChanged);
+    }, [displayEmail]);
 
     useEffect(() => {
         if (!dropdownOpen) return;
@@ -400,7 +415,9 @@ const UserProfile = ({ activeTab = '' }) => {
                 onClose={() => {
                     setShowSignatureVault(false);
                     if (displayEmail) {
-                        void fetchUserSignatureLibrary(displayEmail).then((master) => {
+                        void waitForSignatureLibrarySave()
+                            .then(() => fetchUserSignatureLibrary(displayEmail))
+                            .then((master) => {
                             const sigs = master.signatures?.length
                                 ? master.signatures
                                 : loadSignatureLibrary(displayEmail);

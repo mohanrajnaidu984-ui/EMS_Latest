@@ -454,7 +454,8 @@ app.use('/uploads/logos', (req, res, next) => {
     return next();
 });
 app.use('/uploads', express.static(path.join(__dirname, 'uploads'))); // Serve uploaded files from server/uploads
-app.use('/fonts', express.static(path.join(__dirname, '../public/fonts'))); // Inter etc. for quote PDF (Puppeteer)
+app.use('/fonts', express.static(path.join(__dirname, '../public/fonts'))); // Arimo etc. for quote PDF (Puppeteer)
+app.use('/vendor', express.static(path.join(__dirname, '../public/vendor'))); // Paged.js for quote PDF
 app.use(
     '/dictionaries',
     express.static(path.join(__dirname, '../public/dictionaries'), {
@@ -692,6 +693,22 @@ app.get('/api/master/currency', async (req, res) => {
     }
 });
 
+/** Resolve Master_EnquiryFor.VAT_Per (default quote VAT %) for company / division / item. */
+app.get('/api/master/vat', async (req, res) => {
+    try {
+        const { resolveVatPercentFromDb } = require('./lib/masterVat');
+        const vatPercent = await resolveVatPercentFromDb(sql, {
+            departmentName: req.query.division || req.query.departmentName || '',
+            companyName: req.query.company || req.query.companyName || '',
+            itemName: req.query.itemName || '',
+        });
+        res.json({ vatPercent });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: 'Server Error', vatPercent: 10 });
+    }
+});
+
 // Upload Logo (Defined early to avoid Router conflicts)
 app.post('/api/upload/logo', (req, res, next) => {
     console.log('Hitting /api/upload/logo');
@@ -736,8 +753,18 @@ const salesReportRoutes = require('./routes/salesReportRoutes');
 app.use('/api/sales-report', salesReportRoutes);
 const salesTargetRoutes = require('./routes/salesTargetRoutes');
 app.use('/api/sales-targets', salesTargetRoutes);
-const chatboxRoutes = require('./routes/chatboxRoutes');
-app.use('/api/chatbox', chatboxRoutes);
+const chatboxEnabled = ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.EMS_CHATBOX_ENABLED ?? '0').trim().toLowerCase()
+);
+if (chatboxEnabled) {
+    const chatboxRoutes = require('./routes/chatboxRoutes');
+    app.use('/api/chatbox', chatboxRoutes);
+} else {
+    console.warn('[ChatBox] API DISABLED via EMS_CHATBOX_ENABLED=0');
+    app.use('/api/chatbox', (req, res) => {
+        res.status(503).json({ error: 'ChatBox is disabled', disabled: true });
+    });
+}
 const usageRoutes = require('./routes/usageRoutes');
 app.use('/api/usage', usageRoutes);
 
@@ -1056,6 +1083,82 @@ function splitMailList(s) {
         .filter(Boolean);
 }
 
+/**
+ * Enquiry Status Active/Inactive: creator or Master_EnquiryFor.CCMailIds user
+ * for this enquiry's jobs / creator's department.
+ */
+async function canUserChangeEnquiryStatus({ requestNo, createdBy, userEmail, userName }) {
+    const creator = String(createdBy || '').trim().toLowerCase();
+    const name = String(userName || '').trim().toLowerCase();
+    if (creator && name && creator === name) return true;
+
+    const email = normalizeEmail(userEmail);
+    if (!email) return false;
+
+    const ccEmails = new Set();
+    const addCc = (raw) => {
+        splitMailList(raw).forEach((e) => {
+            const n = normalizeEmail(e);
+            if (n) ccEmails.add(n);
+        });
+    };
+
+    const itemRes = await sql.query`
+        SELECT ItemName FROM EnquiryFor WHERE RequestNo = ${requestNo}
+    `;
+    const itemNames = [
+        ...new Set(
+            (itemRes.recordset || [])
+                .map((r) => String(r.ItemName || '').trim())
+                .filter(Boolean)
+        ),
+    ];
+    if (itemNames.length > 0) {
+        const req = new sql.Request();
+        const params = [];
+        itemNames.forEach((n, i) => {
+            const p = `esIt${i}`;
+            req.input(p, sql.NVarChar, n);
+            params.push(`@${p}`);
+        });
+        const masterRes = await req.query(`
+            SELECT ItemName, DepartmentName, CCMailIds
+            FROM Master_EnquiryFor
+            WHERE LTRIM(RTRIM(ItemName)) IN (${params.join(', ')})
+               OR ${params
+                   .map(
+                       (p) =>
+                           `(${p} LIKE N'% - ' + LTRIM(RTRIM(ItemName)) OR ${p} LIKE N'%- ' + LTRIM(RTRIM(ItemName)))`
+                   )
+                   .join(' OR ')}
+        `);
+        for (const row of masterRes.recordset || []) addCc(row.CCMailIds);
+    }
+
+    if (createdBy) {
+        const creatorRes = await sql.query`
+            SELECT TOP 1 Department
+            FROM Master_ConcernedSE
+            WHERE UPPER(LTRIM(RTRIM(ISNULL(FullName, N'')))) = UPPER(LTRIM(RTRIM(${String(createdBy).trim()})))
+        `;
+        const deptCsv = String(creatorRes.recordset?.[0]?.Department || '').trim();
+        if (deptCsv) {
+            const depts = deptCsv.split(/[,;]/).map((d) => d.trim()).filter(Boolean);
+            for (const dept of depts) {
+                const deptCc = await sql.query`
+                    SELECT CCMailIds
+                    FROM Master_EnquiryFor
+                    WHERE LTRIM(RTRIM(ISNULL(DepartmentName, N''))) = ${dept}
+                       OR LTRIM(RTRIM(ISNULL(ItemName, N''))) = ${dept}
+                `;
+                for (const row of deptCc.recordset || []) addCc(row.CCMailIds);
+            }
+        }
+    }
+
+    return ccEmails.has(email);
+}
+
 function stripJobPrefix(s) {
     return String(s || '').replace(/^(L\d+\s*-\s*|Sub Job\s*-\s*)/i, '').trim();
 }
@@ -1363,7 +1466,7 @@ app.post('/api/enquiries', async (req, res) => {
             SelectedCustomers, SelectedReceivedFroms, SelectedConcernedSEs, ConcernedSEAssignments,
             ProjectName, ClientName, ConsultantName, SelectedConsultants, DetailsOfEnquiry,
             DocumentsReceived, hardcopy, drawing, dvd, spec, eqpschedule, Remark,
-            AutoAck, ceosign, Status, AcknowledgementSE, AdditionalNotificationEmails, CustomerRefNo
+            AutoAck, ceosign, Status, EnquiryStatus, AcknowledgementSE, AdditionalNotificationEmails, CustomerRefNo
         } = req.body;
 
         const clientRequestNo = req.body.RequestNo ? req.body.RequestNo.trim() : '';
@@ -1395,6 +1498,9 @@ app.post('/api/enquiries', async (req, res) => {
         const RequestNo = await resolveRequestNoForCreate(transaction);
         log(`Allocated RequestNo: ${RequestNo} on create`);
 
+        const normalizedEnquiryStatus =
+            String(EnquiryStatus || '').trim().toLowerCase() === 'inactive' ? 'Inactive' : 'Active';
+
         const request = new sql.Request(transaction);
         request.input('RequestNo', sql.NVarChar, RequestNo);
         request.input('SourceOfEnquiry', sql.NVarChar, SourceOfInfo || null);
@@ -1419,6 +1525,7 @@ app.post('/api/enquiries', async (req, res) => {
         request.input('CustomerRefNo', sql.NVarChar, req.body.CustomerRefNo || null);
         request.input('ED_CEOSignatureRequired', sql.Bit, ceosign ?? false);
         request.input('Status', sql.NVarChar, Status || 'Open');
+        request.input('EnquiryStatus', sql.NVarChar, normalizedEnquiryStatus);
         request.input('AcknowledgementSE', sql.NVarChar, AcknowledgementSE || null);
         request.input('AdditionalNotificationEmails', sql.NVarChar, AdditionalNotificationEmails || null);
         request.input('OthersSpecify', sql.NVarChar, DocumentsReceived || null);
@@ -1434,12 +1541,12 @@ app.post('/api/enquiries', async (req, res) => {
                 RequestNo, SourceOfEnquiry, EnquiryDate, DueDate, SiteVisitDate,
                 CustomerName, ReceivedFrom, ProjectName, ClientName, ConsultantName,
                 EnquiryDetails, Doc_HardCopies, Doc_Drawing, Doc_CD_DVD,
-                Doc_Spec, Doc_EquipmentSchedule, Remarks, CustomerRefNo, SendAcknowledgementMail, ED_CEOSignatureRequired, Status, AcknowledgementSE, AdditionalNotificationEmails, OthersSpecify, CreatedBy, CreatedAt
+                Doc_Spec, Doc_EquipmentSchedule, Remarks, CustomerRefNo, SendAcknowledgementMail, ED_CEOSignatureRequired, Status, EnquiryStatus, AcknowledgementSE, AdditionalNotificationEmails, OthersSpecify, CreatedBy, CreatedAt
             ) VALUES (
                 @RequestNo, @SourceOfEnquiry, @EnquiryDate, @DueDate, @SiteVisitDate,
                 @CustomerName, @ReceivedFrom, @ProjectName, @ClientName, @ConsultantName,
                 @EnquiryDetails, @Doc_HardCopies, @Doc_Drawing, @Doc_CD_DVD,
-                @Doc_Spec, @Doc_EquipmentSchedule, @Remarks, @CustomerRefNo, @SendAcknowledgementMail, @ED_CEOSignatureRequired, @Status, @AcknowledgementSE, @AdditionalNotificationEmails, @OthersSpecify, @CreatedBy, @now
+                @Doc_Spec, @Doc_EquipmentSchedule, @Remarks, @CustomerRefNo, @SendAcknowledgementMail, @ED_CEOSignatureRequired, @Status, @EnquiryStatus, @AcknowledgementSE, @AdditionalNotificationEmails, @OthersSpecify, @CreatedBy, @now
             )
         `);
 
@@ -1993,7 +2100,7 @@ app.put('/api/enquiries/:id', async (req, res) => {
         SelectedCustomers, SelectedReceivedFroms, SelectedConcernedSEs, ConcernedSEAssignments,
         ProjectName, ClientName, ConsultantName, SelectedConsultants, DetailsOfEnquiry,
         DocumentsReceived, hardcopy, drawing, dvd, spec, eqpschedule, Remark,
-        AutoAck, ceosign, Status, AcknowledgementSE, AdditionalNotificationEmails, CustomerRefNo
+        AutoAck, ceosign, Status, EnquiryStatus, AcknowledgementSE, AdditionalNotificationEmails, CustomerRefNo
     } = req.body;
 
     try {
@@ -2083,6 +2190,35 @@ app.put('/api/enquiries/:id', async (req, res) => {
         request.input('SendAcknowledgementMail', sql.Bit, AutoAck);
         request.input('ED_CEOSignatureRequired', sql.Bit, ceosign);
         request.input('Status', sql.NVarChar, Status);
+
+        const existingStatusRes = await sql.query`
+            SELECT TOP 1 CreatedBy, EnquiryStatus
+            FROM EnquiryMaster
+            WHERE RequestNo = ${id}
+        `;
+        const existingRow = existingStatusRes.recordset?.[0] || {};
+        const existingEnquiryStatus =
+            String(existingRow.EnquiryStatus || '').trim().toLowerCase() === 'inactive'
+                ? 'Inactive'
+                : 'Active';
+        let normalizedEnquiryStatus =
+            String(EnquiryStatus || '').trim().toLowerCase() === 'inactive' ? 'Inactive' : 'Active';
+        if (normalizedEnquiryStatus !== existingEnquiryStatus) {
+            const allowed = await canUserChangeEnquiryStatus({
+                requestNo: id,
+                createdBy: existingRow.CreatedBy,
+                userEmail: req.body.userEmail || '',
+                userName: req.body.userName || req.body.ModifiedBy || '',
+            });
+            if (!allowed) {
+                console.warn(
+                    `[PUT /api/enquiries/${id}] EnquiryStatus change blocked for user ` +
+                        `${req.body.userEmail || req.body.userName || req.body.ModifiedBy || '(unknown)'}`
+                );
+                normalizedEnquiryStatus = existingEnquiryStatus;
+            }
+        }
+        request.input('EnquiryStatus', sql.NVarChar, normalizedEnquiryStatus);
         request.input('AcknowledgementSE', sql.NVarChar, AcknowledgementSE);
         request.input('AdditionalNotificationEmails', sql.NVarChar, AdditionalNotificationEmails);
         request.input('CustomerRefNo', sql.NVarChar, CustomerRefNo || null);
@@ -2093,7 +2229,7 @@ app.put('/api/enquiries/:id', async (req, res) => {
                 SourceOfEnquiry=@SourceOfEnquiry, EnquiryDate=@EnquiryDate, DueDate=@DueDate, SiteVisitDate=@SiteVisitDate,
                 CustomerName=@CustomerName, ReceivedFrom=@ReceivedFrom, ProjectName=@ProjectName, ClientName=@ClientName, ConsultantName=@ConsultantName,
                 EnquiryDetails=@EnquiryDetails, Doc_HardCopies=@Doc_HardCopies, Doc_Drawing=@Doc_Drawing, Doc_CD_DVD=@Doc_CD_DVD,
-                Doc_Spec=@Doc_Spec, Doc_EquipmentSchedule=@Doc_EquipmentSchedule, Remarks=@Remarks, CustomerRefNo=@CustomerRefNo, SendAcknowledgementMail=@SendAcknowledgementMail, ED_CEOSignatureRequired=@ED_CEOSignatureRequired, Status=@Status, AcknowledgementSE=@AcknowledgementSE, AdditionalNotificationEmails=@AdditionalNotificationEmails, OthersSpecify=@OthersSpecify
+                Doc_Spec=@Doc_Spec, Doc_EquipmentSchedule=@Doc_EquipmentSchedule, Remarks=@Remarks, CustomerRefNo=@CustomerRefNo, SendAcknowledgementMail=@SendAcknowledgementMail, ED_CEOSignatureRequired=@ED_CEOSignatureRequired, Status=@Status, EnquiryStatus=@EnquiryStatus, AcknowledgementSE=@AcknowledgementSE, AdditionalNotificationEmails=@AdditionalNotificationEmails, OthersSpecify=@OthersSpecify
             WHERE RequestNo=@RequestNo
         `);
 
@@ -2808,11 +2944,14 @@ app.get('/api/enquiry-items', async (req, res) => {
 });
 
 app.post('/api/enquiry-items', async (req, res) => {
-    const { ItemName, CompanyName, DepartmentName, Status, CommonMailIds, CCMailIds, RequestNo, DivisionCode, DepartmentCode, Phone, Address, FaxNo, CompanyLogo, Currency } = req.body;
+    const { ItemName, CompanyName, DepartmentName, Status, CommonMailIds, CCMailIds, RequestNo, DivisionCode, DepartmentCode, Phone, Address, FaxNo, CompanyLogo, Currency, VAT_Per } = req.body;
     try {
         const currencyVal = String(Currency || '').trim() || null;
-        const result = await sql.query`INSERT INTO Master_EnquiryFor (ItemName, CompanyName, DepartmentName, Status, CommonMailIds, CCMailIds, RequestNo, DivisionCode, DepartmentCode, Phone, Address, FaxNo, CompanyLogo, Currency)
-                        VALUES (${ItemName}, ${CompanyName}, ${DepartmentName}, ${Status}, ${CommonMailIds}, ${CCMailIds}, ${RequestNo}, ${DivisionCode}, ${DepartmentCode}, ${Phone}, ${Address}, ${FaxNo}, ${CompanyLogo}, ${currencyVal});
+        const vatRaw = VAT_Per ?? req.body.vat_Per ?? req.body.vatPer;
+        const vatNum = vatRaw === '' || vatRaw == null ? null : Number(vatRaw);
+        const vatVal = vatNum != null && Number.isFinite(vatNum) && vatNum >= 0 ? vatNum : null;
+        const result = await sql.query`INSERT INTO Master_EnquiryFor (ItemName, CompanyName, DepartmentName, Status, CommonMailIds, CCMailIds, RequestNo, DivisionCode, DepartmentCode, Phone, Address, FaxNo, CompanyLogo, Currency, VAT_Per)
+                        VALUES (${ItemName}, ${CompanyName}, ${DepartmentName}, ${Status}, ${CommonMailIds}, ${CCMailIds}, ${RequestNo}, ${DivisionCode}, ${DepartmentCode}, ${Phone}, ${Address}, ${FaxNo}, ${CompanyLogo}, ${currencyVal}, ${vatVal});
                         SELECT SCOPE_IDENTITY() AS ID;`;
         res.status(201).json({ message: 'Item added', id: result.recordset[0].ID });
     } catch (err) {
@@ -2823,10 +2962,13 @@ app.post('/api/enquiry-items', async (req, res) => {
 
 app.put('/api/enquiry-items/:id', async (req, res) => {
     const { id } = req.params;
-    const { ItemName, CompanyName, DepartmentName, Status, CommonMailIds, CCMailIds, DivisionCode, DepartmentCode, Phone, Address, FaxNo, CompanyLogo, Currency } = req.body;
+    const { ItemName, CompanyName, DepartmentName, Status, CommonMailIds, CCMailIds, DivisionCode, DepartmentCode, Phone, Address, FaxNo, CompanyLogo, Currency, VAT_Per } = req.body;
     try {
         const currencyVal = String(Currency || '').trim() || null;
-        await sql.query`UPDATE Master_EnquiryFor SET ItemName=${ItemName}, CompanyName=${CompanyName}, DepartmentName=${DepartmentName}, Status=${Status}, CommonMailIds=${CommonMailIds}, CCMailIds=${CCMailIds}, DivisionCode=${DivisionCode}, DepartmentCode=${DepartmentCode}, Phone=${Phone}, Address=${Address}, FaxNo=${FaxNo}, CompanyLogo=${CompanyLogo}, Currency=${currencyVal} WHERE ID=${id}`;
+        const vatRaw = VAT_Per ?? req.body.vat_Per ?? req.body.vatPer;
+        const vatNum = vatRaw === '' || vatRaw == null ? null : Number(vatRaw);
+        const vatVal = vatNum != null && Number.isFinite(vatNum) && vatNum >= 0 ? vatNum : null;
+        await sql.query`UPDATE Master_EnquiryFor SET ItemName=${ItemName}, CompanyName=${CompanyName}, DepartmentName=${DepartmentName}, Status=${Status}, CommonMailIds=${CommonMailIds}, CCMailIds=${CCMailIds}, DivisionCode=${DivisionCode}, DepartmentCode=${DepartmentCode}, Phone=${Phone}, Address=${Address}, FaxNo=${FaxNo}, CompanyLogo=${CompanyLogo}, Currency=${currencyVal}, VAT_Per=${vatVal} WHERE ID=${id}`;
         res.json({ message: 'Item updated' });
     } catch (err) {
         console.error(err);
@@ -3660,15 +3802,22 @@ async function startServer() {
     }
 
     const http = require('http');
-    const { initChatboxRealtime } = require('./lib/chatboxRealtime');
     const server = http.createServer(app);
-    // Kill-switch: EMS_CHATBOX_REALTIME=0 disables Socket.IO entirely (REST chat still works)
-    const chatRealtimeOff = ['0', 'false', 'no', 'off'].includes(
-        String(process.env.EMS_CHATBOX_REALTIME || '1').trim().toLowerCase()
+    // ChatBox off by default (EMS_CHATBOX_ENABLED=0). Realtime also requires EMS_CHATBOX_REALTIME=1.
+    const chatboxOn = ['1', 'true', 'yes', 'on'].includes(
+        String(process.env.EMS_CHATBOX_ENABLED ?? '0').trim().toLowerCase()
     );
-    if (chatRealtimeOff) {
-        console.warn('[ChatBox] Socket.IO DISABLED via EMS_CHATBOX_REALTIME=0 (EMS protected)');
+    const chatRealtimeOn =
+        chatboxOn &&
+        ['1', 'true', 'yes', 'on'].includes(
+            String(process.env.EMS_CHATBOX_REALTIME ?? '0').trim().toLowerCase()
+        );
+    if (!chatboxOn) {
+        console.warn('[ChatBox] fully DISABLED (EMS_CHATBOX_ENABLED=0) — no API / no Socket.IO');
+    } else if (!chatRealtimeOn) {
+        console.warn('[ChatBox] Socket.IO DISABLED via EMS_CHATBOX_REALTIME=0 (REST only)');
     } else {
+        const { initChatboxRealtime } = require('./lib/chatboxRealtime');
         initChatboxRealtime(server);
     }
 

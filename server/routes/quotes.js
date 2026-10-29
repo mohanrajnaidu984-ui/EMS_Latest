@@ -24,6 +24,7 @@ const {
     userHasDepartment,
     userDepartmentMatchesAny,
     anyDepartmentTokenMatchesJobName,
+    expandDepartmentAliases,
 } = require('../lib/userDepartments');
 const {
     normalizeUserEmail,
@@ -31,7 +32,7 @@ const {
     serializeUserSignatureMaster,
     parseQuoteDigitalStamps,
     serializeQuoteDigitalStamps,
-    mergeQuoteStamp,
+    mergeQuoteStampLists,
 } = require('../lib/digitalSignaturesJson');
 const {
     normalizeApprovalEmail,
@@ -87,6 +88,13 @@ const {
     saveApprovalHierarchy,
     deleteApprovalHierarchy,
 } = require('../lib/quoteApprovalHierarchy');
+const {
+    normalizeApprovalMode,
+    isWorkflowSequential,
+    isSequentialApprovalDivision,
+    orderStepsForSequentialApproval,
+    getSequentialActiveStep,
+} = require('../lib/sequentialApproval');
 const { removeExcludedFromEmailSet } = require('../lib/notificationEmailExclusions');
 const { fetchQuoteDivisionUserOptions } = require('../lib/quoteDivisionUserOptions');
 const { resolveCompanyLogoPath } = require('../lib/resolveCompanyLogoPath');
@@ -141,6 +149,18 @@ async function notifyAfterApprovalAction({
     /* Only the final approver's Approve action sends "approved for submission".
        Intermediate approvers must never trigger this email. */
     if (!finalApproved || !actedIsFinal) {
+        if (!finalApproved && isWorkflowSequential(nextSteps, ownJob)) {
+            return notifyNextSequentialApprover({
+                nextSteps,
+                requestNo,
+                projectName,
+                customerName,
+                subject,
+                ownJob,
+                quoteId,
+                draftQuoteId,
+            });
+        }
         return {
             notified: false,
             type: !finalApproved ? 'parallel-pending-final' : 'skipped-non-final-actor',
@@ -197,6 +217,64 @@ async function notifyAfterApprovalAction({
     return {
         notified: mailResult.success,
         type: 'approved-for-submission',
+        mailResult,
+        inApp: inAppResult,
+    };
+}
+
+/** Sequential divisions: after each approval, assign (email + bell) the next approver in turn order. */
+async function notifyNextSequentialApprover({
+    nextSteps,
+    requestNo,
+    projectName = '',
+    customerName = '',
+    subject = '',
+    ownJob = '',
+    quoteId = null,
+    draftQuoteId = null,
+}) {
+    const nextStep = getSequentialActiveStep(nextSteps);
+    const toEmail = normalizeApprovalEmail(nextStep?.approverEmail);
+    if (!nextStep || !toEmail) {
+        return { notified: false, type: 'sequential-no-next-approver' };
+    }
+
+    const resolvedProjectName = await resolveProjectNameForApproval(requestNo, projectName);
+    const mailContext = await fetchApprovalMailContext({
+        quoteId: quoteId || null,
+        draftQuoteId: draftQuoteId || null,
+        meta: { requestNo, customerName, leadJobName: '', ownJob },
+        subjectOverride: subject,
+        projectNameOverride: resolvedProjectName,
+    });
+    const mailResult = await sendQuoteApprovalRequestEmail({
+        toEmail,
+        approverName: nextStep.approverName,
+        mailContext,
+    });
+    if (!mailResult?.success) {
+        console.error(
+            `[approval-action] sequential next-approver email to ${toEmail} failed:`,
+            mailResult?.error || 'Unknown SMTP error'
+        );
+    }
+    let inAppResult = { inserted: 0 };
+    try {
+        inAppResult = await notifyQuoteAssignedForApprovalInApp({
+            approverEmails: [toEmail],
+            requestNo,
+            projectName: resolvedProjectName,
+            quoteNumber: mailContext?.quoteNumber || mailContext?.quoteRef || '',
+            quoteId: quoteId || null,
+            triggerUserName: actorNameFromSteps(nextSteps),
+        });
+    } catch (inAppErr) {
+        console.warn('[approval-action] sequential in-app notification:', inAppErr.message);
+    }
+    return {
+        notified: !!mailResult?.success,
+        type: 'sequential-next-approver',
+        nextApproverEmail: toEmail,
         mailResult,
         inApp: inAppResult,
     };
@@ -275,7 +353,7 @@ const BY_ENQUIRY_QUOTES_SQL = `
                    ShowSchedule, ShowWarranty, ShowResponsibilityMatrix, ShowTermsConditions, ShowAcceptance, ShowBillOfQuantity,
                    ScopeOfWork, BasisOfOffer, Exclusions, PricingTerms,
                    Schedule, Warranty, ResponsibilityMatrix, TermsConditions, Acceptance, BillOfQuantity,
-                   CustomClauses, ClauseOrder, DigitalSignaturesJson, ApprovalWorkflowJson
+                   CustomClauses, ClauseOrder, DigitalSignaturesJson, ApprovalWorkflowJson, PageOrientationsJson
             FROM EnquiryQuotes
             WHERE LTRIM(RTRIM(ISNULL(CAST(RequestNo AS NVARCHAR(50)), ''))) = LTRIM(RTRIM(ISNULL(@requestNo, '')))
               AND (
@@ -370,6 +448,10 @@ const { quoteDetailLineResolved } = require('../lib/mapQuoteListingRows');
 const runPendingQuoteListQuery = require('../lib/pendingQuoteListQuery');
 const runQuotedQuoteListQuery = require('../lib/quotedQuoteListQuery');
 const { runApprovalWorkflowQuoteListQuery } = require('../lib/approvalWorkflowQuoteListQuery');
+const {
+    runQuoteListSearchByQuoteDate,
+    buildQuoteSearchListRowsFromQuotes,
+} = require('../lib/quoteListSearchQuery');
 const buildQuoteListSearchExtraWhere = require('../lib/buildQuoteListSearchExtraWhere');
 const mergeQuoteListSearchRawRows = buildQuoteListSearchExtraWhere.mergeQuoteListSearchRawRows;
 const { clearPricingRevisionRequiredForQuoteTuple } = require('../lib/pricingRevisionRequired');
@@ -658,6 +740,99 @@ function applyOwnJobAfterDepartmentLookup(currentOwnJob, userDept) {
     return oj;
 }
 
+/**
+ * Master_ConcernedSE.Department may be comma-separated (e.g. "Landscape Project,Landscape Maint") — never matches
+ * Master_EnquiryFor.ItemName as a whole. Resolve per token, preferring the token equal to the quote's OwnJob.
+ */
+async function findMasterEnquiryForUserDepartment(userDept, ownJob) {
+    const tokens = parseUserDepartments(userDept);
+    if (!tokens.length) return null;
+    const ojLower = String(ownJob || '').trim().toLowerCase();
+    const ordered = ojLower
+        ? [...tokens.filter((t) => t.toLowerCase() === ojLower), ...tokens.filter((t) => t.toLowerCase() !== ojLower)]
+        : tokens;
+    for (const tok of ordered) {
+        const res = await sql.query`SELECT * FROM Master_EnquiryFor WHERE ItemName = ${tok}`;
+        if (res.recordset[0]) return res.recordset[0];
+    }
+    return null;
+}
+
+/** Dept/Div from a draft ref like "ALP/LDP/2186-L1/DRAFT" (saved with the client's active-tab codes). */
+function parseDeptDivFromDraftQuoteNumber(quoteNumber) {
+    const parts = String(quoteNumber || '').trim().split('/');
+    if (parts.length < 4 || String(parts[parts.length - 1]).toUpperCase() !== 'DRAFT') return null;
+    const dept = String(parts[0] || '').trim();
+    const division = String(parts[1] || '').trim();
+    if (!dept || !division || (dept.toUpperCase() === 'AAC' && division.toUpperCase() === 'GEN')) return null;
+    return { dept, division };
+}
+
+/**
+ * Add stamps to EnquiryQuotes / EnquiryQuotesDraft without ever dropping stamps already stored
+ * (another user may have signed after this client loaded). Compare-and-swap on the stored JSON
+ * so two users signing at the same moment cannot overwrite each other.
+ * @param {'quote'|'draft'} target
+ * @returns {Promise<Array|null>} merged stamps, or null when the row does not exist
+ */
+async function mergeDigitalStampsIntoRow(target, id, incomingStamps, { clear = false } = {}) {
+    const rowId = Number(id);
+    if (!Number.isFinite(rowId) || rowId <= 0) return null;
+    const isDraft = target === 'draft';
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+        const sel = isDraft
+            ? await sql.query`SELECT DigitalSignaturesJson FROM EnquiryQuotesDraft WHERE ID = ${rowId}`
+            : await sql.query`SELECT DigitalSignaturesJson FROM EnquiryQuotes WHERE ID = ${rowId}`;
+        if (!sel.recordset?.length) return null;
+        const oldRaw = sel.recordset[0].DigitalSignaturesJson ?? null;
+        const merged = clear ? [] : mergeQuoteStampLists(oldRaw, incomingStamps);
+        const jsonStr = serializeQuoteDigitalStamps(merged);
+        if (jsonStr === oldRaw) return merged;
+        const now = new Date();
+        const upd = isDraft
+            ? await sql.query`
+                UPDATE EnquiryQuotesDraft
+                SET DigitalSignaturesJson = ${jsonStr}, UpdatedAt = ${now}
+                WHERE ID = ${rowId}
+                  AND (DigitalSignaturesJson = ${oldRaw} OR (DigitalSignaturesJson IS NULL AND ${oldRaw} IS NULL))
+            `
+            : await sql.query`
+                UPDATE EnquiryQuotes
+                SET DigitalSignaturesJson = ${jsonStr}, UpdatedAt = ${now}
+                WHERE ID = ${rowId}
+                  AND (DigitalSignaturesJson = ${oldRaw} OR (DigitalSignaturesJson IS NULL AND ${oldRaw} IS NULL))
+            `;
+        if ((upd.rowsAffected?.[0] || 0) > 0) return merged;
+    }
+    throw new Error('Signatures were being updated by another user at the same time. Please try again.');
+}
+
+/**
+ * EnquiryQuotes row a draft was promoted to (final approver approved), or null while still a draft.
+ * Approval steps can lose DraftQuoteId after later actions, so also match the Promoted draft's QuoteNumber.
+ */
+async function resolvePromotedQuoteIdForDraft(draftQuoteId) {
+    const linked = await resolveLinkedQuoteIdFromDraft(draftQuoteId);
+    if (linked) return linked;
+    const id = Number(draftQuoteId);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    const draftRes = await sql.query`
+        SELECT Status, RequestNo, QuoteNumber FROM EnquiryQuotesDraft WHERE ID = ${id}
+    `;
+    const draft = draftRes.recordset?.[0];
+    if (!draft || String(draft.Status || '').trim().toLowerCase() !== 'promoted') return null;
+    const quoteNumber = String(draft.QuoteNumber || '').trim();
+    if (!quoteNumber || /\/DRAFT$/i.test(quoteNumber)) return null;
+    const quoteRes = await sql.query`
+        SELECT TOP 1 ID FROM EnquiryQuotes
+        WHERE LTRIM(RTRIM(CAST(RequestNo AS NVARCHAR(50)))) = LTRIM(RTRIM(${String(draft.RequestNo || '')}))
+          AND QuoteNumber = ${quoteNumber}
+        ORDER BY ID DESC
+    `;
+    const qid = Number(quoteRes.recordset?.[0]?.ID);
+    return Number.isFinite(qid) && qid > 0 ? qid : null;
+}
+
 function parseMailCsv(raw) {
     return String(raw || '')
         .split(/[;,]/g)
@@ -671,9 +846,11 @@ function departmentMatchesMefRow(department, mefRow) {
         .map((s) => String(s || '').trim())
         .filter(Boolean);
     if (!labels.length) return false;
-    if (userDepartmentMatchesAny(department, labels)) return true;
+    /* Expand SE aliases (e.g. YK Property ↔ Almoayyed Property) before exact/soft match. */
+    const deptTokens = expandDepartmentAliases(department);
+    if (userDepartmentMatchesAny(deptTokens, labels)) return true;
     // Soft includes match per token (legacy fuzzy behaviour)
-    return parseUserDepartments(department).some((tok) => {
+    return deptTokens.some((tok) => {
         const deptLower = tok.toLowerCase();
         if (!deptLower) return false;
         for (const lab of labels) {
@@ -685,7 +862,8 @@ function departmentMatchesMefRow(department, mefRow) {
 }
 
 async function resolveUserCompanyName(userDept) {
-    const tokens = parseUserDepartments(userDept);
+    /* Include aliases so "YK Property" resolves to Almoayyed Property Development company. */
+    const tokens = expandDepartmentAliases(userDept);
     if (!tokens.length) return '';
     for (const dept of tokens) {
         const safeDept = dept.replace(/%/g, '');
@@ -718,6 +896,30 @@ async function resolveUserCompanyName(userDept) {
         if (companyName) return companyName;
     }
     return '';
+}
+
+/** Fallback: company of the MEF row that lists this user in CCMailIds. */
+async function resolveCompanyNameByCcEmail(userEmail) {
+    const email = normalizeUserEmail(userEmail);
+    if (!email) return '';
+    try {
+        const likeExact = `%,${email},%`;
+        const likeLoose = `%${email}%`;
+        const res = await sql.query`
+            SELECT TOP 1 CompanyName
+            FROM Master_EnquiryFor
+            WHERE LTRIM(RTRIM(ISNULL(CompanyName, N''))) <> N''
+              AND (
+                LOWER(N',' + REPLACE(REPLACE(ISNULL(CCMailIds, N''), N';', N','), N' ', N'') + N',')
+                  LIKE ${likeExact}
+                OR LOWER(ISNULL(CCMailIds, N'')) LIKE ${likeLoose}
+              )
+        `;
+        return String(res.recordset?.[0]?.CompanyName || '').trim();
+    } catch (e) {
+        console.warn('[approver-options] resolveCompanyNameByCcEmail:', e.message);
+        return '';
+    }
 }
 
 async function notifyParentJobQuoteEvent({
@@ -1341,6 +1543,7 @@ router.get('/list/pending', async (req, res) => {
 });
 
 router.get('/list/search', async (req, res) => {
+    const t0 = Date.now();
     try {
         let { userEmail, q, dateFrom, dateTo, division } = req.query;
         const divisionTrim = (division || '').toString().trim();
@@ -1351,26 +1554,67 @@ router.get('/list/search', async (req, res) => {
             return res.json([]);
         }
 
-        let pendingRaw;
-        let quotedRaw;
-        let approvalRaw;
+        const hasDateRange = !!(
+            buildQuoteListSearchExtraWhere.normalizeSearchDateParam(dateFrom || '') &&
+            buildQuoteListSearchExtraWhere.normalizeSearchDateParam(dateTo || '')
+        );
+
+        let pendingRaw = [];
+        let quotedRaw = [];
+        let approvalRaw = [];
         let accessCtx;
         let ue;
+        let usedFastPath = false;
+
+        const normalizedEmail = normalizeUserEmail(userEmail);
+        const sharedAccessCtx = normalizedEmail
+            ? await resolvePricingAccessContext(normalizedEmail)
+            : null;
+        const tAccess = Date.now();
+
+        /*
+         * Date-range Search Quote: seed from EnquiryQuotes.QuoteDate first.
+         * The old path ran pending + quoted + approval scanners over the user's full
+         * enquiry universe, then applied the date EXISTS — that is what felt "stuck".
+         */
+        if (hasDateRange) {
+            const fast = await runQuoteListSearchByQuoteDate(
+                sql,
+                userEmail,
+                { q: q || '', dateFrom, dateTo, division: divisionTrim },
+                { accessCtx: sharedAccessCtx }
+            );
+            const quoteRows = fast.quoteRows || [];
+            accessCtx = fast.accessCtx || sharedAccessCtx;
+            ue = fast.userEmail || normalizedEmail || userEmail;
+            usedFastPath = !!fast.usedFastPath;
+            const tSql = Date.now();
+
+            /* Lightweight list rows from quote SQL — skip mapQuoteListingRows (pricing tree). */
+            const merged = buildQuoteSearchListRowsFromQuotes(quoteRows, divisionTrim);
+            const tMap = Date.now();
+            const enriched = await enrichQuoteListRowsWithApprovalStatus(merged);
+            console.log(
+                `[list/search] fastPath rows=${enriched.length} quotes=${quoteRows.length} accessMs=${tAccess - t0} sqlMs=${tSql - tAccess} mapMs=${tMap - tSql} enrichMs=${Date.now() - tMap} totalMs=${Date.now() - t0} div=${divisionTrim || '-'} q=${String(q || '').slice(0, 40)}`
+            );
+            return res.json(enriched);
+        }
 
         const runSearchQueries = async (extraSql, includeWorkflow) => {
+            const listOpts = { slim: true, accessCtx: sharedAccessCtx };
             const [pendingResult, quotedResult, approvalResult] = await Promise.all([
-                runPendingQuoteListQuery(sql, userEmail, extraSql, divisionTrim),
-                runQuotedQuoteListQuery(sql, userEmail, extraSql, divisionTrim),
+                runPendingQuoteListQuery(sql, userEmail, extraSql, divisionTrim, listOpts),
+                runQuotedQuoteListQuery(sql, userEmail, extraSql, divisionTrim, listOpts),
                 includeWorkflow
-                    ? runApprovalWorkflowQuoteListQuery(sql, userEmail, extraSql)
-                    : Promise.resolve({ enquiries: [], accessCtx: null, userEmail }),
+                    ? runApprovalWorkflowQuoteListQuery(sql, userEmail, extraSql, listOpts)
+                    : Promise.resolve({ enquiries: [], accessCtx: sharedAccessCtx, userEmail }),
             ]);
             return {
                 pendingRaw: pendingResult.enquiries || [],
                 quotedRaw: quotedResult.enquiries || [],
                 approvalRaw: approvalResult.enquiries || [],
-                accessCtx: pendingResult.accessCtx,
-                userEmail: pendingResult.userEmail,
+                accessCtx: sharedAccessCtx || pendingResult.accessCtx,
+                userEmail: pendingResult.userEmail || normalizedEmail || userEmail,
             };
         };
 
@@ -1395,8 +1639,10 @@ router.get('/list/search', async (req, res) => {
             ));
         }
 
+        const tSql = Date.now();
         const rawMerged = mergeQuoteListSearchRawRows(pendingRaw, quotedRaw, approvalRaw);
         const mappedRows = await mapQuoteListingRows(sql, rawMerged, ue, accessCtx, divisionTrim);
+        const tMap = Date.now();
 
         const pendingReqNos = new Set((pendingRaw || []).map((r) => String(r.RequestNo)));
         const approvalReqNos = new Set((approvalRaw || []).map((r) => String(r.RequestNo)));
@@ -1427,7 +1673,6 @@ router.get('/list/search', async (req, res) => {
             const b = quoteRowScore(next);
             if (b > a) return next;
             if (a > b) return prev;
-            // Tie-breaker: prefer quoted-kind row over pending-kind row.
             if (prev.QuoteListKind === 'quoted') return prev;
             if (next.QuoteListKind === 'quoted') return next;
             return next;
@@ -1457,6 +1702,9 @@ router.get('/list/search', async (req, res) => {
             return tb - ta;
         });
         const enriched = await enrichQuoteListRowsWithApprovalStatus(merged);
+        console.log(
+            `[list/search] legacyPath usedFastPath=${usedFastPath} rows=${enriched.length} accessMs=${tAccess - t0} sqlMs=${tSql - tAccess} mapMs=${tMap - tSql} enrichMs=${Date.now() - tMap} totalMs=${Date.now() - t0} div=${divisionTrim || '-'} q=${String(q || '').slice(0, 40)}`
+        );
         return res.json(enriched);
     } catch (err) {
         console.error('Error searching quote lists:', err);
@@ -1876,6 +2124,8 @@ router.get('/approver-options', async (req, res) => {
 
         let companyName = String(req.query.companyName || '').trim();
         if (!companyName) companyName = await resolveUserCompanyName(userDept);
+        /* Alias miss or empty SE dept: still resolve company if this user is on a MEF CC list. */
+        if (!companyName) companyName = await resolveCompanyNameByCcEmail(userEmail);
 
         const mefRows = companyName
             ? (await sql.query`
@@ -1935,7 +2185,7 @@ router.get('/approver-options', async (req, res) => {
         }
 
         if (!mefRows.length && userDept) {
-            for (const deptTok of parseUserDepartments(userDept)) {
+            for (const deptTok of expandDepartmentAliases(userDept)) {
                 const safeDept = deptTok.replace(/%/g, '');
                 let ccRes = await sql.query`
                     SELECT TOP 1 CCMailIds
@@ -1998,7 +2248,7 @@ router.post('/approval-hierarchies', express.json(), async (req, res) => {
         if (!userEmail) return res.status(400).json({ error: 'userEmail is required' });
         if (!name) return res.status(400).json({ error: 'Hierarchy name is required' });
 
-        const saved = await saveApprovalHierarchy(userEmail, name, steps, hierarchyId);
+        const saved = await saveApprovalHierarchy(userEmail, name, steps, hierarchyId, req.body?.approvalMode);
         res.json({ success: true, hierarchy: saved });
     } catch (err) {
         if (isMissingQuoteApprovalHierarchyTableError(err.message)) {
@@ -2094,6 +2344,7 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
         const sessionDivision = (req.query.division || '').toString().trim();
         const scope = (req.query.scope || '').toString().trim().toLowerCase();
         const quoteIdParam = req.query.quoteId ? Number(req.query.quoteId) : null;
+        const draftQuoteIdParam = req.query.draftQuoteId ? Number(req.query.draftQuoteId) : null;
         const leadOnly = scope === 'lead' || scope === 'leadjobs';
         if (userEmail) {
             const normalizedEmail = userEmail.toLowerCase().replace(/@almcg\.com/g, '@almoayyedcg.com');
@@ -2101,7 +2352,8 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
                 normalizedEmail,
                 requestNo,
                 sessionDivision,
-                Number.isFinite(quoteIdParam) ? quoteIdParam : null
+                Number.isFinite(quoteIdParam) && quoteIdParam > 0 ? quoteIdParam : null,
+                Number.isFinite(draftQuoteIdParam) && draftQuoteIdParam > 0 ? draftQuoteIdParam : null
             );
             if (!ok) {
                 return res.status(403).json({ error: 'Forbidden' });
@@ -2130,7 +2382,7 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
         try {
             const enquiryResult = await sql.query`
                 SELECT RequestNo, ProjectName, CustomerName, ReceivedFrom,
-                       EnquiryDate, DueDate, CustomerRefNo
+                       EnquiryDate, DueDate, CustomerRefNo, EnquiryStatus
                 FROM EnquiryMaster 
                 WHERE RequestNo = ${requestNo}
             `;
@@ -2155,7 +2407,24 @@ router.get('/enquiry-data/:requestNo', async (req, res) => {
         if (!leadOnly && enquiry.CustomerName) {
             try {
                 const customerNames = enquiry.CustomerName.split(',').map(c => c.trim());
-                const composeAddress = (row) => [row?.Address1, row?.Address2].filter(Boolean).join('\n').trim();
+                /** Dedupe Address2 lines already present in Address1 (Quote To block). */
+                const composeAddress = (row) => {
+                    const a1 = String(row?.Address1 || '').replace(/\r\n/g, '\n').trim();
+                    const a2 = String(row?.Address2 || '').replace(/\r\n/g, '\n').trim();
+                    const lines = [];
+                    const seen = new Set();
+                    const push = (line) => {
+                        const t = String(line || '').trim();
+                        if (!t) return;
+                        const key = t.toLowerCase().replace(/[.,]/g, '').replace(/\s+/g, ' ');
+                        if (!key || seen.has(key)) return;
+                        seen.add(key);
+                        lines.push(t);
+                    };
+                    a1.split('\n').forEach(push);
+                    a2.split('\n').forEach(push);
+                    return lines.join('\n').trim();
+                };
                 for (const name of customerNames) {
                     let bestFallback = null;
 
@@ -3559,16 +3828,29 @@ function ownJobsMatchForDraft(dbOwnJob, queryOwnJob) {
 }
 
 /**
- * QuoteNo is preset per Enquiry No + Lead Job Name + Customer Name.
+ * OwnJob match for QuoteNo series — stricter than draft lookup.
+ * Empty vs non-empty must not share a series (Aluminium vs HVAC get different QuoteNos).
+ */
+function ownJobsMatchForQuoteSeries(dbOwnJob, queryOwnJob) {
+    const dbNorm = normalizeDraftTupleText(dbOwnJob);
+    const qNorm = normalizeDraftTupleText(queryOwnJob);
+    if (!dbNorm && !qNorm) return true;
+    if (!dbNorm || !qNorm) return false;
+    if (dbNorm === qNorm) return true;
+    return dbNorm.includes(qNorm) || qNorm.includes(dbNorm);
+}
+
+/**
+ * QuoteNo is preset per Enquiry No + Lead Job + Customer (ToName) + Own Job.
  * Returns the canonical (earliest) QuoteNo for that tuple and its max RevisionNo, or null if none.
  */
-async function findExistingQuoteSeriesForTuple(requestNo, leadJob, toName) {
+async function findExistingQuoteSeriesForTuple(requestNo, leadJob, toName, ownJob = '') {
     const rn = String(requestNo || '').trim();
     const tn = String(toName || '').trim();
     if (!rn || !tn) return null;
 
     const result = await sql.query`
-        SELECT ID, QuoteNo, RevisionNo, QuoteNumber, LeadJob, ToName, CreatedAt
+        SELECT ID, QuoteNo, RevisionNo, QuoteNumber, LeadJob, ToName, OwnJob, CreatedAt
         FROM EnquiryQuotes
         WHERE LTRIM(RTRIM(ISNULL(CAST(RequestNo AS NVARCHAR(50)), ''))) = LTRIM(RTRIM(${rn}))
           AND LOWER(LTRIM(RTRIM(ISNULL(ToName, N'')))) = LOWER(LTRIM(RTRIM(${tn})))
@@ -3585,6 +3867,10 @@ async function findExistingQuoteSeriesForTuple(requestNo, leadJob, toName) {
         rows = rows.filter((r) => leadJobsMatchForDraft(r.LeadJob, leadNorm));
         if (!rows.length) return null;
     }
+
+    const ownNorm = normalizeDraftTupleText(ownJob);
+    rows = rows.filter((r) => ownJobsMatchForQuoteSeries(r.OwnJob, ownNorm));
+    if (!rows.length) return null;
 
     const quoteNos = [
         ...new Set(
@@ -3612,12 +3898,12 @@ async function findExistingQuoteSeriesForTuple(requestNo, leadJob, toName) {
 
 /**
  * Allocate QuoteNo + RevisionNo for EnquiryQuotes.
- * - Same RequestNo + LeadJob + ToName → reuse QuoteNo, next R#
+ * - Same RequestNo + LeadJob + ToName + OwnJob → reuse QuoteNo, next R#
  * - New combination → next global QuoteNo at R0
  * - draftQuoteNo > 0 is a hint (revision draft) but tuple series wins when present
  */
-async function allocateQuoteNoAndRevision({ requestNo, leadJob, toName, draftQuoteNo = 0 }) {
-    const series = await findExistingQuoteSeriesForTuple(requestNo, leadJob, toName);
+async function allocateQuoteNoAndRevision({ requestNo, leadJob, toName, ownJob = '', draftQuoteNo = 0 }) {
+    const series = await findExistingQuoteSeriesForTuple(requestNo, leadJob, toName, ownJob);
     const hinted = Number(draftQuoteNo);
     const hasHint = Number.isFinite(hinted) && hinted > 0;
 
@@ -3637,16 +3923,37 @@ async function allocateQuoteNoAndRevision({ requestNo, leadJob, toName, draftQuo
     }
 
     if (hasHint) {
-        const maxRevRes = await sql.query`
-            SELECT ISNULL(MAX(RevisionNo), -1) AS MaxRevisionNo
+        /* Stale draft QuoteNo from another OwnJob must not steal that series. */
+        const hintRowsRes = await sql.query`
+            SELECT RequestNo, LeadJob, ToName, OwnJob, RevisionNo
             FROM EnquiryQuotes
             WHERE QuoteNo = ${hinted}
         `;
-        const maxRev = Number(maxRevRes.recordset?.[0]?.MaxRevisionNo);
-        if (Number.isFinite(maxRev) && maxRev >= 0) {
+        const hintRows = hintRowsRes.recordset || [];
+        const hintFitsTuple =
+            hintRows.length === 0 ||
+            hintRows.every((r) => {
+                const rnOk =
+                    String(r.RequestNo ?? '')
+                        .trim()
+                        .toLowerCase() === String(requestNo || '').trim().toLowerCase();
+                const toOk =
+                    normalizeDraftTupleText(r.ToName) === normalizeDraftTupleText(toName);
+                const leadOk = leadJobsMatchForDraft(r.LeadJob, leadJob);
+                const ownOk = ownJobsMatchForQuoteSeries(r.OwnJob, ownJob);
+                return rnOk && toOk && leadOk && ownOk;
+            });
+        if (hintFitsTuple) {
+            if (!hintRows.length) {
+                return { quoteNo: hinted, revisionNo: 0, reused: true };
+            }
+            const maxRev = hintRows.reduce((max, r) => {
+                const rev = Number(r.RevisionNo);
+                return Number.isFinite(rev) && rev > max ? rev : max;
+            }, -1);
             return { quoteNo: hinted, revisionNo: maxRev + 1, reused: true };
         }
-        return { quoteNo: hinted, revisionNo: 0, reused: true };
+        /* Hint belongs to a different own-job/lead series — allocate a fresh QuoteNo below. */
     }
 
     const existingQuotesResult = await sql.query`
@@ -3724,8 +4031,7 @@ async function resolveQuoteDraftIdentity(body) {
             const userRes = await sql.query`SELECT Department FROM Master_ConcernedSE WHERE EmailId = ${normalizedUser}`;
             const userDept = userRes.recordset.length > 0 ? userRes.recordset[0].Department : null;
             if (userDept) {
-                const masterRes = await sql.query`SELECT * FROM Master_EnquiryFor WHERE ItemName = ${userDept}`;
-                const masterData = masterRes.recordset[0];
+                const masterData = await findMasterEnquiryForUserDepartment(userDept, clientOwnJob);
                 if (masterData) {
                     if (!clientOwnJob) {
                         effectiveOwnJob = applyOwnJobAfterDepartmentLookup(effectiveOwnJob, userDept);
@@ -3777,6 +4083,30 @@ async function resolveQuoteDraftIdentity(body) {
     return { dept, division, effectiveOwnJob, quoteNumber, requestRef };
 }
 
+/** Sparse map of 0-based sheet index → "landscape" (cover/index 0 never landscape). */
+function normalizePageOrientationsMap(raw) {
+    let obj = raw;
+    if (typeof raw === 'string') {
+        try {
+            obj = JSON.parse(raw || '{}');
+        } catch {
+            return {};
+        }
+    }
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+        const idx = Number(k);
+        if (!Number.isFinite(idx) || idx <= 0) continue;
+        if (v === 'landscape') out[String(Math.floor(idx))] = 'landscape';
+    }
+    return out;
+}
+
+function serializePageOrientationsJson(raw) {
+    return JSON.stringify(normalizePageOrientationsMap(raw));
+}
+
 function parseQuoteDraftBody(body) {
     const {
         validityDays = 30,
@@ -3822,6 +4152,7 @@ function parseQuoteDraftBody(body) {
         leadJob: leadJobRaw = '',
         digitalSignaturesJson,
         approvalWorkflowJson,
+        pageOrientationsJson,
         reasonForRevision = '',
         requestNo,
         quoteNo = null,
@@ -3845,6 +4176,7 @@ function parseQuoteDraftBody(body) {
                       ? approvalWorkflowJson
                       : approvalWorkflowJson?.steps
               );
+    const pageOrientationsJsonStr = serializePageOrientationsJson(pageOrientationsJson);
 
     const cleanQuoteDate = quoteDate ? String(quoteDate).split('T')[0] : null;
 
@@ -3878,6 +4210,7 @@ function parseQuoteDraftBody(body) {
         clauseOrderJson,
         digitalSignaturesJsonStr,
         approvalWorkflowJsonStr,
+        pageOrientationsJsonStr,
         cleanQuoteDate,
         customerReference,
         quoteType,
@@ -3966,19 +4299,6 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
             return res.status(400).json({ error: 'Request number is required' });
         }
 
-        // If this enquiry+lead+customer already has a QuoteNo, bind the draft to that series
-        // so final approval creates R1/R2… instead of a second R0 with a new QuoteNo.
-        if (!(fields.quoteNo > 0)) {
-            const series = await findExistingQuoteSeriesForTuple(
-                fields.requestNo,
-                fields.leadJob || '',
-                fields.toName || ''
-            );
-            if (series?.quoteNo > 0) {
-                fields.quoteNo = series.quoteNo;
-            }
-        }
-
         const sessionDivision = String(
             body.sessionDivision || body.divisionScope || body.ownJob || ''
         ).trim();
@@ -3988,6 +4308,20 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
         }
 
         const identity = await resolveQuoteDraftIdentity(body);
+
+        // Bind draft to existing QuoteNo for enquiry+lead+customer+ownJob (not cross-ownjob).
+        if (!(fields.quoteNo > 0)) {
+            const series = await findExistingQuoteSeriesForTuple(
+                fields.requestNo,
+                fields.leadJob || '',
+                fields.toName || '',
+                identity.effectiveOwnJob || body.ownJob || ''
+            );
+            if (series?.quoteNo > 0) {
+                fields.quoteNo = series.quoteNo;
+            }
+        }
+
         const now = new Date();
 
         let existingRow = null;
@@ -4119,8 +4453,8 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
                     Status = 'Draft',
                     CustomClauses = ${fields.customClausesJson},
                     ClauseOrder = ${fields.clauseOrderJson},
-                    DigitalSignaturesJson = ${fields.digitalSignaturesJsonStr},
                     ApprovalWorkflowJson = ${fields.approvalWorkflowJsonStr},
+                    PageOrientationsJson = ${fields.pageOrientationsJsonStr},
                     QuoteDate = ${fields.cleanQuoteDate},
                     CustomerReference = ${fields.customerReference},
                     YourRef = ${fields.customerReference},
@@ -4142,6 +4476,14 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
                     UpdatedAt = ${now}
                 WHERE ID = ${existingId}
             `;
+            const clearDigitalSignatures =
+                body.clearDigitalSignatures === true || body.clearDigitalSignatures === 1;
+            const digitalSignatures = await mergeDigitalStampsIntoRow(
+                'draft',
+                existingId,
+                fields.digitalSignaturesJsonStr,
+                { clear: clearDigitalSignatures }
+            );
             return res.json({
                 success: true,
                 id: existingId,
@@ -4150,6 +4492,7 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
                 quoteNo: persistQuoteNo,
                 revisionNo: persistRevisionNo,
                 updated: true,
+                digitalSignatures: digitalSignatures || [],
             });
         }
 
@@ -4161,7 +4504,7 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
                 ShowSchedule, ShowWarranty, ShowResponsibilityMatrix, ShowTermsConditions, ShowAcceptance, ShowBillOfQuantity,
                 ScopeOfWork, BasisOfOffer, Exclusions, PricingTerms,
                 Schedule, Warranty, ResponsibilityMatrix, TermsConditions, Acceptance, BillOfQuantity,
-                TotalAmount, Status, CustomClauses, ClauseOrder, DigitalSignaturesJson, ApprovalWorkflowJson,
+                TotalAmount, Status, CustomClauses, ClauseOrder, DigitalSignaturesJson, ApprovalWorkflowJson, PageOrientationsJson,
                 QuoteDate, CustomerReference, YourRef, QuoteType, Subject, Signatory, SignatoryDesignation, CoSignatory, CoSignatoryDesignation,
                 ToName, ToAddress, ToPhone, ToEmail, ToFax, ToAttention, LeadJob, OwnJob, ReasonForRevision, CreatedAt, UpdatedAt
             )
@@ -4173,7 +4516,7 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
                 ${fields.showSchedule ? 1 : 0}, ${fields.showWarranty ? 1 : 0}, ${fields.showResponsibilityMatrix ? 1 : 0}, ${fields.showTermsConditions ? 1 : 0}, ${fields.showAcceptance ? 1 : 0}, ${fields.showBillOfQuantity ? 1 : 0},
                 ${fields.scopeOfWork}, ${fields.basisOfOffer}, ${fields.exclusions}, ${fields.pricingTerms},
                 ${fields.schedule}, ${fields.warranty}, ${fields.responsibilityMatrix}, ${fields.termsConditions}, ${fields.acceptance}, ${fields.billOfQuantity},
-                ${fields.totalAmount}, 'Draft', ${fields.customClausesJson}, ${fields.clauseOrderJson}, ${fields.digitalSignaturesJsonStr}, ${fields.approvalWorkflowJsonStr},
+                ${fields.totalAmount}, 'Draft', ${fields.customClausesJson}, ${fields.clauseOrderJson}, ${fields.digitalSignaturesJsonStr}, ${fields.approvalWorkflowJsonStr}, ${fields.pageOrientationsJsonStr},
                 ${fields.cleanQuoteDate}, ${fields.customerReference}, ${fields.customerReference}, ${fields.quoteType || ''}, ${fields.subject},
                 ${fields.signatory}, ${fields.signatoryDesignation}, ${fields.coSignatory}, ${fields.coSignatoryDesignation},
                 ${fields.toName}, ${fields.toAddress}, ${fields.toPhone}, ${fields.toEmail}, ${fields.toFax || ''}, ${fields.toAttention || ''},
@@ -4190,6 +4533,7 @@ router.post('/quote-drafts', express.json({ limit: '15mb' }), async (req, res) =
             quoteNo: row.QuoteNo,
             revisionNo: row.RevisionNo,
             updated: false,
+            digitalSignatures: parseQuoteDigitalStamps(fields.digitalSignaturesJsonStr),
         });
     } catch (err) {
         const msg = (err && err.message) || '';
@@ -4628,7 +4972,8 @@ router.get('/quote-drafts/for-approval', async (req, res) => {
         }
 
         const draftRes = await sql.query`
-            SELECT *
+            SELECT *,
+                   CONVERT(varchar(10), CAST(QuoteDate AS DATE), 23) AS QuoteDateYmd
             FROM EnquiryQuotesDraft
             WHERE ID = ${draftQuoteId}
         `;
@@ -4828,12 +5173,27 @@ router.post('/send-approval-request', async (req, res) => {
             });
         }
 
+        /* Hierarchy choice (Parallel / One after another); division default when not supplied. */
+        const approvalMode =
+            normalizeApprovalMode(req.body?.approvalMode) ||
+            (isSequentialApprovalDivision(
+                persistCtx.meta?.ownJob || ownJob,
+                persistCtx.meta?.leadJobName || leadJobName || leadJob
+            )
+                ? 'sequential'
+                : 'parallel');
+        const sequentialApproval = approvalMode === 'sequential';
+        if (sequentialApproval) {
+            steps = orderStepsForSequentialApproval(steps).map((s, i) => ({ ...s, sequence: i + 1 }));
+        }
+
         const replaceResult = await replaceApprovalSteps({
             quoteId: persistCtx.quoteId,
             draftQuoteId: persistCtx.draftQuoteId,
             meta: persistCtx.meta,
             steps,
             createdByEmail: normalizedEmail,
+            approvalMode,
         });
         const savedSteps = replaceResult?.steps || replaceResult;
 
@@ -4857,7 +5217,8 @@ router.post('/send-approval-request', async (req, res) => {
             console.warn('[send-approval-request] workflow JSON mirror:', mirrorErr.message);
         }
 
-        const pendingApprovers = [...savedSteps]
+        const firstTurnStep = sequentialApproval ? getSequentialActiveStep(savedSteps) : null;
+        const pendingApprovers = (sequentialApproval ? (firstTurnStep ? [firstTurnStep] : []) : [...savedSteps])
             .sort((a, b) => a.sequence - b.sequence)
             .filter((s) => String(s.status || 'pending').toLowerCase() === 'pending')
             .map((s) => ({
@@ -4908,6 +5269,8 @@ router.post('/send-approval-request', async (req, res) => {
             approvalRequestSent: true,
             sentTo: pendingApprovers.map((s) => s.approverEmail),
             approverNames: pendingApprovers.map((s) => s.approverName),
+            approvalMode,
+            sequentialApproval,
             via: 'smtp',
             steps: savedSteps,
             workflowNo: replaceResult?.workflowNo || mailContext.workflowNo || null,
@@ -4997,27 +5360,29 @@ async function promoteDraftToEnquiryQuote(draftQuoteId, nextSteps = []) {
     const requestNo = String(draft.RequestNo || '').trim();
     if (!requestNo) throw new Error('Draft is missing request number');
 
+    const draftCodes = parseDeptDivFromDraftQuoteNumber(draft.QuoteNumber);
     const identity = await resolveQuoteDraftIdentity({
         requestNo,
         preparedByEmail: draft.PreparedByEmail || '',
         ownJob: draft.OwnJob || '',
         leadJobPrefix: draft.LeadJob || '',
-        divisionCode: '',
-        departmentCode: '',
+        divisionCode: draftCodes?.division || '',
+        departmentCode: draftCodes?.dept || '',
     });
 
-    // QuoteNo is unique/preset for Enquiry + Lead Job + Customer; only RevisionNo advances.
+    // QuoteNo is unique/preset for Enquiry + Lead Job + Customer + Own Job; only RevisionNo advances.
     const allocated = await allocateQuoteNoAndRevision({
         requestNo,
         leadJob: draft.LeadJob || '',
         toName: draft.ToName || '',
+        ownJob: identity.effectiveOwnJob || draft.OwnJob || '',
         draftQuoteNo: Number(draft.QuoteNo) || 0,
     });
     const quoteNo = allocated.quoteNo;
     const revisionNo = allocated.revisionNo;
     const quoteNumber = `${identity.dept}/${identity.division}/${identity.requestRef}/${quoteNo}-R${revisionNo}`;
     console.log(
-        `[promoteDraft] tuple RequestNo=${requestNo} LeadJob=${draft.LeadJob || ''} ToName=${draft.ToName || ''} → QuoteNo=${quoteNo} R${revisionNo} (reused=${allocated.reused})`
+        `[promoteDraft] tuple RequestNo=${requestNo} LeadJob=${draft.LeadJob || ''} OwnJob=${identity.effectiveOwnJob || draft.OwnJob || ''} ToName=${draft.ToName || ''} → QuoteNo=${quoteNo} R${revisionNo} (reused=${allocated.reused})`
     );
 
     const totalAmount = Number(draft.TotalAmount);
@@ -5039,7 +5404,7 @@ async function promoteDraftToEnquiryQuote(draftQuoteId, nextSteps = []) {
             ShowSchedule, ShowWarranty, ShowResponsibilityMatrix, ShowTermsConditions, ShowAcceptance, ShowBillOfQuantity,
             ScopeOfWork, BasisOfOffer, Exclusions, PricingTerms,
             Schedule, Warranty, ResponsibilityMatrix, TermsConditions, Acceptance, BillOfQuantity,
-            TotalAmount, Status, CustomClauses, ClauseOrder, DigitalSignaturesJson, ApprovalWorkflowJson,
+            TotalAmount, Status, CustomClauses, ClauseOrder, DigitalSignaturesJson, ApprovalWorkflowJson, PageOrientationsJson,
             QuoteDate, CustomerReference, YourRef, QuoteType, Subject, Signatory, SignatoryDesignation, CoSignatory, CoSignatoryDesignation,
             ToName, ToAddress, ToPhone, ToEmail, ToFax, ToAttention, LeadJob, OwnJob, ReasonForRevision, CreatedAt, UpdatedAt
         )
@@ -5052,7 +5417,7 @@ async function promoteDraftToEnquiryQuote(draftQuoteId, nextSteps = []) {
             ${draft.ScopeOfWork || ''}, ${draft.BasisOfOffer || ''}, ${draft.Exclusions || ''}, ${draft.PricingTerms || ''},
             ${draft.Schedule || ''}, ${draft.Warranty || ''}, ${draft.ResponsibilityMatrix || ''}, ${draft.TermsConditions || ''}, ${draft.Acceptance || ''}, ${draft.BillOfQuantity || ''},
             ${totalAmount}, N'Approved', ${draft.CustomClauses || null}, ${draft.ClauseOrder || null},
-            ${draft.DigitalSignaturesJson || null}, ${approvalWorkflowJsonStr},
+            ${draft.DigitalSignaturesJson || null}, ${approvalWorkflowJsonStr}, ${draft.PageOrientationsJson || null},
             ${draft.QuoteDate || null}, ${draft.CustomerReference || ''}, ${draft.YourRef || draft.CustomerReference || ''},
             ${draft.QuoteType || ''}, ${draft.Subject || ''},
             ${draft.Signatory || ''}, ${draft.SignatoryDesignation || ''}, ${draft.CoSignatory || ''}, ${draft.CoSignatoryDesignation || ''},
@@ -5075,6 +5440,21 @@ async function promoteDraftToEnquiryQuote(draftQuoteId, nextSteps = []) {
         ownJob: identity.effectiveOwnJob || draft.OwnJob || '',
         customerName: draft.ToName || '',
     });
+
+    // Steps are now linked, so later stamp reads/writes use EnquiryQuotes. Carry over any stamp
+    // placed on the draft between the SELECT above and the link.
+    try {
+        const latestDraftSig = await sql.query`
+            SELECT DigitalSignaturesJson FROM EnquiryQuotesDraft WHERE ID = ${draftId}
+        `;
+        await mergeDigitalStampsIntoRow(
+            'quote',
+            newQuoteId,
+            latestDraftSig.recordset?.[0]?.DigitalSignaturesJson || '[]'
+        );
+    } catch (sigErr) {
+        console.warn('[promoteDraft] carry over draft signatures:', sigErr.message || sigErr);
+    }
 
     try {
         await promoteDraftAttachmentsToQuote(draftId, newQuoteId);
@@ -5619,28 +5999,23 @@ router.get('/:id/digital-signatures', async (req, res) => {
     }
 });
 
-// PUT /api/quotes/:id/digital-signatures — replace all placed stamps on this revision
+// PUT /api/quotes/:id/digital-signatures — add stamps to this revision (stamps already stored are kept)
 router.put('/:id/digital-signatures', express.json({ limit: '25mb' }), async (req, res) => {
     try {
         const { id } = req.params;
         const stamps = Array.isArray(req.body.stamps) ? req.body.stamps : [];
-        const jsonStr = serializeQuoteDigitalStamps(stamps);
-        const upd = await sql.query`
-            UPDATE EnquiryQuotes
-            SET DigitalSignaturesJson = ${jsonStr}, UpdatedAt = ${new Date()}
-            WHERE ID = ${id}
-        `;
-        if ((upd.rowsAffected?.[0] || 0) === 0) {
+        const merged = await mergeDigitalStampsIntoRow('quote', id, stamps);
+        if (merged == null) {
             return res.status(404).json({ error: 'Quote not found' });
         }
-        return res.json({ ok: true, stamps: parseQuoteDigitalStamps(jsonStr) });
+        return res.json({ ok: true, stamps: merged });
     } catch (err) {
         console.error('[Quote API] PUT /:id/digital-signatures:', err);
         res.status(500).json({ error: 'Failed to save quote signatures', details: err.message });
     }
 });
 
-// POST /api/quotes/:id/digital-signatures/stamps — append/upsert one stamp (multi-user)
+// POST /api/quotes/:id/digital-signatures/stamps — append one stamp (multi-user)
 router.post('/:id/digital-signatures/stamps', express.json({ limit: '8mb' }), async (req, res) => {
     try {
         const { id } = req.params;
@@ -5648,22 +6023,81 @@ router.post('/:id/digital-signatures/stamps', express.json({ limit: '8mb' }), as
         if (!stamp || !stamp.imageDataUrl) {
             return res.status(400).json({ error: 'stamp with imageDataUrl is required' });
         }
-        const existing = await sql.query`
-            SELECT DigitalSignaturesJson FROM EnquiryQuotes WHERE ID = ${id}
-        `;
-        if (!existing.recordset?.length) {
+        const merged = await mergeDigitalStampsIntoRow('quote', id, [stamp]);
+        if (merged == null) {
             return res.status(404).json({ error: 'Quote not found' });
         }
-        const merged = mergeQuoteStamp(existing.recordset[0].DigitalSignaturesJson, stamp);
-        const jsonStr = serializeQuoteDigitalStamps(merged);
-        await sql.query`
-            UPDATE EnquiryQuotes
-            SET DigitalSignaturesJson = ${jsonStr}, UpdatedAt = ${new Date()}
-            WHERE ID = ${id}
-        `;
         return res.json({ ok: true, stamps: merged });
     } catch (err) {
         console.error('[Quote API] POST /:id/digital-signatures/stamps:', err);
+        res.status(500).json({ error: 'Failed to place signature', details: err.message });
+    }
+});
+
+// GET /api/quotes/quote-drafts/:draftId/digital-signatures — stamps for a draft:
+// EnquiryQuotesDraft until the final approver approves, then the promoted EnquiryQuotes row.
+router.get('/quote-drafts/:draftId/digital-signatures', async (req, res) => {
+    try {
+        const draftId = Number(req.params.draftId);
+        if (!Number.isFinite(draftId) || draftId <= 0) {
+            return res.status(400).json({ error: 'Valid draftId is required' });
+        }
+        const linkedQuoteId = await resolvePromotedQuoteIdForDraft(draftId);
+        if (linkedQuoteId) {
+            const quoteRow = await sql.query`
+                SELECT DigitalSignaturesJson FROM EnquiryQuotes WHERE ID = ${linkedQuoteId}
+            `;
+            if (quoteRow.recordset?.length) {
+                return res.json({
+                    stamps: parseQuoteDigitalStamps(quoteRow.recordset[0].DigitalSignaturesJson),
+                    quoteId: linkedQuoteId,
+                    source: 'EnquiryQuotes',
+                });
+            }
+        }
+        const row = await sql.query`
+            SELECT DigitalSignaturesJson FROM EnquiryQuotesDraft WHERE ID = ${draftId}
+        `;
+        if (!row.recordset?.length) {
+            return res.status(404).json({ error: 'Quote draft not found' });
+        }
+        return res.json({
+            stamps: parseQuoteDigitalStamps(row.recordset[0].DigitalSignaturesJson),
+            quoteId: null,
+            source: 'EnquiryQuotesDraft',
+        });
+    } catch (err) {
+        console.error('[Quote API] GET /quote-drafts/:draftId/digital-signatures:', err);
+        res.status(500).json({ error: 'Failed to load draft signatures', details: err.message });
+    }
+});
+
+// POST /api/quotes/quote-drafts/:draftId/digital-signatures/stamps — append one stamp:
+// EnquiryQuotesDraft until the final approver approves, then the promoted EnquiryQuotes row.
+router.post('/quote-drafts/:draftId/digital-signatures/stamps', express.json({ limit: '8mb' }), async (req, res) => {
+    try {
+        const draftId = Number(req.params.draftId);
+        if (!Number.isFinite(draftId) || draftId <= 0) {
+            return res.status(400).json({ error: 'Valid draftId is required' });
+        }
+        const stamp = req.body.stamp;
+        if (!stamp || !stamp.imageDataUrl) {
+            return res.status(400).json({ error: 'stamp with imageDataUrl is required' });
+        }
+        const linkedQuoteId = await resolveLinkedQuoteIdFromDraft(draftId);
+        if (linkedQuoteId) {
+            const quoteStamps = await mergeDigitalStampsIntoRow('quote', linkedQuoteId, [stamp]);
+            if (quoteStamps != null) {
+                return res.json({ ok: true, stamps: quoteStamps, quoteId: linkedQuoteId });
+            }
+        }
+        const draftStamps = await mergeDigitalStampsIntoRow('draft', draftId, [stamp]);
+        if (draftStamps == null) {
+            return res.status(404).json({ error: 'Quote draft not found' });
+        }
+        return res.json({ ok: true, stamps: draftStamps, quoteId: null });
+    } catch (err) {
+        console.error('[Quote API] POST /quote-drafts/:draftId/digital-signatures/stamps:', err);
         res.status(500).json({ error: 'Failed to place signature', details: err.message });
     }
 });
@@ -5741,6 +6175,7 @@ router.post('/', async (req, res) => {
             ownJob = '',
             digitalSignaturesJson,
             approvalWorkflowJson,
+            pageOrientationsJson,
             reasonForRevision = ''
         } = req.body;
 
@@ -5758,6 +6193,7 @@ router.post('/', async (req, res) => {
                           ? approvalWorkflowJson
                           : approvalWorkflowJson?.steps
                   );
+        const pageOrientationsJsonStr = serializePageOrientationsJson(pageOrientationsJson);
 
         if (!requestNo) {
             return res.status(400).json({ error: 'Request number is required' });
@@ -5776,8 +6212,7 @@ router.post('/', async (req, res) => {
                 const userDept = userRes.recordset.length > 0 ? userRes.recordset[0].Department : null;
 
                 if (userDept) {
-                    const masterRes = await sql.query`SELECT * FROM Master_EnquiryFor WHERE ItemName = ${userDept}`;
-                    const masterData = masterRes.recordset[0];
+                    const masterData = await findMasterEnquiryForUserDepartment(userDept, effectiveOwnJob);
                     if (masterData) {
                         effectiveOwnJob = applyOwnJobAfterDepartmentLookup(effectiveOwnJob, userDept);
                         if (!clientSentDivision) {
@@ -5843,11 +6278,12 @@ router.post('/', async (req, res) => {
 
         const requestRef = finalLeadJobCode ? `${requestNo}-${finalLeadJobCode}` : requestNo;
 
-        // QuoteNo is preset per Enquiry + Lead Job + Customer; only RevisionNo changes.
+        // QuoteNo is preset per Enquiry + Lead Job + Customer + Own Job; only RevisionNo changes.
         const allocated = await allocateQuoteNoAndRevision({
             requestNo,
             leadJob: leadJob || '',
             toName: toName || '',
+            ownJob: effectiveOwnJob || '',
             draftQuoteNo: 0,
         });
         const quoteNo = allocated.quoteNo;
@@ -5857,7 +6293,7 @@ router.post('/', async (req, res) => {
         const quoteNumber = `${dept}/${division}/${requestRef}/${quoteNo}-R${revisionNo}`;
 
         console.log(
-            `[Quote Creation] Customer: ${toName}, Division: ${division}, QuoteNo: ${quoteNo}, Rev: ${revisionNo}, reused=${allocated.reused}, Full: ${quoteNumber}`
+            `[Quote Creation] Customer: ${toName}, OwnJob: ${effectiveOwnJob}, Division: ${division}, QuoteNo: ${quoteNo}, Rev: ${revisionNo}, reused=${allocated.reused}, Full: ${quoteNumber}`
         );
 
         const resolvedCreateTotal = await resolveTotalAmountForPersist(
@@ -5880,7 +6316,7 @@ router.post('/', async (req, res) => {
                 ShowSchedule, ShowWarranty, ShowResponsibilityMatrix, ShowTermsConditions, ShowAcceptance, ShowBillOfQuantity,
                 ScopeOfWork, BasisOfOffer, Exclusions, PricingTerms,
                 Schedule, Warranty, ResponsibilityMatrix, TermsConditions, Acceptance, BillOfQuantity,
-                TotalAmount, Status, CustomClauses, ClauseOrder, DigitalSignaturesJson, ApprovalWorkflowJson,
+                TotalAmount, Status, CustomClauses, ClauseOrder, DigitalSignaturesJson, ApprovalWorkflowJson, PageOrientationsJson,
                 QuoteDate, CustomerReference, YourRef, QuoteType, Subject, Signatory, SignatoryDesignation, CoSignatory, CoSignatoryDesignation, ToName, ToAddress, ToPhone, ToEmail, ToFax, ToAttention, LeadJob, OwnJob, ReasonForRevision, CreatedAt, UpdatedAt
             )
             OUTPUT INSERTED.ID, INSERTED.QuoteNumber
@@ -5891,7 +6327,7 @@ router.post('/', async (req, res) => {
                 ${showSchedule ? 1 : 0}, ${showWarranty ? 1 : 0}, ${showResponsibilityMatrix ? 1 : 0}, ${showTermsConditions ? 1 : 0}, ${showAcceptance ? 1 : 0}, ${showBillOfQuantity ? 1 : 0},
                 ${scopeOfWork}, ${basisOfOffer}, ${exclusions}, ${pricingTerms},
                 ${schedule}, ${warranty}, ${responsibilityMatrix}, ${termsConditions}, ${acceptance}, ${billOfQuantity},
-                ${resolvedCreateTotal}, ${status}, ${customClausesJson}, ${clauseOrderJson}, ${digitalSignaturesJsonStr}, ${approvalWorkflowJsonStr},
+                ${resolvedCreateTotal}, ${status}, ${customClausesJson}, ${clauseOrderJson}, ${digitalSignaturesJsonStr}, ${approvalWorkflowJsonStr}, ${pageOrientationsJsonStr},
                 ${quoteDate ? quoteDate.split('T')[0] : null}, ${customerReference}, ${customerReference}, ${quoteType || ''}, ${subject}, ${signatory}, ${signatoryDesignation}, ${coSignatory}, ${coSignatoryDesignation}, ${toName}, ${toAddress}, ${toPhone}, ${toEmail}, ${toFax || ''}, ${toAttention || ''}, ${leadJob || ''}, ${effectiveOwnJob}, ${reasonForRevisionStr || null}, ${now}, ${now}
             )
         `;
@@ -5988,6 +6424,7 @@ router.put('/:id', async (req, res) => {
             ownJob,
             digitalSignaturesJson,
             approvalWorkflowJson,
+            pageOrientationsJson,
             reasonForRevision
         } = req.body;
 
@@ -6008,6 +6445,10 @@ router.put('/:id', async (req, res) => {
                           ? approvalWorkflowJson
                           : approvalWorkflowJson?.steps
                   )
+            : null;
+        const hasPageOrientationsPayload = Object.prototype.hasOwnProperty.call(req.body, 'pageOrientationsJson');
+        const pageOrientationsJsonStr = hasPageOrientationsPayload
+            ? serializePageOrientationsJson(pageOrientationsJson)
             : null;
         let effectiveOwnJob = (ownJob || '').trim();
 
@@ -6065,7 +6506,6 @@ router.put('/:id', async (req, res) => {
         Status = ${status},
         CustomClauses = ${customClausesJson},
         ClauseOrder = ${clauseOrderJson},
-        DigitalSignaturesJson = ${digitalSignaturesJsonStr},
         ApprovalWorkflowJson = ${approvalWorkflowJsonStr},
         QuoteDate = ${quoteDate ? quoteDate.split('T')[0] : null},
         CustomerReference = ${customerReference},
@@ -6144,7 +6584,18 @@ router.put('/:id', async (req, res) => {
         `;
         }
 
+        if (hasDigitalSignaturesPayload) {
+            await mergeDigitalStampsIntoRow('quote', id, digitalSignaturesJsonStr);
+        }
+
         const updated = await sql.query`SELECT ID, QuoteNumber FROM EnquiryQuotes WHERE ID = ${id} `;
+        if (hasPageOrientationsPayload) {
+            await sql.query`
+                UPDATE EnquiryQuotes
+                SET PageOrientationsJson = ${pageOrientationsJsonStr}, UpdatedAt = ${now}
+                WHERE ID = ${id}
+            `;
+        }
         res.json({ success: true, id: updated.recordset[0].ID, quoteNumber: updated.recordset[0].QuoteNumber });
 
     } catch (err) {

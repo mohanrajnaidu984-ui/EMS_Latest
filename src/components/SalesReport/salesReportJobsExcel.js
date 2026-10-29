@@ -109,6 +109,10 @@ export function getJobsExportColumns(topJobStatus, tableConfig) {
         cols.push({ key: 'quoteType', header: 'Quote Type', width: 14, type: 'text' });
     }
 
+    if (topJobStatus === 'Won') {
+        cols.push({ key: 'erpJobNo', header: 'ERP Job.', width: 16, type: 'text' });
+    }
+
     cols.push({ key: 'concernSe', header: 'Concern SE/EE/TE/QS', width: 28, type: 'text' });
 
     if (cfg.extraHeader) {
@@ -154,6 +158,8 @@ function cellValueForRow(col, row, idx, topJobStatus, headingLabel) {
             return dash(row.ConsultantName);
         case 'quoteType':
             return dash(row.QuoteType);
+        case 'erpJobNo':
+            return dash(row.ERPJobNo);
         case 'concernSe':
             return dash(row.ConcernSEEEQS);
         case 'extra':

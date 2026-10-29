@@ -677,6 +677,8 @@ const EnquiryResultsTable = ({
                             pagedRows.map((r, idx) => {
                                 const jobLines = getLeadJobDisplayLines(r, { users: masters?.users });
                                 const reqNo = getEnquiryRowRequestNo(r);
+                                const isInactiveEnquiry =
+                                    String(r.EnquiryStatus || '').trim().toLowerCase() === 'inactive';
                                 const canActivate = Boolean(reqNo && typeof onRowOpen === 'function');
                                 const openThisRow = () => {
                                     if (canActivate) onRowOpen(reqNo);
@@ -685,7 +687,12 @@ const EnquiryResultsTable = ({
                                 return (
                                     <tr
                                         key={`${rowKey}-${idx}`}
-                                        className={canActivate ? 'enquiry-search-row-open' : ''}
+                                        className={[
+                                            canActivate ? 'enquiry-search-row-open' : '',
+                                            isInactiveEnquiry ? 'enquiry-row-inactive' : '',
+                                        ]
+                                            .filter(Boolean)
+                                            .join(' ')}
                                         tabIndex={canActivate ? 0 : undefined}
                                         role={canActivate ? 'button' : undefined}
                                         title={canActivate ? (r._canEdit ? 'Open enquiry (edit)' : 'Open enquiry (view)') : undefined}
@@ -724,7 +731,22 @@ const EnquiryResultsTable = ({
                                                 )}
                                             </div>
                                         </td>
-                                        <td onClick={openThisRow} style={{ cursor: canActivate ? 'pointer' : 'default' }}>{reqNo}</td>
+                                        <td onClick={openThisRow} style={{ cursor: canActivate ? 'pointer' : 'default' }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
+                                                <span>{reqNo}</span>
+                                                {isInactiveEnquiry ? (
+                                                    <span
+                                                        style={{
+                                                            color: '#dc3545',
+                                                            fontWeight: 700,
+                                                            fontSize: '11px',
+                                                        }}
+                                                    >
+                                                        Inactive
+                                                    </span>
+                                                ) : null}
+                                            </div>
+                                        </td>
                                         <td onClick={openThisRow} style={{ cursor: canActivate ? 'pointer' : 'default' }}>{formatEnquiryResultDate(r.EnquiryDate)}</td>
                                         <td
                                             className="ert-col-project"

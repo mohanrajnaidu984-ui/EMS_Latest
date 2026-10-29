@@ -1587,7 +1587,7 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
             WHERE RequestNo IN (${requestNos})
         `),
             sql.query(`
-            SELECT RequestNo, QuoteNumber, QuoteNo, RevisionNo, QuoteDate, OwnJob, LeadJob, ToName, PreparedBy, TotalAmount
+            SELECT ID, RequestNo, QuoteNumber, QuoteNo, RevisionNo, QuoteDate, OwnJob, LeadJob, ToName, PreparedBy, TotalAmount
             FROM EnquiryQuotes
             WHERE RequestNo IN (${requestNos})
         `),
@@ -2272,6 +2272,29 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
                 ? pickLatestQuoteRow(quotesForWorkflowDisplay)
                 : null;
             const workflowQuoteId = workflowPrimaryQuote ? Number(workflowPrimaryQuote.ID) : null;
+            const listQuoteIdFromRef = (() => {
+                if (!listRef) return null;
+                const firstRef = String(listRef)
+                    .split(/\s*\|\s*/)
+                    .map((s) => s.trim())
+                    .filter(Boolean)[0];
+                if (!firstRef) return null;
+                const match = (quotesForReq || []).find(
+                    (q) =>
+                        String(q.QuoteNumber || q.quoteNumber || '')
+                            .trim()
+                            .toLowerCase() === firstRef.toLowerCase()
+                );
+                const id = quoteRowIdNumber(match);
+                return id > 0 ? id : null;
+            })();
+            const listQuoteId =
+                (workflowQuoteId && Number.isFinite(workflowQuoteId) && workflowQuoteId > 0
+                    ? workflowQuoteId
+                    : null) ||
+                listQuoteIdFromRef ||
+                quoteRowIdNumber(pickLatestQuoteRow(quotesForReq)) ||
+                null;
 
             return {
                 RequestNo: enq.RequestNo,
@@ -2282,6 +2305,7 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
                 ListPendingRevisionRequired: pendingRevisionRequired ? 'Yes' : null,
                 ListQuoteLeadContext: listQuoteLeadContext,
                 ProjectName: enq.ProjectName,
+                ListQuoteId: listQuoteId > 0 ? listQuoteId : null,
                 ListQuoteRef: listRef,
                 ListWorkflowNo: resolveListWorkflowNo(workflowLookup, enq.RequestNo, listRef),
                 ListQuoteDetailToName: listQuoteDetailToName,
@@ -2302,6 +2326,7 @@ async function mapQuoteListingRows(sql, enquiries, userEmail, accessCtx, session
                 EnquiryDate: enq.EnquiryDate,
                 DueDate: enq.DueDate,
                 Status: enq.Status,
+                EnquiryStatus: enq.EnquiryStatus || enq.enquirystatus || 'Active',
                 Divisions: enq.Divisions,
                 QuotedCustomers: enq.QuotedCustomers,
                 SubJobPrices: subJobPrices,

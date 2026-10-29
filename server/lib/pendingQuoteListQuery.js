@@ -171,7 +171,12 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
         }
         console.log(`[API] Pending quote list query for ${userEmail || 'All'}...`);
 
-        const accessCtx = userEmail ? await resolvePricingAccessContext(userEmail) : null;
+        const accessCtx =
+            options.accessCtx != null
+                ? options.accessCtx
+                : userEmail
+                  ? await resolvePricingAccessContext(userEmail)
+                  : null;
         if (userEmail && (!accessCtx || !accessCtx.user)) {
             return { enquiries: [], accessCtx: accessCtx || null, userEmail };
         }
@@ -355,7 +360,7 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
             // Refined logic for specific user's division
             query = `
                 SELECT DISTINCT 
-                    E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName, E.EnquiryDate, E.DueDate, E.Status,
+                    E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName, E.EnquiryDate, E.DueDate, E.Status, E.EnquiryStatus,
                     LTRIM(RTRIM(ISNULL(PV.EnquiryForItem, N''))) AS ListPendingOwnJobItem,
                     LTRIM(RTRIM(ISNULL(PV.LeadJobName, N''))) AS ListPendingLeadJobName,
                     LTRIM(RTRIM(ISNULL(PV.CustomerName, N''))) AS ListPendingCustomerName,
@@ -423,7 +428,7 @@ async function runPendingQuoteListQuery(sqlConn, rawUserEmail, extraWhereSql = '
             // Admin or Fallback (Show all with prices but no quotes)
             query = `
                 SELECT DISTINCT 
-                    E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName, E.EnquiryDate, E.DueDate, E.Status,
+                    E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName, E.EnquiryDate, E.DueDate, E.Status, E.EnquiryStatus,
                     LTRIM(RTRIM(ISNULL(PV.EnquiryForItem, N''))) AS ListPendingOwnJobItem,
                     LTRIM(RTRIM(ISNULL(PV.LeadJobName, N''))) AS ListPendingLeadJobName,
                     LTRIM(RTRIM(ISNULL(PV.CustomerName, N''))) AS ListPendingCustomerName,

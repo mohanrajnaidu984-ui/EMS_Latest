@@ -11,6 +11,16 @@ import { formatSignaturePlacedDateTime } from '../../utils/enquiryResultsHelpers
 /** Dispatched when placing from profile modal on Quote tab (QuoteForm listens). */
 export const EMS_QUOTE_PLACE_STAMP_EVENT = 'ems-quote-place-digital-stamp';
 
+/** Dispatched on every library edit (checkboxes, default, add/remove); detail = { email, signatures, defaultSignatureId }. */
+export const EMS_SIGNATURE_LIBRARY_CHANGED_EVENT = 'ems-signature-library-changed';
+
+let pendingSignatureLibrarySave = Promise.resolve();
+
+/** Resolve once the latest library save reached the server, so a re-fetch does not return stale prefs. */
+export function waitForSignatureLibrarySave() {
+    return pendingSignatureLibrarySave.catch(() => {});
+}
+
 export const SIG_LIB_STORAGE_PREFIX = 'ems_quote_sig_library_v1:';
 
 const DEFAULT_SIG_ID_KEY = 'ems_quote_default_sig_id_v1:';
@@ -123,6 +133,25 @@ export function saveStampsForEnquiry(requestNo, stamps, leadJobKey = '', custome
     }
 }
 
+/**
+ * Cover stamps near the sign-off are stored relative to `.quote-cover-sign-off` (mm offsets) and rendered
+ * inside it, so they follow the signatory name when the footer/header height (branding) moves the block.
+ */
+export const COVER_STAMP_ANCHOR = 'cover-signoff';
+const COVER_STAMP_ANCHOR_REACH_MM = 40;
+
+export function stampAnchorFields(s) {
+    if (s?.anchor !== COVER_STAMP_ANCHOR) return {};
+    const dx = Number(s.anchorDxMm);
+    const dy = Number(s.anchorDyMm);
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return {};
+    return { anchor: COVER_STAMP_ANCHOR, anchorDxMm: dx, anchorDyMm: dy };
+}
+
+export function isCoverSignOffAnchoredStamp(s) {
+    return Number(s?.sheetIndex) === 1 && stampAnchorFields(s).anchor === COVER_STAMP_ANCHOR;
+}
+
 /** Parse stamps from EnquiryQuotes.DigitalSignaturesJson (saved revision). */
 export function parseDigitalSignaturesFromQuoteRow(quote) {
     const raw = quote?.DigitalSignaturesJson ?? quote?.digitalSignaturesJson;
@@ -140,6 +169,7 @@ export function parseDigitalSignaturesFromQuoteRow(quote) {
                 })(),
                 xPct: typeof s.xPct === 'number' && Number.isFinite(s.xPct) ? s.xPct : 82,
                 yPct: typeof s.yPct === 'number' && Number.isFinite(s.yPct) ? s.yPct : 38,
+                ...stampAnchorFields(s),
                 imageDataUrl: s.imageDataUrl || '',
                 displayName: (s.displayName || '').trim(),
                 designation: (s.designation || '').trim(),
@@ -168,6 +198,7 @@ export function serializeDigitalStampsForApi(stamps) {
                 sheetIndex: s.sheetIndex,
                 xPct: s.xPct,
                 yPct: s.yPct,
+                ...stampAnchorFields(s),
                 imageDataUrl: s.imageDataUrl,
                 displayName: s.displayName,
                 designation: s.designation,
@@ -373,6 +404,7 @@ export function SignatureVaultModal({
         setNewLabel('');
         (async () => {
             try {
+                await waitForSignatureLibrarySave();
                 let master = await migrateLocalSignatureLibraryToServer(userEmail);
                 if (!master) master = await fetchUserSignatureLibrary(userEmail);
                 if (cancelled) return;
@@ -412,11 +444,22 @@ export function SignatureVaultModal({
         async (next, nextDefaultId = defaultSigId) => {
             setLibrary(next);
             saveSignatureLibrary(userEmail, next);
+            window.dispatchEvent(
+                new CustomEvent(EMS_SIGNATURE_LIBRARY_CHANGED_EVENT, {
+                    detail: {
+                        email: normalizeSignatureEmail(userEmail),
+                        signatures: next,
+                        defaultSignatureId: nextDefaultId || null,
+                    },
+                })
+            );
+            const savePromise = saveUserSignatureLibrary(userEmail, {
+                defaultSignatureId: nextDefaultId,
+                signatures: next,
+            });
+            pendingSignatureLibrarySave = savePromise;
             try {
-                await saveUserSignatureLibrary(userEmail, {
-                    defaultSignatureId: nextDefaultId,
-                    signatures: next,
-                });
+                await savePromise;
                 if (nextDefaultId) saveDefaultSignatureId(userEmail, nextDefaultId);
                 setLibrarySaveError('');
             } catch (e) {
@@ -851,23 +894,67 @@ function computeQuoteSignatureDisplaySize(naturalWidth, naturalHeight) {
     };
 }
 
-/**
- * Click/drop point = center of signature image (not caption).
- * Same offsets for placed stamps (calc) and placement cursor (transform) — preview must match PDF.
- */
-export const QUOTE_SIGNATURE_ANCHOR_OFFSET_X_PX = SIG_IMG_HALF;
-export const QUOTE_SIGNATURE_ANCHOR_OFFSET_Y_PX = SIG_IMG_HALF_H;
+/** A4 page height in mm for the sheet's orientation (sheet width is fixed: 210mm portrait / 297mm landscape). */
+function quoteSheetPageHeightMm(sheetEl) {
+    return sheetEl?.getAttribute?.('data-page-orientation') === 'landscape' ? 210 : 297;
+}
 
-function stampAnchorStyle(xPct, yPct, offsetX = QUOTE_SIGNATURE_ANCHOR_OFFSET_X_PX, offsetY = QUOTE_SIGNATURE_ANCHOR_OFFSET_Y_PX) {
+/**
+ * Stamp yPct is measured against the nominal A4 page height (derived from the fixed sheet width),
+ * not the sheet's rendered height — the cover sheet grows past 297mm when its content is long.
+ */
+export function quoteSheetReferenceHeightPx(sheetEl, rect) {
+    const r = rect || sheetEl?.getBoundingClientRect?.();
+    const w = Number(r?.width) || 0;
+    if (!w) return Number(r?.height) || 0;
+    const pageW = quoteSheetPageHeightMm(sheetEl) === 210 ? 297 : 210;
+    return (w * quoteSheetPageHeightMm(sheetEl)) / pageW;
+}
+
+function quoteSheetPageWidthMm(sheetEl) {
+    return quoteSheetPageHeightMm(sheetEl) === 210 ? 297 : 210;
+}
+
+/** mm per screen px on a sheet (sheet width is fixed in mm; works under preview zoom). */
+function quoteSheetMmPerPx(sheetEl, rect) {
+    const r = rect || sheetEl?.getBoundingClientRect?.();
+    const w = Number(r?.width) || 0;
+    return w ? quoteSheetPageWidthMm(sheetEl) / w : 0;
+}
+
+/**
+ * Offset of a click/drop point from the cover sign-off block, or null when the point is not on the
+ * cover page or too far from the sign-off (those stamps keep the page-relative xPct/yPct).
+ */
+export function computeCoverStampAnchor(sheetEl, clientX, clientY) {
+    if (!sheetEl || quoteSheetPageNumber(sheetEl) !== 1) return null;
+    const signOff = sheetEl.querySelector('.quote-cover-sign-off');
+    if (!signOff) return null;
+    const box = signOff.getBoundingClientRect();
+    const mmPerPx = quoteSheetMmPerPx(sheetEl);
+    if (!box.width || !mmPerPx) return null;
+    const dxMm = (clientX - box.left) * mmPerPx;
+    const dyMm = (clientY - box.top) * mmPerPx;
+    const heightMm = box.height * mmPerPx;
+    if (dyMm < -COVER_STAMP_ANCHOR_REACH_MM || dyMm > heightMm + COVER_STAMP_ANCHOR_REACH_MM) return null;
     return {
-        left: `calc(${xPct}% - ${offsetX}px)`,
-        top: `calc(${yPct}% - ${offsetY}px)`,
+        anchor: COVER_STAMP_ANCHOR,
+        anchorDxMm: Math.round(dxMm * 100) / 100,
+        anchorDyMm: Math.round(dyMm * 100) / 100,
     };
 }
 
-/** Follow-cursor placement preview only (not captured in PDF). Must match stampAnchorStyle offsets. */
-const STAMP_PLACEMENT_CURSOR_TRANSFORM = `translate(${-QUOTE_SIGNATURE_ANCHOR_OFFSET_X_PX}px, -${QUOTE_SIGNATURE_ANCHOR_OFFSET_Y_PX}px)`;
+/** 1-based page number of a rendered quote sheet (hidden/measure sheets do not shift numbering). */
+export function quoteSheetPageNumber(sheetEl, fallbackIndex0 = 0) {
+    const raw = sheetEl?.getAttribute?.('data-sheet-index');
+    const n = raw == null || raw === '' ? NaN : Number(raw);
+    return (Number.isFinite(n) ? n : Math.max(0, fallbackIndex0)) + 1;
+}
 
+/**
+ * Click/drop point = center of the signature image. The body is shifted by half its own final size
+ * (no measurement, no transform), so cursor preview, placed stamp and PDF all agree.
+ */
 function QuoteSignatureStampContent({
     imageDataUrl,
     displayName,
@@ -875,7 +962,7 @@ function QuoteSignatureStampContent({
     preview,
     showNameOnStamp = true,
     showDateTimeOnStamp = true,
-    onImageLoad,
+    children,
 }) {
     const croppedImageUrl = useCroppedSignatureImage(imageDataUrl);
     const [displaySize, setDisplaySize] = useState(null);
@@ -889,37 +976,39 @@ function QuoteSignatureStampContent({
 
     const handleImageLoad = (e) => {
         const img = e.currentTarget;
-        const size = computeQuoteSignatureDisplaySize(img.naturalWidth, img.naturalHeight);
-        if (size) setDisplaySize(size);
-        onImageLoad?.(e);
+        const size = computeQuoteSignatureDisplaySize(img.naturalWidth, img.naturalHeight) || {
+            w: SIG_IMG_HALF * 2,
+            h: SIG_IMG_HALF_H * 2,
+        };
+        setDisplaySize(size);
     };
 
     return (
         <div
             className="quote-signature-stamp-body"
             style={{
-                display: 'inline-flex',
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: hasCaption ? '3px' : 0,
+                position: 'relative',
+                display: 'block',
+                width: displaySize ? `${displaySize.w}px` : `${QUOTE_SIGNATURE_IMAGE_WIDTH_PX}px`,
+                height: displaySize ? `${displaySize.h}px` : `${QUOTE_SIGNATURE_IMAGE_MAX_HEIGHT_PX}px`,
+                marginLeft: displaySize ? `${-displaySize.w / 2}px` : `${-SIG_IMG_HALF}px`,
+                marginTop: displaySize ? `${-displaySize.h / 2}px` : `${-SIG_IMG_HALF_H}px`,
                 opacity: preview ? 0.92 : 1,
                 filter: preview ? 'drop-shadow(0 2px 6px rgba(15,23,42,0.15))' : undefined,
             }}
         >
+            {children}
             <img
                 src={croppedImageUrl}
                 alt=""
                 onLoad={handleImageLoad}
+                onError={handleImageLoad}
                 style={{
-                    width: displaySize ? `${displaySize.w}px` : 'auto',
-                    height: displaySize ? `${displaySize.h}px` : 'auto',
-                    maxWidth: `${QUOTE_SIGNATURE_IMAGE_WIDTH_PX}px`,
-                    maxHeight: `${QUOTE_SIGNATURE_IMAGE_MAX_HEIGHT_PX}px`,
+                    width: '100%',
+                    height: '100%',
                     objectFit: 'contain',
-                    objectPosition: 'left center',
+                    objectPosition: 'center',
                     display: 'block',
-                    flexShrink: 0,
-                    verticalAlign: 'middle',
                     pointerEvents: 'none',
                     backgroundColor: 'transparent',
                     mixBlendMode: 'multiply',
@@ -929,11 +1018,17 @@ function QuoteSignatureStampContent({
                 <div
                     className="quote-signature-stamp-caption"
                     style={{
-                        flexShrink: 0,
+                        position: 'absolute',
+                        left: 'calc(100% + 3px)',
+                        top: 0,
+                        bottom: 0,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'center',
                         lineHeight: 1.2,
                         textAlign: 'left',
                         boxSizing: 'border-box',
-                        maxWidth: '180px',
+                        whiteSpace: 'nowrap',
                         paddingLeft: 0,
                     }}
                 >
@@ -1014,11 +1109,14 @@ export function QuoteSignaturePlacementOverlay({
             const rect = sheet.getBoundingClientRect();
             if (!rect.width || !rect.height) return;
 
+            const refH = quoteSheetReferenceHeightPx(sheet, rect);
+            if (!refH) return;
             const xPct = clamp(((e.clientX - rect.left) / rect.width) * 100, 2, 96);
-            const yPct = clamp(((e.clientY - rect.top) / rect.height) * 100, 2, 92);
-            const sheets = [...preview.querySelectorAll('.quote-a4-sheet')];
-            const sheetIndex0 = Math.max(0, sheets.indexOf(sheet));
-            onPlaceAt({ sheetIndex: sheetIndex0 + 1, xPct, yPct });
+            const yPct = clamp(((e.clientY - rect.top) / refH) * 100, 2, 92);
+            const sheets = [...preview.querySelectorAll('.quote-a4-sheet:not([data-pack-measure-shell])')];
+            const sheetIndex = quoteSheetPageNumber(sheet, sheets.indexOf(sheet));
+            const anchor = sheetIndex === 1 ? computeCoverStampAnchor(sheet, e.clientX, e.clientY) : null;
+            onPlaceAt({ sheetIndex, xPct, yPct, ...(anchor || {}) });
         };
 
         document.addEventListener('mousemove', onMove);
@@ -1057,10 +1155,8 @@ export function QuoteSignaturePlacementOverlay({
                     position: 'fixed',
                     left: cursor.x,
                     top: cursor.y,
-                    transform: STAMP_PLACEMENT_CURSOR_TRANSFORM,
                     pointerEvents: 'none',
                     zIndex: 100401,
-                    maxWidth: 'min(430px, 60vw)',
                 }}
             >
                 <QuoteSignatureStampContent
@@ -1098,20 +1194,20 @@ export function QuoteSignaturePlacementOverlay({
 /**
  * Stamp overlay on the quote sheet. Locked stamps (removableBeforeNextCommit !== true) cannot move or be removed.
  */
-export function QuoteSignatureStamp({ stamp, onRemove, onMove, allowRemove = false, allowMove = false }) {
+export function QuoteSignatureStamp({
+    stamp,
+    onRemove,
+    onMove,
+    allowRemove = false,
+    allowMove = false,
+    landscape = false,
+    anchoredInSignOff = false,
+}) {
     const rootRef = useRef(null);
     const drag = useRef(null);
-    const [anchorOffset, setAnchorOffset] = useState({
-        x: QUOTE_SIGNATURE_ANCHOR_OFFSET_X_PX,
-        y: QUOTE_SIGNATURE_ANCHOR_OFFSET_Y_PX,
-    });
-
-    const onStampImageLoad = useCallback((e) => {
-        const img = e.currentTarget;
-        const w = img.offsetWidth || QUOTE_SIGNATURE_IMAGE_WIDTH_PX;
-        const h = img.offsetHeight || QUOTE_SIGNATURE_IMAGE_MAX_HEIGHT_PX;
-        setAnchorOffset({ x: w / 2, y: h / 2 });
-    }, []);
+    const pageHeightMm = landscape ? 210 : 297;
+    const anchorFields = anchoredInSignOff ? stampAnchorFields(stamp) : {};
+    const isAnchored = anchorFields.anchor === COVER_STAMP_ANCHOR;
 
     const onPointerDown = (e) => {
         if (!allowMove) return;
@@ -1128,7 +1224,11 @@ export function QuoteSignatureStamp({ stamp, onRemove, onMove, allowRemove = fal
             startXPct: stamp.xPct,
             startYPct: stamp.yPct,
             rectW: rect.width || 1,
-            rectH: rect.height || 1,
+            rectH: quoteSheetReferenceHeightPx(sheet, rect) || 1,
+            mmPerPx: quoteSheetMmPerPx(sheet, rect),
+            anchored: isAnchored,
+            startDxMm: anchorFields.anchorDxMm,
+            startDyMm: anchorFields.anchorDyMm,
         };
     };
 
@@ -1141,6 +1241,14 @@ export function QuoteSignatureStamp({ stamp, onRemove, onMove, allowRemove = fal
             const dyp = ((e.clientY - d.startY) / d.rectH) * 100;
             const xPct = clamp(d.startXPct + dxp, 4, 96);
             const yPct = clamp(d.startYPct + dyp, 4, 96);
+            if (d.anchored && d.mmPerPx) {
+                onMove(stamp.id, xPct, yPct, {
+                    anchor: COVER_STAMP_ANCHOR,
+                    anchorDxMm: Math.round((d.startDxMm + (e.clientX - d.startX) * d.mmPerPx) * 100) / 100,
+                    anchorDyMm: Math.round((d.startDyMm + (e.clientY - d.startY) * d.mmPerPx) * 100) / 100,
+                });
+                return;
+            }
             onMove(stamp.id, xPct, yPct);
         };
         const onPointerUp = () => {
@@ -1163,12 +1271,15 @@ export function QuoteSignatureStamp({ stamp, onRemove, onMove, allowRemove = fal
         <div
             ref={rootRef}
             className="quote-digital-signature-stamp"
+            data-stamp-anchor={isAnchored ? COVER_STAMP_ANCHOR : undefined}
             onPointerDown={onPointerDown}
             style={{
                 position: 'absolute',
-                ...stampAnchorStyle(stamp.xPct, stamp.yPct, anchorOffset.x, anchorOffset.y),
+                left: isAnchored ? `${anchorFields.anchorDxMm}mm` : `${stamp.xPct}%`,
+                top: isAnchored
+                    ? `${anchorFields.anchorDyMm}mm`
+                    : `calc(${pageHeightMm}mm * ${Number(stamp.yPct) || 0} / 100)`,
                 zIndex: 25,
-                maxWidth: 'min(430px, 60vw)',
                 padding: 0,
                 background: 'transparent',
                 border: 'none',
@@ -1181,15 +1292,25 @@ export function QuoteSignatureStamp({ stamp, onRemove, onMove, allowRemove = fal
             }}
             title={allowMove ? 'Drag to move on this page' : 'Signature placement is fixed'}
         >
+            <QuoteSignatureStampContent
+                imageDataUrl={stamp.imageDataUrl}
+                displayName={stamp.showNameOnStamp !== false ? stamp.displayName : ''}
+                placedStr={placedStr}
+                showNameOnStamp={stamp.showNameOnStamp !== false}
+                showDateTimeOnStamp={stamp.showDateTimeOnStamp !== false}
+            >
             {allowMove || allowRemove ? (
                 <div
                     className="no-print"
                     style={{
+                        position: 'absolute',
+                        left: 0,
+                        bottom: 'calc(100% + 4px)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: allowRemove ? 'space-between' : 'flex-start',
-                        marginBottom: '4px',
                         gap: '6px',
+                        whiteSpace: 'nowrap',
                     }}
                 >
                     {allowMove ? (
@@ -1230,14 +1351,7 @@ export function QuoteSignatureStamp({ stamp, onRemove, onMove, allowRemove = fal
                     ) : null}
                 </div>
             ) : null}
-            <QuoteSignatureStampContent
-                imageDataUrl={stamp.imageDataUrl}
-                displayName={stamp.showNameOnStamp !== false ? stamp.displayName : ''}
-                placedStr={placedStr}
-                showNameOnStamp={stamp.showNameOnStamp !== false}
-                showDateTimeOnStamp={stamp.showDateTimeOnStamp !== false}
-                onImageLoad={onStampImageLoad}
-            />
+            </QuoteSignatureStampContent>
         </div>
     );
 }

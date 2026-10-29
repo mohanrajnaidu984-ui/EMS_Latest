@@ -75,6 +75,10 @@ export default function SalesReportMultiSelect({
         }
     };
 
+    const closeOnMouseLeave = () => {
+        setOpen(false);
+    };
+
     const panel =
         open && !disabled && panelStyle && typeof document !== 'undefined'
             ? createPortal(
@@ -82,6 +86,7 @@ export default function SalesReportMultiSelect({
                       ref={panelRef}
                       className="sr-multi-select__panel sr-multi-select__panel--portal"
                       style={panelStyle}
+                      onMouseLeave={closeOnMouseLeave}
                   >
                       {showSelectAll ? (
                           <div className="sr-multi-select__actions">

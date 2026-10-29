@@ -9,7 +9,7 @@ const { formatEnquiryDate, formatShortDate, FONT_FAMILY } = require('./enquiryNo
 const { escapeHtml } = require('./htmlEscape');
 const { tomorrowYmdInSchedulerTz } = require('./schedulerTime');
 const { getSmtpFromEmail } = require('./smtpTransport');
-const { resolveCreatedByDivisionLabel } = require('./enquiryLeadDivisions');
+const { resolveDueEmailDivisionLabel } = require('./enquiryLeadDivisions');
 
 function dueSubmissionReminderFromEmail() {
     return String(process.env.EMS_DUE_SUBMISSION_REMINDER_FROM || getSmtpFromEmail()).trim();
@@ -207,7 +207,8 @@ async function buildRecipientBundles(dueYmd) {
             continue;
         }
 
-        const divisionLabel = await resolveCreatedByDivisionLabel(row.CreatedBy);
+        // All enquiry-involved divisions (lead jobs first), numbered 1. 2. 3…
+        const divisionLabel = await resolveDueEmailDivisionLabel(requestNo, row);
         const listEntry = mapRowToListEntry(row, divisionLabel);
         for (const seEmail of toList || []) {
             addEnquiryToBundle(bundles, seEmail, listEntry);

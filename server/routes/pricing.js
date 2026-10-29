@@ -626,7 +626,7 @@ async function getEnquiryPricingList(userEmail, search = null, pendingOnly = tru
     });
     let baseQuery = `
         SELECT 
-            E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName, E.DueDate, E.CreatedBy, E.EnquiryDate
+            E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName, E.DueDate, E.CreatedBy, E.EnquiryDate, E.EnquiryStatus
         FROM EnquiryMaster E
         WHERE 1=1
     `;
@@ -3535,7 +3535,7 @@ router.get('/:requestNo', async (req, res) => {
         let enquiry;
         try {
             const enquiryResult = await sql.query`
-                SELECT RequestNo, ProjectName, CreatedBy, CustomerName, ClientName, ConsultantName
+                SELECT RequestNo, ProjectName, CreatedBy, CustomerName, ClientName, ConsultantName, EnquiryStatus
                 FROM EnquiryMaster 
                 WHERE RequestNo = ${requestNo}
             `;
@@ -4168,7 +4168,8 @@ router.get('/:requestNo', async (req, res) => {
                 createdBy: enquiry.CreatedBy,
                 customerName: enquiry.CustomerName,
                 clientName: enquiry.ClientName,
-                consultantName: enquiry.ConsultantName
+                consultantName: enquiry.ConsultantName,
+                enquiryStatus: enquiry.EnquiryStatus || 'Active',
             },
             extraCustomers: extraCustomers
                 .map(c => (c.CustomerName || '').replace(/,+$/g, '').trim()) // Normalize names

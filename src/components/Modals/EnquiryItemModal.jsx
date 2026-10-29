@@ -18,6 +18,7 @@ const EnquiryItemModal = ({ show, onClose, mode = 'Add', initialData = null, onS
         FaxNo: '',
         CompanyLogo: '',
         Currency: 'BHD',
+        VAT_Per: 10,
     });
 
     const [newCommonMail, setNewCommonMail] = useState('');
@@ -36,9 +37,18 @@ const EnquiryItemModal = ({ show, onClose, mode = 'Add', initialData = null, onS
                     ? initialData.CCMailIds
                     : (initialData.CCMailIds ? initialData.CCMailIds.split(',') : []);
 
+                const cur = initialData.Currency || initialData.currency || 'BHD';
+                const vatRaw = initialData.VAT_Per ?? initialData.vat_Per ?? initialData.vatPer;
+                const vatNum = vatRaw == null || vatRaw === '' ? null : Number(vatRaw);
                 setFormData({
                     ...initialData,
-                    Currency: initialData.Currency || initialData.currency || 'BHD',
+                    Currency: cur,
+                    VAT_Per:
+                        vatNum != null && Number.isFinite(vatNum) && vatNum >= 0
+                            ? vatNum
+                            : cur === 'SAR'
+                              ? 15
+                              : 10,
                     CommonMailIds: common,
                     CCMailIds: cc
                 });
@@ -57,6 +67,7 @@ const EnquiryItemModal = ({ show, onClose, mode = 'Add', initialData = null, onS
                     FaxNo: '',
                     CompanyLogo: '',
                     Currency: 'BHD',
+                    VAT_Per: 10,
                 });
             }
             setNewCommonMail('');
@@ -70,7 +81,19 @@ const EnquiryItemModal = ({ show, onClose, mode = 'Add', initialData = null, onS
     const { masters } = useData();
 
     const handleChange = (field, value) => {
-        setFormData(prev => ({ ...prev, [field]: value }));
+        setFormData(prev => {
+            const next = { ...prev, [field]: value };
+            // When Currency changes and VAT still matches the previous currency default, follow the new default.
+            if (field === 'Currency') {
+                const prevDefault = String(prev.Currency || '').toUpperCase() === 'SAR' ? 15 : 10;
+                const nextDefault = String(value || '').toUpperCase() === 'SAR' ? 15 : 10;
+                const currentVat = Number(prev.VAT_Per);
+                if (!Number.isFinite(currentVat) || Math.abs(currentVat - prevDefault) < 0.0005) {
+                    next.VAT_Per = nextDefault;
+                }
+            }
+            return next;
+        });
         if (errors[field]) {
             setErrors(prev => ({ ...prev, [field]: null }));
         }
@@ -91,8 +114,19 @@ const EnquiryItemModal = ({ show, onClose, mode = 'Add', initialData = null, onS
                         ? match.CCMailIds
                         : (match.CCMailIds ? match.CCMailIds.split(',') : []);
 
+                    const matchCur = match.Currency || match.currency || 'BHD';
+                    const matchVatRaw = match.VAT_Per ?? match.vat_Per ?? match.vatPer;
+                    const matchVatNum =
+                        matchVatRaw == null || matchVatRaw === '' ? null : Number(matchVatRaw);
                     setFormData({
                         ...match,
+                        Currency: matchCur,
+                        VAT_Per:
+                            matchVatNum != null && Number.isFinite(matchVatNum) && matchVatNum >= 0
+                                ? matchVatNum
+                                : matchCur === 'SAR'
+                                  ? 15
+                                  : 10,
                         CommonMailIds: common,
                         CCMailIds: cc
                     });
@@ -256,6 +290,24 @@ const EnquiryItemModal = ({ show, onClose, mode = 'Add', initialData = null, onS
                             <option value="OMR">OMR</option>
                             <option value="QAR">QAR</option>
                         </select>
+                    </div>
+                    <div className="col-md-3">
+                        <label className="form-label">VAT %</label>
+                        <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            className="form-control"
+                            style={{ fontSize: '13px' }}
+                            value={formData.VAT_Per ?? ''}
+                            onChange={(e) =>
+                                handleChange(
+                                    'VAT_Per',
+                                    e.target.value === '' ? '' : Number(e.target.value)
+                                )
+                            }
+                            title="Default VAT % for quote pricing (Master_EnquiryFor.VAT_Per)"
+                        />
                     </div>
                     <div className="col-md-3">
                         <label className="form-label">Phone</label>

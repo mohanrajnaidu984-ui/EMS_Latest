@@ -449,6 +449,11 @@ function buildSalesReportProbAccountableSeClause(request, effectiveSeList, seInp
     return ` AND (${parts.join(' OR ')}) `;
 }
 
+/** Exclude Inactive enquiries (NULL/blank EnquiryStatus treated as Active). Alias must be EnquiryMaster. */
+function sqlExcludeInactiveEnquiry(alias = 'E') {
+    return ` AND (${alias}.EnquiryStatus IS NULL OR LTRIM(RTRIM(${alias}.EnquiryStatus)) = N'' OR LTRIM(RTRIM(${alias}.EnquiryStatus)) <> N'Inactive') `;
+}
+
 function buildSalesReportEnquiryScopeClause({
     request,
     nonCcBlock,
@@ -471,6 +476,7 @@ function buildSalesReportEnquiryScopeClause({
             }
         }
     }
+    clause += sqlExcludeInactiveEnquiry('E');
     return clause;
 }
 
@@ -512,7 +518,8 @@ function buildSalesReportQuoteOwnJobDivisionClause(
 }
 
 /**
- * Quoted KPI total — same LatestQuoted grain + max-per-enquiry as Jobs (Quoted) table.
+ * Quoted KPI total — highest Net Quoted per project (RequestNo) per division (OwnJob), then sum.
+ * Same basis as Jobs (Quoted) table Total (all customers still listed; sum uses the max).
  * @param {string} [quoteSeAccountableClause] — optional OwnJob-accountable SE filter on EQ.
  */
 function buildQuotedMaxPerEnquiryKpiSql(
@@ -541,6 +548,8 @@ function buildQuotedMaxPerEnquiryKpiSql(
                 SELECT * FROM (
                     SELECT
                         EQ.RequestNo,
+                        ${quotedEqOwnJobExpr} AS OwnJob,
+                        ISNULL(EQ.RevisionNo, 0) AS RevisionNo,
                         ISNULL(
                             TRY_CONVERT(
                                 DECIMAL(18,2),
@@ -555,10 +564,11 @@ function buildQuotedMaxPerEnquiryKpiSql(
                                 ${quotedEqOwnJobExpr},
                                 LTRIM(RTRIM(ISNULL(EQ.ToName, N'')))
                             ORDER BY
-                                ISNULL(EQ.QuoteNo, 0) DESC,
                                 ISNULL(EQ.RevisionNo, 0) DESC,
                                 ISNULL(EQ.UpdatedAt, EQ.QuoteDate) DESC,
-                                EQ.QuoteDate DESC
+                                EQ.QuoteDate DESC,
+                                ISNULL(EQ.QuoteNo, 0) DESC,
+                                ISNULL(EQ.ID, 0) DESC
                         ) AS __rn
                     FROM EnquiryQuotes EQ
                     INNER JOIN EnquiryMaster E ON E.RequestNo = EQ.RequestNo
@@ -569,21 +579,39 @@ function buildQuotedMaxPerEnquiryKpiSql(
                 ) __lq
                 WHERE __lq.__rn = 1
             ),
-            MaxPerEnquiry AS (
+            /* Per project+division: latest RevisionNo first, then highest value at that revision. */
+            LatestRevPerProjectDivision AS (
                 SELECT
-                    E.RequestNo,
-                    MAX(LQ.NetQuotedValue) AS MaxValue
-                FROM EnquiryMaster E
-                INNER JOIN LatestQuoted LQ ON E.RequestNo = LQ.RequestNo
+                    LQ.RequestNo,
+                    LQ.OwnJob,
+                    MAX(ISNULL(LQ.RevisionNo, 0)) AS MaxRevisionNo
+                FROM LatestQuoted LQ
+                INNER JOIN EnquiryMaster E ON E.RequestNo = LQ.RequestNo
                 WHERE YEAR(${yearDateExpr}) = @year
                   ${filterClause}
                   ${quarterClause}
-                GROUP BY E.RequestNo
+                GROUP BY LQ.RequestNo, LQ.OwnJob
+            ),
+            MaxPerProjectDivision AS (
+                SELECT
+                    LQ.RequestNo,
+                    LQ.OwnJob,
+                    MAX(LQ.NetQuotedValue) AS MaxValue
+                FROM LatestQuoted LQ
+                INNER JOIN LatestRevPerProjectDivision LR
+                    ON LR.RequestNo = LQ.RequestNo
+                   AND LR.OwnJob = LQ.OwnJob
+                   AND ISNULL(LQ.RevisionNo, 0) = LR.MaxRevisionNo
+                INNER JOIN EnquiryMaster E ON E.RequestNo = LQ.RequestNo
+                WHERE YEAR(${yearDateExpr}) = @year
+                  ${filterClause}
+                  ${quarterClause}
+                GROUP BY LQ.RequestNo, LQ.OwnJob
             )
             SELECT
-                COUNT(*) AS Cnt,
+                COUNT(DISTINCT RequestNo) AS Cnt,
                 SUM(ISNULL(MaxValue, 0)) AS TotalValue
-            FROM MaxPerEnquiry
+            FROM MaxPerProjectDivision
         `;
 }
 
@@ -1251,6 +1279,7 @@ function appendSalesReportEnquiryFilters(req, request, companies, divisions, rol
         }
     }
 
+    filterClause += sqlExcludeInactiveEnquiry('E');
     return filterClause;
 }
 
@@ -2233,6 +2262,7 @@ router.get('/top-job-booked', async (req, res) => {
                         LTRIM(RTRIM(ISNULL(EQ.QuoteType, N''))) AS QuoteType,
                         COALESCE(EQ.UpdatedAt, EQ.QuoteDate) AS QuoteDate,
                         ISNULL(EQ.RevisionNo, 0) AS RevisionNo,
+                        ISNULL(EQ.QuoteNo, 0) AS QuoteNo,
                         ISNULL(
                             TRY_CONVERT(
                                 DECIMAL(18,2),
@@ -2246,10 +2276,11 @@ router.get('/top-job-booked', async (req, res) => {
                                 ${quotedEqOwnJobExpr},
                                 LTRIM(RTRIM(ISNULL(EQ.ToName, N'')))
                             ORDER BY
-                                ISNULL(EQ.QuoteNo, 0) DESC,
                                 ISNULL(EQ.RevisionNo, 0) DESC,
                                 ISNULL(EQ.UpdatedAt, EQ.QuoteDate) DESC,
-                                EQ.QuoteDate DESC
+                                EQ.QuoteDate DESC,
+                                ISNULL(EQ.QuoteNo, 0) DESC,
+                                ISNULL(EQ.ID, 0) DESC
                         ) AS __rn
                     FROM EnquiryQuotes EQ
                     INNER JOIN EnquiryMaster E ON E.RequestNo = EQ.RequestNo
@@ -2276,6 +2307,8 @@ router.get('/top-job-booked', async (req, res) => {
                 x.QuoteRef,
                 x.QuoteDate,
                 x.QuoteType,
+                x.RevisionNo,
+                x.QuoteNo,
                 x.CustomerName,
                 x.ClientName,
                 x.ConsultantName,
@@ -2301,6 +2334,8 @@ router.get('/top-job-booked', async (req, res) => {
                     LQ.QuoteRef,
                     LQ.QuoteDate,
                     LQ.QuoteType,
+                    LQ.RevisionNo,
+                    LQ.QuoteNo,
                     CAST(NULL AS DATETIME) AS BookedDate,
                     CAST(NULL AS DATETIME) AS LostDate
                 FROM EnquiryMaster E
@@ -2353,7 +2388,8 @@ router.get('/top-job-booked', async (req, res) => {
                 x.BookedDate,
                 x.LostDate,
                 x.QuoteType,
-                x.LeadJobCode
+                x.LeadJobCode,
+                x.ERPJobNo
             FROM (
                 SELECT
                     E.RequestNo,
@@ -2367,6 +2403,7 @@ router.get('/top-job-booked', async (req, res) => {
                     ${SQL_TOPJOB_OWNJOB_DIVISION} AS Division,
                     ${SQL_PROB_WON_VALUE} AS JobValue,
                     P.GrossMargin AS WonGrossProfit,
+                    NULLIF(LTRIM(RTRIM(ISNULL(P.ERPJobNo, N''))), N'') AS ERPJobNo,
                     P.Status,
                     P.ProbabilityChance,
                     P.ExpectedDate,
@@ -2698,20 +2735,24 @@ router.get('/top-job-booked', async (req, res) => {
         const reqNos = [...new Set(topJobRows.map((r) => String(r.RequestNo || '').trim()).filter(Boolean))];
         let concernSeAccountableMap = new Map();
         let concernSeByRequestMap = new Map();
+        /* SQL Server max 2100 params — chunk RequestNo IN lists (Quoted can exceed that). */
+        const CONCERN_SE_IN_CHUNK = 1500;
         if (reqNos.length > 0) {
-            const seReq = new sql.Request();
-            const inParams = reqNos.map((rn, i) => {
-                const key = `rq${i}`;
-                seReq.input(key, sql.NVarChar, rn);
-                return `@${key}`;
-            });
-            if (hasReportFilterList(divisions)) {
-                bindReportFilterList(seReq, 'srSeDiv', divisions);
-            }
-            const seDivClause = hasReportFilterList(divisions)
-                ? `AND ${sqlCseOwnJobDivisionMatchList('cse', divisions, 'srSeDiv')}`
-                : '';
-            const seRowsRes = await seReq.query(`
+            for (let offset = 0; offset < reqNos.length; offset += CONCERN_SE_IN_CHUNK) {
+                const chunk = reqNos.slice(offset, offset + CONCERN_SE_IN_CHUNK);
+                const seReq = new sql.Request();
+                const inParams = chunk.map((rn, i) => {
+                    const key = `rq${i}`;
+                    seReq.input(key, sql.NVarChar, rn);
+                    return `@${key}`;
+                });
+                if (hasReportFilterList(divisions)) {
+                    bindReportFilterList(seReq, 'srSeDiv', divisions);
+                }
+                const seDivClause = hasReportFilterList(divisions)
+                    ? `AND ${sqlCseOwnJobDivisionMatchList('cse', divisions, 'srSeDiv')}`
+                    : '';
+                const seRowsRes = await seReq.query(`
                 SELECT
                     cse.RequestNo,
                     LTRIM(RTRIM(ISNULL(cse.SEName, ''))) AS SEName,
@@ -2721,16 +2762,16 @@ router.get('/top-job-booked', async (req, res) => {
                 WHERE cse.RequestNo IN (${inParams.join(', ')})
                   ${seDivClause}
             `);
-            (seRowsRes.recordset || []).forEach((row) => {
-                const k = String(row.RequestNo || '').trim();
-                if (!k) return;
-                const nm = String(row.SEName || '').trim();
-                if (nm) {
-                    if (!concernSeByRequestMap.has(k)) concernSeByRequestMap.set(k, new Set());
-                    concernSeByRequestMap.get(k).add(nm);
-                }
-            });
-            const accountableRowsRes = await seReq.query(`
+                (seRowsRes.recordset || []).forEach((row) => {
+                    const k = String(row.RequestNo || '').trim();
+                    if (!k) return;
+                    const nm = String(row.SEName || '').trim();
+                    if (nm) {
+                        if (!concernSeByRequestMap.has(k)) concernSeByRequestMap.set(k, new Set());
+                        concernSeByRequestMap.get(k).add(nm);
+                    }
+                });
+                const accountableRowsRes = await seReq.query(`
                 SELECT
                     cse.RequestNo,
                     LTRIM(RTRIM(ISNULL(cse.SEName, ''))) AS SEName,
@@ -2741,16 +2782,16 @@ router.get('/top-job-booked', async (req, res) => {
                   AND ${sqlCseAccountabilityYes('cse')}
                   ${seDivClause}
             `);
-            concernSeAccountableMap = (accountableRowsRes.recordset || []).reduce((acc, row) => {
-                const rn = String(row.RequestNo || '').trim();
-                const ljc = String(row.LeadJobCode || '').trim().toUpperCase();
-                const ownJob = String(row.OwnJob || '').trim().toUpperCase();
-                const nm = String(row.SEName || '').trim();
-                if (!rn || !nm) return acc;
-                if (ownJob) acc.set(`${rn}|OWN|${ownJob}`, nm);
-                if (ljc) acc.set(`${rn}|LJC|${ljc}`, nm);
-                return acc;
-            }, new Map());
+                (accountableRowsRes.recordset || []).forEach((row) => {
+                    const rn = String(row.RequestNo || '').trim();
+                    const ljc = String(row.LeadJobCode || '').trim().toUpperCase();
+                    const ownJob = String(row.OwnJob || '').trim().toUpperCase();
+                    const nm = String(row.SEName || '').trim();
+                    if (!rn || !nm) return;
+                    if (ownJob) concernSeAccountableMap.set(`${rn}|OWN|${ownJob}`, nm);
+                    if (ljc) concernSeAccountableMap.set(`${rn}|LJC|${ljc}`, nm);
+                });
+            }
         }
 
         const resolveTopJobConcernSe = (r) => {
@@ -2787,11 +2828,14 @@ router.get('/top-job-booked', async (req, res) => {
                 QuoteRef: r.QuoteRef,
                 QuoteDate: r.QuoteDate,
                 QuoteType: r.QuoteType || '',
+                RevisionNo: r.RevisionNo != null ? Number(r.RevisionNo) || 0 : 0,
+                QuoteNo: r.QuoteNo != null ? Number(r.QuoteNo) || 0 : 0,
                 CustomerName: r.CustomerName,
                 ClientName: r.ClientName,
                 ConsultantName: r.ConsultantName,
                 BookedDate: r.BookedDate,
                 LostDate: r.LostDate,
+                ERPJobNo: r.ERPJobNo || '',
                 ConcernSEEEQS: resolveTopJobConcernSe(r)
             }))
         });

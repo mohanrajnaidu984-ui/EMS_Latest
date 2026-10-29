@@ -126,8 +126,24 @@ function pricingSummaryColgroupHtml(table) {
  * Reserve above the content-end line inside the existing A4 content box (footer/A4 unchanged).
  * Text must finish 12px before that line so a wrapped row is not cropped.
  */
-/** Bottom reserve inside the 220mm / 832px content box (not extra gap between units). */
-export const PACK_HEIGHT_SAFETY_PX = 12;
+/** Bottom reserve inside the 220mm / ~831px content box (not extra gap between units). */
+export {
+    PACK_HEIGHT_SAFETY_PX,
+    QUOTE_A4_SHEET_PADDING_MM,
+    QUOTE_A4_LOGO_BAND_MM,
+    QUOTE_A4_FOOTER_BAND_MM,
+    quoteA4InnerContentMm,
+    quoteContinuationContentMm,
+    quoteContinuationContentPx,
+    EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
+    EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK,
+    QUOTE_PAGE_GEOMETRY,
+} from './quotePageGeometry.js';
+import {
+    PACK_HEIGHT_SAFETY_PX,
+    quoteContinuationContentPx,
+    EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
+} from './quotePageGeometry.js';
 /** Tighter safety when user clicks Align Page (fills the fixed 220mm content box). */
 const PACK_HEIGHT_SAFETY_PX_TIGHT = 10;
 /** Measure vs print slack allowed when pulling the next segment up during Align Page. */
@@ -249,35 +265,7 @@ function resolvePackFillSlackPx(options) {
     return options?.tightFit ? 12 : PACK_SUM_HEIGHT_FILL_SLACK_PX;
 }
 
-/** 15mm padding on each side of every A4 sheet (portrait or landscape). */
-export const QUOTE_A4_SHEET_PADDING_MM = 15;
-
-/** Inner content box inside one sheet after 15mm padding (mm). */
-export function quoteA4InnerContentMm(isLandscape = false) {
-    const pageW = isLandscape ? 297 : 210;
-    const pageH = isLandscape ? 210 : 297;
-    return {
-        innerWidthMm: pageW - QUOTE_A4_SHEET_PADDING_MM * 2,
-        innerHeightMm: pageH - QUOTE_A4_SHEET_PADDING_MM * 2,
-    };
-}
-
-/** Continuation sheet bands. Content starts 36mm from the top and ends at 256mm. */
-export const QUOTE_A4_LOGO_BAND_MM = 21;
-export const QUOTE_A4_FOOTER_BAND_MM = 26;
-
-/** Fixed continuation content box: 180×220mm portrait, 267×133mm landscape. */
-export function quoteContinuationContentMm(isLandscape = false) {
-    const { innerWidthMm, innerHeightMm } = quoteA4InnerContentMm(isLandscape);
-    return {
-        widthMm: innerWidthMm,
-        heightMm: innerHeightMm - QUOTE_A4_LOGO_BAND_MM - QUOTE_A4_FOOTER_BAND_MM,
-    };
-}
-
-export function quoteContinuationContentPx(isLandscape = false) {
-    return Math.round((quoteContinuationContentMm(isLandscape).heightMm / 25.4) * 96);
-}
+/* Geometry constants + helpers: re-exported from quotePageGeometry.js (above). */
 
 function resolvePackLimitForContinuationPage(continuationPageIdx, fallbackUsablePx, options = {}) {
     if (typeof options?.usablePxForContinuationPage === 'function') {
@@ -1229,6 +1217,103 @@ function splitLongParagraphElement(pEl) {
     const texts = splitPlainAtWordBoundary(plain, chunkLines * PACK_CHARS_PER_LINE);
     if (texts.length <= 1) return [pEl.outerHTML];
     return texts.map((t, i) => stamp(t, i > 0));
+}
+
+/**
+ * Soft-split one oversized pack unit at safe HTML boundaries (paragraph / br / word /
+ * clause-row body blocks). Tables stay tables; paragraphs stay paragraphs.
+ * Returns the original HTML alone when further split is unsafe.
+ *
+ * @param {string} html
+ * @param {{ maxParts?: number }} [options]
+ * @returns {string[]}
+ */
+export function softSplitOversizedUnitHtml(html, options = {}) {
+    const raw = String(html || '').trim();
+    if (!raw || typeof DOMParser === 'undefined') return raw ? [raw] : [];
+    const maxParts = Math.max(2, Number(options.maxParts) || 8);
+
+    /* Already a multi-row table fragment → re-run row split aggressively. */
+    if (/<table\b/i.test(raw)) {
+        const parts = splitClauseHtmlToSegments(raw, {
+            splitListsPerItem: true,
+            splitTableMinRows: 1,
+            splitParagraphs: true,
+            splitListMinItems: 1,
+        });
+        if (parts.length >= 2) return parts.slice(0, maxParts);
+    }
+
+    const doc = new DOMParser().parseFromString(`<div id="ems-soft-split">${raw}</div>`, 'text/html');
+    const root = doc.getElementById('ems-soft-split');
+    if (!root) return [raw];
+
+    const children = [...root.children].filter((c) => c.nodeType === Node.ELEMENT_NODE);
+    if (children.length >= 2) {
+        const out = children.map((c) => String(c.outerHTML || '').trim()).filter(Boolean);
+        if (out.length >= 2) return out.slice(0, maxParts);
+    }
+
+    const only = children[0] || null;
+    if (only && /^P$/i.test(only.tagName)) {
+        const parts = splitLongParagraphElement(/** @type {HTMLElement} */ (only));
+        if (parts.length >= 2) return parts.slice(0, maxParts);
+        /* Force word-boundary chop even for shorter paras when caller says oversized. */
+        const plain = String(only.textContent || '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (plain.length > 40) {
+            const texts = splitPlainAtWordBoundary(plain, Math.max(40, Math.ceil(plain.length / 2)));
+            if (texts.length >= 2) {
+                const paraId = `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+                const open0 = cloneOpenTag(only, ` data-ems-para-split="${paraId}"`);
+                const openCont = cloneOpenTag(
+                    only,
+                    ` data-ems-para-split="${paraId}" data-ems-para-continue="1"`
+                );
+                const close = `</${only.tagName.toLowerCase()}>`;
+                return texts.slice(0, maxParts).map((t, i) => `${i > 0 ? openCont : open0}${t}${close}`);
+            }
+        }
+    }
+
+    if (only && /^(UL|OL)$/i.test(only.tagName)) {
+        const items = [...only.children].filter((c) => /^LI$/i.test(c.tagName));
+        if (items.length >= 2) {
+            return items
+                .slice(0, maxParts)
+                .map((li, idx) => wrapSingleListItem(/** @type {HTMLElement} */ (only), li, getListBaseStartIndex(only) + idx));
+        }
+    }
+
+    /* DIV / note wrappers: split block children. */
+    if (only && /^(DIV|SECTION|ARTICLE)$/i.test(only.tagName)) {
+        const blocks = [...only.children].filter((c) =>
+            /^(P|DIV|UL|OL|TABLE|H[1-6])$/i.test(c.tagName)
+        );
+        if (blocks.length >= 2) {
+            return blocks
+                .slice(0, maxParts)
+                .map((b) => String(b.outerHTML || '').trim())
+                .filter(Boolean);
+        }
+    }
+
+    return [raw];
+}
+
+/**
+ * Detect repeated pack/peel state signatures (loop guard).
+ * @param {Set<string>} seen
+ * @param {unknown} groups
+ * @returns {boolean} true when this state was already seen
+ */
+export function detectRepeatedPackState(seen, groups) {
+    if (!seen || typeof seen.has !== 'function') return false;
+    const sig = JSON.stringify(groups || []);
+    if (seen.has(sig)) return true;
+    seen.add(sig);
+    return false;
 }
 
 /** Split multi-paragraph / Word DIV blobs; also chop long single paragraphs at line size. */
@@ -2319,10 +2404,10 @@ function segmentNeedsKeepWithNext(seg) {
 }
 
 /**
- * After greedy pack: never leave a heading (or General sub-header) alone at the bottom.
- * Move it onto the next sheet with its keep-with content. Verify-down only.
+ * After greedy pack / live peel: never leave a heading (or General sub-header) alone
+ * at the bottom. Move it onto the next sheet with its keep-with content.
  */
-function keepHeadingsWithFollowingContent(groups, segments) {
+export function keepHeadingsWithFollowingContent(groups, segments) {
     if (!groups?.length || groups.length < 2 || !segments?.length) return groups || [];
     const result = groups.map((g) => [...g]);
     for (let i = 0; i < result.length - 1; i += 1) {
@@ -2406,11 +2491,216 @@ export function assertSegmentPageGroupsIntegrity(groups, segmentCount) {
     return { ok: missing.length === 0 && dupes.length === 0, missing, dupes };
 }
 
+/** UI-only nodes that must never trip the pagination integrity gate. */
+const PACK_GATE_UI_ONLY_SEL = [
+    '.quote-content-area-mark',
+    '.ems-table-col-resizer',
+    '.ems-table-row-resizer',
+    '.jodit-table-resizer',
+    '.jodit-popup',
+    '.jodit-dialog',
+    '.jodit-toolbar',
+    '.quote-preview-clause-edit-bar',
+    '[role="alert"]',
+    '.quote-digital-signature-stamp',
+].join(', ');
+
+function isPackGateUiOnlyElement(el) {
+    if (!el || el.nodeType !== 1) return true;
+    if (el.closest?.(PACK_GATE_UI_ONLY_SEL)) return true;
+    if (el.classList?.contains?.('no-print')) return true;
+    return false;
+}
+
+/** Preview zoom from .quote-preview-zoom-shell (1 when unzoomed). */
+export function getQuotePreviewZoomFactor(el) {
+    try {
+        const shell = el?.closest?.('.quote-preview-zoom-shell');
+        if (!shell) return 1;
+        const cssVar = parseFloat(shell.style?.getPropertyValue?.('--quote-preview-zoom') || '');
+        if (Number.isFinite(cssVar) && cssVar > 0.05) return cssVar;
+        const t = typeof window !== 'undefined' ? window.getComputedStyle?.(shell)?.transform || '' : '';
+        if (t && t !== 'none') {
+            const m = t.match(/matrix\(([^)]+)\)/);
+            if (m) {
+                const a = parseFloat(String(m[1]).split(',')[0]);
+                if (Number.isFinite(a) && a > 0.05) return a;
+            }
+        }
+    } catch {
+        /* ignore */
+    }
+    return 1;
+}
+
+/**
+ * Shared fit measurement for packer + integrity gate.
+ * Uses CSS/layout px (zoom-corrected from getBoundingClientRect).
+ * Ignores UI-only elements. Fit = last real unit bottom from content top <= usable - reserve.
+ *
+ * @returns {{
+ *   ok: boolean,
+ *   usablePx: number,
+ *   limitPx: number,
+ *   zoom: number,
+ *   scrollHeight: number,
+ *   clientHeight: number,
+ *   lastBottomPx: number,
+ *   failures: Array<{
+ *     seg: number,
+ *     bottomPx: number,
+ *     overshootPx: number,
+ *     tag: string,
+ *     reason: string,
+ *     measurement: string,
+ *   }>,
+ * }}
+ */
+export function measureLiveContentFit(contentEl, options = {}) {
+    const usable = Number.isFinite(options.usablePx)
+        ? options.usablePx
+        : EMS_QUOTE_CONT_USABLE_PX_FALLBACK;
+    const reserve = Number.isFinite(options.reservePx)
+        ? options.reservePx
+        : PACK_HEIGHT_SAFETY_PX;
+    const limitPx = Math.max(usable - reserve, 200);
+    const empty = {
+        ok: true,
+        usablePx: usable,
+        limitPx,
+        zoom: 1,
+        scrollHeight: 0,
+        clientHeight: usable,
+        lastBottomPx: 0,
+        failures: [],
+    };
+    if (!contentEl || typeof contentEl.getBoundingClientRect !== 'function') return empty;
+
+    /*
+     * Temporarily unclip so getBoundingClientRect reports true bottoms of units that
+     * overflow:hidden was truncating to the box edge (false "ok").
+     */
+    /** @type {{ overflow: string, maxHeight: string } | null} */
+    let restoreClip = null;
+    if (options.unclippedMeasure !== false) {
+        try {
+            restoreClip = {
+                overflow: contentEl.style.overflow || '',
+                maxHeight: contentEl.style.maxHeight || '',
+            };
+            contentEl.style.overflow = 'visible';
+            contentEl.style.maxHeight = 'none';
+        } catch {
+            restoreClip = null;
+        }
+    }
+
+    try {
+        const zoom = Math.max(getQuotePreviewZoomFactor(contentEl) || 1, 0.05);
+        const cRect = contentEl.getBoundingClientRect();
+        const scrollHeight = contentEl.scrollHeight || 0;
+        const clientHeight = contentEl.clientHeight || 0;
+
+        const stamped = [...contentEl.querySelectorAll('[data-ems-pack-seg]')].filter(
+            (el) => !isPackGateUiOnlyElement(el)
+        );
+        const blocks = [...contentEl.querySelectorAll('.quote-clause-block')].filter(
+            (el) => !isPackGateUiOnlyElement(el)
+        );
+        const nodes = stamped.length ? stamped : blocks;
+
+        /** @type {typeof empty.failures} */
+        const failures = [];
+        let lastBottomPx = 0;
+        const eps = 1.5;
+
+        nodes.forEach((el) => {
+            const r = el.getBoundingClientRect();
+            /* Convert zoomed viewport px → layout/CSS px (same space as usablePx / packer). */
+            const topPx = (r.top - cRect.top) / zoom;
+            const bottomPx = (r.bottom - cRect.top) / zoom;
+            const heightPx = r.height / zoom;
+            if (heightPx < 1 && r.width / zoom < 1) return;
+            if (bottomPx > lastBottomPx) lastBottomPx = bottomPx;
+            const segAttr = el.getAttribute('data-ems-pack-seg');
+            const seg = segAttr != null ? parseInt(segAttr, 10) : -1;
+            const tag = `${el.tagName?.toLowerCase?.() || '?'}${el.className ? `.${String(el.className).split(/\s+/).slice(0, 2).join('.')}` : ''}`;
+            if (bottomPx > limitPx + eps) {
+                failures.push({
+                    seg,
+                    bottomPx: Math.round(bottomPx * 10) / 10,
+                    overshootPx: Math.round((bottomPx - limitPx) * 10) / 10,
+                    tag,
+                    reason: 'extends-below-content-end-reserve',
+                    measurement: `getBoundingClientRect.bottom/zoom (zoom=${zoom.toFixed(3)})`,
+                });
+            } else if (topPx >= limitPx - eps) {
+                failures.push({
+                    seg,
+                    bottomPx: Math.round(bottomPx * 10) / 10,
+                    overshootPx: Math.round((bottomPx - limitPx) * 10) / 10,
+                    tag,
+                    reason: 'fully-below-content-end',
+                    measurement: `getBoundingClientRect.top/zoom (zoom=${zoom.toFixed(3)})`,
+                });
+            } else if (topPx < -eps) {
+                failures.push({
+                    seg,
+                    bottomPx: Math.round(bottomPx * 10) / 10,
+                    overshootPx: Math.round((-topPx) * 10) / 10,
+                    tag,
+                    reason: 'extends-above-content-start',
+                    measurement: `getBoundingClientRect.top/zoom (zoom=${zoom.toFixed(3)})`,
+                });
+            }
+        });
+
+        /*
+         * scrollHeight is layout px (not zoomed). Compare to usable-reserve — NOT to
+         * clientHeight alone (DEV overflow:visible + flex max-height caused false fails).
+         */
+        if (scrollHeight > limitPx + 2 && failures.length === 0 && nodes.length === 0) {
+            failures.push({
+                seg: -1,
+                bottomPx: scrollHeight,
+                overshootPx: scrollHeight - limitPx,
+                tag: 'content-section',
+                reason: 'content-scrollHeight-exceeds-limit',
+                measurement: 'scrollHeight vs usable-reserve',
+            });
+        } else if (scrollHeight > limitPx + 8 && lastBottomPx <= limitPx + eps) {
+            /* Stamped units fit but scrollHeight is tall — usually padding/UI; do not fail. */
+        } else if (scrollHeight > limitPx + 8 && lastBottomPx > limitPx + eps) {
+            /* Already covered by unit failures. */
+        }
+
+        return {
+            ok: failures.length === 0,
+            usablePx: usable,
+            limitPx,
+            zoom,
+            scrollHeight,
+            clientHeight,
+            lastBottomPx: Math.round(lastBottomPx * 10) / 10,
+            failures,
+        };
+    } finally {
+        if (restoreClip) {
+            try {
+                contentEl.style.overflow = restoreClip.overflow;
+                contentEl.style.maxHeight = restoreClip.maxHeight;
+            } catch {
+                /* ignore */
+            }
+        }
+    }
+}
+
 /**
  * Visibility-aware integrity: each packed unit must be fully inside its sheet
- * content box (top >= contentTop, bottom <= contentTop + usable - reserve).
- * DOM-presence-only checks missed units clipped by overflow:hidden (e.g. 3.03).
- * @returns {{ ok: boolean, clipped: Array<{ seg: number, sheet: number, reason: string }>, missing: number[], dupes: number[] }}
+ * content box (layout px: bottom <= usable - reserve). Zoom-corrected.
+ * Ignores UI-only elements (resizers, CONTENT END marks, Jodit chrome, banners).
+ * @returns {{ ok: boolean, clipped: Array<object>, missing: number[], dupes: number[], diagnostics?: object[] }}
  */
 export function assertSegmentVisibilityOnSheets(
     previewRoot,
@@ -2419,10 +2709,12 @@ export function assertSegmentVisibilityOnSheets(
     options = {}
 ) {
     const base = assertSegmentPageGroupsIntegrity(groups, segmentCount);
-    /** @type {Array<{ seg: number, sheet: number, reason: string }>} */
+    /** @type {Array<object>} */
     const clipped = [];
+    /** @type {object[]} */
+    const diagnostics = [];
     if (!previewRoot || typeof previewRoot.querySelectorAll !== 'function') {
-        return { ...base, clipped, ok: base.ok };
+        return { ...base, clipped, diagnostics, ok: base.ok };
     }
     const reserve = Number.isFinite(options.reservePx)
         ? options.reservePx
@@ -2435,52 +2727,104 @@ export function assertSegmentVisibilityOnSheets(
             '.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)'
         ),
     ];
+    /** @type {Set<number>} */
+    const paintedSegs = new Set();
     contSheets.forEach((sheet, si) => {
         const content = sheet.querySelector('.content-section');
         if (!content) return;
-        const cRect = content.getBoundingClientRect();
+        content.querySelectorAll('[data-ems-pack-seg]').forEach((el) => {
+            const n = parseInt(el.getAttribute('data-ems-pack-seg') || '', 10);
+            if (Number.isInteger(n) && n >= 0) paintedSegs.add(n);
+        });
         const usable = sheet.classList.contains('quote-a4-sheet--landscape')
             ? quoteContinuationContentPx(true)
             : usableFallback;
-        const limitBottom = cRect.top + usable - reserve;
-        const limitTop = cRect.top;
-        const stamped = content.querySelectorAll('[data-ems-pack-seg]');
-        const nodes = stamped.length
-            ? [...stamped]
-            : [...content.querySelectorAll('.quote-clause-block')];
-        nodes.forEach((el) => {
-            const r = el.getBoundingClientRect();
-            if (r.height < 1 && r.width < 1) return;
-            const segAttr = el.getAttribute('data-ems-pack-seg');
-            const seg = segAttr != null ? parseInt(segAttr, 10) : -1;
-            const eps = 1.5;
-            if (r.bottom > limitBottom + eps) {
-                clipped.push({
-                    seg,
-                    sheet: si + 1,
-                    reason: 'extends-below-content-end-reserve',
-                });
-            } else if (r.top < limitTop - eps) {
-                clipped.push({
-                    seg,
-                    sheet: si + 1,
-                    reason: 'extends-above-content-start',
-                });
-            }
+        const fit = measureLiveContentFit(content, {
+            usablePx: usable,
+            reservePx: reserve,
+            /* Always unclip so overflow:hidden cannot hide true bottoms. */
+            unclippedMeasure: true,
         });
-        if (content.scrollHeight > content.clientHeight + 2) {
+        diagnostics.push({
+            sheet: si + 1,
+            zoom: fit.zoom,
+            usablePx: fit.usablePx,
+            limitPx: fit.limitPx,
+            lastBottomPx: fit.lastBottomPx,
+            scrollHeight: fit.scrollHeight,
+            clientHeight: fit.clientHeight,
+            failureCount: fit.failures.length,
+        });
+        fit.failures.forEach((f) => {
             clipped.push({
-                seg: -1,
+                seg: f.seg,
                 sheet: si + 1,
-                reason: 'content-scrollHeight-exceeds-clientHeight',
+                reason: f.reason,
+                bottomPx: f.bottomPx,
+                overshootPx: f.overshootPx,
+                tag: f.tag,
+                measurement: f.measurement,
+                limitPx: fit.limitPx,
             });
-        }
+        });
     });
+
+    /* Packed indices that never painted (skipped sheet / bad rejoin) = missing content.
+     * Only when stamping is active (some [data-ems-pack-seg] exist) — avoid false fails.
+     * Skip blank units (they intentionally have no stamp). */
+    /** @type {number[]} */
+    const missingFromDom = [];
+    const segments = options.segments || null;
+    if (paintedSegs.size > 0) {
+        const expected = new Set((groups || []).flat());
+        expected.forEach((idx) => {
+            if (paintedSegs.has(idx)) return;
+            if (segments) {
+                const plain = String(segments[idx]?.html || '')
+                    .replace(/<[^>]+>/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .replace(/\u00a0/g, ' ')
+                    .trim();
+                if (!plain) return;
+            }
+            missingFromDom.push(idx);
+        });
+        missingFromDom.sort((a, b) => a - b);
+    }
+
+    const isDev =
+        typeof import.meta !== 'undefined' &&
+        Boolean(import.meta.env?.DEV);
+    if (isDev && (clipped.length || missingFromDom.length)) {
+        console.info(
+            '[EMS pack gate] failing units',
+            clipped.map((c) => ({
+                sheet: c.sheet,
+                unitId: c.seg,
+                bottomPx: c.bottomPx,
+                limitPx: c.limitPx,
+                overshootPx: c.overshootPx,
+                element: c.tag,
+                measurement: c.measurement,
+                reason: c.reason,
+            }))
+        );
+        if (missingFromDom.length) {
+            console.info('[EMS pack gate] missing from DOM', missingFromDom);
+        }
+        console.info('[EMS pack gate] per-sheet', diagnostics);
+    }
+
+    const missing = [...new Set([...(base.missing || []), ...missingFromDom])].sort(
+        (a, b) => a - b
+    );
     return {
-        ok: base.ok && clipped.length === 0,
-        missing: base.missing,
+        ok: base.ok && clipped.length === 0 && missingFromDom.length === 0,
+        missing,
+        missingFromDom,
         dupes: base.dupes,
         clipped,
+        diagnostics,
     };
 }
 
@@ -2671,12 +3015,6 @@ export function packClauseSegmentsForContinuationPages(
         });
     });
 }
-
-/** Fixed continuation content height: 220mm portrait / 133mm landscape. */
-export const EMS_QUOTE_CONT_USABLE_PX_FALLBACK = quoteContinuationContentPx(false);
-
-/** Landscape continuation content height (267×133mm). */
-export const EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK = quoteContinuationContentPx(true);
 
 /** @deprecated Reserved in pack safety only — do not subtract from usable height (causes blank pages). */
 export const EMS_QUOTE_PRINT_CONTENT_FOOTER_GAP_PX = 0;

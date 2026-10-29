@@ -45,6 +45,13 @@ function approvalStatusColor(raw) {
     return '#64748b';
 }
 
+function isInactiveEnquiryStatus(status) {
+    return String(status || '').trim().toLowerCase() === 'inactive';
+}
+
+const INACTIVE_ENQUIRY_ROW_BG = '#fde8e8';
+const INACTIVE_ENQUIRY_ROW_HOVER_BG = '#f8cfcf';
+
 const QUOTE_LIST_FILTER_KEYS = ['requestNo', 'projectName', 'listQuoteDetails', 'dueDate', 'consultantName'];
 
 export function getQuoteListRowKey(enq, idx = 0) {
@@ -74,6 +81,8 @@ function getQuoteListFilterValue(row, key) {
         case 'requestNo': {
             const st = formatListQuoteRollupStatusTwoLines(row.ListQuoteRollupStatus);
             const rn = String(row.RequestNo ?? '').trim() || '—';
+            const initiator = String(row.ListInitiatorName ?? '').trim();
+            if (initiator) return `${rn} — ${initiator}`;
             return `${rn} — ${st.line1}`;
         }
         case 'workflowNo':
@@ -478,7 +487,7 @@ export default function DashboardQuoteSummaryTable({
 
     const quoteListColgroup = (
         <colgroup>
-            <col style={{ width: '96px' }} />
+            <col style={{ width: hideRequestNoStatus ? '148px' : '96px' }} />
             <col style={{ width: '220px' }} />
             {showWorkflowNoColumn ? <col style={{ width: '128px' }} /> : null}
             {showWorkflowNoColumn ? <col style={{ width: '148px' }} /> : null}
@@ -582,7 +591,7 @@ export default function DashboardQuoteSummaryTable({
                                 filterCtx={colFilters}
                                 thStyle={{
                                     ...pricingListThBase,
-                                    width: '96px',
+                                    width: hideRequestNoStatus ? '148px' : '96px',
                                     borderTopLeftRadius: flatTableHeader ? 0 : '8px',
                                 }}
                             />
@@ -684,14 +693,18 @@ export default function DashboardQuoteSummaryTable({
                                 const rowKey = getQuoteListRowKey(enq, idx);
                                 const isSelected =
                                     !!selectedRowKey && String(selectedRowKey) === String(rowKey);
+                                const isInactiveRow = isInactiveEnquiryStatus(enq.EnquiryStatus);
                                 const zebraBg = isSelected
                                     ? '#dbeafe'
-                                    : idx % 2 === 0
-                                      ? '#ffffff'
-                                      : '#f1f5f9';
+                                    : isInactiveRow
+                                      ? INACTIVE_ENQUIRY_ROW_BG
+                                      : idx % 2 === 0
+                                        ? '#ffffff'
+                                        : '#f1f5f9';
                                 const statusLines = formatListQuoteRollupStatusTwoLines(enq.ListQuoteRollupStatus);
                                 const statusColor = listQuoteRollupStatusColor(enq.ListQuoteRollupStatus);
                                 const reqNo = String(enq.RequestNo ?? '').trim();
+                                const initiatorName = String(enq.ListInitiatorName ?? '').trim();
                                 return (
                                     <tr
                                         key={rowKey}
@@ -706,7 +719,9 @@ export default function DashboardQuoteSummaryTable({
                                         onMouseEnter={(e) => {
                                             e.currentTarget.style.backgroundColor = isSelected
                                                 ? '#bfdbfe'
-                                                : quoteListRowHoverGrey;
+                                                : isInactiveRow
+                                                  ? INACTIVE_ENQUIRY_ROW_HOVER_BG
+                                                  : quoteListRowHoverGrey;
                                         }}
                                         onMouseLeave={(e) => {
                                             e.currentTarget.style.backgroundColor = zebraBg;
@@ -723,11 +738,49 @@ export default function DashboardQuoteSummaryTable({
                                                 color: '#1e293b',
                                                 fontWeight: '500',
                                                 verticalAlign: 'top',
-                                                whiteSpace: 'nowrap',
+                                                whiteSpace: initiatorName ? 'normal' : 'nowrap',
                                                 textAlign: 'left',
                                             }}
                                         >
-                                            <div>{enq.RequestNo}</div>
+                                            <div
+                                                style={{
+                                                    whiteSpace: 'nowrap',
+                                                    ...(isInactiveRow
+                                                        ? { color: '#dc3545', fontWeight: 700 }
+                                                        : {}),
+                                                }}
+                                            >
+                                                {enq.RequestNo}
+                                            </div>
+                                            {isInactiveRow ? (
+                                                <div
+                                                    style={{
+                                                        marginTop: '4px',
+                                                        color: '#dc3545',
+                                                        fontWeight: 700,
+                                                        fontSize: '11px',
+                                                        lineHeight: 1.2,
+                                                    }}
+                                                >
+                                                    Inactive
+                                                </div>
+                                            ) : null}
+                                            {initiatorName ? (
+                                                <div
+                                                    title={initiatorName}
+                                                    style={{
+                                                        marginTop: '4px',
+                                                        fontSize: '10px',
+                                                        fontWeight: 600,
+                                                        color: '#334155',
+                                                        whiteSpace: 'normal',
+                                                        lineHeight: 1.25,
+                                                        wordBreak: 'break-word',
+                                                    }}
+                                                >
+                                                    {initiatorName}
+                                                </div>
+                                            ) : null}
                                             {!hideRequestNoStatus ? (
                                                 <div
                                                     style={{

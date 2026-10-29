@@ -630,10 +630,10 @@ async function resolveApprovalWorkflowQuoteRestriction(userEmail, requestNo, ses
 /**
  * Enquiry-level gate + job anchors (matches pricing list/detail).
  */
-async function userHasQuotePricingEnquiryAccess(userEmail, requestNo, sessionDivision = '', quoteId = null) {
+async function userHasQuotePricingEnquiryAccess(userEmail, requestNo, sessionDivision = '', quoteId = null, draftQuoteId = null) {
     const normalizedEmail = normalizePricingEmail(userEmail);
     if (!normalizedEmail) return false;
-    if (await userHasApprovalWorkflowQuoteAccess(normalizedEmail, requestNo, quoteId)) {
+    if (await userHasApprovalWorkflowQuoteAccess(normalizedEmail, requestNo, quoteId, draftQuoteId)) {
         return true;
     }
     const ctx = await resolvePricingAccessContext(userEmail);
