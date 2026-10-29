@@ -3,7 +3,10 @@
  * Must match on-screen #quote-preview .quote-a4-sheet grid (logo / body / footer).
  */
 import {
+    EMS_QUOTE_COVER_SIGNATORY_LIFT_PX,
     EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM,
+    EMS_QUOTE_PDF_PREVIEW_GAP_PX,
+    EMS_QUOTE_PDF_FOOTER_GAP_EXTRA_PX,
     EMS_QUOTE_PRINT_FOOTER_MIN_HEIGHT,
 } from '../../constants/emsTheme.js';
 
@@ -48,15 +51,21 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet:not(.quote-a4-sheet--l
     grid-template-columns: minmax(0, 1fr) !important;
     grid-template-rows: auto minmax(0, 1fr) auto !important;
     align-content: stretch !important;
-    page-break-after: auto !important;
-    break-after: auto !important;
+    page-break-after: always !important;
+    break-after: page !important;
     page-break-before: auto !important;
     break-before: auto !important;
-    page-break-inside: auto !important;
-    break-inside: auto !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
     overflow: hidden !important;
     box-shadow: none !important;
     border: none !important;
+}
+/* R6: no trailing blank page — break-after only between sheets. */
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet:not(:has(~ .quote-a4-sheet)),
+[data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet:not(:has(~ .quote-a4-sheet)) {
+    page-break-after: avoid !important;
+    break-after: avoid !important;
 }
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape,
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation="landscape"],
@@ -80,6 +89,35 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation=
     box-shadow: none !important;
     border: none !important;
     page: quote-landscape;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet.quote-a4-sheet--continuation:not(.quote-a4-sheet--landscape):not([data-page-orientation="landscape"]),
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet.quote-a4-sheet--continuation.quote-a4-sheet--landscape,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet.quote-a4-sheet--continuation[data-page-orientation="landscape"],
+[data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet.quote-a4-sheet--continuation:not(.quote-a4-sheet--landscape):not([data-page-orientation="landscape"]),
+[data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet.quote-a4-sheet--continuation.quote-a4-sheet--landscape,
+[data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet.quote-a4-sheet--continuation[data-page-orientation="landscape"] {
+    grid-template-rows: 21mm minmax(0, 1fr) 26mm !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote-sheet-logo-row,
+[data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet--continuation > .quote-sheet-logo-row {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
+    height: 21mm !important;
+    min-height: 21mm !important;
+    max-height: 21mm !important;
+    margin-bottom: 0 !important;
+    box-sizing: border-box !important;
+    width: 100% !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .footer-section,
+[data-ems-pdf-export="1"] #quote-preview .quote-a4-sheet--continuation > .footer-section {
+    height: 26mm !important;
+    min-height: 26mm !important;
+    max-height: 26mm !important;
+    justify-content: flex-end !important;
+    box-sizing: border-box !important;
 }
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .quote-sheet-main-flex,
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--landscape .content-section,
@@ -107,8 +145,34 @@ html[data-preview-pdf="1"] #quote-preview .quote-sheet-logo-row,
 [data-ems-pdf-export="1"] .quote-sheet-logo-row {
     grid-row: 1 !important;
     flex: 0 0 auto !important;
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
     width: 100% !important;
     margin-bottom: ${EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM} !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-sheet-logo-row > div,
+[data-ems-pdf-export="1"] .quote-sheet-logo-row > div {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
+    width: 100% !important;
+    text-align: right !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-sheet-logo-row img,
+[data-ems-pdf-export="1"] .quote-sheet-logo-row img {
+    display: block !important;
+    height: auto !important;
+    width: auto !important;
+    max-height: 21mm !important;
+    max-width: 100% !important;
+    object-fit: contain !important;
+    object-position: right top !important;
+    margin-left: auto !important;
+    margin-right: 0 !important;
+    position: static !important;
 }
 html[data-preview-pdf="1"] #quote-preview .quote-sheet-main-flex,
 [data-ems-pdf-export="1"] .quote-sheet-main-flex {
@@ -153,29 +217,34 @@ html[data-preview-pdf="1"] #quote-print-root[data-print-with-header='1'] .quote-
     visibility: visible !important;
     opacity: 1 !important;
     justify-content: flex-end !important;
+    align-items: flex-start !important;
     flex-direction: row !important;
     width: 100% !important;
 }
 html[data-preview-pdf="1"] #quote-print-root[data-print-with-header='1'] .quote-sheet-logo-row img,
 [data-ems-pdf-export="1"][data-print-with-header='1'] .quote-sheet-logo-row img {
     visibility: visible !important;
-    display: inline-block !important;
+    display: block !important;
     opacity: 1 !important;
-    max-height: 68px !important;
+    max-height: 21mm !important;
     height: auto !important;
     width: auto !important;
-    max-width: 212px !important;
+    max-width: 100% !important;
     object-fit: contain !important;
     object-position: right top !important;
     margin-left: auto !important;
     margin-right: 0 !important;
     float: none !important;
+    position: static !important;
 }
 html[data-preview-pdf="1"] #quote-print-root[data-print-with-header='1'] .quote-sheet-logo-row > div,
 [data-ems-pdf-export="1"][data-print-with-header='1'] .quote-sheet-logo-row > div {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
     width: 100% !important;
     text-align: right !important;
-    display: block !important;
 }
 html[data-preview-pdf="1"] #quote-print-root[data-print-with-header='1'] .quote-print-footer-wrap {
     visibility: visible !important;
@@ -202,6 +271,7 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet:not(.quote-a4-sheet--c
 [data-ems-pdf-export="1"] .quote-a4-sheet:not(.quote-a4-sheet--continuation) .quote-cover-sign-off {
     flex: 0 0 auto !important;
     flex-shrink: 0 !important;
+    margin-bottom: ${EMS_QUOTE_COVER_SIGNATORY_LIFT_PX}px !important;
 }
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation .quote-sheet-main-flex,
 [data-ems-pdf-export="1"] .quote-a4-sheet--continuation .quote-sheet-main-flex {
@@ -214,9 +284,93 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation .content
     min-height: 0 !important;
     max-height: 100% !important;
     overflow: hidden !important;
+    padding-top: 1px;
+    box-sizing: border-box;
 }
-html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet:last-of-type,
-[data-ems-pdf-export="1"] .quote-a4-sheet:last-of-type {
+html[data-preview-pdf="1"] #quote-preview .clause-content > p[data-ems-para-continue="1"],
+html[data-preview-pdf="1"] #quote-preview .clause-content > table[data-ems-clause-row-continue="1"],
+[data-ems-pdf-export="1"] .clause-content > p[data-ems-para-continue="1"],
+[data-ems-pdf-export="1"] .clause-content > table[data-ems-clause-row-continue="1"] {
+    margin-top: 0 !important;
+}
+/* Match packer row cost: Excel height locks left half-empty pages in the PDF. */
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation table tr,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation table td,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation table th,
+[data-ems-pdf-export="1"] .quote-a4-sheet--continuation table tr,
+[data-ems-pdf-export="1"] .quote-a4-sheet--continuation table td,
+[data-ems-pdf-export="1"] .quote-a4-sheet--continuation table th {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation table td,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation table th,
+[data-ems-pdf-export="1"] .quote-a4-sheet--continuation table td,
+[data-ems-pdf-export="1"] .quote-a4-sheet--continuation table th {
+    padding-top: 1px !important;
+    padding-bottom: 1px !important;
+    font-size: 12.5px !important;
+    line-height: 15px !important;
+    overflow: visible !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation .clause-content,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation .clause-content p,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation .clause-content li,
+[data-ems-pdf-export="1"] .quote-a4-sheet--continuation .clause-content,
+[data-ems-pdf-export="1"] .quote-a4-sheet--continuation .clause-content p,
+[data-ems-pdf-export="1"] .quote-a4-sheet--continuation .clause-content li {
+    line-height: 1.4 !important;
+    overflow: visible !important;
+}
+/* Same geometry as preview: 21mm logo / 220mm content / 26mm footer, 15mm padding. */
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote-sheet-logo-row,
+[data-ems-pdf-export="1"] .quote-a4-sheet--continuation > .quote-sheet-logo-row {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
+    height: 21mm !important;
+    min-height: 21mm !important;
+    max-height: 21mm !important;
+    margin-bottom: 0 !important;
+    overflow: hidden !important;
+    box-sizing: border-box !important;
+    width: 100% !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote-sheet-logo-row > div,
+[data-ems-pdf-export="1"] .quote-a4-sheet--continuation > .quote-sheet-logo-row > div {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
+    height: auto !important;
+    max-height: 21mm !important;
+    min-height: 0 !important;
+    width: 100% !important;
+    text-align: right !important;
+    box-sizing: border-box !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote-sheet-logo-row img,
+[data-ems-pdf-export="1"] .quote-a4-sheet--continuation > .quote-sheet-logo-row img {
+    position: static !important;
+    height: auto !important;
+    width: auto !important;
+    max-height: 21mm !important;
+    max-width: 100% !important;
+    object-fit: contain !important;
+    object-position: right top !important;
+    display: block !important;
+    margin-left: auto !important;
+    margin-right: 0 !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation:not(.quote-a4-sheet--landscape):not([data-page-orientation="landscape"]),
+[data-ems-pdf-export="1"] .quote-a4-sheet--continuation:not(.quote-a4-sheet--landscape):not([data-page-orientation="landscape"]) {
+    padding: 15mm !important;
+    padding-bottom: 15mm !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet:not(:has(~ .quote-a4-sheet)),
+[data-ems-pdf-export="1"] .quote-a4-sheet:not(:has(~ .quote-a4-sheet)) {
     page-break-after: avoid !important;
     break-after: avoid !important;
 }

@@ -12,7 +12,6 @@ import {
     X,
     Trash2,
     FolderOpen,
-    Paperclip,
     BookUser,
     Download,
     Upload,
@@ -69,6 +68,7 @@ import {
     EMS_QUOTE_COVER_SIGN_OFF_MIN_HEIGHT_PREVIEW,
     EMS_QUOTE_COVER_SIGN_OFF_BODY_PAD_BOTTOM_PREVIEW,
     EMS_QUOTE_COVER_SIGNATORY_BLOCK_BOTTOM_OFFSET,
+    EMS_QUOTE_COVER_SIGNATORY_LIFT_PX,
     EMS_QUOTE_COVER_SIGN_OFF_FOR_GAP_EM,
     EMS_QUOTE_COVER_SIGN_OFF_PREVIEW_HEIGHT_SCALE,
     EMS_QUOTE_PANEL_LABEL_NAV_GRADIENT,
@@ -90,8 +90,10 @@ import {
     EMS_QUOTE_PRICING_TABLE_AMOUNT_COL_WIDTH,
     EMS_QUOTE_PRICING_TABLE_WIDTH,
     EMS_QUOTE_PRICING_TABLE_CELL_PADDING,
+    EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX,
     EMS_QUOTE_PRICING_TABLE_COLUMN_SYNC_CSS,
     EMS_QUOTE_PRICING_TABLE_PRESENTATION_CSS,
+    EMS_QUOTE_PRICING_TABLE_ALIGN_CSS,
     EMS_QUOTE_PRICING_TABLE_COMPACT_ROW_CSS,
     scopeEmsQuotePricingTablePresentationCss,
 } from '../../constants/emsTheme';
@@ -131,15 +133,25 @@ import {
     preserveClauseEditorSelectionDuring,
     isClauseEditorTypingActive,
 } from './clauseEditorListPresets';
-import { stabilizeClauseEditorTablesForExport, hideTableResizeHandles, hideAllEmsTableResizeHandles, finalizeAllOfficePasteTablesFormatting, applyTableRowHeightModelInHtmlString } from './clauseEditorTable';
+import { stabilizeClauseEditorTablesForExport, hideTableResizeHandles, hideAllEmsTableResizeHandles, finalizeAllOfficePasteTablesFormatting, applyTableRowHeightModelInHtmlString, fitEmsPricingSummaryTableRowHeights, captureBrowseScheduleColumnWidthsFromRoot } from './clauseEditorTable';
 import {
     EMS_OFFICE_PASTE_TABLE_PRESENTATION_CSS,
     EMS_OFFICE_PASTE_TABLE_PREVIEW_EDIT_CSS,
     EMS_OFFICE_PASTE_TABLE_PREVIEW_READ_CSS,
     EMS_TABLE_NO_BORDER_CELL_OVERRIDE_CSS,
+    EMS_CELL_SPLIT_TABLE_CSS,
     initializeAllOfficePastedTableColumns,
+    expandClippedOfficeTableRowHeights,
     applyAllTableRowHeightsInRoot,
-    applyOfficePasteMeasureHeightPadding,
+    applyTableRowHeightModel,
+    relaxTableRowHeightsForClausePackMeasure,
+    isEmsPricingSummaryTable,
+    fitPricingTablesInRootAndBakeIntoHtml,
+    bakePricingColWidthsFromLiveDom,
+    normalizeEmsPricingSummaryTableStructure,
+    normalizeEmsPricingTableTextAlignInHtml,
+    stripStrikethroughFromQuoteTablesInHtml,
+    stripStrikethroughFromQuoteTablesInRoot,
 } from './clauseEditorTable';
 import {
     resolveQuoteSummaryPriceFromRows,
@@ -180,13 +192,32 @@ import {
     packClauseSegmentsForContinuationPages,
     packSegmentsOntoPagesByEstimatedHeight,
     packSegmentsOntoPagesByEstimatedHeightPerPage,
+    packSegmentsOntoPagesByHeights,
+    reflowContinuationPagesTopDown,
+    compactPackHeightsPx,
+    ensureSegmentPageGroupsCoverAll,
+    assertSegmentPageGroupsIntegrity,
+    assertSegmentVisibilityOnSheets,
+    PACK_HEIGHT_SAFETY_PX,
     quoteA4InnerContentMm,
+    quoteContinuationContentPx,
+    QUOTE_A4_LOGO_BAND_MM,
+    QUOTE_A4_FOOTER_BAND_MM,
     segmentPageGroupsEqual,
+    splitClauseHtmlToSegments,
 } from './quoteClausePagination';
+import { QUOTE_PACK_FONT_STACK, buildQuotePackFontFaceCss } from './quotePackFonts.js';
+import { remapSymbolFontGreekInHtml } from './quoteSymbolFont';
+import { sanitizeQuoteRichHtml } from './quoteSanitizeHtml';
 import {
     SignatureVaultModal,
     QuoteSignatureStamp,
     QuoteSignaturePlacementOverlay,
+    quoteSheetReferenceHeightPx,
+    computeCoverStampAnchor,
+    stampAnchorFields,
+    isCoverSignOffAnchoredStamp,
+    quoteSheetPageNumber,
     isUserQuoteCcMailSigner,
     makeVerificationCode,
     loadStampsForEnquiry,
@@ -194,6 +225,8 @@ import {
     resolveDefaultSignatureImage,
     resolveSignatureStampPrefs,
     EMS_QUOTE_PLACE_STAMP_EVENT,
+    EMS_SIGNATURE_LIBRARY_CHANGED_EVENT,
+    waitForSignatureLibrarySave,
     parseDigitalSignaturesFromQuoteRow,
     serializeDigitalStampsForApi,
     migrateLocalSignatureLibraryToServer,
@@ -203,6 +236,8 @@ import {
     fetchUserSignatureLibrary,
     fetchQuoteDigitalStamps,
     appendQuoteDigitalStamp,
+    appendQuoteDraftDigitalStamp,
+    fetchQuoteDraftDigitalStamps,
     saveQuoteDigitalStamps,
     normalizeSignatureEmail,
 } from '../../utils/quoteSignatureApi';
@@ -216,7 +251,7 @@ import {
     writeQuoteSessionSnapshot,
     clearQuoteSessionSnapshot,
 } from '../../utils/quoteSessionRestore';
-import { parseApprovalWorkflowJson, serializeApprovalWorkflowJson, buildCompanyApproverOptions, normalizeApprovalStepsFromApi, resetApprovalStepsForNewRound } from '../../utils/quoteApprovalWorkflow';
+import { parseApprovalWorkflowJson, serializeApprovalWorkflowJson, buildCompanyApproverOptions, normalizeApprovalStepsFromApi, resetApprovalStepsForNewRound, resolveApprovalCoverSignatureImages } from '../../utils/quoteApprovalWorkflow';
 import {
     formatRuntimeCurrencyAmount,
     numberToWordsRuntimeCurrency,
@@ -224,14 +259,23 @@ import {
     stripCurrencyNoise,
     getRuntimeCurrency,
     getCurrencyMeta,
+    getDefaultPricingVatPercent,
     runtimeCurrencySymbol,
 } from '../../utils/currency';
+import { useMasterCurrency } from '../../hooks/useMasterCurrency';
 import {
     parseUserDepartments,
     formatUserDepartments,
     userHasDepartment,
 } from '../../utils/userDepartments';
 import html2pdf from 'html2pdf.js';
+
+/**
+ * Option (a): original on-sheet editor + CSS/PDF capture restored.
+ * Paged.js is NOT used as the visible preview (that replaced editing).
+ * Offscreen break engine: quotePagedBreakEngine.js (not wired into the editor DOM).
+ */
+const EMS_USE_PAGED_QUOTE = false;
 
 /** Confirms this file is the bundle executed by Vite (Main.jsx → ./Quote/QuoteForm). Hard-refresh if missing. */
 console.log("QUOTE FILE LOADED");
@@ -499,6 +543,37 @@ function normalizeDraftUserEmailForApi(raw) {
         .replace(/@almcg\.com/g, '@almoayyedcg.com');
 }
 
+/** Sparse map of 0-based sheet index → "landscape" (cover/index 0 never landscape). */
+function normalizeQuotePageOrientationsMap(raw) {
+    let obj = raw;
+    if (typeof raw === 'string') {
+        try {
+            obj = JSON.parse(raw || '{}');
+        } catch {
+            return {};
+        }
+    }
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+        const idx = Number(k);
+        if (!Number.isFinite(idx) || idx <= 0) continue;
+        if (v === 'landscape') out[String(Math.floor(idx))] = 'landscape';
+    }
+    return out;
+}
+
+function serializePageOrientationsForApi(map) {
+    return JSON.stringify(normalizeQuotePageOrientationsMap(map));
+}
+
+function parsePageOrientationsFromQuoteRow(quote) {
+    if (!quote || typeof quote !== 'object') return {};
+    return normalizeQuotePageOrientationsMap(
+        quote.PageOrientationsJson ?? quote.pageOrientationsJson ?? null
+    );
+}
+
 /** Calendar YYYY-MM-DD for <input type="date" /> from EnquiryQuotes row (avoids TZ off-by-one on ISO datetimes). */
 function quoteRowDateToInputYmd(quote) {
     if (!quote) return new Date().toISOString().split('T')[0];
@@ -507,7 +582,15 @@ function quoteRowDateToInputYmd(quote) {
     const raw = quote.QuoteDate ?? quote.quoteDate;
     if (raw == null || raw === '') return new Date().toISOString().split('T')[0];
     if (typeof raw === 'string') {
-        const m = raw.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+        const s = raw.trim();
+        /* DB driver runs with useUTC:false — "2026-10-12 00:00" Bahrain arrives as "2026-10-11T21:00:00.000Z". */
+        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && /(Z|[+-]\d{2}:?\d{2})$/.test(s)) {
+            const d = new Date(s);
+            if (!Number.isNaN(d.getTime())) {
+                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            }
+        }
+        const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
         if (m) return m[1];
     }
     if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
@@ -839,6 +922,14 @@ function formatQuoteValidityLineForDetails(validityDisplay, dayCount) {
     return `${disp} (${n} day${n === 1 ? '' : 's'})`;
 }
 
+/** Cover E-mail: stay at body size when it fits, shrink only so a very long address stays readable. */
+function quoteCoverEmailFitStyle(email) {
+    const len = String(email || '').trim().length;
+    if (len > 46) return { fontSize: '10.5px' };
+    if (len > 34) return { fontSize: '11.5px' };
+    return undefined;
+}
+
 /** Pick enquiry row when user presses Enter in the left-panel search box. */
 function pickEnquiryForSearchEnter(term, suggestions) {
     const t = String(term || '').trim();
@@ -1061,6 +1152,79 @@ function parseImportedClauseTemplateFile(raw) {
     throw new Error('Unrecognized clause template file format');
 }
 
+/** Parse QuoteTemplates.ClausesConfig whether the API returned a JSON string or an object. */
+function parseStoredClauseTemplateConfig(raw) {
+    if (raw == null || raw === '') {
+        throw new Error('Template configuration is empty');
+    }
+    let value = raw;
+    if (typeof value === 'string') {
+        value = JSON.parse(value);
+        // Older rows may be double-encoded JSON strings.
+        if (typeof value === 'string') {
+            value = JSON.parse(value);
+        }
+    }
+    const { config } = parseImportedClauseTemplateFile(value);
+    return config;
+}
+
+/** Compact fingerprint so Save/Update can confirm the DB round-trip kept clause bodies. */
+function clauseTemplateContentFingerprint(config) {
+    const normalized = normalizeLoadedClauseTemplateConfig(config);
+    const parts = [];
+    const content = normalized.clauseContent || {};
+    Object.keys(content)
+        .sort()
+        .forEach((key) => {
+            const html = String(content[key] || '');
+            parts.push(`${key}:${html.length}:${html.slice(0, 48)}:${html.slice(-48)}`);
+        });
+    (normalized.customClauses || []).forEach((c) => {
+        const html = String(c?.content || '');
+        parts.push(
+            `custom:${c?.id || ''}:${c?.isChecked ? 1 : 0}:${html.length}:${html.slice(0, 32)}`
+        );
+    });
+    const toggles = normalized.clauses || {};
+    parts.push(
+        `tog:${Object.keys(toggles)
+            .sort()
+            .map((k) => `${k}:${toggles[k] ? 1 : 0}`)
+            .join(',')}`
+    );
+    parts.push(`ord:${(normalized.orderedClauses || []).join(',')}`);
+    return parts.join('|');
+}
+
+async function verifySavedClauseTemplate(templateId, sentConfig, userEmail) {
+    const tid = String(templateId || '').trim();
+    const email = String(userEmail || '').trim();
+    if (!tid || !email || isDefaultClauseTemplateId(tid)) {
+        return { ok: true, skipped: true };
+    }
+    try {
+        const res = await fetch(
+            `${API_BASE}/api/quotes/config/templates?userEmail=${encodeURIComponent(email)}`,
+            { cache: 'no-store' }
+        );
+        if (!res.ok) return { ok: false, reason: `reload failed (HTTP ${res.status})` };
+        const list = await res.json();
+        const row = (Array.isArray(list) ? list : []).find((t) => String(t.ID) === tid);
+        if (!row) return { ok: false, reason: 'saved row not found after reload' };
+        const stored = parseStoredClauseTemplateConfig(row.ClausesConfig ?? row.clausesConfig);
+        const sentFp = clauseTemplateContentFingerprint(sentConfig);
+        const storedFp = clauseTemplateContentFingerprint(stored);
+        if (sentFp !== storedFp) {
+            return { ok: false, reason: 'stored content does not match what was sent' };
+        }
+        return { ok: true };
+    } catch (err) {
+        console.error('[verifySavedClauseTemplate]', err);
+        return { ok: false, reason: err?.message || 'verification error' };
+    }
+}
+
 function sanitizeClauseTemplateFileName(name) {
     const base = String(name || 'clause_template')
         .trim()
@@ -1074,7 +1238,14 @@ function renumberClauseMajorInHtml(html, fromMajor, toMajor) {
     const from = Number(fromMajor);
     const to = Number(toMajor);
     if (!Number.isFinite(from) || !Number.isFinite(to)) return String(html);
-    return String(html).replace(new RegExp(`(?<![0-9.])${from}\\.(?=\\d)`, 'g'), `${to}.`);
+    /*
+     * Only clause indexes ("4.1.", "4.1.2."). A bare "4." + digit also matches
+     * "Discount (4.53%)" and money like "4.500", which then recalculates the amount.
+     */
+    return String(html).replace(
+        new RegExp(`(?<![0-9.])${from}\\.(?=\\d{1,2}\\.)`, 'g'),
+        `${to}.`
+    );
 }
 
 /** Put each N.M. / N.M.K. sub-clause on its own line in the rendered quote (HTML or plain). */
@@ -1106,8 +1277,16 @@ function separateClauseSubNumberLines(html) {
 }
 
 /** Preview/PDF body: only renumber clause majors for order; HTML structure mirrors the editor. */
+/** Word Symbol-font Greek lookalikes → Latin (fixes "Τηε Μαιν…" in Notes). */
 function getClauseDisplayBodyHtml(html, listKey, displayMajor, options = {}) {
     let body = String(html || '');
+    body = remapSymbolFontGreekInHtml(body);
+    /* Always un-tag BOQ/SL.NO tables so 72%/28% summary CSS cannot scramble them. */
+    body = stripMisappliedPricingLayoutFromBoqTablesInHtml(body);
+    /* Excel paste left line-through on whole BOQ tables — strip for browse/PDF. */
+    if (/<table\b/i.test(body)) {
+        body = stripStrikethroughFromQuoteTablesInHtml(body);
+    }
     // Normal/view/PDF: always force VAT = 10% of Total (DOM or regex) — edit mode recalcs live.
     const isPricing =
         listKey === 'showPricingTerms' ||
@@ -1116,13 +1295,32 @@ function getClauseDisplayBodyHtml(html, listKey, displayMajor, options = {}) {
         /id=["']ems-auto-price-summary-table/i.test(body);
     /* Skip DOMParser VAT reconcile while typing — it freezes the editor on every keystroke. */
     if (isPricing && options.reconcile !== false) {
-        body = ensurePricingTableColgroupInHtml(reconcilePricingVatAmountCellsInHtml(body));
+        if (pricingFooterVatInconsistent(body)) {
+            body = ensurePricingTableColgroupInHtml(reconcilePricingVatAmountCellsInHtml(body));
+        } else {
+            body = ensurePricingTableColgroupInHtml(body);
+        }
+        /* Stamp full base before pagination copies attrs onto row-split fragments. */
+        body = stampPricingBaseTotalAttrsInHtml(body);
+        /* 3.1 / 4.1 must use this table's VAT %, not the currency default (10% vs 12%). */
+        body = syncPricingLumpSumProseFromTables(body, numberToWordsBHD);
     } else if (isPricing) {
-        body = ensurePricingTableColgroupInHtml(body);
+        body = stampPricingBaseTotalAttrsInHtml(ensurePricingTableColgroupInHtml(body));
+    }
+    // Bake row heights only when missing — exit-edit / multi-page load was re-parsing every time.
+    if (
+        isPricing &&
+        options.reconcile !== false &&
+        options.bakeRowHeights !== false &&
+        !/data-ems-row-heights=/i.test(body)
+    ) {
+        body = applyTableRowHeightModelInHtmlString(body);
     }
     const canon = CLAUSE_MAJOR_BY_LIST_KEY[listKey];
     const renumbered = renumberClauseMajorInHtml(body, canon, displayMajor);
-    const normalized = normalizeClauseProseTextColorsInString(renumbered);
+    /* Strip Excel/Word junk + pull BOQ Note out of tables (keeps prior visual CSS; content only). */
+    const sanitized = sanitizeQuoteRichHtml(renumbered);
+    const normalized = normalizeClauseProseTextColorsInString(sanitized);
     /* Spell decorate is expensive (full Hunspell). Skip while a clause editor is open / on demand.
        Also skip for Pricing tables — marks inside amount cells have caused stale/corrupt totals. */
     if (options.spell === false || isPricing) return normalized;
@@ -1193,20 +1391,245 @@ function ClausePreviewHeading({ html, hasCustomFormat }) {
 /** Stable id on the auto-built pricing summary table so `calculateSummary` can replace it without wiping user HTML. */
 const EMS_AUTO_PRICE_SUMMARY_TABLE_ID = 'ems-auto-price-summary-table';
 /** VAT rate applied to Total (Base Price) for the auto pricing table footer rows. */
-const EMS_PRICING_VAT_RATE = 0.1;
-
 function roundBhdAmount(n) {
     const decimals = getCurrencyMeta(getRuntimeCurrency()).decimals;
     const factor = 10 ** decimals;
     return Math.round((Number(n) || 0) * factor) / factor;
 }
 
-/** @param {number} baseTotal sum of checked division Base Price rows */
-function calcPricingTotalsFromBase(baseTotal) {
+function formatVatPercentNumber(pct) {
+    const n = Number(pct);
+    if (!Number.isFinite(n) || n < 0) return String(getDefaultPricingVatPercent());
+    const rounded = Math.round(n * 100) / 100;
+    if (Number.isInteger(rounded)) return String(rounded);
+    return String(rounded).replace(/\.?0+$/, '');
+}
+
+function formatVatRowLabel(pct = getDefaultPricingVatPercent()) {
+    return `VAT ${formatVatPercentNumber(pct)}%`;
+}
+
+function formatGrandTotalWithVatLabel(pct = getDefaultPricingVatPercent()) {
+    return `Grand Total with VAT ${formatVatPercentNumber(pct)}%`;
+}
+
+function parseVatPercentFromLabel(label) {
+    const t = String(label || '')
+        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!t || /^Grand\s+Total/i.test(t)) return null;
+    // Accept "VAT 10%", "VAT 2.5 %", "VAT10%", and in-progress "VAT 2.5"
+    const m = t.match(/^VAT\s*([\d.]+)\s*%?\s*$/i);
+    if (!m) return null;
+    const n = parseFloat(m[1]);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function impliedVatPercentFromAmount(vatAmount, taxedBase) {
+    const base = Number(taxedBase);
+    const vat = Math.abs(Number(vatAmount));
+    if (!Number.isFinite(base) || base <= 0 || !Number.isFinite(vat)) return null;
+    return Math.round((vat / base) * 10000) / 100;
+}
+
+function vatRateFromPercent(pct) {
+    const n = Number(pct);
+    if (!Number.isFinite(n) || n < 0) return getDefaultPricingVatPercent() / 100;
+    return n / 100;
+}
+
+/**
+ * @param {number} baseTotal sum of checked division Base Price rows (or taxed base)
+ * @param {number} [vatPercent] VAT percent (BHD default 10, SAR default 15)
+ */
+function calcPricingTotalsFromBase(baseTotal, vatPercent = getDefaultPricingVatPercent()) {
     const base = roundBhdAmount(baseTotal);
-    const vat = roundBhdAmount(base * EMS_PRICING_VAT_RATE);
+    const pct =
+        Number.isFinite(Number(vatPercent)) && Number(vatPercent) >= 0
+            ? Number(vatPercent)
+            : getDefaultPricingVatPercent();
+    const vat = roundBhdAmount(base * vatRateFromPercent(pct));
     const grandWithVat = roundBhdAmount(base + vat);
-    return { base, vat, grandWithVat };
+    return { base, vat, grandWithVat, vatPercent: pct };
+}
+
+function readPricingVatPercentFromTable(table) {
+    if (!table) return getDefaultPricingVatPercent();
+    const attr = table.getAttribute('data-ems-vat-pct');
+    if (attr != null && String(attr).trim() !== '') {
+        const n = parseFloat(attr);
+        if (Number.isFinite(n) && n >= 0) return n;
+    }
+    const vatRow = findPricingVatRowInTable(table);
+    const fromLabel = parseVatPercentFromLabel(vatRow?.cells?.[0]?.textContent);
+    if (fromLabel != null) return fromLabel;
+    return getDefaultPricingVatPercent();
+}
+
+function isPricingVatAmountLocked(table) {
+    return Boolean(table && table.getAttribute('data-ems-vat-locked') === '1');
+}
+
+/** Resolve VAT amount + grand from table % / locked amount (default 10%). */
+function resolvePricingVatTotals(table, taxedBase) {
+    const base = roundBhdAmount(taxedBase);
+    const vatRow = findPricingVatRowInTable(table);
+    const pctFromLabel = parseVatPercentFromLabel(vatRow?.cells?.[0]?.textContent);
+    const pct = pctFromLabel != null ? pctFromLabel : readPricingVatPercentFromTable(table);
+
+    if (isPricingVatAmountLocked(table)) {
+        let vat = null;
+        if (vatRow?.cells?.length >= 2) {
+            vat = parseBhdAmountText(vatRow.cells[vatRow.cells.length - 1].textContent);
+        }
+        if (vat == null || !Number.isFinite(vat)) {
+            const stored = parseFloat(table.getAttribute('data-ems-vat-amount'));
+            vat = Number.isFinite(stored) ? stored : null;
+        }
+        if (vat != null && Number.isFinite(vat)) {
+            vat = roundBhdAmount(Math.abs(vat));
+            const impliedPct = impliedVatPercentFromAmount(vat, base);
+            // Label % wins over a stale locked amount (e.g. user set VAT 10% after 2.5%/1.000).
+            if (
+                pctFromLabel != null &&
+                impliedPct != null &&
+                Math.abs(pctFromLabel - impliedPct) > 0.0005
+            ) {
+                table.removeAttribute('data-ems-vat-locked');
+                table.removeAttribute('data-ems-vat-amount');
+                table.setAttribute('data-ems-vat-pct', formatVatPercentNumber(pctFromLabel));
+                const computed = calcPricingTotalsFromBase(base, pctFromLabel);
+                return { ...computed, locked: false };
+            }
+            // Amount is source of truth only when it matches the label % (or label has no %).
+            return {
+                vatPercent: impliedPct != null ? impliedPct : pct,
+                vat,
+                grandWithVat: roundBhdAmount(base + vat),
+                locked: true,
+            };
+        }
+        table.removeAttribute('data-ems-vat-locked');
+        table.removeAttribute('data-ems-vat-amount');
+    }
+
+    const { vat, grandWithVat, vatPercent } = calcPricingTotalsFromBase(base, pct);
+    return { vatPercent, vat, grandWithVat, locked: false };
+}
+
+/**
+ * Bidirectional VAT sync (default 10%):
+ * - Left label % changed → right amount = base × %  (label wins; clears amount lock)
+ * - Right amount changed → left label % = amount ÷ base × 100
+ */
+function syncPricingVatUserEditsInTable(
+    table,
+    lineBaseTotal,
+    { activeCell = null, lockMismatchedAmount = false } = {}
+) {
+    if (!table) return;
+    const vatRow = findPricingVatRowInTable(table);
+    if (!vatRow?.cells || vatRow.cells.length < 2) {
+        if (!table.hasAttribute('data-ems-vat-pct')) {
+            table.setAttribute('data-ems-vat-pct', String(getDefaultPricingVatPercent()));
+        }
+        return;
+    }
+    const labelCell = vatRow.cells[0];
+    const amtCell = vatRow.cells[vatRow.cells.length - 1];
+    const taxedBase = calcTaxedBaseFromPricingTable(table, lineBaseTotal);
+    const pctFromLabel = parseVatPercentFromLabel(labelCell.textContent);
+    const storedRaw = table.getAttribute('data-ems-vat-pct');
+    const storedPct =
+        storedRaw != null && String(storedRaw).trim() !== '' ? parseFloat(storedRaw) : null;
+    const editingAmt = Boolean(activeCell && activeCell === amtCell);
+    const editingLabel = Boolean(activeCell && activeCell === labelCell);
+    const lockedAmt = parseFloat(table.getAttribute('data-ems-vat-amount'));
+    const impliedFromLock =
+        isPricingVatAmountLocked(table) && Number.isFinite(lockedAmt)
+            ? impliedVatPercentFromAmount(lockedAmt, taxedBase)
+            : isPricingVatAmountLocked(table)
+              ? impliedVatPercentFromAmount(parseBhdAmountText(amtCell.textContent), taxedBase)
+              : null;
+
+    // Right side only while caret is in the amount cell: amount drives %
+    if (editingAmt) {
+        if (!isIncompleteBhdAmountText(amtCell.textContent)) {
+            const parsed = parseBhdAmountText(amtCell.textContent);
+            if (parsed != null && Number.isFinite(parsed)) {
+                const vat = roundBhdAmount(Math.abs(parsed));
+                table.setAttribute('data-ems-vat-locked', '1');
+                table.setAttribute('data-ems-vat-amount', String(vat));
+                const impliedPct = impliedVatPercentFromAmount(vat, taxedBase);
+                if (impliedPct != null) {
+                    table.setAttribute('data-ems-vat-pct', formatVatPercentNumber(impliedPct));
+                    const nextLabel = formatVatRowLabel(impliedPct);
+                    if ((labelCell.textContent || '').replace(/\s+/g, ' ').trim() !== nextLabel) {
+                        labelCell.textContent = nextLabel;
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    // Left side (or label already shows a %): % drives amount — always wins over locked amount.
+    if (pctFromLabel != null) {
+        const pctChanged =
+            storedPct == null || Math.abs(pctFromLabel - storedPct) > 0.0005;
+        const labelOverridesLock =
+            impliedFromLock != null && Math.abs(pctFromLabel - impliedFromLock) > 0.0005;
+        if (pctChanged || editingLabel || labelOverridesLock || !isPricingVatAmountLocked(table)) {
+            if (pctChanged || editingLabel || labelOverridesLock) {
+                table.removeAttribute('data-ems-vat-locked');
+                table.removeAttribute('data-ems-vat-amount');
+            }
+            table.setAttribute('data-ems-vat-pct', formatVatPercentNumber(pctFromLabel));
+            if (!editingLabel) {
+                const nextLabel = formatVatRowLabel(pctFromLabel);
+                if ((labelCell.textContent || '').replace(/\s+/g, ' ').trim() !== nextLabel) {
+                    labelCell.textContent = nextLabel;
+                }
+            }
+            if (!isPricingVatAmountLocked(table) && taxedBase >= 0) {
+                const { vat } = calcPricingTotalsFromBase(taxedBase, pctFromLabel);
+                const vatText = formatBhdAmount(vat);
+                if ((amtCell.textContent || '').trim() !== vatText) {
+                    amtCell.textContent = vatText;
+                }
+            }
+        }
+    } else if (storedPct == null || !Number.isFinite(storedPct)) {
+        table.setAttribute('data-ems-vat-pct', String(getDefaultPricingVatPercent()));
+    }
+
+    // Only lock from amount mismatch when the user is NOT driving the label %.
+    // Never steal a label like "VAT 10%" back to 2.5% because amount was still 1.000.
+    if (
+        lockMismatchedAmount &&
+        !editingLabel &&
+        !isPricingVatAmountLocked(table) &&
+        pctFromLabel == null &&
+        !isIncompleteBhdAmountText(amtCell.textContent)
+    ) {
+        const pct = readPricingVatPercentFromTable(table);
+        const expected = calcPricingTotalsFromBase(taxedBase, pct).vat;
+        const actual = parseBhdAmountText(amtCell.textContent);
+        if (actual != null && Number.isFinite(actual) && Math.abs(actual - expected) > 0.0005) {
+            const vat = roundBhdAmount(Math.abs(actual));
+            table.setAttribute('data-ems-vat-locked', '1');
+            table.setAttribute('data-ems-vat-amount', String(vat));
+            const impliedPct = impliedVatPercentFromAmount(vat, taxedBase);
+            if (impliedPct != null) {
+                table.setAttribute('data-ems-vat-pct', formatVatPercentNumber(impliedPct));
+                const nextLabel = formatVatRowLabel(impliedPct);
+                if ((labelCell.textContent || '').replace(/\s+/g, ' ').trim() !== nextLabel) {
+                    labelCell.textContent = nextLabel;
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -1283,7 +1706,10 @@ function patchClause41LumpSumInHtml(html, grandTotalNum, numberToWordsFn) {
                 root.querySelectorAll('p,div,li').forEach((el) => {
                     if (el.closest('table')) return;
                     const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
-                    if (!/4\.1\./.test(text) || !/\bshall be\b/i.test(text)) return;
+                    if (!/\bshall be\b/i.test(text)) return;
+                    if (!/4\.1\./.test(text) && !CLAUSE_41_LUMP_IN_HTML_RE.test(el.innerHTML || '')) {
+                        return;
+                    }
                     const next = replaceClause41LumpSumInElementHtml(el.innerHTML, totalString);
                     if (next !== el.innerHTML) {
                         el.innerHTML = next;
@@ -1330,8 +1756,13 @@ function patchClause41LumpSumInWysiwyg(wys, grandTotalNum, numberToWordsFn) {
 
     wys.querySelectorAll('p,div,li').forEach((el) => {
         if (el.closest(`#${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}`)) return;
+        if (el.closest('table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]')) {
+            return;
+        }
         const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
-        if (!/4\.1\./.test(text) || !/\bshall be\b/i.test(text)) return;
+        // Match standard 4.1 wording and freeform "… shall be BHD …" price lines.
+        if (!/\bshall be\b/i.test(text)) return;
+        if (!/4\.1\./.test(text) && !CLAUSE_41_LUMP_IN_HTML_RE.test(el.innerHTML || '')) return;
         /* Never rewrite the block the user is typing in — innerHTML reset jumps caret to start. */
         if (anchorEl && el.contains(anchorEl)) return;
         const next = replaceClause41LumpSumInElementHtml(el.innerHTML, totalString);
@@ -1355,6 +1786,49 @@ function parseGrandTotalWithVatFromPricingTableElement(table) {
         }
     }
     return null;
+}
+
+/** Grand Total with the table's own VAT % (not the currency default). */
+function grandWithVatForPricingTable(table, lineBase) {
+    if (!table) return null;
+    const base =
+        lineBase != null && Number.isFinite(Number(lineBase))
+            ? Number(lineBase)
+            : parseBaseTotalFromPricingTableElement(table);
+    if (base == null || !Number.isFinite(base)) {
+        return parseGrandTotalWithVatFromPricingTableElement(table);
+    }
+    const taxed = calcTaxedBaseFromPricingTable(table, base);
+    return resolvePricingVatTotals(table, taxed).grandWithVat;
+}
+
+/** Point 4.1 / 3.1 figures and words follow the pricing table Grand Total. */
+function syncPricingLumpSumProseFromTables(html, numberToWordsFn) {
+    if (typeof DOMParser === 'undefined' || typeof numberToWordsFn !== 'function') {
+        return String(html || '');
+    }
+    try {
+        const doc = new DOMParser().parseFromString(
+            `<div id="ems-prose-sync">${String(html || '')}</div>`,
+            'text/html'
+        );
+        const root = doc.getElementById('ems-prose-sync');
+        if (!root) return String(html || '');
+        const tables = [
+            ...root.querySelectorAll(
+                'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+            ),
+        ];
+        if (!tables.length) return String(html || '');
+        if (root.querySelector('p[data-ems-price-wording]')) {
+            return syncAllPricingOptionWordingsInHtml(root.innerHTML, numberToWordsFn);
+        }
+        const grand = grandWithVatForPricingTable(tables[0]);
+        if (grand == null || !Number.isFinite(grand)) return String(html || '');
+        return patchClause41LumpSumInHtml(root.innerHTML, grand, numberToWordsFn);
+    } catch (_e) {
+        return String(html || '');
+    }
 }
 
 /**
@@ -1383,10 +1857,7 @@ function syncAllPricingOptionWordingsInHtml(html, numberToWordsFn) {
             const opt = String(table.getAttribute('data-ems-price-option') || '').trim() || 'Base Price';
             const grand =
                 parseGrandTotalWithVatFromPricingTableElement(table)
-                ?? (() => {
-                    const base = parseBaseTotalFromPricingTableElement(table);
-                    return base != null ? calcPricingTotalsFromBase(base).grandWithVat : null;
-                })();
+                ?? grandWithVatForPricingTable(table);
             if (grand == null || !Number.isFinite(grand)) return;
             const totalString = buildClause41LumpSumString(grand, numberToWordsFn);
             const wording = [...root.querySelectorAll('p[data-ems-price-wording]')].find(
@@ -1426,10 +1897,7 @@ function syncAllPricingOptionWordingsInWysiwyg(wys, numberToWordsFn) {
         const opt = String(table.getAttribute('data-ems-price-option') || '').trim() || 'Base Price';
         const grand =
             parseGrandTotalWithVatFromPricingTableElement(table)
-            ?? (() => {
-                const base = parseBaseTotalFromPricingTableElement(table);
-                return base != null ? calcPricingTotalsFromBase(base).grandWithVat : null;
-            })();
+            ?? grandWithVatForPricingTable(table);
         if (grand == null || !Number.isFinite(grand)) return;
         const totalString = buildClause41LumpSumString(grand, numberToWordsFn);
         const wording = [...wys.querySelectorAll('p[data-ems-price-wording]')].find(
@@ -1465,6 +1933,69 @@ function syncPricingTerms41LumpSumProse(html, grandTotalNum, foundPricedOptional
  */
 function emsPricingTableColgroupHtml() {
     return `<colgroup><col style="width:${EMS_QUOTE_PRICING_TABLE_DESC_COL_WIDTH}" /><col style="width:${EMS_QUOTE_PRICING_TABLE_AMOUNT_COL_WIDTH}" /></colgroup>`;
+}
+
+/** Sl.No | Description | Amount — same % model in edit and browse (no accidental px widen). */
+function emsPricingSlNoOptionColgroupHtml() {
+    return '<colgroup><col style="width:10%" /><col style="width:62%" /><col style="width:28%" /></colgroup>';
+}
+
+/** True for 3-col pricing option tables (Sl.No / Description / Amount), not Qty/Unit BOQ. */
+function pricingTableHtmlLooksSlNoOptionTable(tableHtml) {
+    if (typeof DOMParser === 'undefined') return false;
+    try {
+        const doc = new DOMParser().parseFromString(
+            `<div id="ems-pc3">${tableHtml}</div>`,
+            'text/html'
+        );
+        const table = doc.getElementById('ems-pc3')?.querySelector('table');
+        if (!table) return false;
+        const id = String(table.id || '');
+        const isPricingId =
+            id === EMS_AUTO_PRICE_SUMMARY_TABLE_ID ||
+            id.startsWith(`${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}--`) ||
+            table.getAttribute('data-ems-pricing-cols') === 'fixed';
+        if (!isPricingId) return false;
+        const rows = [...table.querySelectorAll('tr')];
+        const maxCells = Math.max(0, ...rows.map((r) => r.cells?.length || 0));
+        if (maxCells !== 3) return false;
+        const headerText = String(
+            table.querySelector('thead')?.textContent || rows[0]?.textContent || ''
+        )
+            .replace(/\s+/g, ' ')
+            .trim()
+            .toLowerCase();
+        if (/\bqty\b|\bquantity\b/.test(headerText) && /\bunit\b/.test(headerText)) return false;
+        return /\bsl\.?\s*no\b/.test(headerText) && /\bamount\b/.test(headerText);
+    } catch {
+        return false;
+    }
+}
+
+/** Strip per-cell px width locks so percent colgroup controls layout. */
+function stripPricingCellPxWidthLocksInTableHtml(tableRest) {
+    return String(tableRest || '').replace(
+        /<(td|th)([^>]*)>/gi,
+        (full, tag, attrs) => {
+            let next = String(attrs || '')
+                .replace(/\s*width\s*=\s*["'][^"']*["']/gi, '')
+                .replace(
+                    /style=(["'])([\s\S]*?)\1/i,
+                    (m, q, styleBody) => {
+                        let s = String(styleBody || '')
+                            .replace(/(?:^|;)\s*width\s*:\s*[^;]+;?/gi, ';')
+                            .replace(/(?:^|;)\s*min-width\s*:\s*[^;]+;?/gi, ';')
+                            .replace(/(?:^|;)\s*max-width\s*:\s*[^;]+;?/gi, ';')
+                            .replace(/;;+/g, ';')
+                            .replace(/^;|;$/g, '')
+                            .trim();
+                        return s ? `style=${q}${s}${q}` : '';
+                    }
+                );
+            next = next.replace(/\s{2,}/g, ' ').trim();
+            return next ? `<${tag} ${next}>` : `<${tag}>`;
+        }
+    );
 }
 
 /** Inject fixed Description/Amount colgroup so editor and preview share the same column widths. */
@@ -1518,6 +2049,17 @@ function ensureEmsAutoPricingTablePresentationInHtml(html) {
                 ];
                 if (tables.length) {
                     tables.forEach((table, idx) => {
+                        if (tableLooksLikeBoqOrMultiColumnSchedule(table)) {
+                            table.removeAttribute('data-ems-pricing-cols');
+                            const badId = String(table.id || '');
+                            if (
+                                badId === EMS_AUTO_PRICE_SUMMARY_TABLE_ID ||
+                                badId.startsWith(`${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}--`)
+                            ) {
+                                table.removeAttribute('id');
+                            }
+                            return;
+                        }
                         if (!table.getAttribute('id')) {
                             const opt = String(table.getAttribute('data-ems-price-option') || '').trim();
                             table.setAttribute('id', pricingOptionTableId(opt || 'Base Price', idx));
@@ -1525,9 +2067,18 @@ function ensureEmsAutoPricingTablePresentationInHtml(html) {
                         if (!table.getAttribute('data-ems-pricing-cols')) {
                             table.setAttribute('data-ems-pricing-cols', 'fixed');
                         }
-                        table.querySelectorAll('thead th').forEach((th) => {
-                            th.setAttribute('style', headerStyle);
-                        });
+                        /* Header row: style th and td (column-insert may add td). */
+                        const headerCells = table.querySelectorAll('thead th, thead td');
+                        if (headerCells.length) {
+                            headerCells.forEach((cell) => {
+                                cell.setAttribute('style', headerStyle);
+                            });
+                        } else {
+                            const firstRow = table.querySelector('tr');
+                            firstRow?.querySelectorAll('th, td').forEach((cell) => {
+                                cell.setAttribute('style', headerStyle);
+                            });
+                        }
                     });
                     return root.innerHTML;
                 }
@@ -1546,36 +2097,357 @@ function ensureEmsAutoPricingTablePresentationInHtml(html) {
         if (!/data-ems-pricing-cols=/i.test(openAttrs)) {
             openAttrs += ' data-ems-pricing-cols="fixed"';
         }
-        const innerFixed = inner.replace(
-            /(<thead[\s\S]*?<th)(\s[^>]*style=["'])([^"']*)(["'][^>]*>)/gi,
-            `$1 style="${headerStyle}"$4`
-        ).replace(
-            /(<thead[\s\S]*?<th)(?![^>]*\bstyle=)(\s[^>]*>)/gi,
-            `$1 style="${headerStyle}"$2`
-        );
+        const styleHeaderCell = (tag) => {
+            const withStyle = new RegExp(
+                `(<thead[\\s\\S]*?<${tag})(\\s[^>]*style=["'])([^"']*)(["'][^>]*>)`,
+                'gi'
+            );
+            const withoutStyle = new RegExp(
+                `(<thead[\\s\\S]*?<${tag})(?![^>]*\\bstyle=)(\\s[^>]*>)`,
+                'gi'
+            );
+            return (html) =>
+                html
+                    .replace(withStyle, `$1 style="${headerStyle}"$4`)
+                    .replace(withoutStyle, `$1 style="${headerStyle}"$2`);
+        };
+        const innerFixed = styleHeaderCell('td')(styleHeaderCell('th')(inner));
         return `<table${openAttrs}>${innerFixed}</table>`;
     });
 }
 
+function tableLooksLikeBoqOrMultiColumnSchedule(table) {
+    if (!table) return false;
+    const rows = [...table.querySelectorAll('tr')];
+    const maxCells = Math.max(0, ...rows.map((r) => r.cells?.length || 0));
+    const headerText = String(
+        table.querySelector('thead')?.textContent || rows[0]?.textContent || ''
+    )
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+    /*
+     * 4+ col SL.NO / Qty·Unit schedules are always BOQ — even if mis-tagged with the
+     * pricing-summary id (that tag made enter-edit scramble header vs body columns).
+     */
+    if (/\bsl\.?\s*no\b/.test(headerText) && maxCells >= 4) return true;
+    if (/\bqty\b|\bquantity\b/.test(headerText) && /\bunit\b/.test(headerText) && maxCells >= 4) {
+        return true;
+    }
+    const id = String(table.id || '');
+    /*
+     * Real EMS pricing summary keeps its id when users insert a middle column — do not
+     * treat those 2–3 col tables as BOQ or navy header CSS is stripped.
+     */
+    if (
+        id === EMS_AUTO_PRICE_SUMMARY_TABLE_ID ||
+        id.startsWith(`${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}--`)
+    ) {
+        return false;
+    }
+    /* Classic BOQ / schedule headers (fewer cols / untagged) */
+    if (/\bsl\.?\s*no\b/.test(headerText)) return maxCells >= 2;
+    if (/\bqty\b|\bquantity\b/.test(headerText) && /\bunit\b/.test(headerText)) {
+        return maxCells >= 3;
+    }
+    const hasDesc = /\bdescription\b/.test(headerText);
+    const hasAmount = /\bamount\b/.test(headerText);
+    /* Description + Amount (± inserted middle cols) with pricing footers = still pricing. */
+    if (hasDesc && hasAmount) {
+        if (table.getAttribute('data-ems-pricing-cols') === 'fixed') return false;
+        const hasPricingFooter = rows.some((r) => {
+            const kind = String(r.getAttribute('data-ems-row') || '').trim().toLowerCase();
+            if (/^(total|vat|grand|grand-vat|discount|final-discounted)$/.test(kind)) return true;
+            const t = String(r.cells?.[0]?.textContent || '').replace(/\s+/g, ' ').trim();
+            return /^(Total|VAT\s*[\d.]+%|Grand Total|Discount|Final Discounted)/i.test(t);
+        });
+        if (hasPricingFooter) return false;
+    }
+    return false;
+}
+
+function pricingTableHtmlLooksStrictTwoColumn(tableHtml) {
+    if (typeof DOMParser === 'undefined') return true;
+    try {
+        const doc = new DOMParser().parseFromString(
+            `<div id="ems-pc">${tableHtml}</div>`,
+            'text/html'
+        );
+        const table = doc.getElementById('ems-pc')?.querySelector('table');
+        if (!table) return true;
+        if (tableLooksLikeBoqOrMultiColumnSchedule(table)) return false;
+        const rows = [...table.querySelectorAll('tr')];
+        const maxCells = Math.max(0, ...rows.map((r) => r.cells?.length || 0));
+        return maxCells === 2;
+    } catch {
+        return true;
+    }
+}
+
+/** Remove mis-tagged pricing attrs / 72–28 colgroups from BOQ / SL.NO tables. */
+function stripMisappliedPricingLayoutFromBoqTablesInHtml(html) {
+    const raw = String(html || '');
+    if (!raw.includes('data-ems-pricing-cols') && !/width:\s*72%/i.test(raw)) return raw;
+    if (typeof DOMParser === 'undefined') return raw;
+    try {
+        const doc = new DOMParser().parseFromString(
+            `<div id="ems-boq-fix">${raw}</div>`,
+            'text/html'
+        );
+        const root = doc.getElementById('ems-boq-fix');
+        if (!root) return raw;
+        let changed = false;
+        root.querySelectorAll('table').forEach((table) => {
+            if (!tableLooksLikeBoqOrMultiColumnSchedule(table)) return;
+            const id = String(table.id || '');
+            /* BOQ wrongly tagged as EMS summary — strip id so pagination never collapses columns. */
+            if (
+                id === EMS_AUTO_PRICE_SUMMARY_TABLE_ID ||
+                id.startsWith(`${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}--`)
+            ) {
+                table.removeAttribute('id');
+                changed = true;
+            }
+            if (table.getAttribute('data-ems-pricing-cols') === 'fixed') {
+                table.removeAttribute('data-ems-pricing-cols');
+                changed = true;
+            }
+            const cg = table.querySelector('colgroup');
+            if (cg) {
+                const colHtml = cg.innerHTML || '';
+                const colCount = cg.querySelectorAll('col').length;
+                if (colCount === 2 && /72%|28%/.test(colHtml)) {
+                    cg.remove();
+                    changed = true;
+                }
+            }
+            /* Drop forced 80% width locks that belong to EMS summary only. */
+            const style = String(table.getAttribute('style') || '');
+            if (/width\s*:\s*80%/i.test(style) || /max-width\s*:\s*80%/i.test(style)) {
+                const next = style
+                    .replace(/(?:^|;)\s*width\s*:\s*80%\s*(?:!important)?\s*/gi, ';')
+                    .replace(/(?:^|;)\s*max-width\s*:\s*80%\s*(?:!important)?\s*/gi, ';')
+                    .replace(/;;+/g, ';')
+                    .replace(/^;|;$/g, '')
+                    .trim();
+                if (next) table.setAttribute('style', next);
+                else table.removeAttribute('style');
+                changed = true;
+            }
+        });
+        return changed ? root.innerHTML : raw;
+    } catch {
+        return raw;
+    }
+}
+
+function sanitizePricingSummaryTablesStructureInHtml(html) {
+    const raw = String(html || '');
+    if (
+        !raw.includes(EMS_AUTO_PRICE_SUMMARY_TABLE_ID) &&
+        !raw.includes('data-ems-pricing-cols="fixed"')
+    ) {
+        return raw;
+    }
+    if (typeof DOMParser === 'undefined') return raw;
+    try {
+        const doc = new DOMParser().parseFromString(
+            `<div id="ems-price-struct">${raw}</div>`,
+            'text/html'
+        );
+        const root = doc.getElementById('ems-price-struct');
+        if (!root) return raw;
+        let changed = false;
+        root
+            .querySelectorAll(
+                `table#${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}, table[id^="${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}"], table[data-ems-pricing-cols="fixed"]`
+            )
+            .forEach((table) => {
+                if (normalizeEmsPricingSummaryTableStructure(table)) changed = true;
+            });
+        return changed ? root.innerHTML : raw;
+    } catch {
+        return raw;
+    }
+}
+
+/** Avoid re-parsing the same pricing HTML 3–6× per preview rebuild (Enter → load path). */
+const _emsPricingColgroupCache = new Map();
+const EMS_PRICING_COLGROUP_CACHE_MAX = 24;
+
 function ensurePricingTableColgroupInHtml(html) {
-    let out = ensureEmsAutoPricingTablePresentationInHtml(html);
+    const input = String(html || '');
+    /* v5: keep user column resize for 4-col pricing (Staff / Price/Head) as well as 2-col. */
+    const cacheKey = `v5-align-cols:${input}`;
+    const cached = _emsPricingColgroupCache.get(cacheKey);
+    if (cached != null) return cached;
+
+    let out = ensureEmsAutoPricingTablePresentationInHtml(input);
+    out = stripMisappliedPricingLayoutFromBoqTablesInHtml(out);
+    out = alignDiscountFooterRowsInClauseHtml(out);
+    out = sanitizePricingSummaryTablesStructureInHtml(out);
     const raw = String(out || '');
     if (
         !raw.includes(EMS_AUTO_PRICE_SUMMARY_TABLE_ID)
         && !raw.includes('data-ems-pricing-cols="fixed"')
     ) {
+        if (_emsPricingColgroupCache.size >= EMS_PRICING_COLGROUP_CACHE_MAX) {
+            const oldest = _emsPricingColgroupCache.keys().next().value;
+            _emsPricingColgroupCache.delete(oldest);
+        }
+        _emsPricingColgroupCache.set(input, out);
         return out;
     }
+    // Keep data-ems-row-heights + data-ems-col-widths (user column resize) across exit-edit.
+    // Only force Description|Amount colgroup on true 2-column EMS summary tables.
     const tableOpenRe =
-        /(<table[^>]*(?:id=["']ems-auto-price-summary-table(?:--[^"']*)?["']|data-ems-pricing-cols=["']fixed["'])[^>]*>)(\s*<colgroup>[\s\S]*?<\/colgroup>)?/gi;
-    out = raw.replace(tableOpenRe, (full, openTag) => {
-        const wAttr = openTag.match(/data-ems-col-widths=["']([^"']+)["']/i);
-        const colgroup = wAttr
-            ? emsPricingTableColgroupFromWidthsAttr(wAttr[1])
-            : emsPricingTableColgroupHtml();
-        return `${openTag}${colgroup}`;
+        /(<table[^>]*(?:id=["']ems-auto-price-summary-table(?:--[^"']*)?["']|data-ems-pricing-cols=["']fixed["'])[^>]*>)(\s*<colgroup>[\s\S]*?<\/colgroup>)?([\s\S]*?<\/table>)/gi;
+    out = raw.replace(tableOpenRe, (full, openTag, existingColgroup = '', tableRest = '') => {
+        const tableHtml = `${openTag}${existingColgroup || ''}${tableRest}`;
+        /* 3-col Sl.No|Description|Amount: keep edit/browse on the same % widths (not baked px). */
+        if (pricingTableHtmlLooksSlNoOptionTable(tableHtml)) {
+            const userResized = /data-ems-col-widths-custom=["']1["']/i.test(openTag);
+            if (!userResized) {
+                openTag = openTag
+                    .replace(/\s*data-ems-col-widths=["'][^"']*["']/gi, '')
+                    .replace(/\s*data-ems-col-widths-custom=["'][^"']*["']/gi, '');
+                openTag = openTag.replace(
+                    /style=(["'])([\s\S]*?)\1/i,
+                    (m, q, styleBody) => {
+                        let s = String(styleBody || '')
+                            .replace(/(?:^|;)\s*width\s*:\s*[\d.]+px\s*(?:!important)?\s*/gi, ';')
+                            .replace(/(?:^|;)\s*min-width\s*:\s*[\d.]+px\s*(?:!important)?\s*/gi, ';')
+                            .replace(/(?:^|;)\s*max-width\s*:\s*100%\s*(?:!important)?\s*/gi, ';')
+                            .replace(/;;+/g, ';')
+                            .replace(/^;|;$/g, '')
+                            .trim();
+                        if (!/width\s*:/i.test(s)) {
+                            s = `${s ? `${s};` : ''}width:${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;max-width:${EMS_QUOTE_PRICING_TABLE_WIDTH} !important`;
+                        }
+                        return `style=${q}${s}${q}`;
+                    }
+                );
+                const rest = stripPricingCellPxWidthLocksInTableHtml(tableRest);
+                return `${openTag}${emsPricingSlNoOptionColgroupHtml()}${rest}`;
+            }
+            let widthParts = String(
+                (openTag.match(/data-ems-col-widths=["']([^"']+)["']/i) || [])[1] || ''
+            )
+                .split(',')
+                .map((s) => parseFloat(String(s).trim()))
+                .filter((n) => Number.isFinite(n) && n > 0);
+            if (widthParts.length !== 3 && existingColgroup) {
+                const fromCg = [...existingColgroup.matchAll(/width:\s*([\d.]+)px/gi)].map((m) =>
+                    parseFloat(m[1])
+                );
+                if (fromCg.length === 3 && fromCg.every((n) => n > 0)) {
+                    widthParts = fromCg.map((n) => Math.round(n));
+                    const csv = widthParts.join(',');
+                    if (/data-ems-col-widths=/i.test(openTag)) {
+                        openTag = openTag.replace(
+                            /data-ems-col-widths=["'][^"']*["']/i,
+                            `data-ems-col-widths="${csv}"`
+                        );
+                    } else {
+                        openTag = openTag.replace(
+                            /<table/i,
+                            `<table data-ems-col-widths="${csv}"`
+                        );
+                    }
+                }
+            }
+            if (widthParts.length === 3) {
+                return `${openTag}${emsPricingTableColgroupFromWidthsAttr(widthParts.join(','))}${tableRest}`;
+            }
+            /* Custom flagged but widths unreadable — keep colgroup; never force default %. */
+            if (existingColgroup) {
+                return `${openTag}${existingColgroup}${tableRest}`;
+            }
+            return `${openTag}${emsPricingSlNoOptionColgroupHtml()}${tableRest}`;
+        }
+        if (!pricingTableHtmlLooksStrictTwoColumn(tableHtml)) {
+            const userResized = /data-ems-col-widths-custom=["']1["']/i.test(openTag);
+            const widthParts = String(
+                (openTag.match(/data-ems-col-widths=["']([^"']+)["']/i) || [])[1] || ''
+            )
+                .split(',')
+                .map((s) => parseFloat(String(s).trim()))
+                .filter((n) => Number.isFinite(n) && n > 0);
+            /* Resized pricing tables (Description | Staff | Price/Head | Amount, and any other count). */
+            if (userResized && widthParts.length >= 2) {
+                return `${openTag}${emsPricingTableColgroupFromWidthsAttr(widthParts.join(','))}${tableRest}`;
+            }
+            /* Multi-column BOQ: strip summary-only attrs so 72/28 CSS cannot apply. */
+            let cleaned = openTag.replace(/\s*data-ems-pricing-cols=["']fixed["']/i, '');
+            if (/width:\s*72%/i.test(existingColgroup || '')) {
+                return `${cleaned}${tableRest}`;
+            }
+            return `${cleaned}${existingColgroup || ''}${tableRest}`;
+        }
+        const userResized = /data-ems-col-widths-custom=["']1["']/i.test(openTag);
+        let wAttr = openTag.match(/data-ems-col-widths=["']([^"']+)["']/i);
+        // Recover px widths from colgroup only after a real user column resize.
+        // Inventing px locks from measured editor layout made the table widen on exit.
+        if (userResized && !wAttr?.[1] && existingColgroup) {
+            const pxWidths = [...existingColgroup.matchAll(/width:\s*([\d.]+)px/gi)].map((m) =>
+                parseFloat(m[1])
+            );
+            if (pxWidths.length && pxWidths.every((n) => n > 0)) {
+                const csv = pxWidths.map((n) => String(Math.round(n))).join(',');
+                if (!/data-ems-col-widths=/i.test(openTag)) {
+                    openTag = openTag.replace(/<table/i, `<table data-ems-col-widths="${csv}"`);
+                }
+                wAttr = [null, csv];
+            }
+        }
+        if (!userResized) {
+            // Strip accidental px width locks; restore percent colgroup + 80% table width.
+            openTag = openTag
+                .replace(/\s*data-ems-col-widths=["'][^"']*["']/gi, '')
+                .replace(/\s*data-ems-col-widths-custom=["'][^"']*["']/gi, '');
+            openTag = openTag.replace(
+                /style=(["'])([\s\S]*?)\1/i,
+                (m, q, styleBody) => {
+                    let s = String(styleBody || '')
+                        .replace(/(?:^|;)\s*width\s*:\s*[\d.]+px\s*(?:!important)?\s*/gi, ';')
+                        .replace(/(?:^|;)\s*min-width\s*:\s*[\d.]+px\s*(?:!important)?\s*/gi, ';')
+                        .replace(/(?:^|;)\s*max-width\s*:\s*100%\s*(?:!important)?\s*/gi, ';')
+                        .replace(/;;+/g, ';')
+                        .replace(/^;|;$/g, '')
+                        .trim();
+                    if (!/width\s*:/i.test(s)) {
+                        s = `${s ? `${s};` : ''}width:${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;max-width:${EMS_QUOTE_PRICING_TABLE_WIDTH} !important`;
+                    }
+                    return `style=${q}${s}${q}`;
+                }
+            );
+            return `${openTag}${emsPricingTableColgroupHtml()}${tableRest}`;
+        }
+        /* Keep the drag for 2 columns and for tables that gained Staff / Price columns. */
+        const widthParts = String(wAttr?.[1] || '')
+            .split(',')
+            .map((s) => parseFloat(String(s).trim()))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (userResized && widthParts.length >= 2) {
+            return `${openTag}${emsPricingTableColgroupFromWidthsAttr(widthParts.join(','))}${tableRest}`;
+        }
+        if (widthParts.length !== 2) {
+            openTag = openTag
+                .replace(/\s*data-ems-col-widths=["'][^"']*["']/gi, '')
+                .replace(/\s*data-ems-col-widths-custom=["'][^"']*["']/gi, '');
+            return `${openTag}${emsPricingTableColgroupHtml()}${tableRest}`;
+        }
+        const colgroup = emsPricingTableColgroupFromWidthsAttr(widthParts.join(','));
+        return `${openTag}${colgroup}${tableRest}`;
     });
-    return ensureEmsAutoPricingTablePresentationInHtml(out);
+    out = ensureEmsAutoPricingTablePresentationInHtml(out);
+    out = normalizeEmsPricingTableTextAlignInHtml(out);
+    if (_emsPricingColgroupCache.size >= EMS_PRICING_COLGROUP_CACHE_MAX) {
+        const oldest = _emsPricingColgroupCache.keys().next().value;
+        _emsPricingColgroupCache.delete(oldest);
+    }
+    _emsPricingColgroupCache.set(cacheKey, out);
+    return out;
 }
 
 function buildEmsAutoPricingTableHtml(summary, activeJobs, numberToWordsFn = null) {
@@ -1608,8 +2480,116 @@ function formatBhdAmount(n) {
     return formatRuntimeCurrencyAmount(n);
 }
 
+/** Swap currency codes/headers in pricing clause HTML when Division currency changes (BHD ↔ SAR). */
+function rewritePricingTermsCurrencyCodesInHtml(html, fromCode, toCode) {
+    const from = String(fromCode || '').trim().toUpperCase();
+    const to = String(toCode || '').trim().toUpperCase();
+    if (!from || !to || from === to) return String(html || '');
+    let out = String(html || '');
+    const fromRe = from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out = out.replace(new RegExp(`Amount\\s*\\(\\s*${fromRe}\\s*\\)`, 'gi'), `Amount (${to})`);
+    out = out.replace(new RegExp(`AMOUNT\\s*\\(\\s*${fromRe}\\s*\\)`, 'gi'), `AMOUNT (${to})`);
+    out = out.replace(new RegExp(`\\b${fromRe}\\b`, 'g'), to);
+    return out;
+}
+
+/**
+ * When Division currency changes, retarget default VAT % (BHD 10% / SAR 15%) unless the user
+ * locked a custom VAT amount or non-default %.
+ */
+function applyCurrencyDefaultVatToPricingTermsHtml(html, prevCode, nextCode) {
+    const prevDefault = getDefaultPricingVatPercent(prevCode);
+    const nextDefault = getDefaultPricingVatPercent(nextCode);
+    let out = rewritePricingTermsCurrencyCodesInHtml(html, prevCode, nextCode);
+    if (prevDefault === nextDefault || typeof DOMParser === 'undefined') return out;
+    try {
+        const doc = new DOMParser().parseFromString(
+            `<div id="ems-cur-vat">${out}</div>`,
+            'text/html'
+        );
+        const root = doc.getElementById('ems-cur-vat');
+        if (!root) return out;
+        root
+            .querySelectorAll(
+                'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+            )
+            .forEach((table) => {
+                if (table.getAttribute('data-ems-vat-locked') === '1') return;
+                const pctAttr = parseFloat(table.getAttribute('data-ems-vat-pct'));
+                const vatRow = findPricingVatRowInTable(table);
+                const labelPct = parseVatPercentFromLabel(vatRow?.cells?.[0]?.textContent);
+                const effectivePct =
+                    Number.isFinite(pctAttr) && pctAttr >= 0
+                        ? pctAttr
+                        : labelPct != null
+                          ? labelPct
+                          : prevDefault;
+                // Only flip tables still on the previous currency default.
+                if (Math.abs(effectivePct - prevDefault) > 0.0005) return;
+                table.setAttribute('data-ems-vat-pct', String(nextDefault));
+                table.removeAttribute('data-ems-vat-locked');
+                table.removeAttribute('data-ems-vat-amount');
+                const lineBase = parseBaseTotalFromPricingTableElement(table);
+                if (lineBase != null) patchPricingTableFooterDom(table, lineBase);
+            });
+        return root.innerHTML;
+    } catch (_e) {
+        return out;
+    }
+}
+
+/**
+ * When Master_EnquiryFor.VAT_Per changes (same currency), retarget pricing tables
+ * still on the previous default % — leave locked / custom VAT alone.
+ */
+function applyMasterVatPercentToPricingTermsHtml(html, prevPercent, nextPercent) {
+    const prevDefault = Number(prevPercent);
+    const nextDefault = Number(nextPercent);
+    if (
+        !Number.isFinite(prevDefault) ||
+        !Number.isFinite(nextDefault) ||
+        Math.abs(prevDefault - nextDefault) < 0.0005 ||
+        typeof DOMParser === 'undefined'
+    ) {
+        return String(html || '');
+    }
+    try {
+        const doc = new DOMParser().parseFromString(
+            `<div id="ems-mef-vat">${String(html || '')}</div>`,
+            'text/html'
+        );
+        const root = doc.getElementById('ems-mef-vat');
+        if (!root) return String(html || '');
+        root
+            .querySelectorAll(
+                'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+            )
+            .forEach((table) => {
+                if (table.getAttribute('data-ems-vat-locked') === '1') return;
+                const pctAttr = parseFloat(table.getAttribute('data-ems-vat-pct'));
+                const vatRow = findPricingVatRowInTable(table);
+                const labelPct = parseVatPercentFromLabel(vatRow?.cells?.[0]?.textContent);
+                const effectivePct =
+                    Number.isFinite(pctAttr) && pctAttr >= 0
+                        ? pctAttr
+                        : labelPct != null
+                          ? labelPct
+                          : prevDefault;
+                if (Math.abs(effectivePct - prevDefault) > 0.0005) return;
+                table.setAttribute('data-ems-vat-pct', formatVatPercentNumber(nextDefault));
+                table.removeAttribute('data-ems-vat-locked');
+                table.removeAttribute('data-ems-vat-amount');
+                const lineBase = parseBaseTotalFromPricingTableElement(table);
+                if (lineBase != null) patchPricingTableFooterDom(table, lineBase);
+            });
+        return root.innerHTML;
+    } catch (_e) {
+        return String(html || '');
+    }
+}
+
 const EMS_PRICING_FOOTER_LABEL_RE =
-    /^(Total(\s*\([^)]*\))?|Discount(\s*\([\d.]+%\))?|Final Discounted Price|VAT\s*10%|Grand Total)/i;
+    /^(Total(\s*\([^)]*\))?|Discount(\s*\([\d.]+%\))?|Final Discounted Price|VAT\s*[\d.]+%|Grand Total)/i;
 
 const EMS_CUR_TOKEN_RE = String.raw`(?:BHD|AED|SAR|USD|EUR|GBP|KWD|OMR|QAR|BD|KD)`;
 
@@ -1630,30 +2610,69 @@ function isIncompleteBhdAmountText(raw) {
 }
 
 function isDiscountPricingLabel(label) {
-    return /^discount(\s*\([\d.]+%\))?$/i.test(String(label || '').trim())
-        || /^discount(\s+[\d.]+%)?$/i.test(String(label || '').trim());
+    const t = String(label || '')
+        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    // Plain "Discount", "Discount (10%)", "Discount 10%", and in-progress "Discount (", "Discount (10"
+    return /^discount(\s*\(\s*[\d.]*\s*%?\s*\)?)?$/i.test(t)
+        || /^discount(\s+[\d.]*\s*%?)?$/i.test(t);
 }
 
 function isFinalDiscountedPricingLabel(label) {
     return /^Final Discounted Price$/i.test(String(label || '').trim());
 }
 
+/** Parse % from "Discount (10%)", "Discount 10%", or in-progress "Discount (10". */
+function parseDiscountPercentFromLabel(label) {
+    const t = String(label || '')
+        .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const m =
+        t.match(/^Discount\s*\(\s*([\d.]+)\s*%?\s*\)?\s*$/i) ||
+        t.match(/^Discount\s+([\d.]+)\s*%?\s*$/i);
+    if (!m) return null;
+    const n = parseFloat(m[1]);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return Math.round(n * 100) / 100;
+}
+
+function formatDiscountPercentNumber(pct) {
+    const n = Number(pct);
+    if (!Number.isFinite(n) || n < 0) return '0';
+    const rounded = Math.round(n * 100) / 100;
+    if (Number.isInteger(rounded)) return String(rounded);
+    return String(rounded).replace(/\.?0+$/, '');
+}
+
+/** Label like "Discount (10%)" from a percent value (always includes % like VAT). */
+function formatDiscountRowLabelFromPercent(pct) {
+    const n = Number(pct);
+    if (!Number.isFinite(n) || n < 0) return 'Discount (0%)';
+    return `Discount (${formatDiscountPercentNumber(n)}%)`;
+}
+
 /** Label like "Discount (10%)" from amount ÷ Total (Base Price). */
 function formatDiscountRowLabel(discountAmt, baseTotal) {
     const base = Math.abs(Number(baseTotal) || 0);
     const disc = Math.abs(Number(discountAmt) || 0);
-    if (!base || !disc) return 'Discount';
+    if (!base || !disc) return formatDiscountRowLabelFromPercent(0);
     const pct = (disc / base) * 100;
-    const rounded = Math.round(pct * 100) / 100;
-    const numStr = Number.isInteger(rounded)
-        ? String(rounded)
-        : String(rounded.toFixed(2)).replace(/\.?0+$/, '');
-    return `Discount (${numStr}%)`;
+    return formatDiscountRowLabelFromPercent(pct);
 }
 
-/** Default Discount amount — "-{symbol} " prefix; user may delete the minus. */
+function impliedDiscountPercentFromAmount(discountAmt, baseTotal) {
+    const base = Math.abs(Number(baseTotal) || 0);
+    const disc = Math.abs(Number(discountAmt) || 0);
+    if (!base || !Number.isFinite(disc)) return null;
+    return Math.round((disc / base) * 10000) / 100;
+}
+
+/** Default Discount amount — "-{symbol} 0.000"; user may delete the minus. */
 function getEmsPricingDiscountAmountDefault() {
-    return `-${runtimeCurrencySymbol()} `;
+    const zero = formatBhdAmount(0);
+    return zero.startsWith('-') ? zero : `-${zero}`;
 }
 
 /** True when the typed discount text should keep a leading minus after format. */
@@ -1679,7 +2698,8 @@ function formatDiscountAmountDisplay(raw, parsed) {
     const magnitude = Math.abs(parsed);
     const useMinus = discountAmountTextPrefersMinus(raw);
     if (magnitude === 0) {
-        return useMinus ? fallback : formatBhdAmount(0);
+        const zero = formatBhdAmount(0);
+        return useMinus ? (zero.startsWith('-') ? zero : `-${zero}`) : zero;
     }
     return formatBhdAmount(useMinus ? -magnitude : magnitude);
 }
@@ -1706,13 +2726,21 @@ function parseBhdAmountText(raw) {
         .replace(/&nbsp;/gi, ' ')
         .trim();
     if (isIncompleteBhdAmountText(txt)) return null;
+    // Footer/labels like "VAT 10%" must not parse as amount 10 (→ bogus VAT BHD 1.000).
+    if (
+        /^(Total|VAT|Grand\s+Total|Discount|Final\s+Discounted)\b/i.test(txt) ||
+        (/^\s*VAT\b/i.test(txt) && !new RegExp(EMS_CUR_TOKEN_RE, 'i').test(txt))
+    ) {
+        return null;
+    }
     const negBdPrefix =
         new RegExp(`^\\s*-\\s*${EMS_CUR_TOKEN_RE}\\b`, 'i').test(txt)
         || new RegExp(`\\b${EMS_CUR_TOKEN_RE}\\s+-`, 'i').test(txt);
     const parenNeg = /\(/.test(txt) && /\)/.test(txt);
     const cleaned = stripCurrencyNoise(txt).replace(/[^0-9.,\-]/g, '');
+    if (!cleaned || cleaned === '-' || cleaned === '.') return null;
     const n = parseCurrencyAmount(cleaned) ?? parseFloat(cleaned);
-    if (!Number.isFinite(n)) return 0;
+    if (!Number.isFinite(n)) return null;
     if (n < 0) return n;
     if (negBdPrefix || (parenNeg && n > 0)) return -n;
     return n;
@@ -1806,10 +2834,10 @@ function sanitizeMisplacedPricingFooterAttrsInTableHtml(html) {
 }
 
 /**
- * Sum every line-item row above the footer (division, optional, user-inserted rows).
- * Stops at Total (Base Price) / VAT / Grand Total rows.
+ * Sum line-item rows in this table fragment only (ignores stamp / siblings).
+ * Stops at Total / VAT / Grand footer rows.
  */
-function parseBaseTotalFromPricingTableElement(table) {
+function sumPricingLineRowsFromTableElement(table) {
     if (!table?.querySelectorAll) return null;
     sanitizeMisplacedPricingFooterAttrsInTable(table);
     let sum = 0;
@@ -1832,6 +2860,197 @@ function parseBaseTotalFromPricingTableElement(table) {
         found = true;
     }
     return found ? sum : null;
+}
+
+function readStampedPricingBaseTotal(table) {
+    if (!table?.getAttribute) return null;
+    const stamped = parseFloat(table.getAttribute('data-ems-pricing-base-total') || '');
+    return Number.isFinite(stamped) && stamped >= 0 ? stamped : null;
+}
+
+/**
+ * Sum every line-item row above the footer (division, optional, user-inserted rows).
+ * For page-split pricing tables, prefer the stamped full-table base (or sibling
+ * fragments with the same data-ems-split-id) so Total is not recomputed from
+ * only the rows visible on the current page.
+ */
+function parseBaseTotalFromPricingTableElement(table) {
+    if (!table?.querySelectorAll) return null;
+
+    const stamped = readStampedPricingBaseTotal(table);
+    if (stamped != null) return stamped;
+
+    const isSplit = table.getAttribute('data-ems-table-split') === '1';
+    if (isSplit) {
+        const splitId = String(table.getAttribute('data-ems-split-id') || '').trim();
+        const doc = table.ownerDocument;
+        if (splitId && doc?.querySelectorAll) {
+            let siblingSum = 0;
+            let siblingFound = false;
+            let escaped = splitId;
+            try {
+                escaped =
+                    typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+                        ? CSS.escape(splitId)
+                        : splitId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            } catch (_e) {
+                /* use raw id */
+            }
+            const siblings = [
+                ...doc.querySelectorAll(`table[data-ems-split-id="${escaped}"]`),
+            ];
+            for (const sib of siblings) {
+                const sibStamp = readStampedPricingBaseTotal(sib);
+                if (sibStamp != null) return sibStamp;
+                const part = sumPricingLineRowsFromTableElement(sib);
+                if (part == null || !Number.isFinite(part)) continue;
+                siblingSum += part;
+                siblingFound = true;
+            }
+            if (siblingFound) return siblingSum;
+        }
+
+        /* Prefer an existing Total cell over summing this page's lines alone. */
+        const totalRow = findPricingTableRowByKindOrLabel(table, {
+            rowKind: 'total',
+            labelTest: isPricingTotalRowLabel,
+        });
+        if (totalRow?.cells?.length >= 2) {
+            const fromTotal = parseBhdAmountText(
+                totalRow.cells[totalRow.cells.length - 1].textContent
+            );
+            if (fromTotal != null && Number.isFinite(fromTotal) && fromTotal >= 0) {
+                return fromTotal;
+            }
+        }
+    }
+
+    return sumPricingLineRowsFromTableElement(table);
+}
+
+/** Persist full pre-VAT base on the table so page-split fragments keep the same Total. */
+function stampPricingBaseTotalOnTable(table, baseTotal) {
+    if (!table?.setAttribute) return;
+    const n = Number(baseTotal);
+    if (!Number.isFinite(n) || n < 0) return;
+    table.setAttribute('data-ems-pricing-base-total', String(roundBhdAmount(n)));
+}
+
+/**
+ * Ensure every pricing table carries data-ems-pricing-base-total before pagination
+ * copies attributes onto row fragments.
+ */
+function stampPricingBaseTotalAttrsInHtml(html) {
+    const raw = String(html || '');
+    if (!raw || !/<table\b/i.test(raw) || typeof DOMParser === 'undefined') return raw;
+    try {
+        const doc = new DOMParser().parseFromString(
+            `<div id="ems-base-stamp-root">${raw}</div>`,
+            'text/html'
+        );
+        const root = doc.getElementById('ems-base-stamp-root');
+        if (!root) return raw;
+        const tables = [
+            ...root.querySelectorAll(
+                'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+            ),
+        ];
+        if (!tables.length) return raw;
+        let changed = false;
+        tables.forEach((table) => {
+            if (readStampedPricingBaseTotal(table) != null) return;
+            const base =
+                sumPricingLineRowsFromTableElement(table) ??
+                parseBaseTotalFromPricingTableElement(table);
+            if (base == null || !Number.isFinite(base) || base < 0) return;
+            stampPricingBaseTotalOnTable(table, base);
+            changed = true;
+        });
+        return changed ? root.innerHTML : raw;
+    } catch (_e) {
+        return raw;
+    }
+}
+
+/**
+ * Across sheet blocks, sum line rows that share data-ems-split-id and stamp the
+ * full base onto every fragment (covers already-saved HTML without the attr).
+ */
+function stampSplitPricingBasesAcrossSheetBlocks(blocks) {
+    if (!Array.isArray(blocks) || !blocks.length || typeof DOMParser === 'undefined') {
+        return blocks;
+    }
+    /** @type {Map<string, number>} */
+    const stampedBases = new Map();
+    /** @type {Map<string, number>} */
+    const lineSums = new Map();
+    const parsed = blocks.map((block) => {
+        const html = String(block?.bodyHtml || '');
+        if (!html || !/data-ems-table-split=/i.test(html)) {
+            return { block, html, root: null };
+        }
+        try {
+            const doc = new DOMParser().parseFromString(
+                `<div id="ems-split-stamp">${html}</div>`,
+                'text/html'
+            );
+            const root = doc.getElementById('ems-split-stamp');
+            return { block, html, root };
+        } catch (_e) {
+            return { block, html, root: null };
+        }
+    });
+
+    parsed.forEach(({ root }) => {
+        if (!root) return;
+        root
+            .querySelectorAll(
+                'table[data-ems-table-split="1"][data-ems-split-id]'
+            )
+            .forEach((table) => {
+                const sid = String(table.getAttribute('data-ems-split-id') || '').trim();
+                if (!sid) return;
+                const stamped = readStampedPricingBaseTotal(table);
+                if (stamped != null) {
+                    stampedBases.set(sid, stamped);
+                    return;
+                }
+                const part = sumPricingLineRowsFromTableElement(table);
+                if (part == null || !Number.isFinite(part)) return;
+                lineSums.set(sid, roundBhdAmount((lineSums.get(sid) || 0) + part));
+            });
+    });
+
+    /** @type {Map<string, number>} */
+    const bases = new Map();
+    lineSums.forEach((sum, sid) => {
+        bases.set(sid, stampedBases.has(sid) ? stampedBases.get(sid) : sum);
+    });
+    stampedBases.forEach((sum, sid) => {
+        bases.set(sid, sum);
+    });
+
+    if (!bases.size) return blocks;
+
+    return parsed.map(({ block, root }) => {
+        if (!root) return block;
+        let changed = false;
+        root
+            .querySelectorAll(
+                'table[data-ems-table-split="1"][data-ems-split-id]'
+            )
+            .forEach((table) => {
+                const sid = String(table.getAttribute('data-ems-split-id') || '').trim();
+                const base = bases.get(sid);
+                if (base == null || !Number.isFinite(base)) return;
+                const prev = readStampedPricingBaseTotal(table);
+                if (prev != null && Math.abs(prev - base) < 0.0005) return;
+                stampPricingBaseTotalOnTable(table, base);
+                changed = true;
+            });
+        if (!changed) return block;
+        return { ...block, bodyHtml: root.innerHTML };
+    });
 }
 
 function sumPricingLineRowsFromTableHtmlRegex(tableHtml) {
@@ -1903,9 +3122,18 @@ function parseLumpSumFromAutoTableHtml(html) {
     const grandVatMatch = tableHtml.match(/<td[^>]*data-ems-amount=["']grand-vat["'][^>]*>([\s\S]*?)<\/td>/i);
     if (grandVatMatch) return cellNum(grandVatMatch[1]);
 
-    const baseSum = parseBaseTotalFromAutoTableHtml(html);
-    if (baseSum != null && Number.isFinite(baseSum)) {
-        return calcPricingTotalsFromBase(baseSum).grandWithVat;
+    if (typeof DOMParser !== 'undefined') {
+        try {
+            const doc = new DOMParser().parseFromString(
+                `<div id="ems-lump">${tableHtml}</div>`,
+                'text/html'
+            );
+            const table = doc.querySelector('table');
+            const fromTable = grandWithVatForPricingTable(table);
+            if (fromTable != null && Number.isFinite(fromTable)) return fromTable;
+        } catch (_e) {
+            /* fall through */
+        }
     }
     return null;
 }
@@ -1960,22 +3188,25 @@ function resolveActiveClauseEditorJodit() {
     return host?.__emsActiveClauseEditorJodit || null;
 }
 
-/** Amount <td> that currently holds the typing caret (do not rewrite its text while editing). */
-function getActivePricingTableAmountCell(table) {
+/** Resolve the pricing-table <td> that currently holds the typing caret (Jodit-safe). */
+function getActivePricingTableCell(table) {
     if (!table || typeof document === 'undefined') return null;
     const active = document.activeElement;
     const fromActive = active?.closest?.('td');
-    if (fromActive && table.contains(fromActive)) {
-        const row = fromActive.closest('tr');
-        const cells = row?.cells || [];
-        if (cells.length >= 2 && fromActive === cells[cells.length - 1]) return fromActive;
-    }
+    if (fromActive && table.contains(fromActive)) return fromActive;
     const sel = window.getSelection?.();
     if (!sel?.rangeCount) return null;
     const node = sel.getRangeAt(0).startContainer;
     const el = node?.nodeType === 1 ? node : node?.parentElement;
     const td = el?.closest?.('td');
     if (!td || !table.contains(td)) return null;
+    return td;
+}
+
+/** Amount <td> that currently holds the typing caret (do not rewrite its text while editing). */
+function getActivePricingTableAmountCell(table) {
+    const td = getActivePricingTableCell(table);
+    if (!td) return null;
     const row = td.closest('tr');
     const cells = row?.cells || [];
     if (cells.length < 2 || td !== cells[cells.length - 1]) return null;
@@ -2030,7 +3261,33 @@ function calcTaxedBaseFromPricingTable(table, lineBaseTotal) {
     return roundBhdAmount(base - parseDiscountAmountFromPricingTable(table));
 }
 
-function normalizeDiscountRowsInPricingTable(table, { skipCell = null, baseTotal = null } = {}) {
+function isPricingDiscountAmountLocked(table) {
+    return Boolean(table && table.getAttribute('data-ems-discount-locked') === '1');
+}
+
+function lockPricingDiscountAmount(table, magnitude) {
+    if (!table) return;
+    const amt = roundBhdAmount(Math.abs(Number(magnitude) || 0));
+    table.setAttribute('data-ems-discount-locked', '1');
+    table.setAttribute('data-ems-discount-amount', String(amt));
+}
+
+function clearPricingDiscountAmountLock(table) {
+    if (!table) return;
+    table.removeAttribute('data-ems-discount-locked');
+    table.removeAttribute('data-ems-discount-amount');
+}
+
+/**
+ * Bidirectional Discount sync (same idea as VAT %):
+ * - Left label % changed → right amount = base × % (clears amount lock)
+ * - Right amount changed → lock amount; left label % = amount ÷ base × 100
+ * Locked amount is never rewritten from a rounded % (100 stays 100, not 99.956).
+ */
+function normalizeDiscountRowsInPricingTable(
+    table,
+    { skipCell = null, activeCell = null, baseTotal = null } = {}
+) {
     if (!table?.querySelectorAll) return;
     sanitizeMisplacedPricingFooterAttrsInTable(table);
     const lineBase =
@@ -2046,40 +3303,198 @@ function normalizeDiscountRowsInPricingTable(table, { skipCell = null, baseTotal
         if (!isDiscountRow) continue;
         const amtCell = cells[cells.length - 1];
         const labelCell = cells[0];
-        const isActiveCell = Boolean(skipCell && amtCell === skipCell);
+        const editingAmt = Boolean(
+            (activeCell && activeCell === amtCell) || (skipCell && amtCell === skipCell)
+        );
+        const editingLabel = Boolean(activeCell && activeCell === labelCell);
         row.setAttribute('data-ems-row', 'discount');
         amtCell.setAttribute('data-ems-amount', 'discount');
-        const raw = String(amtCell?.textContent || '').trim();
-        if (!raw) {
-            if (!isActiveCell) amtCell.textContent = getEmsPricingDiscountAmountDefault();
-            if (lineBase != null) {
-                const nextLabel = formatDiscountRowLabel(0, lineBase);
-                if ((labelCell.textContent || '').trim() !== nextLabel) labelCell.textContent = nextLabel;
+
+        const pctFromLabel = parseDiscountPercentFromLabel(labelCell.textContent);
+        const storedRaw = table.getAttribute('data-ems-discount-pct');
+        const storedPct =
+            storedRaw != null && String(storedRaw).trim() !== '' ? parseFloat(storedRaw) : null;
+        const rawAmt = String(amtCell?.textContent || '').trim();
+        const lockedAmtAttr = parseFloat(table.getAttribute('data-ems-discount-amount'));
+        /* Auto-lock when displayed amount ≠ base×rounded% (e.g. typed 100 → label 5.66%). */
+        if (
+            !isPricingDiscountAmountLocked(table) &&
+            !editingLabel &&
+            lineBase != null &&
+            lineBase > 0 &&
+            pctFromLabel != null &&
+            rawAmt &&
+            !isIncompleteBhdAmountText(amtCell.textContent)
+        ) {
+            const parsedAmt = parseBhdAmountText(amtCell.textContent);
+            if (parsedAmt != null && Number.isFinite(parsedAmt)) {
+                const magnitude = roundBhdAmount(Math.abs(parsedAmt));
+                const fromPct = roundBhdAmount((lineBase * pctFromLabel) / 100);
+                if (Math.abs(fromPct - magnitude) > 0.0005) {
+                    lockPricingDiscountAmount(table, magnitude);
+                }
+            }
+        }
+        const locked =
+            isPricingDiscountAmountLocked(table)
+            && (Number.isFinite(lockedAmtAttr)
+                || Number.isFinite(parseFloat(table.getAttribute('data-ems-discount-amount')))
+                || Boolean(rawAmt));
+
+        // Right side (amount under caret): lock amount; amount drives left %
+        if (editingAmt) {
+            if (!rawAmt || isIncompleteBhdAmountText(amtCell.textContent)) {
+                // Leave label/% alone while the amount is mid-type (same as VAT).
+                continue;
+            }
+            const parsed = parseBhdAmountText(amtCell.textContent);
+            if (parsed == null || !Number.isFinite(parsed) || lineBase == null) continue;
+            const magnitude = Math.abs(parsed);
+            lockPricingDiscountAmount(table, magnitude);
+            const impliedPct = impliedDiscountPercentFromAmount(magnitude, lineBase);
+            if (impliedPct != null) {
+                table.setAttribute('data-ems-discount-pct', formatDiscountPercentNumber(impliedPct));
+                const nextLabel = formatDiscountRowLabelFromPercent(impliedPct);
+                if ((labelCell.textContent || '').trim() !== nextLabel) {
+                    labelCell.textContent = nextLabel;
+                }
             }
             continue;
         }
-        if (isIncompleteBhdAmountText(amtCell?.textContent)) {
-            if (!isActiveCell) {
-                if (!raw || raw === '-' || new RegExp(`^-\\s*${EMS_CUR_TOKEN_RE}\\s*$`, 'i').test(raw)) {
+
+        // Locked amount wins over rounded label % (100.000 must not become 99.956).
+        if (locked && !editingLabel && lineBase != null && lineBase > 0) {
+            let magnitude = Number.isFinite(lockedAmtAttr)
+                ? roundBhdAmount(Math.abs(lockedAmtAttr))
+                : null;
+            if (magnitude == null && rawAmt && !isIncompleteBhdAmountText(amtCell.textContent)) {
+                const parsed = parseBhdAmountText(amtCell.textContent);
+                if (parsed != null && Number.isFinite(parsed)) {
+                    magnitude = roundBhdAmount(Math.abs(parsed));
+                }
+            }
+            if (magnitude == null) {
+                clearPricingDiscountAmountLock(table);
+            } else {
+                lockPricingDiscountAmount(table, magnitude);
+                const preferMinus =
+                    !rawAmt ||
+                    isIncompleteBhdAmountText(amtCell.textContent) ||
+                    discountAmountTextPrefersMinus(rawAmt);
+                const formatted =
+                    magnitude === 0
+                        ? preferMinus
+                            ? getEmsPricingDiscountAmountDefault()
+                            : formatBhdAmount(0)
+                        : formatBhdAmount(preferMinus ? -magnitude : magnitude);
+                if ((amtCell.textContent || '').trim() !== formatted) {
+                    amtCell.textContent = formatted;
+                }
+                const impliedPct = impliedDiscountPercentFromAmount(magnitude, lineBase);
+                if (impliedPct != null) {
+                    table.setAttribute(
+                        'data-ems-discount-pct',
+                        formatDiscountPercentNumber(impliedPct)
+                    );
+                    const nextLabel = formatDiscountRowLabelFromPercent(impliedPct);
+                    if ((labelCell.textContent || '').trim() !== nextLabel) {
+                        labelCell.textContent = nextLabel;
+                    }
+                }
+                continue;
+            }
+        }
+
+        // Left side (label %): % drives right amount — also when Total/base changes.
+        if (pctFromLabel != null && lineBase != null && lineBase > 0) {
+            const pctChanged =
+                storedPct == null || Math.abs(pctFromLabel - storedPct) > 0.0005;
+            if (editingLabel || pctChanged || !isPricingDiscountAmountLocked(table)) {
+                if (editingLabel || pctChanged) clearPricingDiscountAmountLock(table);
+                table.setAttribute('data-ems-discount-pct', formatDiscountPercentNumber(pctFromLabel));
+                if (!editingLabel) {
+                    const nextLabel = formatDiscountRowLabelFromPercent(pctFromLabel);
+                    if ((labelCell.textContent || '').trim() !== nextLabel) {
+                        labelCell.textContent = nextLabel;
+                    }
+                }
+                if (!editingAmt && !isPricingDiscountAmountLocked(table)) {
+                    const discAmt = roundBhdAmount((lineBase * pctFromLabel) / 100);
+                    const preferMinus =
+                        !rawAmt ||
+                        isIncompleteBhdAmountText(amtCell.textContent) ||
+                        discountAmountTextPrefersMinus(rawAmt);
+                    const formatted =
+                        discAmt === 0
+                            ? preferMinus
+                                ? getEmsPricingDiscountAmountDefault()
+                                : formatBhdAmount(0)
+                            : formatBhdAmount(preferMinus ? -discAmt : discAmt);
+                    if ((amtCell.textContent || '').trim() !== formatted) {
+                        amtCell.textContent = formatted;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // No % in label yet — keep amount tidy; derive % from amount when possible
+        if (!rawAmt) {
+            if (!editingAmt) amtCell.textContent = getEmsPricingDiscountAmountDefault();
+            table.setAttribute('data-ems-discount-pct', '0');
+            clearPricingDiscountAmountLock(table);
+            if (lineBase != null && !editingLabel) {
+                const nextLabel = formatDiscountRowLabel(0, lineBase);
+                if ((labelCell.textContent || '').trim() !== nextLabel) {
+                    labelCell.textContent = nextLabel;
+                }
+            }
+            continue;
+        }
+        if (isIncompleteBhdAmountText(amtCell.textContent)) {
+            if (!editingAmt) {
+                if (
+                    !rawAmt ||
+                    rawAmt === '-' ||
+                    new RegExp(`^-\\s*${EMS_CUR_TOKEN_RE}\\s*$`, 'i').test(rawAmt)
+                ) {
                     amtCell.textContent = getEmsPricingDiscountAmountDefault();
                 }
             }
-            if (lineBase != null) {
+            table.setAttribute('data-ems-discount-pct', '0');
+            if (lineBase != null && !editingLabel) {
                 const nextLabel = formatDiscountRowLabel(0, lineBase);
-                if ((labelCell.textContent || '').trim() !== nextLabel) labelCell.textContent = nextLabel;
+                if ((labelCell.textContent || '').trim() !== nextLabel) {
+                    labelCell.textContent = nextLabel;
+                }
             }
             continue;
         }
-        const parsed = parseBhdAmountText(amtCell?.textContent);
+        const parsed = parseBhdAmountText(amtCell.textContent);
         if (parsed == null || !Number.isFinite(parsed)) continue;
         const magnitude = Math.abs(parsed);
-        if (!isActiveCell) {
-            const formatted = formatDiscountAmountDisplay(raw, parsed);
+        /* Amount present without a matching % amount — treat as user amount (lock). */
+        if (lineBase != null && lineBase > 0 && pctFromLabel != null) {
+            const fromPct = roundBhdAmount((lineBase * pctFromLabel) / 100);
+            if (Math.abs(fromPct - magnitude) > 0.0005) {
+                lockPricingDiscountAmount(table, magnitude);
+            }
+        } else if (lineBase != null && lineBase > 0) {
+            lockPricingDiscountAmount(table, magnitude);
+        }
+        if (!editingAmt) {
+            const formatted = formatDiscountAmountDisplay(rawAmt, parsed);
             if ((amtCell.textContent || '').trim() !== formatted) amtCell.textContent = formatted;
         }
-        if (lineBase != null) {
+        if (lineBase != null && !editingLabel) {
             const nextLabel = formatDiscountRowLabel(magnitude, lineBase);
-            if ((labelCell.textContent || '').trim() !== nextLabel) labelCell.textContent = nextLabel;
+            if ((labelCell.textContent || '').trim() !== nextLabel) {
+                labelCell.textContent = nextLabel;
+            }
+            const impliedPct = impliedDiscountPercentFromAmount(magnitude, lineBase);
+            if (impliedPct != null) {
+                table.setAttribute('data-ems-discount-pct', formatDiscountPercentNumber(impliedPct));
+            }
         }
     }
 }
@@ -2089,7 +3504,9 @@ function isLooseVatPricingLabel(label) {
         .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
         .replace(/\s+/g, ' ')
         .trim();
-    return /^VAT\b/i.test(t) || /\bVAT\s*10\s*%/i.test(t);
+    // Must start with VAT — do NOT match "Grand Total with VAT 10%" (that stole the VAT row).
+    if (/^Grand\s+Total/i.test(t)) return false;
+    return /^VAT(\s*10\s*%|\b)/i.test(t);
 }
 
 function isLooseGrandVatPricingLabel(label) {
@@ -2123,16 +3540,18 @@ function findPricingVatRowInTable(table) {
         const amtKind = String(cells[cells.length - 1].getAttribute('data-ems-amount') || '')
             .trim()
             .toLowerCase();
-        if (kind === 'vat' || amtKind === 'vat' || isLooseVatPricingLabel(label)) vatIdx = i;
-        if (kind === 'total' || amtKind === 'total' || isPricingTotalRowLabel(label)) totalIdx = i;
-        if (
+        const isGrand =
             kind === 'grand-vat' ||
             kind === 'grand' ||
             amtKind === 'grand-vat' ||
-            isLooseGrandVatPricingLabel(label)
-        ) {
+            isLooseGrandVatPricingLabel(label);
+        if (isGrand) {
             grandIdx = i;
+            return;
         }
+        // Prefer real VAT row; never let Grand Total win via a loose "VAT 10%" substring.
+        if (kind === 'vat' || amtKind === 'vat' || isLooseVatPricingLabel(label)) vatIdx = i;
+        if (kind === 'total' || amtKind === 'total' || isPricingTotalRowLabel(label)) totalIdx = i;
     });
     if (vatIdx >= 0) return rows[vatIdx];
     // Positional: VAT is the last non-grand footer row after Total (skip discount/final-discounted if labeled).
@@ -2154,12 +3573,41 @@ function findPricingVatRowInTable(table) {
     return null;
 }
 
-function patchPricingTableFooterDom(table, baseTotal) {
+function patchPricingTableFooterDom(table, baseTotal, opts = {}) {
     if (!table) return;
+    const activeCell = opts.activeCell || null;
+    const lockMismatchedAmount = Boolean(opts.lockMismatchedAmount);
     sanitizeMisplacedPricingFooterAttrsInTable(table);
+    /* Repair Discount/Final rows that were inserted without BOQ colspans. */
+    alignPricingDiscountFooterRowsToTemplate(table);
+    /* Keep Discount amount = Total × % whenever base changes (before VAT uses taxed base). */
+    normalizeDiscountRowsInPricingTable(table, {
+        activeCell,
+        skipCell: opts.skipDiscountAmountCell || null,
+        baseTotal,
+    });
+    syncPricingVatUserEditsInTable(table, baseTotal, { activeCell, lockMismatchedAmount });
     const hasDiscount = pricingTableHasDiscountBlock(table);
     const taxedBase = calcTaxedBaseFromPricingTable(table, baseTotal);
-    const { vat, grandWithVat } = calcPricingTotalsFromBase(taxedBase);
+    const { vat, grandWithVat, vatPercent, locked: vatLocked } = resolvePricingVatTotals(
+        table,
+        taxedBase
+    );
+    table.setAttribute('data-ems-vat-pct', formatVatPercentNumber(vatPercent));
+    stampPricingBaseTotalOnTable(table, baseTotal);
+    if (vatLocked) {
+        table.setAttribute('data-ems-vat-locked', '1');
+        table.setAttribute('data-ems-vat-amount', String(vat));
+    } else {
+        table.removeAttribute('data-ems-vat-locked');
+        table.removeAttribute('data-ems-vat-amount');
+    }
+    const vatLabel = formatVatRowLabel(vatPercent);
+    const grandLabel = formatGrandTotalWithVatLabel(vatPercent);
+    const vatRowEl = findPricingVatRowInTable(table);
+    const vatAmtCell =
+        vatRowEl?.cells?.length >= 2 ? vatRowEl.cells[vatRowEl.cells.length - 1] : null;
+    const skipVatAmount = Boolean(activeCell && vatAmtCell && activeCell === vatAmtCell);
     const optionName =
         String(table.getAttribute('data-ems-price-option') || '').trim() || 'Base Price';
     const totalLabel = formatPricingTotalRowLabel(optionName);
@@ -2178,19 +3626,24 @@ function patchPricingTableFooterDom(table, baseTotal) {
         {
             attr: 'vat',
             rowKind: 'vat',
-            label: 'VAT 10%',
+            label: vatLabel,
             text: formatBhdAmount(vat),
             labelMatch: isLooseVatPricingLabel,
+            skipAmount: skipVatAmount,
+            // Keep user-typed VAT amount; still refresh label/% + Grand.
+            preserveAmount: vatLocked,
+            syncLabel: true,
         },
         {
             attr: 'grand-vat',
             rowKind: 'grand-vat',
-            label: 'Grand Total with VAT 10%',
+            label: grandLabel,
             text: formatBhdAmount(grandWithVat),
             labelMatch: isLooseGrandVatPricingLabel,
+            syncLabel: true,
         },
     );
-    footerValues.forEach(({ attr, rowKind, label, text, labelMatch }) => {
+    footerValues.forEach(({ attr, rowKind, label, text, labelMatch, skipAmount, preserveAmount, syncLabel }) => {
         let patched = false;
         for (const row of getPricingTableDataRows(table)) {
             const cells = row.cells || [];
@@ -2200,6 +3653,15 @@ function patchPricingTableFooterDom(table, baseTotal) {
                 .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
                 .replace(/\s+/g, ' ')
                 .trim();
+            // Never apply VAT amounts onto Grand Total (label contains "VAT …%").
+            if (
+                rowKind === 'vat' &&
+                (rowKindAttr === 'grand-vat' ||
+                    rowKindAttr === 'grand' ||
+                    isLooseGrandVatPricingLabel(rowLabel))
+            ) {
+                continue;
+            }
             const matches =
                 rowKindAttr === String(rowKind || '').toLowerCase() ||
                 (labelMatch ? labelMatch(rowLabel) : rowLabel === label || rowLabel.startsWith(label));
@@ -2209,15 +3671,44 @@ function patchPricingTableFooterDom(table, baseTotal) {
             amtCell.setAttribute('data-ems-amount', attr);
             if (rowKind === 'total' && (cells[0].textContent || '').trim() !== label) {
                 cells[0].textContent = label;
+            } else if (syncLabel && (cells[0].textContent || '').replace(/\s+/g, ' ').trim() !== label) {
+                // Keep VAT / Grand labels aligned with the active percent.
+                if (!(activeCell && activeCell === cells[0])) {
+                    cells[0].textContent = label;
+                }
             }
-            if ((amtCell.textContent || '').trim() !== text) amtCell.textContent = text;
+            if (!skipAmount && !preserveAmount) {
+                if ((amtCell.textContent || '').trim() !== text) amtCell.textContent = text;
+            } else if (preserveAmount && !skipAmount) {
+                // Normalize display of locked amount without changing its value.
+                const parsed = parseBhdAmountText(amtCell.textContent);
+                if (parsed != null && Number.isFinite(parsed)) {
+                    const formatted = formatBhdAmount(roundBhdAmount(Math.abs(parsed)));
+                    if ((amtCell.textContent || '').trim() !== formatted) {
+                        amtCell.textContent = formatted;
+                    }
+                }
+            }
             patched = true;
         }
         if (patched) return;
         // Attr / row-kind fallback — do not require footer-label regex (stale VAT must still update).
         table.querySelectorAll(`td[data-ems-amount="${attr}"]`).forEach((c) => {
-            if ((c.textContent || '').trim() !== text) c.textContent = text;
             const row = c.closest('tr');
+            if (rowKind === 'vat' && row) {
+                const rk = String(row.getAttribute('data-ems-row') || '')
+                    .trim()
+                    .toLowerCase();
+                const lab = String(row.cells?.[0]?.textContent || '')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                if (rk === 'grand-vat' || rk === 'grand' || isLooseGrandVatPricingLabel(lab)) {
+                    return;
+                }
+            }
+            if (!skipAmount && !preserveAmount) {
+                if ((c.textContent || '').trim() !== text) c.textContent = text;
+            }
             if (row) row.setAttribute('data-ems-row', rowKind);
             patched = true;
         });
@@ -2226,7 +3717,14 @@ function patchPricingTableFooterDom(table, baseTotal) {
             if (cells.length < 2) return;
             const amtCell = cells[cells.length - 1];
             amtCell.setAttribute('data-ems-amount', attr);
-            if ((amtCell.textContent || '').trim() !== text) amtCell.textContent = text;
+            if (!skipAmount && !preserveAmount) {
+                if ((amtCell.textContent || '').trim() !== text) amtCell.textContent = text;
+            }
+            if (syncLabel && cells[0] && !(activeCell && activeCell === cells[0])) {
+                if ((cells[0].textContent || '').replace(/\s+/g, ' ').trim() !== label) {
+                    cells[0].textContent = label;
+                }
+            }
             patched = true;
         });
         // VAT last resort: positional row between Total and Grand (attrs/label often stripped by Jodit).
@@ -2236,10 +3734,16 @@ function patchPricingTableFooterDom(table, baseTotal) {
                 const amtCell = vatRow.cells[vatRow.cells.length - 1];
                 vatRow.setAttribute('data-ems-row', 'vat');
                 amtCell.setAttribute('data-ems-amount', 'vat');
-                if ((amtCell.textContent || '').trim() !== text) amtCell.textContent = text;
+                if (!skipAmount && !preserveAmount) {
+                    if ((amtCell.textContent || '').trim() !== text) amtCell.textContent = text;
+                }
                 const labelCell = vatRow.cells[0];
-                if (labelCell && !isLooseVatPricingLabel(labelCell.textContent)) {
-                    labelCell.textContent = 'VAT 10%';
+                if (
+                    labelCell &&
+                    !(activeCell && activeCell === labelCell) &&
+                    !isLooseVatPricingLabel(labelCell.textContent)
+                ) {
+                    labelCell.textContent = vatLabel;
                 }
             }
         }
@@ -2254,11 +3758,20 @@ function patchPricingTableFooterDom(table, baseTotal) {
             const amtCell = discountRow.cells[discountRow.cells.length - 1];
             const labelCell = discountRow.cells[0];
             amtCell.setAttribute('data-ems-amount', 'discount');
-            const discAmt = parseDiscountAmountFromPricingTable(table);
-            const nextLabel = formatDiscountRowLabel(discAmt, baseTotal);
-            if ((labelCell.textContent || '').trim() !== nextLabel) labelCell.textContent = nextLabel;
+            const editingLabel = Boolean(activeCell && activeCell === labelCell);
+            const editingAmt = Boolean(activeCell && activeCell === amtCell);
+            // Keep label/% ↔ amount in sync unless the user is mid-edit on that side.
+            normalizeDiscountRowsInPricingTable(table, {
+                activeCell,
+                skipCell: editingAmt ? amtCell : null,
+                baseTotal,
+            });
             const rawAmt = String(amtCell.textContent || '').trim();
-            if (!rawAmt) amtCell.textContent = getEmsPricingDiscountAmountDefault();
+            if (!rawAmt && !editingAmt) {
+                amtCell.textContent = getEmsPricingDiscountAmountDefault();
+            }
+            // Do not force label from amount when amount is blank/incomplete — that
+            // would wipe a typed Discount (x%) before the amount side catches up.
         }
     }
 }
@@ -2290,6 +3803,159 @@ function getPricingDiscountFooterCellStyles(totalRow) {
     };
 }
 
+/** Logical column span of a footer/header row (sum of colspans). */
+function pricingFooterRowLogicalColCount(row) {
+    if (!row?.cells?.length) return 0;
+    return [...row.cells].reduce((n, cell) => n + Math.max(1, Number(cell.colSpan) || 1), 0);
+}
+
+/** Column count for footer rows — prefer thead, then Total/VAT, else 2. */
+function getPricingTableFooterColumnCount(table, templateRow) {
+    const header =
+        table?.querySelector?.('thead tr')
+        || table?.querySelector?.('tr');
+    const fromHeader = pricingFooterRowLogicalColCount(header);
+    if (fromHeader >= 2) return fromHeader;
+    const fromTemplate = pricingFooterRowLogicalColCount(templateRow);
+    if (fromTemplate >= 2) return fromTemplate;
+    return 2;
+}
+
+/**
+ * Build a footer row that spans the full table width:
+ * multi-col BOQ → label colspan=(n-1) + amount; 2-col summary → label|amount.
+ * Plain 2-cell rows on 5-col tables leave Qty/Unit/Amount empty and wrap labels.
+ */
+function createPricingFooterRowMatchingTemplate(doc, table, templateRow, rowKind, amountAttr, label, amountText) {
+    const tr = doc.createElement('tr');
+    tr.setAttribute('data-ems-row', rowKind);
+    const { labelStyle, amountStyle } = getPricingDiscountFooterCellStyles(templateRow);
+    const colCount = getPricingTableFooterColumnCount(table, templateRow);
+    const tdLabel = doc.createElement('td');
+    tdLabel.setAttribute('style', labelStyle);
+    tdLabel.textContent = label;
+    if (colCount > 2) {
+        tdLabel.setAttribute('colspan', String(colCount - 1));
+    }
+    const tdAmt = doc.createElement('td');
+    tdAmt.setAttribute('data-ems-amount', amountAttr);
+    tdAmt.setAttribute('style', amountStyle);
+    tdAmt.textContent = amountText;
+    tr.appendChild(tdLabel);
+    tr.appendChild(tdAmt);
+    return tr;
+}
+
+/** True when Discount/Final row does not cover the full table width (broken BOQ layout). */
+function pricingFooterRowNeedsTemplateAlign(row, table, templateRow) {
+    if (!row?.cells?.length) return false;
+    const colCount = getPricingTableFooterColumnCount(table, templateRow);
+    const logical = pricingFooterRowLogicalColCount(row);
+    if (logical !== colCount) return true;
+    /* Multi-col: expect label span + amount (2 cells). Extra/missing cells = broken. */
+    if (colCount > 2 && row.cells.length !== 2) return true;
+    if (colCount > 2) {
+        const labelSpan = Math.max(1, Number(row.cells[0].colSpan) || 1);
+        if (labelSpan !== colCount - 1) return true;
+    }
+    return false;
+}
+
+/**
+ * Rebuild Discount / Final Discounted Price rows with correct colspans for BOQ tables.
+ */
+function alignPricingDiscountFooterRowsToTemplate(table) {
+    if (!table) return false;
+    const templateRow =
+        findPricingTableRowByKindOrLabel(table, {
+            rowKind: 'total',
+            labelTest: isPricingTotalRowLabel,
+        })
+        || findPricingVatRowInTable(table);
+    if (!templateRow?.cells || templateRow.cells.length < 2) return false;
+
+    const doc = table.ownerDocument || document;
+    let changed = false;
+    const kinds = [
+        {
+            rowKind: 'discount',
+            amountAttr: 'discount',
+            labelTest: isDiscountPricingLabel,
+            defaultLabel: formatDiscountRowLabelFromPercent(0),
+            defaultAmount: () => getEmsPricingDiscountAmountDefault(),
+        },
+        {
+            rowKind: 'final-discounted',
+            amountAttr: 'final-discounted',
+            labelTest: isFinalDiscountedPricingLabel,
+            defaultLabel: 'Final Discounted Price',
+            defaultAmount: () => {
+                const base = parseBaseTotalFromPricingTableElement(table);
+                return formatBhdAmount(roundBhdAmount(base != null ? base : 0));
+            },
+        },
+    ];
+    kinds.forEach(({ rowKind, amountAttr, labelTest, defaultLabel, defaultAmount }) => {
+        const row = findPricingTableRowByKindOrLabel(table, { rowKind, labelTest });
+        if (!row?.parentNode) return;
+        if (!pricingFooterRowNeedsTemplateAlign(row, table, templateRow)) return;
+        const label = String(row.cells[0]?.textContent || '').replace(/\s+/g, ' ').trim() || defaultLabel;
+        const amountText =
+            String(row.cells[row.cells.length - 1]?.textContent || '').trim() || defaultAmount();
+        const next = createPricingFooterRowMatchingTemplate(
+            doc,
+            table,
+            templateRow,
+            rowKind,
+            amountAttr,
+            label,
+            amountText
+        );
+        row.parentNode.replaceChild(next, row);
+        changed = true;
+    });
+    return changed;
+}
+
+/**
+ * Repair Discount/Final colspans in clause HTML — including BOQ tables that no longer
+ * carry data-ems-pricing-cols (stripped so 72/28 layout does not apply).
+ */
+function alignDiscountFooterRowsInClauseHtml(html) {
+    const raw = String(html || '');
+    if (
+        !/data-ems-row=["']discount["']/i.test(raw)
+        && !/data-ems-row=["']final-discounted["']/i.test(raw)
+        && !/>\s*Discount(\s*\([\d.]+%\))?\s*</i.test(raw)
+        && !/>\s*Final Discounted Price\s*</i.test(raw)
+    ) {
+        return raw;
+    }
+    if (typeof DOMParser === 'undefined') return raw;
+    try {
+        const doc = new DOMParser().parseFromString(
+            `<div id="ems-disc-align">${raw}</div>`,
+            'text/html'
+        );
+        const root = doc.getElementById('ems-disc-align');
+        if (!root) return raw;
+        let changed = false;
+        root.querySelectorAll('table').forEach((table) => {
+            const hasDisc = [...table.querySelectorAll('tr')].some((row) => {
+                const kind = String(row.getAttribute('data-ems-row') || '').toLowerCase();
+                if (kind === 'discount' || kind === 'final-discounted') return true;
+                const label = String(row.cells?.[0]?.textContent || '').replace(/\s+/g, ' ').trim();
+                return isDiscountPricingLabel(label) || isFinalDiscountedPricingLabel(label);
+            });
+            if (!hasDisc) return;
+            if (alignPricingDiscountFooterRowsToTemplate(table)) changed = true;
+        });
+        return changed ? root.innerHTML : raw;
+    } catch {
+        return raw;
+    }
+}
+
 /** Insert Discount + Final Discounted Price between Total (…) and VAT. */
 function insertDiscountBlockIntoPricingTable(table) {
     if (!table || pricingTableHasDiscountBlock(table)) return false;
@@ -2300,33 +3966,23 @@ function insertDiscountBlockIntoPricingTable(table) {
     if (!totalRow?.parentNode) return false;
 
     const doc = table.ownerDocument || document;
-    const { labelStyle, amountStyle } = getPricingDiscountFooterCellStyles(totalRow);
-    const createFooterRow = (rowKind, amountAttr, label, amountText) => {
-        const tr = doc.createElement('tr');
-        tr.setAttribute('data-ems-row', rowKind);
-        const tdLabel = doc.createElement('td');
-        tdLabel.setAttribute('style', labelStyle);
-        tdLabel.textContent = label;
-        const tdAmt = doc.createElement('td');
-        tdAmt.setAttribute('data-ems-amount', amountAttr);
-        tdAmt.setAttribute('style', amountStyle);
-        tdAmt.textContent = amountText;
-        tr.appendChild(tdLabel);
-        tr.appendChild(tdAmt);
-        return tr;
-    };
-
     const lineBase =
         parseBaseTotalFromPricingTableElement(table)
         ?? parseBhdAmountText(totalRow.cells[totalRow.cells.length - 1]?.textContent)
         ?? 0;
-    const discountRow = createFooterRow(
+    const discountRow = createPricingFooterRowMatchingTemplate(
+        doc,
+        table,
+        totalRow,
         'discount',
         'discount',
-        'Discount',
+        formatDiscountRowLabelFromPercent(0),
         getEmsPricingDiscountAmountDefault()
     );
-    const finalRow = createFooterRow(
+    const finalRow = createPricingFooterRowMatchingTemplate(
+        doc,
+        table,
+        totalRow,
         'final-discounted',
         'final-discounted',
         'Final Discounted Price',
@@ -2367,7 +4023,14 @@ function extractAllPricingDiscountStatesFromHtml(html) {
                 String(table.getAttribute('data-ems-price-option') || '').trim()
                 || String(table.getAttribute('id') || '').trim()
                 || 'Base Price';
-            out.push({ option, amountText: amtText });
+            const lockedAmt = parseFloat(table.getAttribute('data-ems-discount-amount'));
+            out.push({
+                option,
+                amountText: amtText,
+                locked: isPricingDiscountAmountLocked(table),
+                lockedAmount:
+                    Number.isFinite(lockedAmt) ? roundBhdAmount(Math.abs(lockedAmt)) : null,
+            });
         });
         return out;
     } catch (_e) {
@@ -2388,6 +4051,13 @@ function applyDiscountBlockToPricingTableElement(table, discountState) {
         const amtCell = discountRow.cells[discountRow.cells.length - 1];
         const nextAmt = String(discountState.amountText || '').trim() || getEmsPricingDiscountAmountDefault();
         if ((amtCell.textContent || '').trim() !== nextAmt) amtCell.textContent = nextAmt;
+        if (discountState.locked) {
+            const mag =
+                discountState.lockedAmount != null && Number.isFinite(discountState.lockedAmount)
+                    ? discountState.lockedAmount
+                    : Math.abs(parseBhdAmountText(nextAmt) || 0);
+            lockPricingDiscountAmount(table, mag);
+        }
     }
     const lineBase = parseBaseTotalFromPricingTableElement(table);
     if (lineBase != null && Number.isFinite(lineBase)) {
@@ -2435,12 +4105,7 @@ function applyDiscountBlockToPricingTermsHtml(html, discountState, numberToWords
             out = syncPricingTerms41LumpSumProse(out, 0, false, numberToWordsFn);
             if (!/data-ems-price-wording=/i.test(out)) {
                 const lineBase = parseBaseTotalFromPricingTableElement(tables[0]);
-                const taxedBase =
-                    lineBase != null && Number.isFinite(lineBase)
-                        ? calcTaxedBaseFromPricingTable(tables[0], lineBase)
-                        : null;
-                const grandWithVat =
-                    taxedBase != null ? calcPricingTotalsFromBase(taxedBase).grandWithVat : null;
+                const grandWithVat = grandWithVatForPricingTable(tables[0], lineBase);
                 if (grandWithVat != null) {
                     out = patchClause41LumpSumInHtml(out, grandWithVat, numberToWordsFn);
                 }
@@ -2481,6 +4146,116 @@ function preserveDiscountsOntoPricingTermsHtml(prevOrLiveHtml, nextHtml, numberT
     return applyDiscountBlockToPricingTermsHtml(nextHtml, preserved, numberToWordsFn);
 }
 
+/** Capture per-table VAT % / locked amount so Update Price keeps user edits. */
+function extractAllPricingVatStatesFromHtml(html) {
+    if (typeof DOMParser === 'undefined') return [];
+    try {
+        const doc = new DOMParser().parseFromString(
+            `<div id="ems-vat-snap">${String(html || '')}</div>`,
+            'text/html'
+        );
+        const root = doc.getElementById('ems-vat-snap');
+        const tables = [
+            ...(root?.querySelectorAll(
+                'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+            ) || []),
+        ];
+        return tables.map((table) => {
+            const option =
+                String(table.getAttribute('data-ems-price-option') || '').trim() ||
+                String(table.getAttribute('id') || '').trim() ||
+                'Base Price';
+            const vatPct = readPricingVatPercentFromTable(table);
+            const locked = isPricingVatAmountLocked(table);
+            const vatRow = findPricingVatRowInTable(table);
+            let vatAmount = null;
+            if (vatRow?.cells?.length >= 2) {
+                vatAmount = parseBhdAmountText(vatRow.cells[vatRow.cells.length - 1].textContent);
+            }
+            if ((vatAmount == null || !Number.isFinite(vatAmount)) && locked) {
+                const stored = parseFloat(table.getAttribute('data-ems-vat-amount'));
+                vatAmount = Number.isFinite(stored) ? stored : null;
+            }
+            return {
+                option,
+                vatPct,
+                locked,
+                vatAmount:
+                    vatAmount != null && Number.isFinite(vatAmount)
+                        ? roundBhdAmount(Math.abs(vatAmount))
+                        : null,
+            };
+        });
+    } catch (_e) {
+        return [];
+    }
+}
+
+function applyPricingVatStatesToPricingTermsHtml(html, vatStates) {
+    const states = Array.isArray(vatStates) ? vatStates : [];
+    if (!states.length || typeof DOMParser === 'undefined') return String(html || '');
+    try {
+        const doc = new DOMParser().parseFromString(
+            `<div id="ems-vat-apply">${String(html || '')}</div>`,
+            'text/html'
+        );
+        const root = doc.getElementById('ems-vat-apply');
+        if (!root) return String(html || '');
+        const tables = [
+            ...root.querySelectorAll(
+                'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+            ),
+        ];
+        tables.forEach((table, idx) => {
+            const opt = String(table.getAttribute('data-ems-price-option') || '').trim();
+            const tableId = String(table.getAttribute('id') || '').trim();
+            const matched =
+                states.find((s) => s.option && (s.option === opt || s.option === tableId)) ||
+                (states.length === tables.length ? states[idx] : null) ||
+                (tables.length === 1 ? states[0] : null);
+            if (!matched) return;
+            const pct =
+                matched.vatPct != null && Number.isFinite(Number(matched.vatPct))
+                    ? Number(matched.vatPct)
+                    : getDefaultPricingVatPercent();
+            table.setAttribute('data-ems-vat-pct', formatVatPercentNumber(pct));
+            if (matched.locked && matched.vatAmount != null && Number.isFinite(matched.vatAmount)) {
+                table.setAttribute('data-ems-vat-locked', '1');
+                table.setAttribute('data-ems-vat-amount', String(matched.vatAmount));
+                const vatRow = findPricingVatRowInTable(table);
+                if (vatRow?.cells?.length >= 2) {
+                    vatRow.cells[0].textContent = formatVatRowLabel(pct);
+                    vatRow.cells[vatRow.cells.length - 1].textContent = formatBhdAmount(
+                        matched.vatAmount
+                    );
+                }
+            } else {
+                table.removeAttribute('data-ems-vat-locked');
+                table.removeAttribute('data-ems-vat-amount');
+            }
+            const lineBase = parseBaseTotalFromPricingTableElement(table);
+            if (lineBase != null) patchPricingTableFooterDom(table, lineBase);
+        });
+        return root.innerHTML;
+    } catch (_e) {
+        return String(html || '');
+    }
+}
+
+/** Keep user VAT % / locked amount after Update Price rebuilds the auto table. */
+function preserveVatOntoPricingTermsHtml(prevOrLiveHtml, nextHtml) {
+    const sourceHtml = getPricingTermsHtmlPreferringLiveEditor(prevOrLiveHtml);
+    const preserved = extractAllPricingVatStatesFromHtml(sourceHtml);
+    const custom = preserved.filter(
+        (s) =>
+            s.locked ||
+            (s.vatPct != null &&
+                Math.abs(Number(s.vatPct) - getDefaultPricingVatPercent()) > 0.0005)
+    );
+    if (!custom.length) return String(nextHtml || '');
+    return applyPricingVatStatesToPricingTermsHtml(nextHtml, preserved);
+}
+
 function insertDiscountBlockIntoPricingTermsHtml(html, numberToWordsFn) {
     if (typeof DOMParser === 'undefined') return null;
     try {
@@ -2504,12 +4279,7 @@ function insertDiscountBlockIntoPricingTermsHtml(html, numberToWordsFn) {
             out = syncPricingTerms41LumpSumProse(out, 0, false, numberToWordsFn);
             if (!/data-ems-price-wording=/i.test(out)) {
                 const lineBase = parseBaseTotalFromPricingTableElement(tables[0]);
-                const taxedBase =
-                    lineBase != null && Number.isFinite(lineBase)
-                        ? calcTaxedBaseFromPricingTable(tables[0], lineBase)
-                        : null;
-                const grandWithVat =
-                    taxedBase != null ? calcPricingTotalsFromBase(taxedBase).grandWithVat : null;
+                const grandWithVat = grandWithVatForPricingTable(tables[0], lineBase);
                 if (grandWithVat != null) {
                     out = patchClause41LumpSumInHtml(out, grandWithVat, numberToWordsFn);
                 }
@@ -2569,8 +4339,7 @@ function removeDiscountBlocksFromPricingTermsHtml(html, numberToWordsFn) {
             out = syncPricingTerms41LumpSumProse(out, 0, false, numberToWordsFn);
             if (!/data-ems-price-wording=/i.test(out)) {
                 const lineBase = parseBaseTotalFromPricingTableElement(tables[0]);
-                const grandWithVat =
-                    lineBase != null ? calcPricingTotalsFromBase(lineBase).grandWithVat : null;
+                const grandWithVat = grandWithVatForPricingTable(tables[0], lineBase);
                 if (grandWithVat != null) {
                     out = patchClause41LumpSumInHtml(out, grandWithVat, numberToWordsFn);
                 }
@@ -2585,14 +4354,14 @@ function removeDiscountBlocksFromPricingTermsHtml(html, numberToWordsFn) {
 function applyPricingTableRecalcDomPatches(liveTable, baseTotal) {
     if (!liveTable) return;
     const jodit = resolveActiveClauseEditorJodit();
-    const activeCell = getActivePricingTableAmountCell(liveTable);
+    const activeCell = getActivePricingTableCell(liveTable);
+    const activeAmountCell = getActivePricingTableAmountCell(liveTable);
     const run = () => {
-        /* Skip rewriting the amount cell under the caret; still format other discount display + %. */
-        normalizeDiscountRowsInPricingTable(liveTable, {
-            skipCell: activeCell,
-            baseTotal,
+        patchPricingTableFooterDom(liveTable, baseTotal, {
+            activeCell,
+            skipDiscountAmountCell: activeAmountCell,
+            lockMismatchedAmount: true,
         });
-        patchPricingTableFooterDom(liveTable, baseTotal);
     };
     if (jodit) {
         preserveClauseEditorSelectionDuring(jodit, run);
@@ -2651,7 +4420,22 @@ function recalcPricingTermsEditorHtml(val, numberToWordsFn) {
             /* keep baseTotal */
         }
     }
-    const grandWithVat = calcPricingTotalsFromBase(taxedBase).grandWithVat;
+    const grandWithVat = liveTable
+        ? resolvePricingVatTotals(liveTable, taxedBase).grandWithVat
+        : (grandWithVatForPricingTable(
+              (() => {
+                  try {
+                      const doc = new DOMParser().parseFromString(
+                          extractEmsAutoPricingTableHtml(html) || '',
+                          'text/html'
+                      );
+                      return doc.querySelector('table');
+                  } catch (_e) {
+                      return null;
+                  }
+              })(),
+              baseTotal
+          ) ?? calcPricingTotalsFromBase(taxedBase).grandWithVat);
 
     const wys = liveTables[0]?.closest('.jodit-wysiwyg') || liveTable?.closest('.jodit-wysiwyg');
     const jodit = resolveActiveClauseEditorJodit();
@@ -2720,10 +4504,89 @@ function pricingFooterAmountsSig(html) {
         .join('|');
 }
 
-/** True when Total (+ optional Discount) imply 10% VAT but the VAT cell text disagrees. */
+/**
+ * True when VAT/Grand disagree with the table's VAT % (or locked amount).
+ * Custom user VAT (locked amount or non-default %) is respected — not forced back to 10%.
+ */
 function pricingFooterVatInconsistent(html) {
     const raw = String(html || '');
     if (!raw || !/<table\b/i.test(raw)) return false;
+    if (typeof DOMParser !== 'undefined') {
+        try {
+            const doc = new DOMParser().parseFromString(
+                `<div id="ems-vat-chk">${raw}</div>`,
+                'text/html'
+            );
+            const root = doc.getElementById('ems-vat-chk');
+            const tables = [
+                ...(root?.querySelectorAll(
+                    'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
+                ) || []),
+            ];
+            if (tables.length) {
+                return tables.some((table) => {
+                    /*
+                     * Page-split fragments often lack VAT/Grand on this page. Flagging them
+                     * as inconsistent caused reconcile to rewrite Total from this page's
+                     * lines only (skipping prior-page amounts).
+                     */
+                    if (table.getAttribute('data-ems-table-split') === '1') {
+                        const vatRowSplit = findPricingVatRowInTable(table);
+                        if (!vatRowSplit?.cells || vatRowSplit.cells.length < 2) {
+                            return false;
+                        }
+                    }
+                    let base = null;
+                    const stamped = readStampedPricingBaseTotal(table);
+                    if (stamped != null) {
+                        base = stamped;
+                    }
+                    const totalRow = findPricingTableRowByKindOrLabel(table, {
+                        rowKind: 'total',
+                        labelTest: isPricingTotalRowLabel,
+                    });
+                    if (base == null && totalRow?.cells?.length >= 2) {
+                        base = parseBhdAmountText(
+                            totalRow.cells[totalRow.cells.length - 1].textContent
+                        );
+                    }
+                    if (base == null || !Number.isFinite(base)) {
+                        base = parseBaseTotalFromPricingTableElement(table);
+                    }
+                    if (base == null || !Number.isFinite(base)) return false;
+                    const taxed = calcTaxedBaseFromPricingTable(table, base);
+                    const expected = resolvePricingVatTotals(table, taxed);
+                    const vatRow = findPricingVatRowInTable(table);
+                    if (!vatRow?.cells || vatRow.cells.length < 2) return true;
+                    const vatAmt = parseBhdAmountText(
+                        vatRow.cells[vatRow.cells.length - 1].textContent
+                    );
+                    if (vatAmt == null || !Number.isFinite(vatAmt)) return true;
+                    if (Math.abs(vatAmt - expected.vat) > 0.0005) return true;
+                    const grandRow = findPricingTableRowByKindOrLabel(table, {
+                        rowKind: 'grand-vat',
+                        labelTest: isLooseGrandVatPricingLabel,
+                    });
+                    if (grandRow?.cells?.length >= 2) {
+                        const grandAmt = parseBhdAmountText(
+                            grandRow.cells[grandRow.cells.length - 1].textContent
+                        );
+                        if (
+                            grandAmt != null &&
+                            Number.isFinite(grandAmt) &&
+                            Math.abs(grandAmt - expected.grandWithVat) > 0.0005
+                        ) {
+                            return true;
+                        }
+                    }
+                    return false;
+                });
+            }
+        } catch (_e) {
+            /* fall through */
+        }
+    }
+
     const total = parsePricingTotalFromTableHtmlFragment(raw);
     if (total == null || !Number.isFinite(total)) return false;
 
@@ -2749,7 +4612,24 @@ function pricingFooterVatInconsistent(html) {
         }
     }
 
-    const expectedVat = calcPricingTotalsFromBase(taxedBase).vat;
+    const pctAttr = raw.match(/data-ems-vat-pct=["']([^"']+)["']/i);
+    const pct =
+        pctAttr && Number.isFinite(parseFloat(pctAttr[1]))
+            ? parseFloat(pctAttr[1])
+            : getDefaultPricingVatPercent();
+    const locked = /data-ems-vat-locked=["']1["']/i.test(raw);
+    if (locked) {
+        // Locked amount is intentional — only flag if Grand ≠ base + VAT.
+        const vatAttr = raw.match(/data-ems-amount=["']vat["'][^>]*>([\s\S]*?)<\/td>/i);
+        const grandAttr = raw.match(/data-ems-amount=["']grand-vat["'][^>]*>([\s\S]*?)<\/td>/i);
+        const vatAmt = vatAttr ? parseBhdAmountText(vatAttr[1]) : null;
+        const grandAmt = grandAttr ? parseBhdAmountText(grandAttr[1]) : null;
+        if (vatAmt == null || !Number.isFinite(vatAmt)) return true;
+        if (grandAmt == null || !Number.isFinite(grandAmt)) return true;
+        return Math.abs(grandAmt - roundBhdAmount(taxedBase + Math.abs(vatAmt))) > 0.0005;
+    }
+
+    const expectedVat = calcPricingTotalsFromBase(taxedBase, pct).vat;
     const vatAttr = raw.match(/data-ems-amount=["']vat["'][^>]*>([\s\S]*?)<\/td>/i);
     let vatAmt = vatAttr ? parseBhdAmountText(vatAttr[1]) : null;
     if (vatAmt == null) {
@@ -2773,8 +4653,8 @@ function pricingFooterVatInconsistent(html) {
 }
 
 /**
- * Force every pricing table in a DOM root to show VAT = 10% of Total.
- * Used by paint-time + MutationObserver so React re-applies cannot leave a stale cell.
+ * Sync every pricing table VAT/Grand from the table's VAT % (default 10%) or locked amount.
+ * Does not force a custom user VAT back to 10%.
  */
 function forcePricingVatInDomRoot(root) {
     if (!root?.querySelectorAll) return false;
@@ -2784,13 +4664,17 @@ function forcePricingVatInDomRoot(root) {
             'table[data-ems-pricing-cols="fixed"], table[id^="ems-auto-price-summary-table"]'
         )
         .forEach((table) => {
-            // Prefer displayed Total row (source of truth) over line-sum — matches what user sees.
+            // Split tables: stamped/sibling full base wins (fixes Total rewritten from one page).
+            // Unsplit: prefer displayed Total row, then line-sum.
             let base = null;
+            if (table.getAttribute('data-ems-table-split') === '1') {
+                base = parseBaseTotalFromPricingTableElement(table);
+            }
             const totalRow = findPricingTableRowByKindOrLabel(table, {
                 rowKind: 'total',
                 labelTest: isPricingTotalRowLabel,
             });
-            if (totalRow?.cells?.length >= 2) {
+            if (base == null && totalRow?.cells?.length >= 2) {
                 base = parseBhdAmountText(totalRow.cells[totalRow.cells.length - 1].textContent);
             }
             if (base == null || !Number.isFinite(base)) {
@@ -2802,11 +4686,12 @@ function forcePricingVatInDomRoot(root) {
             const beforeText = beforeVat?.cells?.[beforeVat.cells.length - 1]
                 ? String(beforeVat.cells[beforeVat.cells.length - 1].textContent || '').trim()
                 : '';
+            const beforeLocked = isPricingVatAmountLocked(table);
 
             patchPricingTableFooterDom(table, base);
 
             const taxed = calcTaxedBaseFromPricingTable(table, base);
-            const { vat, grandWithVat } = calcPricingTotalsFromBase(taxed);
+            const { vat, grandWithVat, locked } = resolvePricingVatTotals(table, taxed);
             const vatText = formatBhdAmount(vat);
             const grandText = formatBhdAmount(grandWithVat);
 
@@ -2815,10 +4700,15 @@ function forcePricingVatInDomRoot(root) {
                 const cell = vatRow.cells[vatRow.cells.length - 1];
                 vatRow.setAttribute('data-ems-row', 'vat');
                 cell.setAttribute('data-ems-amount', 'vat');
-                if ((cell.textContent || '').trim() !== vatText) {
-                    cell.textContent = vatText;
-                    changed = true;
-                } else if (beforeText && beforeText !== vatText) {
+                // Never overwrite a locked / user-entered VAT amount here.
+                if (!locked && !beforeLocked) {
+                    if ((cell.textContent || '').trim() !== vatText) {
+                        cell.textContent = vatText;
+                        changed = true;
+                    } else if (beforeText && beforeText !== vatText) {
+                        changed = true;
+                    }
+                } else if (beforeText && beforeText !== String(cell.textContent || '').trim()) {
                     changed = true;
                 }
             }
@@ -2894,6 +4784,7 @@ function reconcilePricingVatAmountCellsInHtml(html) {
                 ];
                 if (tables.length) {
                     tables.forEach((table) => {
+                        /* Prefer stamped / sibling full base; never rebuild Total from one page alone. */
                         let base = parseBaseTotalFromPricingTableElement(table);
                         if (base == null || !Number.isFinite(base)) {
                             const totalRow = findPricingTableRowByKindOrLabel(table, {
@@ -2941,7 +4832,31 @@ function reconcilePricingVatAmountCellsInHtml(html) {
                 }
             }
         }
-        const { vat, grandWithVat } = calcPricingTotalsFromBase(taxedBase);
+        const pctAttr = tableHtml.match(/data-ems-vat-pct=["']([^"']+)["']/i);
+        let vatPct =
+            pctAttr && Number.isFinite(parseFloat(pctAttr[1]))
+                ? parseFloat(pctAttr[1])
+                : getDefaultPricingVatPercent();
+        const labelPctMatch = tableHtml.match(
+            /data-ems-row=["']vat["'][^>]*>[\s\S]*?<t[dh][^>]*>\s*VAT\s*([\d.]+)\s*%/i
+        );
+        if (labelPctMatch && Number.isFinite(parseFloat(labelPctMatch[1]))) {
+            vatPct = parseFloat(labelPctMatch[1]);
+        }
+        const vatLocked = /data-ems-vat-locked=["']1["']/i.test(tableHtml);
+        let vat;
+        let grandWithVat;
+        if (vatLocked) {
+            const vatAttr = tableHtml.match(/data-ems-amount=["']vat["'][^>]*>([\s\S]*?)<\/td>/i);
+            const parsedVat = vatAttr ? parseBhdAmountText(vatAttr[1]) : null;
+            vat =
+                parsedVat != null && Number.isFinite(parsedVat)
+                    ? roundBhdAmount(Math.abs(parsedVat))
+                    : calcPricingTotalsFromBase(taxedBase, vatPct).vat;
+            grandWithVat = roundBhdAmount(taxedBase + vat);
+        } else {
+            ({ vat, grandWithVat } = calcPricingTotalsFromBase(taxedBase, vatPct));
+        }
         const vatText = formatBhdAmount(vat);
         const grandText = formatBhdAmount(grandWithVat);
 
@@ -3005,7 +4920,18 @@ function reconcilePricingVatAmountCellsInHtml(html) {
         };
 
         let next = tableHtml;
-        next = rewriteFooterAmount(next, 'vat', 'vat', vatText, isLooseVatPricingLabel);
+        if (!/data-ems-vat-pct=/i.test(next)) {
+            next = next.replace(/<table\b/i, `<table data-ems-vat-pct="${formatVatPercentNumber(vatPct)}"`);
+        } else {
+            next = next.replace(
+                /data-ems-vat-pct=["'][^"']*["']/i,
+                `data-ems-vat-pct="${formatVatPercentNumber(vatPct)}"`
+            );
+        }
+        // Keep locked VAT amount; only refresh Grand Total.
+        if (!vatLocked) {
+            next = rewriteFooterAmount(next, 'vat', 'vat', vatText, isLooseVatPricingLabel);
+        }
         next = rewriteFooterAmount(
             next,
             'grand-vat',
@@ -3147,6 +5073,138 @@ const normalizeCustomerKey = (s) =>
         .trim()
         .toLowerCase()
         .replace(/[^a-z0-9]/g, '');
+
+/** Strip courtesy prefixes so "M/s Almoayyed Solar…" matches master "Almoayyed Solar…". */
+const stripCourtesyCustomerPrefix = (name) =>
+    String(name || '')
+        .replace(/^(m\/s\.?|m\.s\.?|messrs\.?|messers\.?)\s+/i, '')
+        .trim();
+
+const customerMatchKeys = (name) => {
+    const raw = String(name || '').trim();
+    const stripped = stripCourtesyCustomerPrefix(stripTaggedLeadCodeFromCustomerLabel(raw));
+    return {
+        exact: raw,
+        norm: normalize(raw),
+        key: normalizeCustomerKey(raw),
+        strippedNorm: normalize(stripped),
+        strippedKey: normalizeCustomerKey(stripped),
+    };
+};
+
+const customerHasCourtesyPrefix = (name) =>
+    /^(m\/s\.?|m\.s\.?|messrs\.?|messers\.?)\s+/i.test(String(name || '').trim());
+
+/**
+ * Resolve Master_CustomerName / Consultant / client row for a dropdown label.
+ * When several rows share the same core name (M/s X vs X), prefer the courtesy-prefix match.
+ */
+function findMasterCustomerRow(customersList, selectedName) {
+    const list = Array.isArray(customersList) ? customersList : [];
+    const t = customerMatchKeys(selectedName);
+    if (!t.exact || !list.length) return null;
+    const selHasMs = customerHasCourtesyPrefix(t.exact);
+
+    let best = null;
+    let bestScore = 0;
+    for (const c of list) {
+        const company = String(c?.CompanyName || '').trim();
+        if (!company) continue;
+        const k = customerMatchKeys(company);
+        let score = 0;
+        if (company === t.exact) score = 100;
+        else if (k.norm && k.norm === t.norm) score = 90;
+        else if (k.strippedKey && t.strippedKey && k.strippedKey === t.strippedKey) {
+            score = customerHasCourtesyPrefix(company) === selHasMs ? 80 : 50;
+        } else if (k.strippedNorm && t.strippedNorm && k.strippedNorm === t.strippedNorm) {
+            score = customerHasCourtesyPrefix(company) === selHasMs ? 70 : 40;
+        }
+        if (score > bestScore) {
+            bestScore = score;
+            best = c;
+        }
+    }
+    return bestScore > 0 ? best : null;
+}
+
+/** Dedupe address lines / repeated half-blocks; drop leading company line matching selected To name. */
+function sanitizeToAddressText(raw, selectedName = '') {
+    const text = String(raw || '').replace(/\r\n/g, '\n').trim();
+    if (!text) return '';
+    let lines = [];
+    const seen = new Set();
+    for (const line of text.split('\n')) {
+        const t = String(line || '').trim();
+        if (!t) continue;
+        const key = normalize(t);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        lines.push(t);
+    }
+    /* e.g. [street, city, street, city] when Address1+Address2 were concatenated before dedupe. */
+    if (lines.length >= 4 && lines.length % 2 === 0) {
+        const half = lines.length / 2;
+        const a = lines.slice(0, half).map((l) => normalize(l)).join('|');
+        const b = lines.slice(half).map((l) => normalize(l)).join('|');
+        if (a && a === b) lines = lines.slice(0, half);
+    }
+    if (lines.length) {
+        const firstKey = customerMatchKeys(lines[0]).strippedKey;
+        const selKey = customerMatchKeys(selectedName).strippedKey;
+        if (firstKey && selKey && firstKey === selKey) lines = lines.slice(1);
+    }
+    return lines.join('\n').trim();
+}
+
+/**
+ * Build To Address from master Address1/Address2:
+ * - dedupe repeated street lines (Address2 often repeats Address1)
+ * - drop a leading company line when it matches the selected / master company name
+ */
+function composeCustomerToAddress(row, selectedName = '') {
+    if (!row || typeof row !== 'object') return '';
+    if (row.Address && !row.Address1 && !row.Address2) {
+        return sanitizeToAddressText(row.Address, selectedName || row.CompanyName);
+    }
+    const a1 = String(row.Address1 || '').replace(/\r\n/g, '\n').trim();
+    const a2 = String(row.Address2 || '').replace(/\r\n/g, '\n').trim();
+    const combined = [a1, a2].filter(Boolean).join('\n');
+    return sanitizeToAddressText(combined, selectedName || row.CompanyName);
+}
+
+function formatMasterCustomerPhone(row) {
+    return `${row?.Phone1 || ''} ${row?.Phone2 ? '/ ' + row.Phone2 : ''}`.trim();
+}
+
+/**
+ * Address from the best-matching master row; phone/fax/email fall back to other master
+ * rows with the same core company name when the preferred row has blanks
+ * (e.g. "M/s Almoayyed Solar…" has PO Box but empty phones; sibling "Almoayyed Solar CO…" has contacts).
+ */
+function resolveMasterCustomerRecipient(customersList, selectedName) {
+    const primary = findMasterCustomerRow(customersList, selectedName);
+    if (!primary) return null;
+    const t = customerMatchKeys(selectedName);
+    const siblings = (Array.isArray(customersList) ? customersList : []).filter((c) => {
+        const k = customerMatchKeys(c?.CompanyName);
+        return !!(k.strippedKey && t.strippedKey && k.strippedKey === t.strippedKey);
+    });
+    const ordered = [primary, ...siblings.filter((c) => c !== primary)];
+    const pick = (getter) => {
+        for (const row of ordered) {
+            const v = getter(row);
+            if (v) return v;
+        }
+        return '';
+    };
+    return {
+        row: primary,
+        address: composeCustomerToAddress(primary, selectedName),
+        phone: pick(formatMasterCustomerPhone),
+        email: pick((r) => String(r?.EmailId || '').trim()),
+        fax: pick((r) => String(r?.FaxNo || '').trim()),
+    };
+}
 
 /**
  * Previous Quotes / Revisions must always show matching quote refs.
@@ -3714,10 +5772,15 @@ function resolveQuoteLogoSrc(logo) {
 }
 
 const QUOTE_HEADER_LOGO_STYLE = {
-    height: '68px',
+    height: 'auto',
     width: 'auto',
-    maxWidth: '212px',
+    maxHeight: '21mm',
+    maxWidth: '100%',
     objectFit: 'contain',
+    objectPosition: 'right top',
+    display: 'block',
+    marginLeft: 'auto',
+    marginRight: 0,
 };
 
 function QuoteHeaderLogo({ candidates }) {
@@ -4805,6 +6868,43 @@ const quoteNumberDivisionMatchesTab = (q, activeTabObj, multiTab) => {
     return matchDivisionCode(qDiv, tabLabel, activeTabObj.divisionCode);
 };
 
+/** POST multipart via XHR so the attachment card can show upload progress (fetch has no upload progress). */
+const postAttachmentFormWithProgress = (url, formData, onProgress) =>
+    new Promise((resolve) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable && e.total > 0) onProgress(Math.round((e.loaded / e.total) * 100));
+        };
+        xhr.onload = () => {
+            let body = {};
+            try {
+                body = JSON.parse(xhr.responseText || '{}');
+            } catch (_) {
+                /* non-JSON error page */
+            }
+            resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, body });
+        };
+        xhr.onerror = () => resolve({ ok: false, status: 0, body: { error: 'Network error' } });
+        xhr.ontimeout = () => resolve({ ok: false, status: 0, body: { error: 'Upload timed out' } });
+        xhr.send(formData);
+    });
+
+const attachmentDedupeKey = (name, visibility) =>
+    `${String(visibility || 'Public').toLowerCase() === 'private' ? 'Private' : 'Public'}::${String(name || '')
+        .trim()
+        .toLowerCase()}`;
+
+/** Keep every stamp already on screen (same position) and add stored stamps placed by other users. */
+const unionDigitalStamps = (prev, incoming) => {
+    const base = Array.isArray(prev) ? prev : [];
+    const seen = new Set(base.map((s) => s.id));
+    const added = (Array.isArray(incoming) ? incoming : [])
+        .filter((s) => s && s.id && s.imageDataUrl && !seen.has(s.id))
+        .map((s) => ({ ...s, removableBeforeNextCommit: false }));
+    return added.length ? [...base, ...added] : base;
+};
+
 /** Primary key on EnquiryQuotes rows from API (driver / JSON may use ID, id, or Id). */
 const quoteRowId = (q) => {
     if (!q || typeof q !== 'object') return undefined;
@@ -4891,6 +6991,34 @@ const divisionMatchContextForQuoteTab = (
     return (activeTabObj?.label || activeTabObj?.name || '').toUpperCase();
 };
 
+/**
+ * Walk a job's parent chain. Always bounded — cyclic / self-parent rows used to
+ * freeze the tab ("Page Unresponsive") inside calculateSummary / auto-select.
+ * @param {(job: object, parentId: string) => boolean|void} visit return true to stop early
+ * @returns {boolean} true if visit returned true
+ */
+const forEachJobAncestor = (startJob, pool, visit) => {
+    let curr = startJob;
+    const visited = new Set();
+    let safety = 0;
+    while (curr && safety < 40) {
+        safety += 1;
+        const id = String(curr.id ?? curr.ItemID ?? curr.ID ?? '');
+        if (id) {
+            if (visited.has(id)) break;
+            visited.add(id);
+        }
+        const rawPid = curr.parentId ?? curr.ParentID;
+        if (rawPid == null || rawPid === '' || rawPid === '0' || rawPid === 0 || rawPid === 'undefined') {
+            break;
+        }
+        const parentId = String(rawPid);
+        if (visit(curr, parentId) === true) return true;
+        curr = (pool || []).find((j) => String(j.id ?? j.ItemID ?? j.ID) === parentId) || null;
+    }
+    return false;
+};
+
 const isDescendant = (childId, ancestorId, pool) => {
     if (!childId || !ancestorId || !pool) return false;
     const child = pool.find(j => String(j.id || j.ItemID || j.ID) === String(childId));
@@ -4898,16 +7026,7 @@ const isDescendant = (childId, ancestorId, pool) => {
     const pid = child.parentId || child.ParentID;
     if (!pid || pid === '0' || pid === 0 || pid === 'undefined') return false;
     if (String(pid) === String(ancestorId)) return true;
-    // Recursive check with safety
-    let curr = child;
-    let safety = 0;
-    while (curr && (curr.parentId || curr.ParentID) && safety < 10) {
-        const pId = String(curr.parentId || curr.ParentID);
-        if (pId === String(ancestorId)) return true;
-        curr = pool.find(pj => String(pj.id || pj.ItemID || pj.ID) === pId);
-        safety++;
-    }
-    return false;
+    return forEachJobAncestor(child, pool, (_job, parentId) => parentId === String(ancestorId));
 };
 
 /** Direct child job ids under parentId (pricing jobs + enquiry hierarchy merged — same as tab builder). */
@@ -4982,13 +7101,17 @@ const tableStyles = `
     .clause-content table:not([data-ems-paste-source="office"]) td:not([data-ems-valign]):not([data-ems-cell-border="none"]) {
         border: 1px solid #64748b !important;
         /* Do not set text-align here — mirror editor/Word inline styles and align attributes. */
-        padding: 4px 6px;
-        line-height: 1.45;
+        /* Fixed px line-height/padding so Selawik matches pre-font-change Arial row height (R8). */
+        padding: 2px 6px;
+        font-size: 12.5px;
+        line-height: 15px;
+        overflow: visible;
         vertical-align: top;
         word-wrap: break-word;
         overflow-wrap: anywhere;
     }
     ${EMS_TABLE_NO_BORDER_CELL_OVERRIDE_CSS}
+    ${EMS_CELL_SPLIT_TABLE_CSS}
     .clause-content table:not([data-ems-paste-source="office"]):not(#ems-auto-price-summary-table):not([data-ems-pricing-cols="fixed"]) th {
         background-color: #f8fafc !important;
         font-weight: 600 !important;
@@ -4996,6 +7119,7 @@ const tableStyles = `
     /* EMS auto pricing summary — visible outer border, navy header (overrides generic clause table + inline). */
     ${EMS_QUOTE_PRICING_TABLE_COLUMN_SYNC_CSS}
     ${EMS_QUOTE_PRICING_TABLE_PRESENTATION_CSS}
+    ${EMS_QUOTE_PRICING_TABLE_ALIGN_CSS}
     ${EMS_QUOTE_PRICING_TABLE_COMPACT_ROW_CSS}
     .clause-content table#ems-auto-price-summary-table,
     .clause-content table[id^="ems-auto-price-summary-table"],
@@ -5006,10 +7130,19 @@ const tableStyles = `
         font-size: 11px !important;
         line-height: 1.25 !important;
         border: ${EMS_QUOTE_PRICING_TABLE_OUTER_BORDER} !important;
-        width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
-        max-width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
         table-layout: fixed !important;
         box-sizing: border-box !important;
+    }
+    .clause-content table#ems-auto-price-summary-table:not([data-ems-col-widths]),
+    .clause-content table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]),
+    .clause-content table[data-ems-pricing-cols="fixed"]:not([data-ems-col-widths]) {
+        width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
+        max-width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
+    }
+    .clause-content table#ems-auto-price-summary-table[data-ems-col-widths],
+    .clause-content table[id^="ems-auto-price-summary-table"][data-ems-col-widths],
+    .clause-content table[data-ems-pricing-cols="fixed"][data-ems-col-widths] {
+        max-width: 100% !important;
     }
     .clause-content table#ems-auto-price-summary-table th,
     .clause-content table#ems-auto-price-summary-table td,
@@ -5022,9 +7155,13 @@ const tableStyles = `
         color: #0f172a !important;
     }
     .clause-content table#ems-auto-price-summary-table thead th,
+    .clause-content table#ems-auto-price-summary-table thead td,
     .clause-content table[id^="ems-auto-price-summary-table"] thead th,
-    .clause-content table[data-ems-pricing-cols="fixed"] thead th {
+    .clause-content table[id^="ems-auto-price-summary-table"] thead td,
+    .clause-content table[data-ems-pricing-cols="fixed"] thead th,
+    .clause-content table[data-ems-pricing-cols="fixed"] thead td {
         background: ${EMS_QUOTE_PRICING_TABLE_HEADER_BG} !important;
+        background-color: ${EMS_QUOTE_PRICING_TABLE_HEADER_BG} !important;
         color: ${EMS_QUOTE_PRICING_TABLE_HEADER_COLOR} !important;
         font-weight: 600 !important;
         border: ${EMS_QUOTE_PRICING_TABLE_HEAD_CELL_BORDER} !important;
@@ -5086,39 +7223,16 @@ const tableStyles = `
     .clause-content table:not([data-ems-paste-source="office"]):not([data-ems-col-widths]) th:not(:focus-within) > p:empty {
         display: none !important;
     }
-    /* EMS auto pricing table: keep the Amount column right-aligned even when the
-       generic .clause-content rule above forces table cells to left-align.
-       Targets the Amount <th>/<td> by structural position AND by data-ems-amount,
-       so it works whether or not Jodit preserved our data attributes. */
-    .clause-content table#ems-auto-price-summary-table th:nth-child(2),
-    .clause-content table#ems-auto-price-summary-table td:nth-child(2),
-    .clause-content table#ems-auto-price-summary-table td[data-ems-amount],
-    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="total"] td:first-child,
-    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="discount"] td:first-child,
-    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td:first-child,
-    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="vat"] td:first-child,
-    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="grand-vat"] td:first-child,
-    .clause-content table#ems-auto-price-summary-table tr[data-ems-row="grand"] td:first-child,
-    .clause-content table[id^="ems-auto-price-summary-table"] th:nth-child(2),
-    .clause-content table[id^="ems-auto-price-summary-table"] td:nth-child(2),
-    .clause-content table[id^="ems-auto-price-summary-table"] td[data-ems-amount],
-    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="total"] td:first-child,
-    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="discount"] td:first-child,
-    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="final-discounted"] td:first-child,
-    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="vat"] td:first-child,
-    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand-vat"] td:first-child,
-    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand"] td:first-child,
-    .clause-content table[data-ems-pricing-cols="fixed"] th:nth-child(2),
-    .clause-content table[data-ems-pricing-cols="fixed"] td:nth-child(2),
-    .clause-content table[data-ems-pricing-cols="fixed"] td[data-ems-amount],
-    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="total"] td:first-child,
-    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="discount"] td:first-child,
-    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="final-discounted"] td:first-child,
-    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="vat"] td:first-child,
-    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand-vat"] td:first-child,
-    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand"] td:first-child {
-        text-align: right !important;
-    }
+    ${EMS_QUOTE_PRICING_TABLE_ALIGN_CSS.replace(
+        /table#ems-auto-price-summary-table/g,
+        '.clause-content table#ems-auto-price-summary-table'
+    ).replace(
+        /table\[id\^="ems-auto-price-summary-table"\]/g,
+        '.clause-content table[id^="ems-auto-price-summary-table"]'
+    ).replace(
+        /table\[data-ems-pricing-cols="fixed"\]/g,
+        '.clause-content table[data-ems-pricing-cols="fixed"]'
+    )}
     .clause-content table#ems-auto-price-summary-table tr[data-ems-row="division"],
     .clause-content table#ems-auto-price-summary-table tr[data-ems-row="division"] td,
     .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-row="division"],
@@ -5132,8 +7246,77 @@ const tableStyles = `
         white-space: normal !important;
         word-wrap: break-word !important;
         overflow-wrap: anywhere !important;
+        word-break: break-word !important;
         line-height: 1.6 !important;
         color: #0f172a !important;
+        max-width: 100% !important;
+        box-sizing: border-box !important;
+    }
+    /* Word paste often wraps prose in <span style="white-space:nowrap"> — force wrap past the editor border.
+     * Apply max-width only on block hosts. max-width on inline <span>s makes some engines wrap text
+     * without growing the <li>/<p> line box → wrapped line overlaps the next bullet. */
+    .clause-content p,
+    .clause-content div:not(table):not(thead):not(tbody):not(tfoot):not(tr),
+    .clause-content li {
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+        word-wrap: break-word !important;
+        word-break: break-word !important;
+        max-width: 100% !important;
+        height: auto !important;
+        max-height: none !important;
+        min-height: 0 !important;
+        overflow: visible !important;
+        box-sizing: border-box !important;
+    }
+    .clause-content span,
+    .clause-content font,
+    .clause-content b,
+    .clause-content strong,
+    .clause-content i,
+    .clause-content em,
+    .clause-content u,
+    .clause-content a {
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+        word-wrap: break-word !important;
+        word-break: break-word !important;
+        max-width: none !important;
+        height: auto !important;
+        max-height: none !important;
+        line-height: inherit !important;
+    }
+    /* Beat .clause-content line-height:1.6 so pricing single-line rows can stay 24px after exit. */
+    .clause-content table#ems-auto-price-summary-table,
+    .clause-content table[id^="ems-auto-price-summary-table"],
+    .clause-content table[data-ems-pricing-cols="fixed"] {
+        line-height: 1.25 !important;
+    }
+    .clause-content table#ems-auto-price-summary-table td,
+    .clause-content table#ems-auto-price-summary-table th,
+    .clause-content table#ems-auto-price-summary-table td *,
+    .clause-content table#ems-auto-price-summary-table th *,
+    .clause-content table[id^="ems-auto-price-summary-table"] td,
+    .clause-content table[id^="ems-auto-price-summary-table"] th,
+    .clause-content table[id^="ems-auto-price-summary-table"] td *,
+    .clause-content table[id^="ems-auto-price-summary-table"] th *,
+    .clause-content table[data-ems-pricing-cols="fixed"] td,
+    .clause-content table[data-ems-pricing-cols="fixed"] th,
+    .clause-content table[data-ems-pricing-cols="fixed"] td *,
+    .clause-content table[data-ems-pricing-cols="fixed"] th * {
+        line-height: 1.25 !important;
+    }
+    .clause-content table#ems-auto-price-summary-table tr[data-ems-pricing-row-h="24"] > td,
+    .clause-content table#ems-auto-price-summary-table tr[data-ems-pricing-row-h="24"] > th,
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-pricing-row-h="24"] > td,
+    .clause-content table[id^="ems-auto-price-summary-table"] tr[data-ems-pricing-row-h="24"] > th,
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-pricing-row-h="24"] > td,
+    .clause-content table[data-ems-pricing-cols="fixed"] tr[data-ems-pricing-row-h="24"] > th {
+        height: ${EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX}px !important;
+        min-height: ${EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX}px !important;
+        max-height: ${EMS_QUOTE_PRICING_TABLE_ROW_HEIGHT_PX}px !important;
+        overflow: hidden !important;
+        padding: ${EMS_QUOTE_PRICING_TABLE_CELL_PADDING} !important;
     }
     .clause-content table,
     .clause-content table td,
@@ -5144,7 +7327,9 @@ const tableStyles = `
     .clause-content p {
         margin: 0 !important;
         padding: 0 !important;
-        line-height: 1.6 !important;
+        /* 1.4 not 1.6: Selawik glyph box is taller; 1.6 overflowed and half-cut lines in PDF (R2). */
+        line-height: 1.4 !important;
+        overflow: visible !important;
         white-space: normal !important;
     }
     /* Sub-clause stack spacing: 60% tighter than prior 4px → 40% of 4px */
@@ -5178,9 +7363,12 @@ const tableStyles = `
         text-indent: 0 !important;
     }
     .clause-content li {
-        margin-bottom: 1.6px !important;
+        margin-bottom: 0.35em !important;
         line-height: 1.6 !important;
         font-size: inherit !important;
+        height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
     }
     .clause-content ul:not([class*='ems-bullet-']) > li,
     .clause-content ol:not([class*='ems-num-']) > li {
@@ -5577,9 +7765,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const quoteDraftLoadedRowRef = useRef(null);
     const quoteDraftPendingClauseReapplyRef = useRef(false);
     const quoteDraftFetchInFlightRef = useRef(false);
+    /**
+     * After the user explicitly loads a clause template, skip draft clause re-apply / late draft
+     * hydrate so template bodies are not overwritten by EnquiryQuotesDraft.
+     */
+    const quoteDraftSkipClauseReapplyRef = useRef(false);
+    /** Blocks async Jodit flush/commit from writing stale HTML over a just-loaded template. */
+    const suppressClauseEditorStateWritesRef = useRef(false);
     /** True when collaborative draft row exists — EPV must not replace saved PricingTerms. */
     const shouldKeepDraftPricingTerms = useCallback(() => {
         if (browsePreviousQuotesRevisionsRef.current) return false;
+        if (quoteDraftSkipClauseReapplyRef.current) return false;
         if (quoteDraftClausesLockedRef.current) return true;
         const row = quoteDraftLoadedRowRef.current;
         if (!row) return false;
@@ -5696,6 +7892,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             quoteDraftClausesLockedRef.current = false;
             quoteDraftLoadedRowRef.current = null;
             quoteDraftPendingClauseReapplyRef.current = false;
+            quoteDraftSkipClauseReapplyRef.current = false;
         }
     }, [browsePreviousQuotesRevisions]);
     /** One-shot after enabling Previous Quotes: snap preview to the same row as the top list card (overrides stale tab.quoteNo / formViewingSomeTabQuote). */
@@ -5764,6 +7961,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         let cancelled = false;
         (async () => {
             try {
+                await waitForSignatureLibrarySave();
                 let master = await migrateLocalSignatureLibraryToServer(email);
                 if (!master) master = await fetchUserSignatureLibrary(email);
                 if (cancelled) return;
@@ -5781,6 +7979,18 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             cancelled = true;
         };
     }, [signatureLibraryEmail, signatureVaultOpen]);
+
+    /** Live-apply library edits (Show name / date checkboxes, default) from any signature modal. */
+    useEffect(() => {
+        const onLibraryChanged = (e) => {
+            const d = e?.detail || {};
+            if (!signatureLibraryEmail || d.email !== normalizeSignatureEmail(signatureLibraryEmail)) return;
+            setUserSignatureLibrary(Array.isArray(d.signatures) ? d.signatures : []);
+            setUserDefaultSignatureId(d.defaultSignatureId || null);
+        };
+        window.addEventListener(EMS_SIGNATURE_LIBRARY_CHANGED_EVENT, onLibraryChanged);
+        return () => window.removeEventListener(EMS_SIGNATURE_LIBRARY_CHANGED_EVENT, onLibraryChanged);
+    }, [signatureLibraryEmail]);
 
     /** Default if set, else first library image — for dragging from the toolbar without opening the vault. */
     const toolbarActiveSignature = React.useMemo(() => {
@@ -5813,6 +8023,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         [currentUser?.Designation, currentUser?.designation]
     );
     const [quoteDigitalStamps, setQuoteDigitalStamps] = useState([]);
+    /** Per-sheet orientation (0-based `sheets` index). Cover page stays portrait. */
+    const [quotePageOrientations, setQuotePageOrientations] = useState({});
+    const pageOrientDraftSaveTimerRef = useRef(null);
+    const digitalStampDraftSaveTimerRef = useRef(null);
 
     const isQuoteCcMailSigner = React.useMemo(() => {
         const email = (currentUser?.EmailId || currentUser?.email || '').trim();
@@ -5870,6 +8084,18 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const [quoteLogo, setQuoteLogo] = useState(null);
     const [quoteCompanyName, setQuoteCompanyName] = useState('Almoayyed Air Conditioning');
     const [quoteAttachments, setQuoteAttachments] = useState([]);
+    const quoteAttachmentsRef = useRef(quoteAttachments);
+    quoteAttachmentsRef.current = quoteAttachments;
+    /** Files currently being sent to the server — shown as cards immediately with progress. */
+    const [uploadingAttachments, setUploadingAttachments] = useState([]);
+    /** Synchronous in-flight keys so rapid repeat picks of the same file are ignored before re-render. */
+    const inFlightAttachmentKeysRef = useRef(new Set());
+    /** Only the latest list fetch may apply — slower earlier responses (busy server / proxy) must not overwrite. */
+    const attachmentsFetchSeqRef = useRef(0);
+    /** Just-uploaded rows ({ ownerKey, row, at }) kept visible until the server list includes them. */
+    const recentUploadedAttachmentsRef = useRef([]);
+    /** Attachment ID → removed-at; hidden from fetched lists so a late response cannot bring it back. */
+    const recentlyDeletedAttachmentIdsRef = useRef(new Map());
     const [isUploading, setIsUploading] = useState(false);
     const [exportBusyLabel, setExportBusyLabel] = useState('');
     /** If auto-open fails, user can use this real link (second gesture) to open the same mailto: draft. */
@@ -5924,6 +8150,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const [approvalRequestSent, setApprovalRequestSent] = useState(false);
     const [approvalWorkflowCreatorCompanyName, setApprovalWorkflowCreatorCompanyName] = useState('');
     const [approvalWorkflowCreatorDivisionName, setApprovalWorkflowCreatorDivisionName] = useState('');
+    const [approvalWorkflowMode, setApprovalWorkflowMode] = useState('');
     const [approvalWorkflowCreatorBranding, setApprovalWorkflowCreatorBranding] = useState(null);
     const [toName, setToName] = useState('');
     /** Keeps pricing/preview panels mounted until To is restored after a lead-branch switch (covers busy/toName ordering gaps). */
@@ -5978,6 +8205,64 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const pricingStableSig = React.useMemo(
         () => pricingValuesStableSig(pricingData),
         [pricingData]
+    );
+
+    /** Master_EnquiryFor currency for Division Name (+ Lead Job) — updates left/right without page refresh. */
+    const quoteCurrencyDivision = React.useMemo(
+        () =>
+            quoteEffectiveDivisions(quoteListDivision, quoteListDivisions)[0] ||
+            String(quoteListDivision || '').trim(),
+        [quoteListDivision, quoteListDivisions]
+    );
+    const quoteCurrencyItemName = React.useMemo(() => {
+        const pool = [
+            ...(Array.isArray(pricingData?.jobs) ? pricingData.jobs : []),
+            ...(Array.isArray(enquiryData?.divisionsHierarchy)
+                ? enquiryData.divisionsHierarchy
+                : []),
+        ];
+        const node = selectedLeadId
+            ? pool.find((j) => String(j.id || j.ItemID || j.ID) === String(selectedLeadId))
+            : null;
+        const raw =
+            node?.itemName ||
+            node?.ItemName ||
+            node?.DivisionName ||
+            enquiryData?.leadJobPrefix ||
+            quoteCurrencyDivision ||
+            '';
+        return String(raw)
+            .replace(/^L\d+\s*-\s*/i, '')
+            .trim();
+    }, [
+        selectedLeadId,
+        pricingData?.jobs,
+        enquiryData?.divisionsHierarchy,
+        enquiryData?.leadJobPrefix,
+        quoteCurrencyDivision,
+    ]);
+    const quoteCurrencyCompany = React.useMemo(
+        () =>
+            String(
+                enquiryData?.enquiry?.CompanyName ||
+                    enquiryData?.enquiry?.companyName ||
+                    enquiryData?.companyName ||
+                    ''
+            ).trim(),
+        [
+            enquiryData?.enquiry?.CompanyName,
+            enquiryData?.enquiry?.companyName,
+            enquiryData?.companyName,
+        ]
+    );
+    const { currencyCode: quoteCurrencyCode, vatPercent: quoteVatPercent } = useMasterCurrency({
+        division: quoteCurrencyDivision,
+        itemName: quoteCurrencyItemName,
+        companyName: quoteCurrencyCompany,
+    });
+    const quoteCurrencyPrevRef = useRef(String(quoteCurrencyCode || '').trim());
+    const quoteVatPrevRef = useRef(
+        Number.isFinite(Number(quoteVatPercent)) ? Number(quoteVatPercent) : getDefaultPricingVatPercent()
     );
 
     const [pricingSummary, setPricingSummary] = useState([]);
@@ -6078,9 +8363,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         approvalWorkflowDraftId,
         loadedEnquiryQuoteRowForPreview,
     ]);
-    /** Right-hand quote preview + clause editor load only after lead job and customer are both chosen. */
-    const quoteShellReady =
-        embeddedApprovalQuoteReady || (hasSelectedLeadJob && hasSelectedCustomer);
+    /**
+     * Right-hand quote preview + clause editor.
+     * Approvals (embedded): only when the exact quote/draft row is loaded — never fall through to
+     * lead+customer alone (that briefly "ready" shell was racing the load and hiding the preparing state).
+     * Quote module: after lead job and customer are both chosen.
+     */
+    const quoteShellReady = embeddedApprovalReview
+        ? embeddedApprovalQuoteReady
+        : hasSelectedLeadJob && hasSelectedCustomer;
 
     React.useEffect(() => {
         if ((toName || '').trim()) setLeadSwitchShellHold(false);
@@ -6108,6 +8399,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const quoteSearchAbortRef = useRef(null);
     /** When true with an enquiry open, right panel shows pending/search list instead of quote preview (after Search click). */
     const [showQuoteListSummaryOverQuote, setShowQuoteListSummaryOverQuote] = useState(false);
+    /** Right side panel (approval + quote): Workflow | Attachments */
+    const [quoteSidePanelTab, setQuoteSidePanelTab] = useState('workflow');
     const quoteSummaryClearColFiltersRef = useRef(() => {});
     const [quoteSummaryHasColFilters, setQuoteSummaryHasColFilters] = useState(false);
     const [quoteListFilteredRows, setQuoteListFilteredRows] = useState([]);
@@ -6363,6 +8656,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         quoteDraftClausesLockedRef.current = false;
         quoteDraftLoadedRowRef.current = null;
         quoteDraftPendingClauseReapplyRef.current = false;
+        quoteDraftSkipClauseReapplyRef.current = false;
         pricingTermsUserTouchedRef.current = false;
         setPricingSummary([]);
         setGrandTotal(0);
@@ -6487,6 +8781,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     // Re-resolve enquiry jobs/profiles when session division changes (aligns with &division= on pricing).
     useEffect(() => {
+        if (embeddedApprovalReview) return;
         const rn = enquiryData?.enquiry?.RequestNo;
         const userEmail = (currentUser?.EmailId || currentUser?.email || '').trim();
         if (!rn || !userEmail) return;
@@ -6537,7 +8832,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         return () => {
             cancelled = true;
         };
-    }, [quoteListDivision, quoteListDivisions, currentUser?.EmailId, currentUser?.email, enquiryData?.enquiry?.RequestNo]);
+    }, [embeddedApprovalReview, quoteListDivision, quoteListDivisions, currentUser?.EmailId, currentUser?.email, enquiryData?.enquiry?.RequestNo]);
 
     // Tab State for unified Quote and Pricing Sections
     const [activeQuoteTab, setActiveQuoteTab] = useState('self');
@@ -6622,6 +8917,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
              setQuoteCompanyName('Almoayyed Air Conditioning');
              setQuoteLogo(null);
         }
+        setQuotePageOrientations({});
     }, [currentUser, enquiryData, resetQuoteDraftDirtyTracking]);
 
     const handleTabChange = (newTabId, opts = {}) => {
@@ -7083,7 +9379,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         quoteDraftClausesLockedRef.current = false;
         quoteDraftLoadedRowRef.current = null;
         quoteDraftPendingClauseReapplyRef.current = false;
+        quoteDraftSkipClauseReapplyRef.current = false;
         pricingTermsUserTouchedRef.current = false;
+        clauseSegmentBuildCacheRef.current.clear();
+        clauseSegmentsFrozenWhileEditingRef.current = [];
         setClauses({
             showScopeOfWork: true,
             showBasisOfOffer: true,
@@ -7139,6 +9438,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         quoteDraftClausesLockedRef.current = false;
         quoteDraftLoadedRowRef.current = null;
         quoteDraftPendingClauseReapplyRef.current = false;
+        quoteDraftSkipClauseReapplyRef.current = false;
         setQuoteDraftHydrated(false);
         setQuoteDraftId(null);
         setQuoteDraftReloadNonce((n) => n + 1);
@@ -7319,6 +9619,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 browsePreviousQuotesRevisions: Boolean(browsePreviousQuotesRevisions),
                 quoteDraftId: quoteDraftId != null ? quoteDraftId : null,
                 quoteListDivision: String(quoteListDivision || '').trim(),
+                quotePageOrientations: normalizeQuotePageOrientationsMap(quotePageOrientations),
             };
         } catch (e) {
             console.warn('[QuoteForm] session formUiSnapshot', e);
@@ -7364,6 +9665,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         browsePreviousQuotesRevisions,
         quoteDraftId,
         quoteListDivision,
+        quotePageOrientations,
     ]);
 
     const handleSaveQuoteFormDraft = async () => {
@@ -7424,6 +9726,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 pricingSummary: pricingSummary?.length ? JSON.parse(JSON.stringify(pricingSummary)) : [],
                 hasUserPricing: Boolean(hasUserPricing),
                 printWithHeader: Boolean(printWithHeader),
+                quotePageOrientations: normalizeQuotePageOrientationsMap(quotePageOrientations),
             };
         } catch (e) {
             console.warn('[QuoteForm] draft formUiSnapshot', e);
@@ -7572,10 +9875,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             );
             setLoadedEnquiryQuoteRowForPreview(null);
             setToName(saved.toName || '');
-            setToAddress(saved.toAddress || '');
-            setToPhone(saved.toPhone || '');
-            setToEmail(saved.toEmail || '');
-            setToFax(saved.toFax || '');
+            /* Keep existing Recipient Info when registry has blanks (avoid wipe ↔ Master hydrate fight). */
+            if (String(saved.toAddress || '').trim()) setToAddress(saved.toAddress);
+            if (String(saved.toPhone || '').trim()) setToPhone(saved.toPhone);
+            if (String(saved.toEmail || '').trim()) setToEmail(saved.toEmail);
+            if (String(saved.toFax || '').trim()) setToFax(saved.toFax);
             setToAttention(saved.toAttention || '');
             setQuoteTypeList(Array.isArray(saved.quoteTypeList) ? [...saved.quoteTypeList] : []);
             setQuoteEnquiryTypeSelect(saved.quoteEnquiryTypeSelect || '');
@@ -7674,6 +9978,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             }
             if (snap.quoteListDivision) {
                 setQuoteListDivision(String(snap.quoteListDivision).trim());
+            }
+            if (snap.quotePageOrientations != null) {
+                setQuotePageOrientations(normalizeQuotePageOrientationsMap(snap.quotePageOrientations));
             }
         } catch (e) {
             console.warn('[QuoteForm] applyFormUiSnapshotFromDraft', e);
@@ -7833,8 +10140,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const [quotePreviewPageInfo, setQuotePreviewPageInfo] = useState({ current: 1, total: 1 });
     const [quotePreviewZoomInput, setQuotePreviewZoomInput] = useState('100');
     const [quotePreviewPageInput, setQuotePreviewPageInput] = useState('1');
-    /** Per-sheet orientation (0-based `sheets` index). Cover page stays portrait. */
-    const [quotePageOrientations, setQuotePageOrientations] = useState({});
     const [isEditingQuotePreviewZoomInput, setIsEditingQuotePreviewZoomInput] = useState(false);
     const [isEditingQuotePreviewPageInput, setIsEditingQuotePreviewPageInput] = useState(false);
     quotePreviewZoomRef.current = quotePreviewZoom;
@@ -7936,17 +10241,33 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const quoteCoverLetterRef = useRef(null);
     const clauseMeasureHostRef = useRef(null);
     const lastClausePackSigRef = useRef('');
+    const lastPackedClauseMembershipRef = useRef('');
     const clausePackMeasureRetryRef = useRef(0);
     const clausePackRenderVerifyRef = useRef(0);
     /** Continuation sheets (index 0 = cover); each entry is segment indices packed for that sheet. */
     const [clauseSegmentPageGroups, setClauseSegmentPageGroups] = useState([]);
     const [clausePackRetryNonce, setClausePackRetryNonce] = useState(0);
+    /** Caps auto pack-retry — uncapped retries kept the main thread busy forever (page stuck). */
+    const clausePackRetryCountRef = useRef(0);
     const [quoteAlignPageNonce, setQuoteAlignPageNonce] = useState(0);
     const [clausePackSplitMode, setClausePackSplitMode] = useState(false);
     const clausePackTightFitRef = useRef(false);
+    /** Soft/auto Align: skip expensive rebalance/slack loops; still uses fine segments + measure. */
+    const clausePackFastAlignRef = useRef(false);
+    const clausePackAlignGenRef = useRef(0);
+    /** Cancels in-flight debounced pack when deps change (separate from Align gen). */
+    const clausePackRunGenRef = useRef(0);
+    /** Groups just scheduled by the packer. Paint-fill must not overwrite them in the same commit. */
+    const packedGroupsAwaitingPaintRef = useRef(null);
+    /** Cache measured segment heights across Align retries (keyed by segment html signature). */
+    const clausePackSegmentHeightCacheRef = useRef(new Map());
     const alignQuotePreviewPagesRef = useRef(async () => {});
     /** True while Align Page (manual or auto) is measuring / packing sheets. */
     const [quoteAlignPageBusy, setQuoteAlignPageBusy] = useState(false);
+    /** True when pack integrity failed after recovery — PDF download must be blocked. */
+    const [quotePackIntegrityFailed, setQuotePackIntegrityFailed] = useState(false);
+    /** One-shot: bump pack bottom reserve after a visibility failure, then give up. */
+    const packVisibilityRecoveryRef = useRef(0);
     const [coverLetterExtraPadPx, setCoverLetterExtraPadPx] = useState(0);
     /** When true, cover letter gap equalization must not move the signatory block (user-placed signature). */
     const coverSignatoryLayoutLockedRef = useRef(false);
@@ -7967,6 +10288,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const editingClauseReflowTimerRef = useRef(null);
     /** Last idle preview segments — reused while a clause editor is open to avoid rebuild lag. */
     const clauseSegmentsFrozenWhileEditingRef = useRef([]);
+    /** Per-clause segment cache — exit-edit / load only rebuilds changed clauses. */
+    const clauseSegmentBuildCacheRef = useRef(new Map());
     const [editingClauseLiveSig, setEditingClauseLiveSig] = useState('');
     /** Checked clauses in UI order (preview + measurement source). */
     const activeClausesList = React.useMemo(() => {
@@ -8025,7 +10348,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             return `${d.key}:${on}:${String(clauseContent[d.contentKey] || '').length}`;
         }).join(';');
         const cust = (customClauses || [])
-            .map((c) => `${String(c.id)}:${String(c.content || '').length}`)
+            .map((c) => `${String(c.id)}:${c.isChecked ? 1 : 0}:${String(c.content || '').length}`)
             .join(';');
         const headingSig = Object.entries(clauseHeadingHtml || {})
             .map(([k, v]) => `${k}:${String(v || '').length}`)
@@ -8037,6 +10360,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             .join(',');
         return `${ordered}|${std}|${cust}|${headingSig}|spell:${spellDictReady ? 1 : 0}|orient:${orientSig}`;
     }, [orderedClauses, clauses, clauseContent, clauseHeadingHtml, customClauses, spellDictReady, quotePageOrientations]);
+
+    /** Checked clause ids in preview order — used to invalidate edit-time segment freeze / page packs. */
+    const clausePreviewMembershipSig = React.useMemo(
+        () => activeClausesList.map((c) => String(c.listKey || c.id || '')).join('|'),
+        [activeClausesList]
+    );
 
     /** Editor-driven pricing body changes must refresh preview segments without churning layout packing on every keystroke. */
     const pricingTermsEditorSig = React.useMemo(() => {
@@ -8070,32 +10399,125 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             return [];
         }
         /* Freeze preview segments while inline editing — full rebuild + VAT reconcile on each
-           keystroke/flush made the Jodit editor lag. Refresh when the editor closes. */
-        if (expandedClause && clauseSegmentsFrozenWhileEditingRef.current.length) {
-            return clauseSegmentsFrozenWhileEditingRef.current;
+           keystroke/flush made the Jodit editor lag. Refresh when the editor closes.
+           Do NOT freeze across clause add/remove/toggle — otherwise a newly Added clause never
+           appears in the right-hand preview until the editor is closed. */
+        const frozen = clauseSegmentsFrozenWhileEditingRef.current;
+        if (expandedClause && frozen.length) {
+            const frozenMembership = frozen
+                .map((seg) => String(seg?.clause?.listKey || seg?.clause?.id || ''))
+                .filter(Boolean)
+                .filter((k, i, arr) => arr.indexOf(k) === i)
+                .join('|');
+            if (frozenMembership === clausePreviewMembershipSig) {
+                return frozen;
+            }
         }
-        /* Align Page: fine splits for tight packing. Normal preview: coarser segments for faster load. */
+        /*
+         * Fast path (default): coarse table/list splits for quick multi-page paint.
+         * Align Page (clausePackSplitMode): finer list/paragraph splits for tight A4 fit.
+         */
         const splitOpts = clausePackSplitMode
             ? { splitListsPerItem: true, splitTableMinRows: 2, splitParagraphs: true }
-            : { splitTableMinRows: 8, splitListMinItems: 16, splitParagraphs: false };
-        /* While editing, skip Hunspell + VAT DOMParser — both re-ran on every keystroke. */
-        const formatBody = expandedClause
-            ? (html, listKey, displayMajor) =>
-                  getClauseDisplayBodyHtml(html, listKey, displayMajor, {
-                      spell: false,
-                      reconcile: false,
-                  })
-            : getClauseDisplayBodyHtml;
-        const next = buildClauseSegmentsForPagination(
-            activeClausesList,
-            formatBody,
-            splitOpts
-        );
+            : {
+                  /*
+                   * Always per-item lists + row-split tables (≥2 body rows) so leftover
+                   * sheet slack can take the next BOQ row / Terms bullet.
+                   */
+                  splitListsPerItem: true,
+                  splitTableMinRows: 2,
+                  splitListMinItems: 1,
+                  splitParagraphs: true,
+              };
+        const formatBody = (html, listKey, displayMajor) => {
+            const editingPricing = expandedClause === 'pricingTerms';
+            const isPricingBody =
+                listKey === 'showPricingTerms' ||
+                /data-ems-amount=["']vat["']/i.test(html) ||
+                /data-ems-row=["']vat["']/i.test(html) ||
+                /id=["']ems-auto-price-summary-table/i.test(html) ||
+                /data-ems-pricing-cols=["']fixed["']/i.test(html);
+            const htmlLen = String(html || '').length;
+            /* Large draft BOQ/pricing: DOMParser reconcile on every segment rebuild freezes the tab. */
+            const allowReconcile =
+                htmlLen < 100000 && !(editingPricing && isPricingBody);
+            return getClauseDisplayBodyHtml(html, listKey, displayMajor, {
+                spell: false,
+                reconcile: allowReconcile,
+                /* Row heights already baked on exit-edit — skip full DOM re-measure per clause. */
+                bakeRowHeights: false,
+            });
+        };
+
+        /* Incremental: rebuild only clauses whose content/split mode changed (exit-edit + load). */
+        const cache = clauseSegmentBuildCacheRef.current;
+        /* Bump when split/pack rules change so in-memory segment cache cannot keep stale layouts. */
+        const splitModeKey = `${clausePackSplitMode ? 'fine' : 'fast'}:v45-row-metrics-nbsp`;
+        /** @type {typeof frozen} */
+        const next = [];
+        const keepKeys = new Set();
+        activeClausesList.forEach((clause, clauseIdx) => {
+            const listKey = String(clause.listKey || clause.key || clause.id || clauseIdx);
+            keepKeys.add(listKey);
+            const content = String(clause.content || '');
+            const contentSig = `${content.length}:${content.slice(0, 64)}:${content.slice(-96)}`;
+            const cached = cache.get(listKey);
+            if (
+                cached &&
+                cached.splitModeKey === splitModeKey &&
+                cached.contentSig === contentSig &&
+                Array.isArray(cached.parts) &&
+                cached.parts.length
+            ) {
+                const displayMajor = clauseIdx + 1;
+                cached.parts.forEach((html, partIdx) => {
+                    next.push({
+                        clauseIdx,
+                        clause,
+                        html,
+                        showHeading: partIdx === 0,
+                        displayMajor,
+                        key: `${listKey}-${partIdx}`,
+                    });
+                });
+                return;
+            }
+            const bodyHtml = formatBody(content, listKey, clauseIdx + 1);
+            const parts = splitClauseHtmlToSegments(bodyHtml, splitOpts);
+            cache.set(listKey, { contentSig, splitModeKey, parts });
+            const displayMajor = clauseIdx + 1;
+            parts.forEach((html, partIdx) => {
+                next.push({
+                    clauseIdx,
+                    clause,
+                    html,
+                    showHeading: partIdx === 0,
+                    displayMajor,
+                    key: `${listKey}-${partIdx}`,
+                });
+            });
+        });
+        [...cache.keys()].forEach((k) => {
+            if (!keepKeys.has(k)) cache.delete(k);
+        });
         clauseSegmentsFrozenWhileEditingRef.current = next;
         return next;
-    }, [activeClausesList, clausePaginationLayoutKey, pricingTermsEditorSig, clausePackSplitMode, expandedClause]);
+    }, [
+        activeClausesList,
+        clausePaginationLayoutKey,
+        pricingTermsEditorSig,
+        clausePackSplitMode,
+        expandedClause,
+        clausePreviewMembershipSig,
+    ]);
 
     const isQuotePreviewVisible = quoteShellReady;
+
+    /** Off-screen measure nodes — always on when preview has clause segments (dense DOM pack). */
+    const mountClauseMeasureSegments = React.useMemo(
+        () => clauseSegmentsForPagination.length > 0,
+        [clauseSegmentsForPagination.length]
+    );
 
     useEffect(() => {
         if (!isQuotePreviewVisible) return undefined;
@@ -8120,12 +10542,30 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     /* clausePaginationLayoutKey replaces activeClausesList in deps — list identity churned and retriggered packing → max update depth. */
     useLayoutEffect(() => {
         if (!isQuotePreviewVisible) return;
-        /* Keep page packing stable while inline editor is open — remeasure on exit only. */
-        if (expandedClause) return;
+        if (EMS_USE_PAGED_QUOTE) {
+            setClauseSegmentPageGroups((prev) => (prev.length ? [] : prev));
+            setQuoteAlignPageBusy((busy) => (busy ? false : busy));
+            setQuotePackIntegrityFailed(false);
+            return undefined;
+        }
+        /* Keep page packing stable while inline editor is open — remeasure on exit only.
+           Still re-pack when checked clause membership changes (Add / remove / toggle). */
+        const membershipChanged =
+            lastPackedClauseMembershipRef.current !== clausePreviewMembershipSig;
+        if (expandedClause && !membershipChanged) return;
+        lastPackedClauseMembershipRef.current = clausePreviewMembershipSig;
 
         let cancelled = false;
         lastClausePackSigRef.current = '';
         clausePackMeasureRetryRef.current = 0;
+        clausePackRetryCountRef.current = 0;
+        const alignGen = clausePackAlignGenRef.current;
+        const releaseAlignFlag = () => {
+            if (clausePackAlignGenRef.current === alignGen) {
+                clausePackFastAlignRef.current = false;
+                clausePackTightFitRef.current = false;
+            }
+        };
 
         if (clauseSegmentsForPagination.length === 0) {
             setClauseSegmentPageGroups((prev) => (prev.length ? [] : prev));
@@ -8135,40 +10575,35 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             };
         }
 
-        const runMeasuredPackNow =
-            Boolean(clausePackTightFitRef.current) || Boolean(clausePackSplitMode);
-
+        /*
+         * Row-split pricing/BOQ: pack from baked row heights (thead once/page). DOM measure
+         * previously stretched to full A4 and left 1 row/page — skip it unless Align Page.
+         */
         const applyEstimatedPackQuick = (usablePx = EMS_QUOTE_CONT_USABLE_PX_FALLBACK) => {
-            const hasLandscapeSheets = Object.values(quotePageOrientations || {}).some(
-                (v) => v === 'landscape'
+            const safeUsable = Math.max(
+                (usablePx || EMS_QUOTE_CONT_USABLE_PX_FALLBACK) - PACK_HEIGHT_SAFETY_PX,
+                200
             );
-            const fallback = hasLandscapeSheets
-                ? packSegmentsOntoPagesByEstimatedHeightPerPage(
-                      clauseSegmentsForPagination,
-                      (continuationPageIdx) => {
-                          const sheetIdx = continuationPageIdx + 1;
-                          return quotePageOrientations[sheetIdx] === 'landscape'
-                              ? EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK
-                              : EMS_QUOTE_CONT_USABLE_PX_FALLBACK;
-                      }
-                  )
-                : packSegmentsOntoPagesByEstimatedHeight(clauseSegmentsForPagination, usablePx);
+            const packed = reflowContinuationPagesTopDown(
+                clauseSegmentsForPagination,
+                compactPackHeightsPx(clauseSegmentsForPagination, null),
+                safeUsable
+            );
+            const fallback = ensureSegmentPageGroupsCoverAll(
+                packed,
+                clauseSegmentsForPagination.length
+            );
             if (cancelled || !fallback.length) return;
+            packedGroupsAwaitingPaintRef.current = fallback;
             setClauseSegmentPageGroups((prev) =>
                 segmentPageGroupsEqual(prev, fallback) ? prev : fallback
             );
         };
 
-        /* Fast browse path: estimated packing only (no hidden measure DOM). */
-        if (!runMeasuredPackNow) {
-            applyEstimatedPackQuick();
-            setQuoteAlignPageBusy((busy) => (busy ? false : busy));
-            return () => {
-                cancelled = true;
-                clausePackTightFitRef.current = false;
-            };
-        }
-
+        /*
+         * Always DOM-measure + slack-fill (including row-split pricing). Estimate-only
+         * left orphan Scope bullets on near-empty sheets; measure shell is content-sized.
+         */
         const preview = quotePreviewLayoutRef.current;
         const host = clauseMeasureHostRef.current;
         if (!preview || !host) {
@@ -8182,55 +10617,117 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         /* Match PDF: inner content width depends on sheet orientation (210mm or 297mm page width). */
         const defaultInnerW = Math.round(quoteMmToPx(quoteA4InnerContentMm(false).innerWidthMm));
         host.style.width = `${Math.max(280, defaultInnerW)}px`;
+        /*
+         * Keep measured heights for clauses that did not change. Clearing this on every
+         * split-table pack remeasured the whole quote on exit-edit.
+         * Align Page still drops the cache so a manual align remeasures.
+         */
+        if (clausePackTightFitRef.current || clausePackFastAlignRef.current) {
+            clausePackSegmentHeightCacheRef.current.clear();
+        }
 
         const isContinuationSheetLandscape = (continuationPageIdx) =>
             quotePageOrientations[continuationPageIdx + 1] === 'landscape';
 
         const applyEstimatedPack = (usablePx = EMS_QUOTE_CONT_USABLE_PX_FALLBACK) => {
-            const hasLandscapeSheets = Object.values(quotePageOrientations || {}).some(
-                (v) => v === 'landscape'
+            const safeUsable = Math.max(
+                (usablePx || EMS_QUOTE_CONT_USABLE_PX_FALLBACK) - PACK_HEIGHT_SAFETY_PX,
+                200
             );
-            const fallback = hasLandscapeSheets
-                ? packSegmentsOntoPagesByEstimatedHeightPerPage(
-                      clauseSegmentsForPagination,
-                      (continuationPageIdx) =>
-                          isContinuationSheetLandscape(continuationPageIdx)
-                              ? EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK
-                              : usablePx
-                  )
-                : packSegmentsOntoPagesByEstimatedHeight(clauseSegmentsForPagination, usablePx);
+            const packed = reflowContinuationPagesTopDown(
+                clauseSegmentsForPagination,
+                compactPackHeightsPx(clauseSegmentsForPagination, null),
+                safeUsable
+            );
+            const fallback = ensureSegmentPageGroupsCoverAll(
+                packed,
+                clauseSegmentsForPagination.length
+            );
             if (cancelled || !fallback.length) return;
+            packedGroupsAwaitingPaintRef.current = fallback;
             setClauseSegmentPageGroups((prev) =>
                 segmentPageGroupsEqual(prev, fallback) ? prev : fallback
             );
         };
 
-        const measureHeights = () =>
-            clauseSegmentsForPagination.map((_, i) => {
+        const measureHeights = () => {
+            const heightCache = clausePackSegmentHeightCacheRef.current;
+            return clauseSegmentsForPagination.map((seg, i) => {
+                const cacheKey = `v45-row-metrics-nbsp:${seg?.key || i}:${String(seg?.html || '').length}:${String(seg?.html || '').slice(0, 48)}`;
+                if (heightCache.has(cacheKey)) return heightCache.get(cacheKey);
+                const emptySeg =
+                    !String(seg?.html || '').trim() && !seg?.showHeading;
+                if (emptySeg) {
+                    heightCache.set(cacheKey, 1);
+                    return 1;
+                }
                 const n = host.querySelector(`[data-segment-measure-index="${i}"]`);
                 if (!n) return 0;
-                applyAllTableRowHeightsInRoot(n);
-                void n.offsetHeight;
-                const rect = n.getBoundingClientRect();
-                const cs = typeof window !== 'undefined' ? window.getComputedStyle(n) : null;
-                const marginY =
-                    (cs ? parseFloat(cs.marginTop) || 0 : 0) + (cs ? parseFloat(cs.marginBottom) || 0 : 0);
-                const h = Math.max(
-                    rect.height,
-                    n.offsetHeight || 0,
-                    n.scrollHeight || 0,
-                    1
-                );
-                return applyOfficePasteMeasureHeightPadding(Math.round(h + marginY), n);
+                /* Pack measure: natural row height (not stored locks — those inflate 1-row splits). */
+                if (n.querySelector?.('table')) {
+                    relaxTableRowHeightsForClausePackMeasure(n);
+                    void n.offsetHeight;
+                }
+                const splitTable = n.querySelector('table[data-ems-table-split="1"]');
+                let h;
+                if (splitTable || /data-ems-table-split\s*=\s*["']?1/i.test(String(seg?.html || ''))) {
+                    const headingH = seg?.showHeading ? 44 : 0;
+                    const bodyRow =
+                        splitTable?.querySelector('tbody > tr') ||
+                        n.querySelector('tbody > tr');
+                    const rowH = Math.round(
+                        bodyRow?.offsetHeight ||
+                            bodyRow?.getBoundingClientRect().height ||
+                            n.offsetHeight ||
+                            34
+                    );
+                    /* Cap row cost — inflated Excel/measure rows left 55–90mm BOQ/matrix gaps. */
+                    h = Math.min(72, Math.max(22, rowH + 4)) + headingH;
+                } else {
+                    /*
+                     * Single-li list segments: measure the LI only. Full block height
+                     * includes UL + clause-block margins that collapse when items rejoin
+                     * on a sheet — sum packing then left huge blank bands under Terms.
+                     */
+                    const soloLi = n.querySelector(
+                        '.clause-content > ul > li:only-child, .clause-content > ol > li:only-child'
+                    );
+                    if (soloLi && !seg?.showHeading) {
+                        /* offsetHeight only — getBoundingClientRect is scaled by preview zoom. */
+                        h = Math.max(Math.round(soloLi.offsetHeight || soloLi.scrollHeight || 0), 18) + 6;
+                    } else {
+                        const cs = typeof window !== 'undefined' ? window.getComputedStyle(n) : null;
+                        const marginY =
+                            (cs ? parseFloat(cs.marginTop) || 0 : 0) +
+                            (cs ? parseFloat(cs.marginBottom) || 0 : 0);
+                        h = Math.max(n.offsetHeight || 0, n.scrollHeight || 0, 1);
+                        h = Math.round(h + marginY);
+                    }
+                }
+                /*
+                 * +2px safety per unit so greedy sum never understates paint height
+                 * (understate → overpack → overflow:hidden hides content).
+                 */
+                if (h > 0) {
+                    h = Math.round(h + 2);
+                    heightCache.set(cacheKey, h);
+                }
+                return h;
             });
+        };
 
         const applyPack = () => {
             if (cancelled) return;
             const previewRoot = quotePreviewLayoutRef.current;
             const heights = measureHeights();
-            /* Wait for per-segment measure DOM; never dump all segments onto one sheet (causes overflow). */
-            if (heights.some((h) => !h)) {
-                if (clausePackMeasureRetryRef.current < 30) {
+            /* Wait only when measure nodes are missing — empty segments are height 1, not "not ready". */
+            const missingNode = heights.some((h, i) => {
+                if (h > 0) return false;
+                const seg = clauseSegmentsForPagination[i];
+                return Boolean(String(seg?.html || '').trim() || seg?.showHeading);
+            });
+            if (missingNode) {
+                if (clausePackMeasureRetryRef.current < 4) {
                     clausePackMeasureRetryRef.current += 1;
                     requestAnimationFrame(() => applyPack());
                 } else {
@@ -8252,17 +10749,25 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     )
                 );
 
-            if (!mergeMeasureEl && previewRoot) {
+            if (!mergeMeasureEl) {
+                mergeMeasureEl =
+                    typeof document !== 'undefined'
+                        ? document.querySelector('[data-pack-merge-measure="1"]')
+                        : null;
+            }
+            if (!mergeMeasureEl && typeof document !== 'undefined') {
+                /* Off-screen, outside preview zoom transform — same 180mm width as print. */
                 mergeMeasureEl = document.createElement('div');
                 mergeMeasureEl.setAttribute('data-pack-merge-measure', '1');
                 mergeMeasureEl.style.width = `${Math.max(280, defaultInnerW)}px`;
                 mergeMeasureEl.style.boxSizing = 'border-box';
-                mergeMeasureEl.style.position = 'absolute';
-                mergeMeasureEl.style.left = '-9999px';
+                mergeMeasureEl.style.position = 'fixed';
+                mergeMeasureEl.style.left = '-10000px';
                 mergeMeasureEl.style.top = '0';
                 mergeMeasureEl.style.visibility = 'hidden';
                 mergeMeasureEl.style.pointerEvents = 'none';
-                previewRoot.appendChild(mergeMeasureEl);
+                mergeMeasureEl.style.zIndex = '-1';
+                document.body.appendChild(mergeMeasureEl);
             }
 
             const configureMergeMeasureShellWidth = (innerWPx) => {
@@ -8272,28 +10777,28 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 if (shell) shell.style.width = w;
             };
 
-            /** Measure at full content height — never inside overflow:hidden / fixed grid (scrollHeight was capped → clipped rows). */
-            mergeMeasureEl.innerHTML = `<div data-pack-measure-shell class="quote-a4-sheet quote-a4-sheet--continuation" style="width:${Math.max(280, defaultInnerW)}px;box-sizing:border-box;overflow:visible;display:block">
-                <div class="quote-sheet-logo-row" aria-hidden="true" style="width:100%;min-height:68px;margin-bottom:${EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM}"></div>
-                <div class="quote-sheet-main-flex" style="display:flex;flex-direction:column;width:100%">
-                <div data-pack-measure-content class="content-section" style="width:100%;box-sizing:border-box;overflow:visible;height:auto;max-height:none;flex:0 1 auto"></div>
+            /*
+             * Pack measure shell must NOT use .quote-a4-sheet--continuation (fixed 297mm).
+             * That class + .quote-sheet-main-flex { height:100% } stretched content to a full
+             * page, so every group measured ~page-tall → 1 pricing row per sheet + blank space.
+             */
+            mergeMeasureEl.innerHTML = `<div data-pack-measure-shell data-ems-pack-measure="1" style="width:${Math.max(280, defaultInnerW)}px;box-sizing:border-box;overflow:visible;display:block;height:auto;max-height:none;min-height:0">
+                <div class="quote-sheet-logo-row" aria-hidden="true" style="width:100%;min-height:56px;height:auto;margin-bottom:${EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM}"></div>
+                <div data-pack-measure-main style="display:block;width:100%;height:auto;max-height:none;min-height:0">
+                <div data-pack-measure-content class="content-section" style="width:100%;box-sizing:border-box;overflow:visible;height:auto;max-height:none;min-height:0"></div>
                 </div>
                 ${buildQuotePackMeasureFooterHtml(EMS_QUOTE_PRINT_FOOTER_MIN_HEIGHT)}
             </div>`;
 
-            const measureLogo = mergeMeasureEl.querySelector('.quote-sheet-logo-row');
-            const measureFooter = mergeMeasureEl.querySelector('.footer-section');
             const measureContent = mergeMeasureEl.querySelector('[data-pack-measure-content]');
 
-            const computeContUsablePx = (isLandscape) => {
-                const gridInnerPx = quoteMmToPx(quoteA4InnerContentMm(isLandscape).innerHeightMm);
-                return Math.max(
-                    gridInnerPx -
-                        (measureLogo?.offsetHeight || 0) -
-                        (measureFooter?.offsetHeight || 0),
-                    200
-                );
-            };
+            /*
+             * Fixed content area for Align Page and normal pack:
+             * 15mm margins, 21mm logo, 26mm footer → 180×220mm (832px).
+             * Live logo/footer measurement was a different box on each Align click.
+             */
+            const computeContUsablePx = (isLandscape) =>
+                Math.max(quoteContinuationContentPx(isLandscape), 200);
 
             const portraitContUsablePx = computeContUsablePx(false);
 
@@ -8302,10 +10807,25 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
             const packContentLimitPxForPage = (continuationPageIdx) =>
                 Math.max(
-                    usablePxForContinuationPage(continuationPageIdx) -
-                        (clausePackTightFitRef.current ? 12 : 48),
+                    usablePxForContinuationPage(continuationPageIdx) - PACK_HEIGHT_SAFETY_PX,
                     200
                 );
+
+            /** True when rejoined content would clip into the footer band. */
+            const overflowTestForPage = (continuationPageIdx, groupIndices) => {
+                if (!groupIndices?.length || !measureContent) return false;
+                preparePackMeasureContent(groupIndices, continuationPageIdx);
+                const limit = packContentLimitPxForPage(continuationPageIdx);
+                const natural = Math.round(
+                    Math.max(
+                        measureContent.scrollHeight || 0,
+                        measureContent.offsetHeight || 0,
+                        measureContent.firstElementChild?.scrollHeight || 0
+                    )
+                );
+                /* Require a clear overshoot — tiny 1–2px noise was over-peeling pricing rows. */
+                return natural > limit + 8;
+            };
 
             const renderBlocksHtml = (groupIndices) => {
                 const blocks = mergeSegmentsIntoSheetBlocks(
@@ -8332,7 +10852,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         const heading = block.showHeading
                             ? `<div class="quote-clause-heading-panel quote-preview-panel-shell"><h3${headingCustomAttr}>${headingInner}</h3></div>`
                             : '';
-                        return `<div class="quote-clause-block quote-clause-block--continuation">${heading}<div class="clause-content" style="font-size:13px;line-height:1.45">${block.bodyHtml}</div></div>`;
+                        return `<div class="quote-clause-block quote-clause-block--continuation">${heading}<div class="clause-content" style="font-size:13px;line-height:1.4">${block.bodyHtml}</div></div>`;
                     })
                     .join('');
             };
@@ -8341,47 +10861,73 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 if (!groupIndices?.length || !measureContent) return;
                 configureMergeMeasureShellWidth(innerWidthPxForContinuation(continuationPageIdx));
                 measureContent.innerHTML = renderBlocksHtml(groupIndices);
-                applyAllTableRowHeightsInRoot(measureContent);
+                /*
+                 * BOQ/office schedules often carry inflated data-ems-row-heights from Excel.
+                 * Re-locking them here made ~3 short rows measure as a full A4 page → huge
+                 * blank bands. Measure natural height (matches on-sheet paint). Keep locks
+                 * only for EMS pricing summary so VAT/Total packing stays accurate.
+                 * A4 size, footer, and table column formatting are unchanged.
+                 */
+                relaxTableRowHeightsForClausePackMeasure(measureContent);
+                measureContent.querySelectorAll?.('table')?.forEach((table) => {
+                    if (isEmsPricingSummaryTable(table)) {
+                        applyTableRowHeightModel(table);
+                    }
+                });
                 void measureContent.offsetHeight;
             };
 
+            /** Content-sized height only — ignore flex/A4 stretch on offsetHeight. */
+            const readPackMeasureContentPx = () => {
+                if (!measureContent) return 0;
+                const inner = measureContent.firstElementChild;
+                const candidates = [measureContent, inner].filter(Boolean);
+                let h = 0;
+                for (const el of candidates) {
+                    h = Math.max(
+                        h,
+                        Math.round(el.scrollHeight || 0),
+                        Math.round(el.offsetHeight || 0)
+                    );
+                }
+                return h;
+            };
+
+            /** Cache merged measures within one pack run — fill/enforce re-ask the same groups. */
+            const mergedMeasureCache = new Map();
             const measureMergedGroupPx = (groupIndices, continuationPageIdx = 0) => {
                 if (!groupIndices?.length || !measureContent) return 0;
-                preparePackMeasureContent(groupIndices, continuationPageIdx);
-                const contentH = Math.max(
-                    Math.round(measureContent.scrollHeight),
-                    Math.round(measureContent.offsetHeight),
-                    Math.round(measureContent.getBoundingClientRect().height)
-                );
-                if (contentH > 0) {
-                    return applyOfficePasteMeasureHeightPadding(contentH, measureContent);
+                const cacheKey = `${continuationPageIdx}|${groupIndices.join(',')}`;
+                if (mergedMeasureCache.has(cacheKey)) {
+                    return mergedMeasureCache.get(cacheKey);
                 }
-                return groupIndices.reduce((s, gi) => s + Math.max(heights[gi] || 0, 1), 0);
-            };
-
-            /** Same overflow:hidden + max-height test as continuation sheet render — per-page orientation. */
-            const overflowTestForPage = (continuationPageIdx, groupIndices) => {
-                if (!groupIndices?.length || !measureContent) return false;
                 preparePackMeasureContent(groupIndices, continuationPageIdx);
-                const limitPx = packContentLimitPxForPage(continuationPageIdx);
-                measureContent.style.boxSizing = 'border-box';
-                measureContent.style.width = '100%';
-                measureContent.style.maxHeight = `${limitPx}px`;
-                measureContent.style.overflow = 'hidden';
+                measureContent.style.maxHeight = 'none';
+                measureContent.style.overflow = 'visible';
+                measureContent.style.height = 'auto';
                 void measureContent.offsetHeight;
-                const overflows = measureContent.scrollHeight > limitPx + 2;
-                measureContent.style.maxHeight = '';
-                measureContent.style.overflow = '';
-                return overflows;
+                const contentH = readPackMeasureContentPx();
+                const h =
+                    contentH > 0
+                        ? contentH
+                        : groupIndices.reduce((s, gi) => s + Math.max(heights[gi] || 0, 1), 0);
+                /* Trust natural rejoined height after relaxTableRowHeights (no estimate cap). */
+                mergedMeasureCache.set(cacheKey, h);
+                return h;
             };
 
             const packOptions = {
-                ...(clausePackTightFitRef.current ? { tightFit: true } : {}),
+                tightFit: true,
                 usablePxForContinuationPage,
                 overflowTestForPage,
+                segments: clauseSegmentsForPagination,
+                packSafetyPx:
+                    PACK_HEIGHT_SAFETY_PX +
+                    (packVisibilityRecoveryRef.current > 0 ? 24 : 0),
             };
 
             const remaining = clauseSegmentsForPagination.map((_, i) => i);
+            /* Always greedy-fill by rejoined DOM height at the real 180mm content width. */
             let continuation = packClauseSegmentsForContinuationPages(
                 remaining,
                 measureMergedGroupPx,
@@ -8391,18 +10937,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 heights
             );
             if (!continuation.length) {
-                continuation = Object.values(quotePageOrientations || {}).some((v) => v === 'landscape')
-                    ? packSegmentsOntoPagesByEstimatedHeightPerPage(
-                          clauseSegmentsForPagination,
-                          (continuationPageIdx) =>
-                              isContinuationSheetLandscape(continuationPageIdx)
-                                  ? EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK
-                                  : portraitContUsablePx
-                      )
-                    : packSegmentsOntoPagesByEstimatedHeight(
-                          clauseSegmentsForPagination,
-                          portraitContUsablePx
-                      );
+                continuation = reflowContinuationPagesTopDown(
+                    clauseSegmentsForPagination,
+                    compactPackHeightsPx(clauseSegmentsForPagination, heights),
+                    portraitContUsablePx
+                );
             }
             const sig = JSON.stringify(continuation);
             if (cancelled) return;
@@ -8413,33 +10952,68 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             }
             lastClausePackSigRef.current = sig;
             clausePackRenderVerifyRef.current = 0;
+            packedGroupsAwaitingPaintRef.current = continuation;
             setClauseSegmentPageGroups((prev) =>
                 segmentPageGroupsEqual(prev, continuation) ? prev : continuation
             );
-            clausePackTightFitRef.current = false;
+            releaseAlignFlag();
             setQuoteAlignPageBusy((busy) => (busy ? false : busy));
         };
 
-        /* Align Page path: estimated first, then DOM measure. */
+        /* Instant estimate so sheets paint; measured pack is debounced to avoid freezes. */
         applyEstimatedPack();
-
-        let raf1 = 0;
-        let raf2 = 0;
-        let raf3 = 0;
-        raf1 = requestAnimationFrame(() => {
-            raf2 = requestAnimationFrame(() => {
-                raf3 = requestAnimationFrame(() => {
-                    applyPack();
-                });
+        const packGen = ++clausePackRunGenRef.current;
+        let debounceTimer = 0;
+        let rafPack = 0;
+        const runMeasuredPack = () => {
+            if (cancelled || clausePackRunGenRef.current !== packGen) return;
+            setQuoteAlignPageBusy(true);
+            const go = () => {
+                if (cancelled || clausePackRunGenRef.current !== packGen) return;
+                applyPack();
+                let integrity = assertSegmentPageGroupsIntegrity(
+                    packedGroupsAwaitingPaintRef.current || [],
+                    clauseSegmentsForPagination.length
+                );
+                if (!integrity.ok) {
+                    console.error('[EMS pack] preview integrity', integrity);
+                    /* One recovery pack with larger safety (no fill-up). */
+                    applyEstimatedPack(
+                        Math.max(
+                            EMS_QUOTE_CONT_USABLE_PX_FALLBACK - PACK_HEIGHT_SAFETY_PX - 24,
+                            200
+                        )
+                    );
+                    integrity = assertSegmentPageGroupsIntegrity(
+                        packedGroupsAwaitingPaintRef.current || [],
+                        clauseSegmentsForPagination.length
+                    );
+                }
+                if (!cancelled && clausePackRunGenRef.current === packGen) {
+                    setQuotePackIntegrityFailed(!integrity.ok);
+                }
+            };
+            /* Wait for Selawik faces before measuring — avoids system Segoe metrics. */
+            if (typeof document !== 'undefined' && document.fonts?.ready) {
+                document.fonts.ready.then(go).catch(go);
+            } else {
+                go();
+            }
+        };
+        /* Align Page runs immediately; normal edits debounce ~300ms. */
+        const delayMs = clausePackFastAlignRef.current || clausePackTightFitRef.current ? 0 : 300;
+        debounceTimer = window.setTimeout(() => {
+            rafPack = requestAnimationFrame(() => {
+                requestAnimationFrame(runMeasuredPack);
             });
-        });
+        }, delayMs);
 
         return () => {
             cancelled = true;
-            clausePackTightFitRef.current = false;
-            cancelAnimationFrame(raf1);
-            cancelAnimationFrame(raf2);
-            cancelAnimationFrame(raf3);
+            clausePackRunGenRef.current += 1;
+            releaseAlignFlag();
+            window.clearTimeout(debounceTimer);
+            cancelAnimationFrame(rafPack);
         };
 
     }, [
@@ -8448,18 +11022,39 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         clauseHeadingHtml,
         isQuotePreviewVisible,
         expandedClause,
+        clausePreviewMembershipSig,
         clausePackRetryNonce,
         quoteAlignPageNonce,
         clausePackSplitMode,
         quotePageOrientations,
     ]);
 
-    /** If measured packing never settles, nudge a remeasure so preview does not stay cover-only. */
+    /** If measured packing never settles, nudge a remeasure (capped — uncapped froze the tab). */
     useEffect(() => {
-        if (!isQuotePreviewVisible || expandedClause) return undefined;
+        if (!isQuotePreviewVisible) return undefined;
+        if (expandedClause && lastPackedClauseMembershipRef.current === clausePreviewMembershipSig) {
+            return undefined;
+        }
         if (!clauseSegmentsForPagination.length) return undefined;
-        if (clauseSegmentPageGroups.length > 0) return undefined;
+        if (clausePackRetryCountRef.current >= 3) return undefined;
+        if (clauseSegmentPageGroups.length > 0) {
+            const covered = new Set(clauseSegmentPageGroups.flat());
+            const n = clauseSegmentsForPagination.length;
+            let missing = false;
+            for (let i = 0; i < n; i += 1) {
+                if (!covered.has(i)) {
+                    missing = true;
+                    break;
+                }
+            }
+            if (!missing) {
+                clausePackRetryCountRef.current = 0;
+                return undefined;
+            }
+        }
         const timer = window.setTimeout(() => {
+            if (clausePackRetryCountRef.current >= 3) return;
+            clausePackRetryCountRef.current += 1;
             lastClausePackSigRef.current = '';
             setClausePackRetryNonce((n) => n + 1);
         }, 700);
@@ -8467,8 +11062,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     }, [
         isQuotePreviewVisible,
         expandedClause,
+        clausePreviewMembershipSig,
         clauseSegmentsForPagination.length,
-        clauseSegmentPageGroups.length,
+        clauseSegmentPageGroups,
         clausePaginationLayoutKey,
     ]);
 
@@ -8476,7 +11072,21 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     React.useLayoutEffect(() => {
         const root = document.getElementById('quote-preview');
         if (!root) return;
+        if (
+            !root.querySelector(
+                'table[data-ems-paste-source="office"], table[data-ems-col-widths], table.ems-office-paste-table'
+            )
+        ) {
+            return;
+        }
         initializeAllOfficePastedTableColumns(root);
+        /*
+         * Excel row locks (80–120px) make the packer think a page is full after a few
+         * lines and leave blank bands. Continuation preview uses natural row height.
+         */
+        root.querySelectorAll('.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)').forEach((sheet) => {
+            relaxTableRowHeightsForClausePackMeasure(sheet);
+        });
         /* Re-run when page packing changes — mid-table page breaks must not re-measure columns locally. */
     }, [clausePaginationLayoutKey, clauseSegmentPageGroups]);
 
@@ -8489,77 +11099,198 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 group.filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < n)
             )
             .filter((g) => g.length > 0);
-        if (filtered.length) return filtered;
+        const covered = new Set(filtered.flat());
+        let hasUncovered = filtered.length === 0;
+        if (!hasUncovered) {
+            for (let i = 0; i < n; i += 1) {
+                if (!covered.has(i)) {
+                    hasUncovered = true;
+                    break;
+                }
+            }
+        }
+        /* Adding a clause while editing leaves old page groups that omit the new segment index —
+           fall back to estimate so "8. new" appears immediately on the right. */
+        if (!hasUncovered) {
+            return ensureSegmentPageGroupsCoverAll(filtered, n);
+        }
         const hasLandscapeSheets = Object.values(quotePageOrientations || {}).some((v) => v === 'landscape');
         if (hasLandscapeSheets) {
-            return packSegmentsOntoPagesByEstimatedHeightPerPage(
-                clauseSegmentsForPagination,
-                (continuationPageIdx) => {
-                    const sheetIdx = continuationPageIdx + 1;
-                    return quotePageOrientations[sheetIdx] === 'landscape'
-                        ? EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK
-                        : EMS_QUOTE_CONT_USABLE_PX_FALLBACK;
-                }
+            return ensureSegmentPageGroupsCoverAll(
+                packSegmentsOntoPagesByEstimatedHeightPerPage(
+                    clauseSegmentsForPagination,
+                    (continuationPageIdx) => {
+                        const sheetIdx = continuationPageIdx + 1;
+                        return quotePageOrientations[sheetIdx] === 'landscape'
+                            ? EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK
+                            : EMS_QUOTE_CONT_USABLE_PX_FALLBACK;
+                    }
+                ),
+                n
             );
         }
-        return packSegmentsOntoPagesByEstimatedHeight(clauseSegmentsForPagination);
+        return ensureSegmentPageGroupsCoverAll(
+            reflowContinuationPagesTopDown(
+                clauseSegmentsForPagination,
+                compactPackHeightsPx(clauseSegmentsForPagination, null),
+                EMS_QUOTE_CONT_USABLE_PX_FALLBACK
+            ),
+            n
+        );
     }, [clauseSegmentPageGroups, clauseSegmentsForPagination, quotePageOrientations]);
 
-    /** Final safety net: if rendered continuation sheet still overflows, move last segment to next page. */
+    /**
+     * Geometry verify-down (max 3 iterations): move units whose painted bottom
+     * exceeds contentTop + usable - 12px onto the next sheet. Never pull up.
+     */
+    const CONTENT_END_GAP_PX = PACK_HEIGHT_SAFETY_PX;
+    const footerClipPeelKeyRef = useRef('');
+    const pagePackFillCountRef = useRef(0);
+    const footerClipPeelCountRef = useRef(0);
+    const skipOverflowPeelRef = useRef(false);
     useLayoutEffect(() => {
         if (!isQuotePreviewVisible || expandedClause) return;
-        const groups = sanitizedClauseSegmentPageGroups;
-        if (!groups?.length) return;
-        if (clausePackRenderVerifyRef.current > 8) return;
-
-        const preview = quotePreviewLayoutRef.current;
-        if (!preview) return;
-
-        const visibleSheets = queryQuotePreviewVisibleSheets(preview);
-        let continuationGroupIdx = 0;
-        let overflowGroupIdx = -1;
-
-        for (let si = 1; si < visibleSheets.length; si += 1) {
-            const sheet = visibleSheets[si];
-            if (!sheet.classList.contains('quote-a4-sheet--continuation')) continue;
-            const main = sheet.querySelector('.quote-sheet-main-flex');
-            const content = main?.querySelector('.content-section');
-            if (main && content && content.scrollHeight > main.clientHeight + 2) {
-                overflowGroupIdx = continuationGroupIdx;
-                break;
-            }
-            continuationGroupIdx += 1;
+        const packKey = `${clausePaginationLayoutKey}|${quoteAlignPageNonce}|live-pack-v11-geom`;
+        if (footerClipPeelKeyRef.current !== packKey) {
+            footerClipPeelKeyRef.current = packKey;
+            footerClipPeelCountRef.current = 0;
+            pagePackFillCountRef.current = 0;
         }
-
-        if (overflowGroupIdx < 0) {
-            clausePackRenderVerifyRef.current = 0;
+        if (!sanitizedClauseSegmentPageGroups?.length) return;
+        const root = document.getElementById('quote-preview');
+        /* C2: detach orphaned col/row resizers left on document.body after exit-edit. */
+        if (!expandedClause && typeof document !== 'undefined') {
+            document
+                .querySelectorAll(
+                    '.ems-table-col-resizer, .ems-table-row-resizer, .jodit-table-resizer'
+                )
+                .forEach((el) => {
+                    if (!el.closest?.('.quote-a4-sheet--clause-editing')) el.remove();
+                });
+        }
+        if (root) {
+            root.querySelectorAll(
+                '.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)'
+            ).forEach((sheet) => relaxTableRowHeightsForClausePackMeasure(sheet));
+        }
+        if (pagePackFillCountRef.current >= 1 || skipOverflowPeelRef.current) {
+            /* After verify settles, run visibility integrity once per pack key. */
+            if (root && footerClipPeelCountRef.current >= 0) {
+                const vis = assertSegmentVisibilityOnSheets(
+                    root,
+                    sanitizedClauseSegmentPageGroups,
+                    clauseSegmentsForPagination.length,
+                    {
+                        reservePx: CONTENT_END_GAP_PX,
+                        usablePx: EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
+                    }
+                );
+                if (!vis.ok && vis.clipped?.length) {
+                    if (footerClipPeelCountRef.current < 3) {
+                        /* Still clipped — allow another verify-down peel. */
+                        pagePackFillCountRef.current = 0;
+                    } else {
+                        setQuotePackIntegrityFailed(true);
+                    }
+                } else if (vis.ok) {
+                    setQuotePackIntegrityFailed(false);
+                    packVisibilityRecoveryRef.current = 0;
+                } else if (
+                    !vis.ok &&
+                    packVisibilityRecoveryRef.current < 1 &&
+                    footerClipPeelCountRef.current >= 3
+                ) {
+                    packVisibilityRecoveryRef.current = 1;
+                    clausePackSegmentHeightCacheRef.current.clear();
+                    setClausePackRetryNonce((n) => n + 1);
+                }
+            }
             return;
         }
-
-        const g = groups[overflowGroupIdx];
-        if (!g || g.length <= 1) return;
-
-        const nextGroups = groups.map((grp) => [...grp]);
-        const moved = nextGroups[overflowGroupIdx].pop();
-        if (overflowGroupIdx + 1 < nextGroups.length) {
-            nextGroups[overflowGroupIdx + 1].unshift(moved);
-        } else {
-            nextGroups.push([moved]);
+        pagePackFillCountRef.current = 1;
+        if (!root) return;
+        const contSheets = [
+            ...root.querySelectorAll(
+                '.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)'
+            ),
+        ];
+        if (!contSheets.length) return;
+        /** @type {number[][]} */
+        let nextGroups = sanitizedClauseSegmentPageGroups.map((g) => [...g]);
+        let changed = false;
+        for (let si = 0; si < contSheets.length; si += 1) {
+            const sheet = contSheets[si];
+            const content = sheet.querySelector('.content-section');
+            if (!content) continue;
+            const usable = quoteContinuationContentPx(
+                sheet.classList.contains('quote-a4-sheet--landscape')
+            );
+            const cRect = content.getBoundingClientRect();
+            const limitBottom = cRect.top + usable - CONTENT_END_GAP_PX;
+            const overScroll = content.scrollHeight > content.clientHeight + 2;
+            let overUnit = false;
+            const stamped = content.querySelectorAll('[data-ems-pack-seg]');
+            const checkNodes = stamped.length
+                ? [...stamped]
+                : [...content.querySelectorAll('.quote-clause-block')];
+            for (const el of checkNodes) {
+                const r = el.getBoundingClientRect();
+                if (r.height < 1) continue;
+                if (r.bottom > limitBottom + 1.5) {
+                    overUnit = true;
+                    break;
+                }
+            }
+            if (!overScroll && !overUnit) continue;
+            const group = nextGroups[si];
+            if (!group || group.length <= 1) continue;
+            const moved = group.pop();
+            if (moved == null) continue;
+            if (si + 1 < nextGroups.length) {
+                nextGroups[si + 1] = [moved, ...nextGroups[si + 1]];
+            } else {
+                nextGroups.push([moved]);
+            }
+            changed = true;
+            break; /* one segment per paint frame — avoid long sync loops */
         }
-
-        clausePackRenderVerifyRef.current += 1;
-        lastClausePackSigRef.current = '';
-        setClauseSegmentPageGroups(nextGroups);
+        if (changed) {
+            nextGroups = ensureSegmentPageGroupsCoverAll(
+                nextGroups.filter((g) => g.length > 0),
+                clauseSegmentsForPagination.length
+            );
+            packedGroupsAwaitingPaintRef.current = nextGroups;
+            setClauseSegmentPageGroups(nextGroups);
+            pagePackFillCountRef.current = 0;
+            footerClipPeelCountRef.current += 1;
+            if (footerClipPeelCountRef.current >= 3) {
+                pagePackFillCountRef.current = 1;
+            }
+        } else {
+            const vis = assertSegmentVisibilityOnSheets(
+                root,
+                nextGroups,
+                clauseSegmentsForPagination.length,
+                {
+                    reservePx: CONTENT_END_GAP_PX,
+                    usablePx: EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
+                }
+            );
+            setQuotePackIntegrityFailed(!vis.ok);
+        }
     }, [
         sanitizedClauseSegmentPageGroups,
+        clauseSegmentsForPagination,
         isQuotePreviewVisible,
         expandedClause,
         clausePaginationLayoutKey,
+        quoteAlignPageNonce,
+        clausePackSplitMode,
     ]);
 
     const sheets = React.useMemo(() => {
         const res = [{ isFirstPage: true, blocks: [] }];
-        sanitizedClauseSegmentPageGroups.forEach((group) => {
+        sanitizedClauseSegmentPageGroups.forEach((group, groupIdx) => {
             const blocks = mergeSegmentsIntoSheetBlocks(group, clauseSegmentsForPagination);
             if (!blocks.length) return;
             const hasBody = blocks.some((block) => {
@@ -8571,15 +11302,20 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             });
             if (!hasBody) return;
             // While editing, skip VAT reconcile — DOMParser on every sheet rebuild freezes typing.
-            if (expandedClause) {
+            // Reconcile pricing VAT even while another clause is open (skip only when pricing itself is open).
+            const skipVatReconcile = expandedClause === 'pricingTerms';
+            if (skipVatReconcile) {
                 res.push({
                     isFirstPage: false,
                     blocks,
+                    packGroupIdx: groupIdx,
                 });
                 return;
             }
             // Reconcile AFTER split/rejoin so dangerouslySetInnerHTML cannot re-apply a stale VAT cell.
-            const fixedBlocks = blocks.map((block) => {
+            // Stamp full base across split-id siblings first so Total is not page-local.
+            const stampedBlocks = stampSplitPricingBasesAcrossSheetBlocks(blocks);
+            const fixedBlocks = stampedBlocks.map((block) => {
                 const html = String(block.bodyHtml || '');
                 const needsVat =
                     block.listKey === 'showPricingTerms' ||
@@ -8588,39 +11324,76 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     /id=["']ems-auto-price-summary-table/i.test(html) ||
                     /data-ems-pricing-cols=["']fixed["']/i.test(html);
                 if (!needsVat) return block;
+                /*
+                 * Split fragment with a Total row: always re-stamp Total from the full
+                 * base (attr), even when VAT lives on another page (inconsistency check
+                 * would skip and leave a page-local Total).
+                 */
+                const splitHasTotal =
+                    /data-ems-table-split=["']1["']/i.test(html) &&
+                    (/data-ems-amount=["']total["']/i.test(html) ||
+                        /data-ems-row=["']total["']/i.test(html) ||
+                        />\s*Total(\s*<|\s*\()/i.test(html));
+                if (splitHasTotal || pricingFooterVatInconsistent(html)) {
+                    return {
+                        ...block,
+                        bodyHtml: ensurePricingTableColgroupInHtml(
+                            reconcilePricingVatAmountCellsInHtml(html)
+                        ),
+                    };
+                }
                 return {
                     ...block,
-                    bodyHtml: ensurePricingTableColgroupInHtml(
-                        reconcilePricingVatAmountCellsInHtml(html)
-                    ),
+                    bodyHtml: ensurePricingTableColgroupInHtml(html),
                 };
             });
             res.push({
                 isFirstPage: false,
                 blocks: fixedBlocks,
+                packGroupIdx: groupIdx,
             });
         });
         return res;
     }, [sanitizedClauseSegmentPageGroups, clauseSegmentsForPagination, expandedClause]);
 
+
     /**
      * One-shot VAT sync after preview paint (no MutationObserver — continuous observe
      * froze the tab while editing / when discount VAT checks looped).
+     * Still run while editing non-pricing clauses so VAT cannot flip to a wrong value.
+     * Single pass + idle second pass (was double synchronous + rAF — slowed Enter load).
      */
     useLayoutEffect(() => {
-        if (expandedClause) return undefined;
+        if (expandedClause === 'pricingTerms') return undefined;
         const root = document.getElementById('quote-preview');
         if (!root) return undefined;
+        stripStrikethroughFromQuoteTablesInRoot(root);
         forcePricingVatInDomRoot(root);
-        const raf = window.requestAnimationFrame(() => {
-            forcePricingVatInDomRoot(root);
-        });
-        return () => window.cancelAnimationFrame(raf);
+        let idleId = 0;
+        let timeoutId = 0;
+        const secondPass = () => {
+            const r = document.getElementById('quote-preview');
+            if (r) {
+                stripStrikethroughFromQuoteTablesInRoot(r);
+                forcePricingVatInDomRoot(r);
+            }
+        };
+        if (typeof window.requestIdleCallback === 'function') {
+            idleId = window.requestIdleCallback(secondPass, { timeout: 800 });
+        } else {
+            timeoutId = window.setTimeout(secondPass, 200);
+        }
+        return () => {
+            if (idleId && typeof window.cancelIdleCallback === 'function') {
+                window.cancelIdleCallback(idleId);
+            }
+            if (timeoutId) window.clearTimeout(timeoutId);
+        };
     }, [sheets, expandedClause, pricingTermsEditorSig]);
 
     /** Persist corrected VAT into clause state so pack/PDF don't keep the stale cell. */
     useEffect(() => {
-        if (expandedClause) return;
+        if (expandedClause === 'pricingTerms') return;
         const current = String(clauseContentRef.current?.pricingTerms || '');
         if (!clauseHtmlHasEmsAutoPricingTable(current)) return;
         if (!pricingFooterVatInconsistent(current)) return;
@@ -9589,7 +12362,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             numberToWordsBHD
         );
         return tableHtml;
-    }, [pricingSummaryForClause, activeJobsForClause, pricingStableSig, pricingData]);
+    }, [pricingSummaryForClause, activeJobsForClause, pricingStableSig, pricingData, quoteCurrencyCode]);
 
     /**
      * Structural signature of the auto pricing table. Whenever this signature changes we re-inject
@@ -9622,11 +12395,75 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (b === 'Base Price') return 1;
             return a.localeCompare(b);
         });
-        /* v5 = all option tables locked to same 80% width (inline !important + CSS exclusions). */
-        return `v5|opts=${opts.join(',')}|${body}`;
-    }, [pricingSummaryForClause, activeJobsForClause]);
+        /* v5 = all option tables locked to same 80% width (inline !important + CSS exclusions).
+           Include runtime currency so Division/Lead currency changes reinject Amount (BHD|SAR) headers. */
+        return `v5|cur=${quoteCurrencyCode}|vat=${quoteVatPercent}|opts=${opts.join(',')}|${body}`;
+    }, [pricingSummaryForClause, activeJobsForClause, quoteCurrencyCode, quoteVatPercent]);
 
     const lastInjectedAutoTableSigRef = useRef('');
+
+    /** When Division/Lead currency changes: refresh pricing clause labels + default VAT (no page reload). */
+    useEffect(() => {
+        const next = String(quoteCurrencyCode || '').trim().toUpperCase();
+        const prev = String(quoteCurrencyPrevRef.current || '').trim().toUpperCase();
+        if (!next) return;
+        if (!prev || prev === next) {
+            quoteCurrencyPrevRef.current = next;
+            return;
+        }
+        quoteCurrencyPrevRef.current = next;
+        setClauseContent((prevContent) => {
+            const terms = String(prevContent?.pricingTerms || '');
+            if (!terms || !clauseHtmlHasEmsAutoPricingTable(terms)) return prevContent;
+            const rewritten = ensurePricingTableColgroupInHtml(
+                applyCurrencyDefaultVatToPricingTermsHtml(terms, prev, next)
+            );
+            if (rewritten === terms) return prevContent;
+            const nextContent = { ...prevContent, pricingTerms: rewritten };
+            clauseContentRef.current = nextContent;
+            return nextContent;
+        });
+        // Keep VAT runtime prev in sync with currency-driven default flip.
+        quoteVatPrevRef.current = getDefaultPricingVatPercent(next);
+        // Force left pricing summary + auto-table inject to re-format with the new currency.
+        lastInjectedAutoTableSigRef.current = '';
+        lastPricingCalcSigRef.current = '';
+        setPricingSummary((s) => (Array.isArray(s) ? [...s] : s));
+    }, [quoteCurrencyCode]);
+
+    /**
+     * When Master_EnquiryFor.VAT_Per changes for the selected company/division
+     * (same currency), retarget pricing tables still on the previous default %.
+     */
+    useEffect(() => {
+        const next = Number(quoteVatPercent);
+        if (!Number.isFinite(next) || next < 0) return;
+        const prev = Number(quoteVatPrevRef.current);
+        if (!Number.isFinite(prev)) {
+            quoteVatPrevRef.current = next;
+            return;
+        }
+        if (Math.abs(prev - next) < 0.0005) {
+            quoteVatPrevRef.current = next;
+            return;
+        }
+        quoteVatPrevRef.current = next;
+        setClauseContent((prevContent) => {
+            const terms = String(prevContent?.pricingTerms || '');
+            if (!terms || !clauseHtmlHasEmsAutoPricingTable(terms)) return prevContent;
+            // Reuse currency VAT rewriter by faking codes with matching defaults.
+            const rewritten = ensurePricingTableColgroupInHtml(
+                applyMasterVatPercentToPricingTermsHtml(terms, prev, next)
+            );
+            if (rewritten === terms) return prevContent;
+            const nextContent = { ...prevContent, pricingTerms: rewritten };
+            clauseContentRef.current = nextContent;
+            return nextContent;
+        });
+        lastInjectedAutoTableSigRef.current = '';
+        lastPricingCalcSigRef.current = '';
+        setPricingSummary((s) => (Array.isArray(s) ? [...s] : s));
+    }, [quoteVatPercent]);
 
     // Keep Clause 4 editor content in sync with the auto-table — but only when summary STRUCTURE
     // changes (jobs added/removed, item names changed). Mere edits to prices in the editor must
@@ -9737,9 +12574,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             );
         }
 
-        const preservedDiscounts = extractAllPricingDiscountStatesFromHtml(
-            getPricingTermsHtmlPreferringLiveEditor(currentTerms)
-        );
+        const liveTermsForPreserve = getPricingTermsHtmlPreferringLiveEditor(currentTerms);
+        const preservedDiscounts = extractAllPricingDiscountStatesFromHtml(liveTermsForPreserve);
         if (preservedDiscounts.length) {
             nextHtml = applyDiscountBlockToPricingTermsHtml(
                 nextHtml,
@@ -9747,6 +12583,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 numberToWordsBHD
             );
         }
+        nextHtml = preserveVatOntoPricingTermsHtml(liveTermsForPreserve, nextHtml);
 
         // 4.1 lump-sum prose should match checked-job total (grand with VAT when present).
         const previewGrand = parseLumpSumFromAutoTableHtml(pricingTermsAutoTablePreviewHtml);
@@ -10104,17 +12941,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         [quoteLogoCandidateRaws]
     );
 
-    /** Company line in the standard cover letter (first page) — same source as print footer when possible. */
-    const quoteCoverOfferCompanyName = React.useMemo(() => {
-        const n = String(
-            effectiveQuoteBranding?.name ||
-                footerDetails?.name ||
-                quotePreviewEnquiryCompanyFallback?.name ||
-                ''
-        ).trim();
-        return n || 'Almoayyed Air Conditioning W.L.L.';
-    }, [effectiveQuoteBranding?.name, footerDetails?.name, quotePreviewEnquiryCompanyFallback?.name]);
-
     /** Print/PDF footer contact — Master_EnquiryFor only (no hardcoded fallbacks). */
     const quotePrintFooterContact = React.useMemo(() => {
         if (effectiveQuoteBranding) {
@@ -10145,23 +12971,26 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     ]);
 
     const quotePreviewFooterDisplay = React.useMemo(() => {
+        const fallbackName =
+            String(footerDetails?.name || quotePreviewEnquiryCompanyFallback?.name || '').trim() ||
+            'Almoayyed Contracting';
         if (effectiveQuoteBranding) {
             return {
-                name: effectiveQuoteBranding.name,
+                name: String(effectiveQuoteBranding.name || '').trim() || fallbackName,
                 address: effectiveQuoteBranding.address,
             };
         }
         return {
-            name:
-                footerDetails?.name ||
-                quotePreviewEnquiryCompanyFallback?.name ||
-                'Almoayyed Contracting',
+            name: fallbackName,
             address:
                 footerDetails?.address ||
                 quotePreviewEnquiryCompanyFallback?.address ||
                 'P.O. Box 32232, Manama, Kingdom of Bahrain',
         };
     }, [effectiveQuoteBranding, footerDetails, quotePreviewEnquiryCompanyFallback]);
+
+    /** Cover sign-off "For …" — always the footer company so both lines name the same entity. */
+    const quoteCoverOfferCompanyName = quotePreviewFooterDisplay.name;
 
     /** Own-job + subjob tabs: all pricing summary rows start checked; tab switch reapplies defaults (user can still uncheck). */
     const prevQuoteTabForDefaultsRef = React.useRef(null);
@@ -11036,6 +13865,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     ]);
 
     useEffect(() => {
+        // Approvals loads the exact quote/draft row — skip Previous Quotes scoped list fetch.
+        if (embeddedApprovalReview) {
+            // Mark scope settled so save/preview gates that compare keys do not hang.
+            if (scopedQuotePanelFetchKey) {
+                setScopedQuotesFetchSettledKey(scopedQuotePanelFetchKey);
+            }
+            return;
+        }
         const rn = enquiryData?.enquiry?.RequestNo;
         const activeScopedTabObj = (calculatedTabs || []).find((t) => String(t.id) === String(activeQuoteTab));
         const holdScopedRowsForSubjobBrowse =
@@ -11101,6 +13938,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch keyed by scopedQuotePanelFetchKey; scopedEnquiryQuotesParams identity churns with pricingData
     }, [
+        embeddedApprovalReview,
         enquiryData?.enquiry?.RequestNo,
         scopedQuotePanelFetchKey,
         browsePreviousQuotesRevisions,
@@ -11137,6 +13975,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const quotePreviewClauseEditAllowed = isQuotePreviewClauseEditAllowed(browsePreviousQuotesRevisions);
 
     const quotePreviewUpdating = React.useMemo(() => {
+        // Approvals loads the exact quote row — scoped by-enquiry is skipped, so never gate on it.
+        if (embeddedApprovalReview) return false;
         if (!quoteShellReady || showQuoteListSummaryOverQuote) return false;
         const scopeLoading =
             Boolean(scopedQuotePanelFetchKey) &&
@@ -11144,6 +13984,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         /* Pricing busy no longer dims preview. */
         return leadSwitchShellHold || scopeLoading;
     }, [
+        embeddedApprovalReview,
         quoteShellReady,
         showQuoteListSummaryOverQuote,
         leadSwitchShellHold,
@@ -11773,16 +14614,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         // Only run logic if not yet processed for this tab
         if (lastAutoSelectRef.current.processed) return;
 
-        // Helper to check hierarchy
-        const isDescendantLocal = (childId, parentId) => {
-            const hierarchy = enquiryData.divisionsHierarchy || [];
-            let current = hierarchy.find(d => String(d.ItemID || d.id) === String(childId));
-            while (current) {
-                if (String(current.ParentID || current.parentId) === String(parentId)) return true;
-                current = hierarchy.find(d => String(d.ItemID || d.id) === String(current.ParentID || current.parentId));
-            }
-            return false;
-        };
+        // Helper to check hierarchy (bounded — cyclic ParentID must not freeze the tab)
+        const isDescendantLocal = (childId, parentId) =>
+            isDescendant(childId, parentId, enquiryData.divisionsHierarchy || []);
 
         const activeTabObj = (calculatedTabs || []).find(t => String(t.id) === String(activeQuoteTab));
         if (!activeTabObj) return;
@@ -11906,6 +14740,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     // Load Pricing Data when enquiry and customer are selected (bootstrap with empty customer only after lead job is known).
     // Re-fetch when Division dropdown changes so access/jobs match the session department (see &division= on loadPricingData URL).
     useEffect(() => {
+        if (embeddedApprovalReview) return;
         const req = enquiryData?.enquiry?.RequestNo;
         if (!req) return;
         const cx = (toName || '').trim();
@@ -11930,94 +14765,113 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             console.log('[useEffect] Bootstrap pricing (customer sync after lead):', req);
             loadPricingData(req, '');
         }
-    }, [enquiryData, toName, quoteListDivision, selectedLeadId]);
+    }, [embeddedApprovalReview, enquiryData, toName, quoteListDivision, selectedLeadId]);
 
     useEffect(() => {
         recipientOverrideTouchedRef.current = false;
     }, [toName]);
 
-    // Safety net for pending-list/context opens:
-    // if customer name is present but recipient contact block is blank, hydrate from master/enquiry data.
+    /**
+     * Recipient To Address/Phone/Fax/Email — fill blank fields only, once per To + master readiness.
+     * Functional setState avoids depending on toAddress (which fought draft load and re-rendered forever).
+     */
+    const recipientHydrateAttemptRef = useRef('');
     useEffect(() => {
         const tn = String(toName || '').trim();
-        if (!tn) return;
+        if (!tn) {
+            recipientHydrateAttemptRef.current = '';
+            return;
+        }
         if (recipientOverrideTouchedRef.current) return;
 
-        const hasAnyContact =
-            String(toAddress || '').trim() ||
-            String(toPhone || '').trim() ||
-            String(toEmail || '').trim() ||
-            String(toFax || '').trim();
-        if (hasAnyContact) return;
-
-        const tnNorm = normalize(tn);
-        const tnKey = normalizeCustomerKey(tn);
-        const matchedCustomer = (customersList || []).find((c) => {
-            const name = String(c?.CompanyName || '').trim();
-            if (!name) return false;
-            const nNorm = normalize(name);
-            const nKey = normalizeCustomerKey(name);
-            return (
-                nNorm === tnNorm ||
-                nKey === tnKey ||
-                (nNorm && tnNorm && (nNorm.includes(tnNorm) || tnNorm.includes(nNorm)))
-            );
-        });
-
-        if (matchedCustomer) {
-            const addr = [matchedCustomer.Address1, matchedCustomer.Address2].filter(Boolean).join('\n').trim();
-            if (addr) setToAddress(addr);
-            const ph = `${matchedCustomer.Phone1 || ''} ${matchedCustomer.Phone2 ? '/ ' + matchedCustomer.Phone2 : ''}`.trim();
-            if (ph) setToPhone(ph);
-            if (matchedCustomer.EmailId) setToEmail(String(matchedCustomer.EmailId).trim());
-            if (matchedCustomer.FaxNo) setToFax(String(matchedCustomer.FaxNo).trim());
-            return;
-        }
-
-        // Internal recipient fallback (e.g. "Civil Project", "HVAC Project") from profiles/jobs.
-        const cleanTarget = collapseSpacesLower(stripQuoteJobPrefix(tn));
-        const profileMatch = (enquiryData?.availableProfiles || []).find((p) => {
-            const name = collapseSpacesLower(stripQuoteJobPrefix(p?.itemName || p?.name || ''));
-            return name && (name === cleanTarget || name.includes(cleanTarget) || cleanTarget.includes(name));
-        });
-        if (profileMatch) {
-            const addr = String(profileMatch.address || profileMatch.Address || '').trim();
-            const ph = String(profileMatch.phone || profileMatch.Phone || '').trim();
-            const em = String(profileMatch.email || profileMatch.Email || '').trim();
-            const fx = String(profileMatch.fax || profileMatch.Fax || '').trim();
-            if (addr) setToAddress(addr);
-            if (ph) setToPhone(ph);
-            if (em) setToEmail(em.split(',')[0].trim());
-            if (fx) setToFax(fx);
-            return;
-        }
-
-        const pricingJobMatch = (pricingData?.jobs || []).find((j) => {
-            const name = collapseSpacesLower(stripQuoteJobPrefix(j?.itemName || j?.ItemName || j?.DivisionName || ''));
-            return name && (name === cleanTarget || name.includes(cleanTarget) || cleanTarget.includes(name));
-        });
-        if (pricingJobMatch) {
-            const addr = String(pricingJobMatch.address || pricingJobMatch.Address || '').trim();
-            const ph = String(pricingJobMatch.phone || pricingJobMatch.Phone || '').trim();
-            const em = String(pricingJobMatch.email || pricingJobMatch.Email || '').trim();
-            const fx = String(pricingJobMatch.fax || pricingJobMatch.Fax || '').trim();
-            if (addr) setToAddress(addr);
-            if (ph) setToPhone(ph);
-            if (em) setToEmail(em.split(',')[0].trim());
-            if (fx) setToFax(fx);
-            return;
-        }
-
+        const reqNo = String(enquiryData?.enquiry?.RequestNo || '');
+        const profiles = enquiryData?.availableProfiles || [];
         const details = enquiryData?.customerDetails;
-        if (details) {
-            const addr = details.Address || [details.Address1, details.Address2].filter(Boolean).join('\n').trim();
-            if (addr) setToAddress(addr);
-            const ph = `${details.Phone1 || ''} ${details.Phone2 ? '/ ' + details.Phone2 : ''}`.trim();
-            if (ph) setToPhone(ph);
-            if (details.EmailId) setToEmail(String(details.EmailId).trim());
-            if (details.FaxNo) setToFax(String(details.FaxNo).trim());
+        const custLen = Array.isArray(customersList) ? customersList.length : 0;
+        /* Retry only when master list / profiles / details become available — not on every field paint. */
+        const attemptKey = `${tn}|${reqNo}|c${custLen}|p${profiles.length}|d${details ? 1 : 0}`;
+        if (recipientHydrateAttemptRef.current === attemptKey) return;
+        recipientHydrateAttemptRef.current = attemptKey;
+
+        const fillBlank = (contact) => {
+            if (!contact || recipientOverrideTouchedRef.current) return;
+            const addr = String(contact.address || '').trim();
+            const ph = String(contact.phone || '').trim();
+            const em = String(contact.email || '').trim();
+            const fx = String(contact.fax || '').trim();
+            if (addr) setToAddress((prev) => (String(prev || '').trim() ? prev : addr));
+            if (ph) setToPhone((prev) => (String(prev || '').trim() ? prev : ph));
+            if (em) setToEmail((prev) => (String(prev || '').trim() ? prev : em));
+            if (fx) setToFax((prev) => (String(prev || '').trim() ? prev : fx));
+        };
+
+        const matchedCustomer = resolveMasterCustomerRecipient(customersList, tn);
+        if (matchedCustomer) {
+            fillBlank({
+                address: matchedCustomer.address,
+                phone: matchedCustomer.phone,
+                email: matchedCustomer.email,
+                fax: matchedCustomer.fax,
+            });
+            return;
         }
-    }, [toName, toAddress, toPhone, toEmail, toFax, customersList, enquiryData, pricingData]);
+
+        const cleanTarget = collapseSpacesLower(stripQuoteJobPrefix(tn));
+        if (cleanTarget.length >= 2) {
+            /* Exact match only — includes() mis-filled from short internal names. */
+            const profileMatch = profiles.find((p) => {
+                const a = collapseSpacesLower(stripQuoteJobPrefix(p?.itemName || ''));
+                const b = collapseSpacesLower(stripQuoteJobPrefix(p?.name || ''));
+                return (a && a === cleanTarget) || (b && b === cleanTarget);
+            });
+            if (profileMatch) {
+                fillBlank({
+                    address: profileMatch.address || profileMatch.Address,
+                    phone: profileMatch.phone || profileMatch.Phone,
+                    email: String(profileMatch.email || profileMatch.Email || '')
+                        .split(',')[0]
+                        .trim(),
+                    fax: profileMatch.fax || profileMatch.Fax,
+                });
+                return;
+            }
+
+            const jobs = pricingData?.jobs || [];
+            const pricingJobMatch = jobs.find((j) => {
+                const name = collapseSpacesLower(
+                    stripQuoteJobPrefix(j?.itemName || j?.ItemName || j?.DivisionName || '')
+                );
+                return name && name === cleanTarget;
+            });
+            if (pricingJobMatch) {
+                fillBlank({
+                    address: pricingJobMatch.address || pricingJobMatch.Address,
+                    phone: pricingJobMatch.phone || pricingJobMatch.Phone,
+                    email: String(pricingJobMatch.email || pricingJobMatch.Email || '')
+                        .split(',')[0]
+                        .trim(),
+                    fax: pricingJobMatch.fax || pricingJobMatch.Fax,
+                });
+                return;
+            }
+        }
+
+        if (details) {
+            fillBlank({
+                address: composeCustomerToAddress(details, tn) || String(details.Address || '').trim(),
+                phone: `${details.Phone1 || ''} ${details.Phone2 ? '/ ' + details.Phone2 : ''}`.trim(),
+                email: details.EmailId,
+                fax: details.FaxNo,
+            });
+        }
+    }, [
+        toName,
+        customersList,
+        enquiryData?.enquiry?.RequestNo,
+        enquiryData?.availableProfiles?.length,
+        enquiryData?.customerDetails,
+        pricingData?.jobs?.length,
+    ]);
 
     /**
      * Internal "To" customers ALWAYS take their address/phone/fax/email from
@@ -12066,8 +14920,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     useEffect(() => {
         if (!quoteRowAutoSelectLeadRef.current) return;
         if (!pricingData?.jobs?.length || !enquiryData?.leadJobPrefix) return;
+        // Only abandon when full enquiry data confirms the Division filter has zero jobs —
+        // scope=lead payloads often omit divisions and must not clear the deferred pick.
         if (
             String(quoteListDivision || '').trim() &&
+            enquiryData?.scope !== 'lead' &&
             Array.isArray(enquiryData?.divisions) &&
             enquiryData.divisions.length === 0
         ) {
@@ -12182,9 +15039,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const newClause = {
             id: `custom_${Date.now()}`,
             title: newClauseTitle,
-            content: '',
+            content: '<p><br></p>',
             isChecked: true
         };
+        // Invalidate edit-time freeze so the new clause packs into the preview immediately.
+        clauseSegmentsFrozenWhileEditingRef.current = [];
+        lastPackedClauseMembershipRef.current = '';
         setCustomClauses([...customClauses, newClause]);
         setOrderedClauses([...orderedClauses, newClause.id]);
         setNewClauseTitle('');
@@ -12325,6 +15185,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const canSaveOrReviseQuote = () => canEdit() || canCollaborateOnQuoteDraft();
 
     useEffect(() => {
+        if (embeddedApprovalReview) return;
         if (quoteListDivisionsLoading) return;
         if (quoteListCategory !== QUOTE_LIST_CATEGORY.PENDING) return;
         // Single-select Division — wait until options resolve, then fetch that division.
@@ -12335,6 +15196,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         }
         refetchPendingQuotes(formatUserDepartments(divs));
     }, [
+        embeddedApprovalReview,
         quoteListDivisionsLoading,
         quoteListCategory,
         quoteListDivision,
@@ -12420,14 +15282,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     const handleSelectCustomer = (e) => {
         const selectedName = e.target.value;
-        const cust = customersList.find(c => c.CompanyName === selectedName);
         setToName(selectedName);
-        if (cust) {
-            setToAddress(`${cust.Address1 || ''} \n${cust.Address2 || ''} `.trim());
-            setToPhone(`${cust.Phone1 || ''} ${cust.Phone2 ? '/ ' + cust.Phone2 : ''} `.trim());
-            setToEmail(cust.EmailId || '');
-
-            // NOTE: Do not update footerDetails with customer info
+        if (!browsePreviousQuotesRevisionsRef.current) {
+            const cust = resolveMasterCustomerRecipient(customersList, selectedName);
+            if (cust) {
+                setToAddress(cust.address);
+                setToPhone(cust.phone);
+                setToEmail(cust.email);
+                setToFax(cust.fax);
+            }
         }
 
         // Reload pricing for selected customer
@@ -12475,10 +15338,19 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             return;
         }
 
-        // Only reset if effectively changed (prevents auto-selection from clearing active quote).
+        // Name unchanged: fill any still-blank Recipient Info fields from Master (do not wipe saved values).
         // After a lead-job change we may re-apply the same customer label; tuple changed so we must not no-op.
         if (!leadJobAutoReselect && normalize(selectedName) === normalize(toName)) {
-            console.log('[handleCustomerChange] Customer name unchanged (normalized), skipping reset.');
+            if (!recipientOverrideTouchedRef.current) {
+                const custSame = resolveMasterCustomerRecipient(customersList, selectedName);
+                if (custSame) {
+                    console.log('[handleCustomerChange] Customer name unchanged — filling blank recipient fields from Master.');
+                    if (custSame.address && !String(toAddress || '').trim()) setToAddress(custSame.address);
+                    if (custSame.phone && !String(toPhone || '').trim()) setToPhone(custSame.phone);
+                    if (custSame.email && !String(toEmail || '').trim()) setToEmail(custSame.email);
+                    if (custSame.fax && !String(toFax || '').trim()) setToFax(custSame.fax);
+                }
+            }
             return;
         }
 
@@ -12673,20 +15545,20 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 setToEmail('');
                 setToFax('');
             }
+        } else if (browsePreviousQuotesRevisionsRef.current) {
+            /* Previous Quotes mode: recipient comes from EnquiryQuotes via loadQuote — not Master. */
+            console.log('[handleCustomerChange] Previous Quotes mode — skip Master recipient fill');
         } else {
-            // --- EXTERNAL CUSTOMER: Master_Customers → Enquiry customer details → jobs pool ---
-            let cust = customersList.find(c => c.CompanyName === selectedName);
-            if (!cust) {
-                cust = customersList.find(c => normalize(c.CompanyName) === targetNorm);
-            }
+            // --- EXTERNAL CUSTOMER (draft mode): Master when picking a customer ---
+            // Saved draft contact is applied by loadQuote; a new customer selection uses Master until next save.
+            const cust = resolveMasterCustomerRecipient(customersList, selectedName);
 
             if (cust) {
-                console.log('[handleCustomerChange] Found customer in Master list:', cust.CompanyName);
-                const addr = [cust.Address1, cust.Address2].filter(Boolean).join('\n').trim();
-                setToAddress(addr);
-                setToPhone(`${cust.Phone1 || ''} ${cust.Phone2 ? '/ ' + cust.Phone2 : ''} `.trim());
-                setToEmail(cust.EmailId || '');
-                setToFax(cust.FaxNo || '');
+                console.log('[handleCustomerChange] Found customer in Master list:', cust.row.CompanyName);
+                setToAddress(cust.address);
+                setToPhone(cust.phone);
+                setToEmail(cust.email);
+                setToFax(cust.fax);
             } else {
                 console.log('[handleCustomerChange] Customer NOT found in Master list');
 
@@ -12695,11 +15567,22 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 if (enquiryData?.customerDetails) {
                     const enqCustName = enquiryData.enquiry?.CustomerName || enquiryData.CustomerName || '';
                     const enqCustList = enqCustName.split(',').map(c => normalize(c.trim()));
+                    const selectedKeys = customerMatchKeys(selectedName);
+                    const enqMatch = enqCustList.some((n) => {
+                        if (n === targetNorm) return true;
+                        const ek = customerMatchKeys(n);
+                        return (
+                            (ek.strippedKey && selectedKeys.strippedKey && ek.strippedKey === selectedKeys.strippedKey) ||
+                            (ek.strippedNorm && selectedKeys.strippedNorm && ek.strippedNorm === selectedKeys.strippedNorm)
+                        );
+                    });
 
-                    if (enqCustList.includes(targetNorm) && enquiryData.customerDetails) {
+                    if (enqMatch && enquiryData.customerDetails) {
                         console.log('[handleCustomerChange] Using Enquiry Customer Details fallback (possibly inactive)');
                         const details = enquiryData.customerDetails;
-                        const addr = details.Address || [details.Address1, details.Address2].filter(Boolean).join('\n').trim();
+                        const addr =
+                            composeCustomerToAddress(details, selectedName) ||
+                            String(details.Address || '').trim();
                         setToAddress(addr);
                         setToPhone(`${details.Phone1 || ''} ${details.Phone2 ? '/ ' + details.Phone2 : ''} `.trim());
                         setToEmail(details.EmailId || '');
@@ -13137,7 +16020,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     const rootId = String(activeRoot.id);
                     const branchIds = new Set([rootId]);
                     let changed = true;
-                    while (changed) {
+                    let guard = 0;
+                    const maxGuard = Math.max(8, (jobsPool.length || 0) + 4);
+                    while (changed && guard < maxGuard) {
+                        guard += 1;
                         changed = false;
                         jobsPool.forEach(j => {
                             const jId = String(j.id);
@@ -13287,10 +16173,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
      */
     const handleUpdatePricingFromLive = useCallback(async () => {
         if (browsePreviousQuotesRevisionsRef.current) return;
-        // Capture Disc% from the live editor before rebuild so Update Price keeps them.
-        const discountSnapshot = extractAllPricingDiscountStatesFromHtml(
-            getPricingTermsHtmlPreferringLiveEditor(clauseContentRef.current?.pricingTerms)
+        // Capture Disc% + custom VAT from the live editor before rebuild so Update Price keeps them.
+        const livePricingHtml = getPricingTermsHtmlPreferringLiveEditor(
+            clauseContentRef.current?.pricingTerms
         );
+        const discountSnapshot = extractAllPricingDiscountStatesFromHtml(livePricingHtml);
+        const vatSnapshot = extractAllPricingVatStatesFromHtml(livePricingHtml);
         quoteDraftClausesLockedRef.current = false;
         quoteDraftPendingClauseReapplyRef.current = false;
         pricingTermsUserTouchedRef.current = false;
@@ -13324,15 +16212,21 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 forcePricingClauseUpdate: true,
             });
         }
-        // Re-apply captured discounts after async load/calc (in case live DOM was replaced).
-        if (discountSnapshot.length) {
+        // Re-apply captured discounts + VAT after async load/calc (in case live DOM was replaced).
+        if (discountSnapshot.length || vatSnapshot.length) {
             setClauseContent((prev) => {
                 const prevTerms = String(prev?.pricingTerms || '');
-                const nextTerms = applyDiscountBlockToPricingTermsHtml(
-                    prevTerms,
-                    discountSnapshot,
-                    numberToWordsBHD
-                );
+                let nextTerms = prevTerms;
+                if (discountSnapshot.length) {
+                    nextTerms = applyDiscountBlockToPricingTermsHtml(
+                        nextTerms,
+                        discountSnapshot,
+                        numberToWordsBHD
+                    );
+                }
+                if (vatSnapshot.length) {
+                    nextTerms = applyPricingVatStatesToPricingTermsHtml(nextTerms, vatSnapshot);
+                }
                 if (nextTerms === prevTerms) return prev;
                 return { ...prev, pricingTerms: nextTerms };
             });
@@ -13450,7 +16344,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
             // 2. Add All Descendants
             let changed = true;
-            while (changed) {
+            let guard = 0;
+            const maxGuard = Math.max(8, (jobsPool.length || 0) + 4);
+            while (changed && guard < maxGuard) {
+                guard += 1;
                 changed = false;
                 jobsPool.forEach(j => {
                     const jId = j.id || j.ItemID;
@@ -13499,7 +16396,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 if (s) branchIds.add(s);
             });
             let changed = true;
-            while (changed) {
+            let guard = 0;
+            const maxGuard = Math.max(8, (jobsPool.length || 0) + 4);
+            while (changed && guard < maxGuard) {
+                guard += 1;
                 changed = false;
                 jobsPool.forEach((j) => {
                     const jId = String(j.id || j.ItemID || j.ID);
@@ -13636,18 +16536,31 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         // Resolve the actual Lead Job for this branch (Step 825 Fix)
         const actualLeadJob = (() => {
             if (!rootJob) return null;
-            let curr = rootJob;
             const selPrefix = (quotePricingBranchPrefix || enquiryData?.leadJobPrefix || '').toUpperCase();
-            while (curr) {
+            let matched = null;
+            let curr = rootJob;
+            const visited = new Set();
+            let safety = 0;
+            while (curr && safety < 40) {
+                safety += 1;
+                const id = String(curr.id || curr.ItemID || curr.ID || '');
+                if (id) {
+                    if (visited.has(id)) break;
+                    visited.add(id);
+                }
                 const name = (curr.itemName || curr.DivisionName || '').toUpperCase();
                 const code = (curr.leadJobCode || curr.LeadJobCode || '').toUpperCase();
-                // Match the lead job prefix from header
-                if (code === selPrefix || name === selPrefix || (selPrefix && name.startsWith(selPrefix + ' -'))) return curr;
-                // If it's a root job (no parent), it's the lead for its branch
-                if (!curr.parentId || curr.parentId === '0' || curr.parentId === 0) return curr;
+                if (code === selPrefix || name === selPrefix || (selPrefix && name.startsWith(selPrefix + ' -'))) {
+                    matched = curr;
+                    break;
+                }
+                if (!curr.parentId || curr.parentId === '0' || curr.parentId === 0) {
+                    matched = curr;
+                    break;
+                }
                 curr = jobsPool.find(j => String(j.id || j.ItemID) === String(curr.parentId || curr.ParentID));
             }
-            return null;
+            return matched;
         })();
 
         const activeLead = actualLeadJob ? normalizeCust(actualLeadJob.itemName || actualLeadJob.DivisionName) : normalizeCust(branchPrefix);
@@ -13783,13 +16696,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     const isAncestorOfRoot = (() => {
                         if (!rootJobId) return false;
                         if (rootJobId === optLeadId) return true;
-                        let curr = rootJob;
-                        while (curr && (curr.parentId || curr.ParentID)) {
-                            const pid = String(curr.parentId || curr.ParentID);
-                            if (pid === optLeadId) return true;
-                            curr = jobsPool.find(pj => String(pj.id || pj.ItemID) === pid);
-                        }
-                        return false;
+                        return forEachJobAncestor(rootJob, jobsPool, (_job, pid) => pid === String(optLeadId));
                     })();
 
                     if (!isAncestorOfRoot) {
@@ -13822,12 +16729,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 if (activeJob) {
                     const optJob = jobsPool.find(j => normalizeCust(j.itemName || j.DivisionName) === optCust);
                     if (optJob) {
-                        let curr = optJob;
-                        while (curr && (curr.parentId || curr.ParentID)) {
-                            const pid = curr.parentId || curr.ParentID;
-                            if (pid === (activeJob.id || activeJob.ItemID)) return true;
-                            curr = jobsPool.find(j => (j.id || j.ItemID) === pid);
-                        }
+                        const activeId = String(activeJob.id || activeJob.ItemID || '');
+                        if (forEachJobAncestor(optJob, jobsPool, (_job, pid) => pid === activeId)) return true;
                     }
                 }
                 const isExternalCustomer = !jobsPool.some(j => normalizeCust(j.itemName || j.DivisionName) === activeCust);
@@ -13892,13 +16795,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     const optLower = (opt.itemName || '').trim().toLowerCase();
                     if (scopeLower === optLower || scopeLower.includes(optLower) || optLower.includes(scopeLower)) return true;
                     if (optJob) {
-                        let curr = optJob;
-                        while (curr && (curr.parentId || curr.ParentID)) {
-                            const pid = String(curr.parentId || curr.ParentID);
+                        return forEachJobAncestor(optJob, jobsPool, (_job, pid) => {
                             const parent = jobsPool.find(pj => String(pj.id || pj.ItemID) === pid);
-                            if (parent && (parent.itemName || '').trim().toLowerCase() === scopeLower) return true;
-                            curr = parent;
-                        }
+                            return !!(parent && (parent.itemName || '').trim().toLowerCase() === scopeLower);
+                        });
                     }
                     return false;
                 });
@@ -13907,13 +16807,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     const optLower = (opt.itemName || '').trim().toLowerCase();
                     if (scopeLower === optLower || scopeLower.includes(optLower) || optLower.includes(scopeLower)) return true;
                     if (optJob) {
-                        let curr = optJob;
-                        while (curr && (curr.parentId || curr.ParentID)) {
-                            const pid = String(curr.parentId || curr.ParentID);
+                        return forEachJobAncestor(optJob, jobsPool, (_job, pid) => {
                             const parent = jobsPool.find(pj => String(pj.id || pj.ItemID) === pid);
-                            if (parent && (parent.itemName || '').trim().toLowerCase() === scopeLower) return true;
-                            curr = parent;
-                        }
+                            return !!(parent && (parent.itemName || '').trim().toLowerCase() === scopeLower);
+                        });
                     }
                     return false;
                 });
@@ -13986,15 +16883,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         const isStrictParent = (data.access?.editableJobs || []).some(scopeName => {
                             const scopeJob = jobsPool.find(j => normalizeName(j.itemName || j.DivisionName) === normalizeName(scopeName));
                             if (!scopeJob) return false;
-
-                            // Check if job is ancestor of scopeJob
-                            let curr = scopeJob;
-                            while (curr && (curr.parentId || curr.ParentID)) {
-                                const pid = String(curr.parentId || curr.ParentID);
-                                if (pid === String(job.id || job.ItemID)) return true;
-                                curr = jobsPool.find(p => String(p.id || p.ItemID) === pid);
-                            }
-                            return false;
+                            const jobIdStr = String(job.id || job.ItemID || '');
+                            return forEachJobAncestor(scopeJob, jobsPool, (_j, pid) => pid === jobIdStr);
                         });
                         if (isStrictParent) return false;
 
@@ -14098,14 +16988,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     // Default should remain 0 unless explicitly entered for that customer/job.
                     if (price <= 0 && data.allValues && opt.name !== 'Base Price') {
                         const fallbackCandidates = [];
-                        let pId = job.parentId || job.ParentID;
-                        while (pId && pId !== '0' && pId !== 0) {
-                            const pJob = jobsPool.find(j => (j.id || j.ItemID) === pId);
+                        forEachJobAncestor(job, jobsPool, (_j, pid) => {
+                            const pJob = jobsPool.find(j => String(j.id || j.ItemID) === String(pid));
                             if (pJob) {
-                                fallbackCandidates.push((pJob.itemName || pJob.DivisionName).replace(/^(L\d+|Sub Job)\s*-\s*/i, '').trim());
-                                pId = pJob.parentId || pJob.ParentID;
-                            } else break;
-                        }
+                                fallbackCandidates.push(
+                                    (pJob.itemName || pJob.DivisionName || '')
+                                        .replace(/^(L\d+|Sub Job)\s*-\s*/i, '')
+                                        .trim()
+                                );
+                            }
+                        });
                         jobsPool.forEach(j => {
                             const jName = (j.itemName || j.DivisionName || '').replace(/^(L\d+|Sub Job)\s*-\s*/i, '').trim();
                             if (jName && !fallbackCandidates.includes(jName)) fallbackCandidates.push(jName);
@@ -14608,6 +17500,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 pricingTermsFull,
                 numberToWordsBHD
             );
+            // Keep custom VAT % / locked VAT amount across table rebuild.
+            pricingTermsFull = preserveVatOntoPricingTermsHtml(prevPricingTerms, pricingTermsFull);
             const retainedDiscounts = extractAllPricingDiscountStatesFromHtml(pricingTermsFull);
             if (retainedDiscounts.length) {
                 // Discount-aware wording already applied in preserveDiscountsOntoPricingTermsHtml.
@@ -14746,7 +17640,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         let quoteIdQ = '';
         if (embeddedApprovalReview) {
             const qid = String(openContext?.quoteId || quoteId || '').trim();
+            const did = String(openContext?.draftQuoteId || quoteDraftId || '').trim();
             if (qid) quoteIdQ = `&quoteId=${encodeURIComponent(qid)}`;
+            else if (did) quoteIdQ = `&draftQuoteId=${encodeURIComponent(did)}`;
         } else if (listOpenApprovalQuoteIdRef.current) {
             quoteIdQ = `&quoteId=${encodeURIComponent(String(listOpenApprovalQuoteIdRef.current))}`;
         } else if (quoteEffectiveDivisions(quoteListDivision, quoteListDivisions).length) {
@@ -15200,7 +18096,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 embeddedApprovalReview ||
                 (browsePreviousQuotesRevisionsRef.current && quoteRowId(quote) !== undefined)
             ) {
-                // Authoritative steps load from QuoteApprovalSteps when quoteId updates — skip JSON to avoid flicker.
+                // Authoritative steps (+ digital signatures) from QuoteApprovalSteps — always reload for Approvals / browse.
+                queueMicrotask(() => {
+                    void fetchApprovalStepsFromServerRef.current?.(
+                        qRowId !== undefined ? qRowId : undefined
+                    );
+                });
             } else {
                 setApprovalWorkflowSteps(parsedApprovalSteps);
             }
@@ -15224,31 +18125,38 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const skipRecipientFromRow = !!tabAtLoadForRecipient?.isSubJobTab || preserveRecipient;
         // Subjob tab OR preserveRecipient: do not overwrite the **dropdown** (e.g. external lead customer). A4 "To" for
         // subjobs still comes from EnquiryQuotes (`loadedEnquiryQuoteRowForPreview` + `quotePreviewToBlockDisplay`).
+        const recipientToName = String(quote.ToName ?? quote.toname ?? toName ?? '').trim();
+        /* Saved draft / EnquiryQuotes row is authoritative — never overwrite with Master here. */
+        const rowAddress = String(quote.ToAddress ?? quote.toaddress ?? '').trim();
+        const rowPhone = String(quote.ToPhone ?? quote.tophone ?? '').trim();
+        const rowEmail = String(quote.ToEmail ?? quote.toemail ?? '').trim();
+        const rowFax = String(quote.ToFax ?? quote.tofax ?? '').trim();
+
         if (!skipRecipientFromRow) {
-            setToName(String(quote.ToName ?? quote.toname ?? '').trim());
-            setToAddress(String(quote.ToAddress ?? quote.toaddress ?? '').trim());
-            setToPhone(String(quote.ToPhone ?? quote.tophone ?? '').trim());
-            setToEmail(String(quote.ToEmail ?? quote.toemail ?? '').trim());
-            setToFax(String(quote.ToFax ?? quote.tofax ?? '').trim());
+            setToName(recipientToName);
+            setToAddress(rowAddress);
+            setToPhone(rowPhone);
+            setToEmail(rowEmail);
+            setToFax(rowFax);
         } else if (preserveRecipient) {
             // Pending-list / context opens preserve the dropdown customer, but still need address/contact hydration.
             // Fill only missing fields so manual edits are not overridden.
-            const rowAddr = String(quote.ToAddress ?? quote.toaddress ?? '').trim();
-            const rowPhone = String(quote.ToPhone ?? quote.tophone ?? '').trim();
-            const rowEmail = String(quote.ToEmail ?? quote.toemail ?? '').trim();
-            const rowFax = String(quote.ToFax ?? quote.tofax ?? '').trim();
-            if (rowAddr && !String(toAddress || '').trim()) setToAddress(rowAddr);
+            if (rowAddress && !String(toAddress || '').trim()) setToAddress(rowAddress);
             if (rowPhone && !String(toPhone || '').trim()) setToPhone(rowPhone);
             if (rowEmail && !String(toEmail || '').trim()) setToEmail(rowEmail);
             if (rowFax && !String(toFax || '').trim()) setToFax(rowFax);
         }
 
-        /** Draft row: always hydrate recipient contact lines from EnquiryQuotesDraft (dropdown toName unchanged). */
+        /**
+         * Draft row: apply contact only when the draft actually stored values.
+         * Empty draft fields must not wipe Master / pending-list Recipient Info
+         * (that fight re-triggered hydrate and contributed to tab freezes).
+         */
         if (opts.isDraftRow === true) {
-            setToAddress(String(quote.ToAddress ?? quote.toaddress ?? '').trim());
-            setToPhone(String(quote.ToPhone ?? quote.tophone ?? '').trim());
-            setToEmail(String(quote.ToEmail ?? quote.toemail ?? '').trim());
-            setToFax(String(quote.ToFax ?? quote.tofax ?? '').trim());
+            if (rowAddress) setToAddress(rowAddress);
+            if (rowPhone) setToPhone(rowPhone);
+            if (rowEmail) setToEmail(rowEmail);
+            if (rowFax) setToFax(rowFax);
         }
 
         // Do not merge profiles onto a persisted EnquiryQuotes row — that replaced subjob "To" block with parent HVAC profile.
@@ -15324,9 +18232,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             }
         }
 
-        // Clause Visibility + bodies from row (EnquiryQuotes / EnquiryQuotesDraft)
+        // Clause Visibility + bodies from row (EnquiryQuotes / EnquiryQuotesDraft).
+        // Draft open: never flushSync — large PricingTerms/BOQ + sync forceLayout froze the tab
+        // (Page Unresponsive on enquiry 1515 / draft 2688). Approval review still syncs.
         const clauseBundle = applyQuoteClauseBundleFromRow(quote, {
-            sync: opts.isDraftRow === true || embeddedApprovalReview,
+            sync: embeddedApprovalReview === true,
             lockDraftClauses: opts.isDraftRow === true,
             isDraftRow: opts.isDraftRow,
         });
@@ -15380,6 +18290,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         setExpandedClause(null);
         setPendingFiles([]); // Clear any pending files from previous session
         {
+            const orientationsFromDb = parsePageOrientationsFromQuoteRow(quote);
+            const rawOrient = quote?.PageOrientationsJson ?? quote?.pageOrientationsJson;
+            setQuotePageOrientations((prev) => {
+                if (rawOrient === undefined) {
+                    // List rows may omit the column — keep in-memory landscape until a full row loads.
+                    return prev && typeof prev === 'object' ? prev : {};
+                }
+                return orientationsFromDb;
+            });
+        }
+        {
             if (!applySavedDigitalSignatures) {
                 setQuoteDigitalStamps([]);
                 const ctx = stampScopeRef.current;
@@ -15396,10 +18317,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                  */
                 setQuoteDigitalStamps((prev) => {
                     if (stampsFromDb.length > 0) {
-                        return stampsFromDb.map((s) => ({
+                        const locked = stampsFromDb.map((s) => ({
                             ...s,
                             removableBeforeNextCommit: false,
                         }));
+                        const ctx = stampScopeRef.current;
+                        if (ctx?.requestNo) {
+                            saveStampsForEnquiry(ctx.requestNo, locked, ctx.leadKey, ctx.customer);
+                        }
+                        return locked;
                     }
                     if (rawSig === undefined && prev.length > 0) {
                         return prev.map((s) => ({
@@ -16278,6 +19204,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             quoteDraftClausesLockedRef.current = false;
             quoteDraftLoadedRowRef.current = null;
             quoteDraftPendingClauseReapplyRef.current = false;
+            quoteDraftSkipClauseReapplyRef.current = false;
             quoteDraftForceReloadRef.current = true;
             tabStateRegistry.current = {};
             setQuoteDraftReloadNonce((n) => n + 1);
@@ -16577,17 +19504,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         validateMandatoryFields,
     ]);
 
-    // Select enquiry
-    // Trigger fetch when enquiry is loaded
-    useEffect(() => {
-        if (enquiryData?.enquiry?.RequestNo) {
-            console.log('[QuoteForm] Enquiry loaded, fetching quotes for RequestNo:', enquiryData.enquiry.RequestNo);
-            fetchExistingQuotes(enquiryData.enquiry.RequestNo);
-        } else {
-            console.log('[QuoteForm] Enquiry loaded but no RequestNo?', enquiryData);
-        }
-    }, [enquiryData?.enquiry?.RequestNo]); // Only trigger when RequestNo changes
-
     const fetchExistingQuotes = useCallback(async (requestNo) => {
         try {
             console.log('[fetchExistingQuotes] START fetching for:', requestNo);
@@ -16617,6 +19533,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         }
         return null;
     }, [currentUser]);
+
+    // Trigger fetch when enquiry is loaded (skip in Approvals — exact row is loaded separately).
+    useEffect(() => {
+        if (embeddedApprovalReview) return;
+        if (enquiryData?.enquiry?.RequestNo) {
+            void fetchExistingQuotes(enquiryData.enquiry.RequestNo);
+        }
+    }, [embeddedApprovalReview, enquiryData?.enquiry?.RequestNo, fetchExistingQuotes]);
 
     // NEW: Auto-load latest revision for selected customer and lead job
 
@@ -16672,6 +19596,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         quoteDraftClausesLockedRef.current = false;
         quoteDraftLoadedRowRef.current = null;
         quoteDraftPendingClauseReapplyRef.current = false;
+        quoteDraftSkipClauseReapplyRef.current = false;
         setQuoteDraftHydrated(false);
         setQuoteDraftPendingBaselineReset(false);
         resetQuoteDraftDirtyTracking();
@@ -16690,6 +19615,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const hydrateFullEnquiryDataInBackground = (rn, seq, enqRow, listRowOnly) => {
             void (async () => {
                 try {
+                    /* Wait for first preview paint / idle so full hydrate does not contend with pricing+draft. */
+                    await new Promise((resolve) => {
+                        if (typeof window.requestIdleCallback === 'function') {
+                            window.requestIdleCallback(() => resolve(), { timeout: 1500 });
+                        } else {
+                            window.setTimeout(resolve, 500);
+                        }
+                    });
+                    if (seq !== quoteEnquiryLoadSeqRef.current) return;
                     const fullRes = await fetch(buildEnquiryDataFetchUrl(rn), { cache: 'no-store' });
                     if (seq !== quoteEnquiryLoadSeqRef.current || !fullRes.ok) return;
                     const fullData = await fullRes.json();
@@ -16778,6 +19712,40 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                 ? ''
                                 : (prev?.leadJobPrefix ?? fullData.leadJobPrefix),
                     }));
+
+                    // Full hydrate may bring divisionsHierarchy that scope=lead lacked — finish lead id pick.
+                    if (
+                        !listRowOnly &&
+                        !quoteListEnquiryOnlySkipLeadRef.current &&
+                        quoteRowAutoSelectLeadRef.current
+                    ) {
+                        const leadPickLabel = String(
+                            quoteRowFirstLeadDivisionFullRef.current ||
+                                fullData.leadJobPrefix ||
+                                ''
+                        ).trim();
+                        if (
+                            leadPickLabel &&
+                            Array.isArray(fullData.divisionsHierarchy) &&
+                            fullData.divisionsHierarchy.length > 0
+                        ) {
+                            const rootPick = resolvePricingRootForLeadSelect(
+                                leadPickLabel,
+                                [],
+                                fullData.divisionsHierarchy
+                            );
+                            const rootId = rootPick?.id ?? rootPick?.ItemID;
+                            if (rootId != null && String(rootId).trim() !== '') {
+                                setSelectedLeadId(rootId);
+                                quoteRowAutoSelectLeadRef.current = false;
+                                quoteRowSyncDropdownCustomerRef.current = true;
+                            }
+                        }
+                        if (quoteRowAutoSelectLeadRef.current) {
+                            pendingPricingBootstrapRef.current =
+                                pendingPricingBootstrapRef.current || {};
+                        }
+                    }
 
                     const extendedSignatoryOptions = [
                         ...usersList.map((u) => ({ value: u.FullName, label: u.FullName, designation: u.Designation })),
@@ -17000,14 +19968,67 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             leadFromDivision;
                         console.log('[QuoteForm] Auto-selecting lead from Division dropdown:', data.leadJobPrefix, selectedDivisionTrim);
                     } else if (selectedDivisionTrim) {
-                        data.leadJobPrefix = '';
-                        firstLeadDivisionFull = '';
-                        console.log(
-                            '[QuoteForm] Division not on enquiry — no lead job:',
-                            selectedDivisionTrim,
-                            'divisions:',
-                            data.divisions
-                        );
+                        // Division toolbar is set but L-code walk failed — still bind the matching root by name
+                        // (e.g. "IFM Civil Maint") instead of wiping leadJobPrefix (that left Customer disabled).
+                        const cleanDiv = (s) =>
+                            String(s || '')
+                                .replace(/^(L\d+|Sub Job)\s*-\s*/i, '')
+                                .trim()
+                                .toLowerCase();
+                        const nameHit =
+                            availableDivisions.find((d) => cleanDiv(d) === selectedDivisionNorm) ||
+                            hierarchyRows.find((n) => {
+                                const nm = cleanDiv(n?.itemName || n?.ItemName || n?.DivisionName || '');
+                                const dept = String(n?.departmentName || n?.DepartmentName || '')
+                                    .trim()
+                                    .toLowerCase();
+                                return (nm && nm === selectedDivisionNorm) || (dept && dept === selectedDivisionNorm);
+                            });
+                        if (nameHit) {
+                            const label =
+                                typeof nameHit === 'string'
+                                    ? String(nameHit).trim()
+                                    : String(
+                                          nameHit.itemName ||
+                                              nameHit.ItemName ||
+                                              nameHit.DivisionName ||
+                                              selectedDivisionTrim
+                                      ).trim();
+                            firstLeadDivisionFull = label;
+                            const codeFromNode =
+                                typeof nameHit === 'string'
+                                    ? ''
+                                    : extractLCodeUpperFromJobOrNode(nameHit) ||
+                                      findRootLeadCode(nameHit);
+                            data.leadJobPrefix = codeFromNode || label;
+                            console.log(
+                                '[QuoteForm] Auto-selecting lead by Division name match:',
+                                data.leadJobPrefix,
+                                label
+                            );
+                        } else if (sortedLeadJobs.length >= 1) {
+                            firstLeadDivisionFull = String(sortedLeadJobs[0]).trim();
+                            data.leadJobPrefix = firstLeadDivisionFull.split('-')[0].trim();
+                            console.log(
+                                '[QuoteForm] Division unmatched — falling back to first Lead Job:',
+                                data.leadJobPrefix
+                            );
+                        } else if (String(data.leadJobPrefix || '').trim()) {
+                            firstLeadDivisionFull = String(data.leadJobPrefix).trim();
+                            console.log(
+                                '[QuoteForm] Keeping server leadJobPrefix:',
+                                data.leadJobPrefix
+                            );
+                        } else {
+                            data.leadJobPrefix = '';
+                            firstLeadDivisionFull = '';
+                            console.log(
+                                '[QuoteForm] Division not on enquiry — no lead job:',
+                                selectedDivisionTrim,
+                                'divisions:',
+                                data.divisions
+                            );
+                        }
                     } else if (sortedLeadJobs.length >= 1) {
                         firstLeadDivisionFull = String(sortedLeadJobs[0]).trim();
                         data.leadJobPrefix = firstLeadDivisionFull.split('-')[0].trim();
@@ -17063,20 +20084,59 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 setSignatoryOptions(uniqueSigOptions);
 
                 if (!enquiryOnlyFromList) {
-                    quoteRowFirstLeadDivisionFullRef.current = firstLeadDivisionFull;
-                    quoteRowAutoSelectLeadRef.current = false;
                     quoteRowDivisionLeadLockRef.current = false;
                     const leadPickLabel = String(firstLeadDivisionFull || data.leadJobPrefix || '').trim();
-                    if (leadPickLabel && Array.isArray(data.divisionsHierarchy) && data.divisionsHierarchy.length > 0) {
-                        const rootPick = resolvePricingRootForLeadSelect(
-                            leadPickLabel,
-                            [],
-                            data.divisionsHierarchy
+                    quoteRowFirstLeadDivisionFullRef.current = firstLeadDivisionFull || leadPickLabel;
+
+                    const tryResolveLeadId = (label) => {
+                        const raw = String(label || '').trim();
+                        if (!raw) return null;
+                        const hier = Array.isArray(data.divisionsHierarchy) ? data.divisionsHierarchy : [];
+                        const rootPick = resolvePricingRootForLeadSelect(raw, [], hier);
+                        let rootId = rootPick?.id ?? rootPick?.ItemID;
+                        if (rootId != null && String(rootId).trim() !== '') return rootId;
+                        // Bare L-code or clean name: first matching hierarchy root
+                        const wantL = (raw.match(/^(L\d+)/i) || [])[1]?.toUpperCase() || '';
+                        const clean = (s) =>
+                            String(s || '')
+                                .replace(/^(L\d+|Sub Job)\s*-\s*/i, '')
+                                .trim()
+                                .toLowerCase();
+                        const roots = hier.filter((d) => {
+                            const pid = d.parentId ?? d.ParentID;
+                            return !pid || pid === '0' || pid === 0;
+                        });
+                        const byCode = wantL
+                            ? roots.find((d) => extractLCodeUpperFromJobOrNode(d) === wantL)
+                            : null;
+                        const byName = roots.find((d) => clean(d.itemName || d.DivisionName) === clean(raw));
+                        const hit = byCode || byName || (roots.length === 1 ? roots[0] : null);
+                        rootId = hit?.id ?? hit?.ItemID;
+                        return rootId != null && String(rootId).trim() !== '' ? rootId : null;
+                    };
+
+                    const resolvedLeadId =
+                        tryResolveLeadId(leadPickLabel) ||
+                        tryResolveLeadId(data.leadJobPrefix) ||
+                        tryResolveLeadId(firstLeadDivisionFull) ||
+                        tryResolveLeadId(String(quoteListDivision || '').trim());
+
+                    if (resolvedLeadId != null) {
+                        setSelectedLeadId(resolvedLeadId);
+                        quoteRowAutoSelectLeadRef.current = false;
+                        quoteRowSyncDropdownCustomerRef.current = true;
+                        quoteRowAwaitingLeadForCustomerRef.current = true;
+                        console.log('[QuoteForm] Enter/Search set selectedLeadId=', resolvedLeadId);
+                    } else if (leadPickLabel) {
+                        quoteRowAutoSelectLeadRef.current = true;
+                        pendingPricingBootstrapRef.current = pendingPricingBootstrapRef.current || {};
+                        quoteRowAwaitingLeadForCustomerRef.current = true;
+                        console.log(
+                            '[QuoteForm] Lead label set but id pending pricing bootstrap:',
+                            leadPickLabel
                         );
-                        const rootId = rootPick?.id ?? rootPick?.ItemID;
-                        if (rootId != null && String(rootId).trim() !== '') {
-                            setSelectedLeadId(rootId);
-                        }
+                    } else {
+                        quoteRowAutoSelectLeadRef.current = false;
                     }
                 }
 
@@ -17099,7 +20159,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     setToName(toNameForLoad);
                     // Pending-list auto-open sets ToName directly (bypasses handleCustomerChange).
                     // Mirror manual customer-selection hydration for To-address/contact block.
-                    const hintKey = normalizeCustomerDisplayKey(toNameForLoad);
                     const isInternalRecipient = internalNamesNorm.has(hintNorm) && !!hintStripped;
 
                     // --- INTERNAL CUSTOMER: address/phone/fax/email come from Master_EnquiryFor ---
@@ -17135,28 +20194,18 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     }
 
                     if (!internalProfileApplied) {
-                        const matchedCustomer =
-                            (customersList || []).find((c) => {
-                                const nm = String(c?.CompanyName || '').trim();
-                                if (!nm) return false;
-                                const nNorm = normalize(nm);
-                                const nKey = normalizeCustomerDisplayKey(nm);
-                                return (
-                                    nNorm === hintNorm ||
-                                    nKey === hintKey ||
-                                    (nNorm && hintNorm && (nNorm.includes(hintNorm) || hintNorm.includes(nNorm)))
-                                );
-                            }) || null;
+                        const matchedCustomer = resolveMasterCustomerRecipient(customersList, toNameForLoad);
 
                         if (matchedCustomer) {
-                            const addr = [matchedCustomer.Address1, matchedCustomer.Address2].filter(Boolean).join('\n').trim();
-                            setToAddress(addr);
-                            setToPhone(`${matchedCustomer.Phone1 || ''} ${matchedCustomer.Phone2 ? '/ ' + matchedCustomer.Phone2 : ''} `.trim());
-                            setToEmail(matchedCustomer.EmailId || '');
-                            setToFax(matchedCustomer.FaxNo || '');
+                            setToAddress(matchedCustomer.address);
+                            setToPhone(matchedCustomer.phone);
+                            setToEmail(matchedCustomer.email);
+                            setToFax(matchedCustomer.fax);
                         } else if (data?.customerDetails) {
                             const details = data.customerDetails;
-                            const addr = details.Address || [details.Address1, details.Address2].filter(Boolean).join('\n').trim();
+                            const addr =
+                                composeCustomerToAddress(details, toNameForLoad) ||
+                                String(details.Address || '').trim();
                             setToAddress(addr);
                             setToPhone(`${details.Phone1 || ''} ${details.Phone2 ? '/ ' + details.Phone2 : ''} `.trim());
                             setToEmail(details.EmailId || '');
@@ -17177,11 +20226,32 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 setEnquiryData({ ...data });
                 setCustomerReference(resolveEnquiryCustomerRef(data.enquiry));
 
+                // Ensure pricing jobs load so deferred lead-id pick / customer list can complete after Enter.
+                // Prefer known ToName so we skip an empty-customer pricing round-trip (major Enter lag).
+                if (
+                    !enquiryOnlyFromList &&
+                    !embeddedApprovalReview &&
+                    String(data.leadJobPrefix || firstLeadDivisionFull || '').trim()
+                ) {
+                    pendingPricingBootstrapRef.current = pendingPricingBootstrapRef.current || {};
+                    const pricingCustomerHint = String(pendingListCustomerHint || '').trim();
+                    queueMicrotask(() => {
+                        try {
+                            void loadPricingData(requestNo, pricingCustomerHint);
+                        } catch (e) {
+                            console.warn('[QuoteForm] post-Enter pricing bootstrap', e);
+                        }
+                    });
+                }
+
                 if (data.scope === 'lead') {
                     if (loadSeq === quoteEnquiryLoadSeqRef.current) {
                         setEnquiryLeadLoading(false);
                     }
-                    hydrateFullEnquiryDataInBackground(requestNo, loadSeq, enq, enquiryOnlyFromList);
+                    // Approvals only needs lead-scoped data for preview; skip heavy full hydrate.
+                    if (!embeddedApprovalReview && !options?.skipFullHydrate) {
+                        hydrateFullEnquiryDataInBackground(requestNo, loadSeq, enq, enquiryOnlyFromList);
+                    }
                 }
 
                 // "To" customer: pending-list rows set ListQuoteDetailToName / ListPendingCustomerName above so the first
@@ -17194,6 +20264,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 const divisionToolbarOnLoad = String(quoteListDivision || '').trim();
                 if (res.status === 404) {
                     setEnquiryDivisionScopeNotice(`Enquiry ${requestNo} was not found.`);
+                } else if (res.status === 403 && embeddedApprovalReview) {
+                    setEnquiryDivisionScopeNotice(
+                        'You do not have access to load this enquiry for approval preview. Ask an admin to check approval assignment.'
+                    );
                 } else if (res.status === 403 && divisionToolbarOnLoad) {
                     setEnquiryDivisionScopeNotice(QUOTE_DIVISION_SCOPE_NOTICE);
                 } else {
@@ -17231,16 +20305,59 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         ].join('::');
         if (handledQuoteOpenContextKeyRef.current === targetKey) return;
         handledQuoteOpenContextKeyRef.current = targetKey;
+        const openQuoteId = String(openContext.quoteId || '').trim();
+        const openQuoteNumber = String(openContext.quoteNumber || '').trim();
         pendingQuoteOpenTargetRef.current = {
             requestNo,
-            quoteId: String(openContext.quoteId || '').trim(),
-            quoteNumber: String(openContext.quoteNumber || '').trim(),
+            quoteId: openQuoteId,
+            quoteNumber: openQuoteNumber,
         };
         (async () => {
-            const ok = await handleSelectEnquiry({ RequestNo: requestNo, ProjectName: '' });
-            if (ok) setBrowsePreviousQuotesRevisions(true);
+            const email = normalizeDraftUserEmailForApi(currentUser?.EmailId || currentUser?.email || '');
+            const fetchOpenRow = async () => {
+                if (!email) return null;
+                if (openQuoteId) {
+                    const singleParams = new URLSearchParams({ userEmail: email });
+                    const res = await fetch(
+                        `${API_BASE}/api/quotes/single/${encodeURIComponent(openQuoteId)}?${singleParams.toString()}`,
+                        { cache: 'no-store' }
+                    );
+                    if (res.ok) return await res.json();
+                }
+                if (openQuoteNumber) {
+                    const params = new URLSearchParams({
+                        requestNo,
+                        quoteNumber: openQuoteNumber,
+                        userEmail: email,
+                    });
+                    const byRefRes = await fetch(
+                        `${API_BASE}/api/quotes/by-quote-number?${params.toString()}`,
+                        { cache: 'no-store' }
+                    );
+                    if (byRefRes.ok) return await byRefRes.json();
+                }
+                return null;
+            };
+            // Parallel: enquiry lead + exact quote row when deep-link ids exist.
+            const [ok, row] = await Promise.all([
+                handleSelectEnquiry({ RequestNo: requestNo, ProjectName: '' }),
+                fetchOpenRow(),
+            ]);
+            if (!ok) return;
+            setBrowsePreviousQuotesRevisions(true);
+            if (row) {
+                pendingQuoteOpenTargetRef.current = null;
+                const resolvedId = quoteRowId(row);
+                if (resolvedId) setQuoteId(resolvedId);
+                setQuoteNumber(String(row.QuoteNumber || row.quoteNumber || openQuoteNumber || '').trim());
+                loadQuote(row, {
+                    preserveRecipient: true,
+                    skipPreparedSignatory: true,
+                    applySavedDigitalSignatures: true,
+                });
+            }
         })();
-    }, [openContext]);
+    }, [openContext, currentUser]);
     useEffect(() => {
         const target = pendingQuoteOpenTargetRef.current;
         if (!target) return;
@@ -17306,100 +20423,116 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         markDraftHydrateSkipAutoLoad();
         setApprovalRequestSent(false);
         setLoadedEnquiryQuoteRowForPreview(null);
+        setEnquiryLeadLoading(true);
+        setShowQuoteListSummaryOverQuote(false);
 
         let cancelled = false;
-        (async () => {
-            const ok = await handleSelectEnquiry({ RequestNo: requestNo, ProjectName: '' });
-            if (!ok || cancelled) return;
-            browsePreviousQuotesRevisionsRef.current = true;
-            setBrowsePreviousQuotesRevisions(true);
-            const email = normalizeDraftUserEmailForApi(currentUser?.EmailId || currentUser?.email || '');
-            if (!email) return;
+        let finished = false;
 
+        const fetchApprovalQuoteRow = async (email) => {
+            // Prefer id endpoints first (list already resolved them) — skip extra by-quote-number RTT.
+            if (draftIdCtx && !quoteIdCtx) {
+                const params = new URLSearchParams({
+                    userEmail: email,
+                    draftQuoteId: draftIdCtx,
+                });
+                const draftRes = await fetch(
+                    `${API_BASE}/api/quotes/quote-drafts/for-approval?${params.toString()}`,
+                    { cache: 'no-store' }
+                );
+                if (!draftRes.ok) return null;
+                return { row: await draftRes.json(), isDraft: true };
+            }
+            if (quoteIdCtx) {
+                const singleParams = new URLSearchParams({ userEmail: email });
+                const res = await fetch(
+                    `${API_BASE}/api/quotes/single/${encodeURIComponent(quoteIdCtx)}?${singleParams.toString()}`,
+                    { cache: 'no-store' }
+                );
+                if (res.ok) return { row: await res.json(), isDraft: false };
+            }
+            if (quoteNumberCtx) {
+                const params = new URLSearchParams({
+                    requestNo,
+                    quoteNumber: quoteNumberCtx,
+                    userEmail: email,
+                });
+                const byRefRes = await fetch(
+                    `${API_BASE}/api/quotes/by-quote-number?${params.toString()}`,
+                    { cache: 'no-store' }
+                );
+                if (byRefRes.ok) return { row: await byRefRes.json(), isDraft: false };
+            }
+            return null;
+        };
+
+        (async () => {
+            const email = normalizeDraftUserEmailForApi(currentUser?.EmailId || currentUser?.email || '');
+            if (!email) {
+                if (!cancelled) setEnquiryLeadLoading(false);
+                return;
+            }
             try {
-                // Draft-based pending approval
-                if (draftIdCtx && !quoteIdCtx) {
-                    setQuoteDraftId(Number(draftIdCtx));
-                    setQuoteId(null);
-                    const params = new URLSearchParams({
-                        userEmail: email,
-                        draftQuoteId: draftIdCtx,
-                    });
-                    const draftRes = await fetch(
-                        `${API_BASE}/api/quotes/quote-drafts/for-approval?${params.toString()}`,
-                        { cache: 'no-store' }
-                    );
-                    if (!draftRes.ok || cancelled) return;
-                    const row = await draftRes.json();
-                    const leadJobLabel = String(
-                        openContext?.leadJobName || row.LeadJob || row.leadJob || ''
-                    ).trim();
-                    if (leadJobLabel) embeddedApprovalLeadJobRef.current = leadJobLabel;
-                    setQuoteNumber(String(row.QuoteNumber || row.quoteNumber || quoteNumberCtx || '').trim());
-                    loadQuote(row, {
-                        skipPreparedSignatory: true,
-                        applySavedDigitalSignatures: true,
-                        preserveRecipient: true,
-                        isDraftRow: true,
-                    });
-                    const customer = String(
-                        openContext?.customerName || row.ToName || row.toname || ''
-                    ).trim();
-                    if (customer) setToName(customer);
-                    setHasUserPricing(true);
-                    setApprovalRequestSent(true);
+                // Parallel: lead enquiry-data + exact quote/draft row (saves one RTT).
+                const [ok, pack] = await Promise.all([
+                    handleSelectEnquiry(
+                        { RequestNo: requestNo, ProjectName: '' },
+                        { skipFullHydrate: true }
+                    ),
+                    fetchApprovalQuoteRow(email),
+                ]);
+                if (!ok || cancelled) {
+                    if (!cancelled) setEnquiryLeadLoading(false);
+                    return;
+                }
+                if (!pack?.row) {
+                    if (!cancelled) setEnquiryLeadLoading(false);
                     return;
                 }
 
-                setQuoteDraftId(null);
-                let row = null;
-                if (quoteNumberCtx) {
-                    const params = new URLSearchParams({
-                        requestNo,
-                        quoteNumber: quoteNumberCtx,
-                        userEmail: email,
-                    });
-                    const byRefRes = await fetch(
-                        `${API_BASE}/api/quotes/by-quote-number?${params.toString()}`,
-                        { cache: 'no-store' }
-                    );
-                    if (byRefRes.ok) {
-                        row = await byRefRes.json();
-                    }
+                const { row, isDraft } = pack;
+                if (isDraft) {
+                    setQuoteDraftId(Number(draftIdCtx));
+                    setQuoteId(null);
+                } else {
+                    setQuoteDraftId(null);
+                    const resolvedQuoteId = quoteRowId(row) ?? (quoteIdCtx ? Number(quoteIdCtx) : null);
+                    if (resolvedQuoteId) setQuoteId(resolvedQuoteId);
                 }
-                if (!row && quoteIdCtx) {
-                    const singleParams = new URLSearchParams({ userEmail: email });
-                    const res = await fetch(
-                        `${API_BASE}/api/quotes/single/${encodeURIComponent(quoteIdCtx)}?${singleParams.toString()}`,
-                        { cache: 'no-store' }
-                    );
-                    if (res.ok) row = await res.json();
-                }
-                if (!row || cancelled) return;
+
+                browsePreviousQuotesRevisionsRef.current = true;
+                setBrowsePreviousQuotesRevisions(true);
 
                 const leadJobLabel = String(
                     openContext?.leadJobName || row.LeadJob || row.leadJob || ''
                 ).trim();
                 if (leadJobLabel) embeddedApprovalLeadJobRef.current = leadJobLabel;
-                const resolvedQuoteId = quoteRowId(row) ?? (quoteIdCtx ? Number(quoteIdCtx) : null);
-                if (resolvedQuoteId) setQuoteId(resolvedQuoteId);
                 setQuoteNumber(String(row.QuoteNumber || row.quoteNumber || quoteNumberCtx || '').trim());
                 loadQuote(row, {
                     skipPreparedSignatory: true,
                     applySavedDigitalSignatures: true,
                     preserveRecipient: true,
+                    isDraftRow: isDraft,
                 });
                 const customer = String(
                     openContext?.customerName || row.ToName || row.toname || ''
                 ).trim();
                 if (customer) setToName(customer);
                 setHasUserPricing(true);
+                setApprovalRequestSent(true);
+                finished = true;
             } catch (e) {
                 console.warn('[QuoteForm] embedded approval quote load', e);
+            } finally {
+                if (!cancelled) setEnquiryLeadLoading(false);
             }
         })();
         return () => {
             cancelled = true;
+            // Strict Mode / dep change: allow the effect to run again if load never finished.
+            if (!finished && handledQuoteOpenContextKeyRef.current === targetKey) {
+                handledQuoteOpenContextKeyRef.current = '';
+            }
         };
     }, [embeddedApprovalReview, openContext, currentUser]);
 
@@ -17907,6 +21040,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     );
 
     const quoteListSummaryBody = React.useMemo(() => {
+        if (embeddedApprovalReview) return null;
         if (quoteSearchLoading || (quoteListCategory === QUOTE_LIST_CATEGORY.PENDING && pendingQuotesLoading)) {
             return (
                 <div
@@ -18019,7 +21153,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 }}
             />
         );
-    }, [quoteListDisplayRows, quoteListCategory, handleSelectEnquiry, quoteSearchLoading, quoteSearchError, pendingQuotesLoading]);
+    }, [embeddedApprovalReview, quoteListDisplayRows, quoteListCategory, handleSelectEnquiry, quoteSearchLoading, quoteSearchError, pendingQuotesLoading]);
 
     // --- Attachment Functions ---
     const quoteAttachmentAuthParams = useCallback(() => {
@@ -18073,50 +21207,46 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     const canViewQuotePrivateAttachment = useCallback(
         (att) => {
-            const visibility = String(att?.Visibility || 'Public').trim();
+            // Uploaded files: server already enforced Private rules — trust the list.
+            if (att?.ID != null || att?.id != null) return true;
+            // Pending (not uploaded): only show to Admin; others see after server accepts upload.
+            const visibility = String(att?.Visibility || att?.visibility || 'Public').trim();
             if (visibility.toLowerCase() !== 'private') return true;
-            const isAdmin = String(currentUser?.role || currentUser?.Roles || '')
-                .toLowerCase()
-                .includes('admin');
-            if (isAdmin) return true;
-            const userDeptCsv = currentUser?.Department || currentUser?.Division || quoteListDivision || '';
-            const fileDivision = String(att?.Division || '').trim();
-            const uploader = String(att?.UploadedBy || '').trim().toLowerCase();
-            const me = String(
-                currentUser?.FullName || currentUser?.name || currentUser?.UserName || ''
-            )
-                .trim()
-                .toLowerCase();
-            const isOwnFile = Boolean(uploader && me && uploader === me);
-            if (fileDivision && userDeptCsv) {
-                if (userHasDepartment(userDeptCsv, fileDivision) || isOwnFile) return true;
-                return false;
-            }
-            return isOwnFile;
+            const rolesStr = String(currentUser?.role || currentUser?.Roles || '').toLowerCase();
+            return rolesStr.includes('admin') || rolesStr.includes('system');
         },
-        [
-            currentUser?.role,
-            currentUser?.Roles,
-            currentUser?.Department,
-            currentUser?.Division,
-            currentUser?.FullName,
-            currentUser?.name,
-            currentUser?.UserName,
-            quoteListDivision,
-        ]
+        [currentUser?.role, currentUser?.Roles]
     );
 
     const fetchQuoteAttachments = useCallback(async (qId, { draft = false } = {}) => {
         if (!qId) return;
+        const seq = ++attachmentsFetchSeqRef.current;
+        const ownerKey = `${draft ? 'd' : 'q'}:${qId}`;
         try {
             const qs = quoteAttachmentAuthParams().toString();
             const base = draft
                 ? `${API_BASE}/api/quotes/attachments/draft/${qId}`
                 : `${API_BASE}/api/quotes/attachments/${qId}`;
             const url = qs ? `${base}?${qs}` : base;
-            const res = await fetch(url);
+            const res = await fetch(url, { cache: 'no-store' });
+            if (seq !== attachmentsFetchSeqRef.current) return;
             if (res.ok) {
-                const data = await res.json();
+                const fetched = await res.json();
+                if (seq !== attachmentsFetchSeqRef.current) return;
+                const now = Date.now();
+                recentUploadedAttachmentsRef.current = recentUploadedAttachmentsRef.current.filter(
+                    (r) => now - r.at < 120000
+                );
+                const deleted = recentlyDeletedAttachmentIdsRef.current;
+                for (const [id, at] of deleted) {
+                    if (now - at >= 120000) deleted.delete(id);
+                }
+                const list = (Array.isArray(fetched) ? fetched : []).filter((a) => !deleted.has(String(a.ID)));
+                const serverIds = new Set(list.map((a) => String(a.ID)));
+                const missingRecent = recentUploadedAttachmentsRef.current
+                    .filter((r) => r.ownerKey === ownerKey && !serverIds.has(String(r.row.ID)))
+                    .map((r) => r.row);
+                const data = missingRecent.length ? [...missingRecent, ...list] : list;
                 setQuoteAttachments((prev) => {
                     try {
                         if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
@@ -18179,18 +21309,51 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const { userName, division } = quoteAttachmentUploaderMeta();
         const authQs = quoteAttachmentAuthParams();
 
+        const inFlight = inFlightAttachmentKeysRef.current;
+        let toUpload = items.filter((it) => !inFlight.has(attachmentDedupeKey(it.name, it.visibility)));
+        if (!explicitTarget) {
+            const alreadyAttached = toUpload.filter((it) =>
+                (quoteAttachmentsRef.current || []).some(
+                    (a) =>
+                        attachmentDedupeKey(a.FileName, a.Visibility) ===
+                        attachmentDedupeKey(it.name, it.visibility)
+                )
+            );
+            if (
+                alreadyAttached.length > 0 &&
+                !window.confirm(
+                    `Already attached:\n${alreadyAttached.map((it) => it.name).join('\n')}\n\nUpload again?`
+                )
+            ) {
+                const skip = new Set(alreadyAttached);
+                toUpload = toUpload.filter((it) => !skip.has(it));
+            }
+        }
+        if (!toUpload.length) return;
+
+        const batch = toUpload.map((it) => ({
+            ...it,
+            tempId: `u-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            key: attachmentDedupeKey(it.name, it.visibility),
+        }));
+        batch.forEach((b) => inFlight.add(b.key));
+        setUploadingAttachments((prev) => [
+            ...prev,
+            ...batch.map((b) => ({ tempId: b.tempId, name: b.name, visibility: b.visibility, progress: 0 })),
+        ]);
+
         setIsUploading(true);
         try {
             const groups = new Map();
-            for (const it of items) {
-                const vis = it.visibility === 'Private' ? 'Private' : 'Public';
+            for (const b of batch) {
+                const vis = b.visibility === 'Private' ? 'Private' : 'Public';
                 if (!groups.has(vis)) groups.set(vis, []);
-                groups.get(vis).push(it.file);
+                groups.get(vis).push(b);
             }
 
-            for (const [vis, fileList] of groups.entries()) {
+            for (const [vis, groupItems] of groups.entries()) {
                 const formData = new FormData();
-                fileList.forEach((file) => formData.append('files', file));
+                groupItems.forEach((b) => formData.append('files', b.file));
                 const qs = new URLSearchParams(authQs);
                 qs.set('visibility', vis);
                 qs.set('division', division);
@@ -18198,18 +21361,44 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 const base = uploadAsDraft
                     ? `${API_BASE}/api/quotes/attachments/draft/${uploadId}`
                     : `${API_BASE}/api/quotes/attachments/${uploadId}`;
-                const res = await fetch(`${base}?${qs.toString()}`, {
-                    method: 'POST',
-                    body: formData,
+                const groupTempIds = new Set(groupItems.map((b) => b.tempId));
+                const res = await postAttachmentFormWithProgress(`${base}?${qs.toString()}`, formData, (pct) => {
+                    setUploadingAttachments((prev) =>
+                        prev.map((u) => (groupTempIds.has(u.tempId) ? { ...u, progress: pct } : u))
+                    );
                 });
                 if (!res.ok) {
-                    const err = await res.json().catch(() => ({}));
-                    alert('Failed to upload attachments: ' + (err.error || 'Unknown error'));
+                    alert('Failed to upload attachments: ' + (res.body?.error || 'Unknown error'));
                     return;
                 }
+                const nowIso = new Date().toISOString();
+                const newRows = (Array.isArray(res.body?.files) ? res.body.files : [])
+                    .filter((f) => f?.id != null)
+                    .map((f) => ({
+                        ID: f.id,
+                        FileName: f.fileName,
+                        UploadedAt: nowIso,
+                        Visibility: f.visibility || vis,
+                        UploadedBy: f.uploadedBy || null,
+                        Division: f.division || division,
+                    }));
+                if (newRows.length) {
+                    const ownerKey = `${uploadAsDraft ? 'd' : 'q'}:${uploadId}`;
+                    const at = Date.now();
+                    recentUploadedAttachmentsRef.current = [
+                        ...recentUploadedAttachmentsRef.current,
+                        ...newRows.map((row) => ({ ownerKey, row, at })),
+                    ];
+                    const newIds = new Set(newRows.map((r) => String(r.ID)));
+                    setQuoteAttachments((prev) => [
+                        ...newRows,
+                        ...(prev || []).filter((a) => !newIds.has(String(a.ID))),
+                    ]);
+                }
+                setUploadingAttachments((prev) => prev.filter((u) => !groupTempIds.has(u.tempId)));
             }
 
-            await fetchQuoteAttachments(uploadId, { draft: uploadAsDraft });
+            void fetchQuoteAttachments(uploadId, { draft: uploadAsDraft });
             setPendingFiles((prev) =>
                 prev.filter(
                     (p) =>
@@ -18224,6 +21413,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             console.error('Upload error:', err);
             alert('Error uploading files. Please try again or check the server status.');
         } finally {
+            batch.forEach((b) => inFlight.delete(b.key));
+            const batchTempIds = new Set(batch.map((b) => b.tempId));
+            setUploadingAttachments((prev) => prev.filter((u) => !batchTempIds.has(u.tempId)));
             setIsUploading(false);
         }
     }, [
@@ -18246,23 +21438,48 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             return;
         }
         if (!window.confirm('Delete this attachment?')) return;
+
+        const idKey = String(attachmentId);
+        const removedRow = (quoteAttachmentsRef.current || []).find((a) => String(a.ID) === idKey) || null;
+        const removedRecents = recentUploadedAttachmentsRef.current.filter((r) => String(r.row.ID) === idKey);
+        recentlyDeletedAttachmentIdsRef.current.set(idKey, Date.now());
+        recentUploadedAttachmentsRef.current = recentUploadedAttachmentsRef.current.filter(
+            (r) => String(r.row.ID) !== idKey
+        );
+        setQuoteAttachments((prev) => prev.filter((a) => String(a.ID) !== idKey));
+
+        const restore = (message) => {
+            recentlyDeletedAttachmentIdsRef.current.delete(idKey);
+            recentUploadedAttachmentsRef.current = [...recentUploadedAttachmentsRef.current, ...removedRecents];
+            if (removedRow) {
+                setQuoteAttachments((prev) => {
+                    if (prev.some((a) => String(a.ID) === idKey)) return prev;
+                    return [...prev, removedRow].sort(
+                        (a, b) => (Date.parse(b.UploadedAt || 0) || 0) - (Date.parse(a.UploadedAt || 0) || 0)
+                    );
+                });
+            }
+            alert(message);
+        };
+
         try {
             const qs = quoteAttachmentAuthParams().toString();
             const url = qs
                 ? `${API_BASE}/api/quotes/attachments/${attachmentId}?${qs}`
                 : `${API_BASE}/api/quotes/attachments/${attachmentId}`;
             const res = await fetch(url, { method: 'DELETE' });
-            if (res.ok) {
-                setQuoteAttachments((prev) => prev.filter((a) => a.ID !== attachmentId));
-            } else if (res.status === 403) {
+            if (!res.ok) {
                 const err = await res.json().catch(() => ({}));
-                alert(
+                restore(
                     err.error ||
-                        'You do not have permission to delete this attachment.'
+                        (res.status === 403
+                            ? 'You do not have permission to delete this attachment.'
+                            : 'Failed to delete attachment. Please try again.')
                 );
             }
         } catch (err) {
             console.error('Error deleting attachment:', err);
+            restore('Failed to delete attachment. Please check your connection and try again.');
         }
     };
 
@@ -18284,8 +21501,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (vis === 'Private' && !canViewQuotePrivateAttachment(a)) return false;
             return true;
         });
+        const filteredUploading = uploadingAttachments.filter((u) => u.visibility === vis);
 
-        if (filteredPending.length === 0 && filteredUploaded.length === 0) {
+        if (filteredPending.length === 0 && filteredUploaded.length === 0 && filteredUploading.length === 0) {
             return (
                 <div
                     style={{
@@ -18307,6 +21525,89 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         return (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+                {filteredUploading.map((u) => (
+                    <div
+                        key={u.tempId}
+                        className="attachment-card"
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '8px 12px',
+                            background: '#eff6ff',
+                            border: '1px dashed #3b82f6',
+                            borderRadius: '6px',
+                            width: '100%',
+                            maxWidth: '240px',
+                            minWidth: 0,
+                            boxSizing: 'border-box',
+                            boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                            position: 'relative',
+                        }}
+                    >
+                        <div
+                            style={{
+                                width: '32px',
+                                height: '32px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                background: '#dbeafe',
+                                borderRadius: '4px',
+                                color: '#3b82f6',
+                                flexShrink: 0,
+                            }}
+                        >
+                            <div
+                                className="animate-spin"
+                                style={{
+                                    width: '14px',
+                                    height: '14px',
+                                    border: '2px solid #3b82f6',
+                                    borderTopColor: 'transparent',
+                                    borderRadius: '50%',
+                                }}
+                            />
+                        </div>
+                        <div style={{ flex: 1, overflow: 'hidden' }}>
+                            <div
+                                style={{
+                                    fontSize: '12px',
+                                    fontWeight: '600',
+                                    color: '#1e293b',
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                }}
+                                title={u.name}
+                            >
+                                {u.name}
+                            </div>
+                            <div style={{ fontSize: '10px', color: '#2563eb', fontWeight: '600' }}>
+                                {u.progress >= 100 ? 'Saving…' : `Uploading… ${u.progress || 0}%`}
+                            </div>
+                            <div
+                                style={{
+                                    marginTop: '4px',
+                                    height: '3px',
+                                    background: '#dbeafe',
+                                    borderRadius: '2px',
+                                    overflow: 'hidden',
+                                }}
+                            >
+                                <div
+                                    style={{
+                                        width: `${Math.max(4, u.progress || 0)}%`,
+                                        height: '100%',
+                                        background: '#3b82f6',
+                                        transition: 'width 0.2s',
+                                    }}
+                                />
+                            </div>
+                        </div>
+                    </div>
+                ))}
+
                 {filteredPending.map((item) => {
                     const name = item.name || item.file?.name || 'file';
                     const pendingKey = item.pendingId || `${vis}-${name}`;
@@ -18322,8 +21623,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                 background: '#fff7ed',
                                 border: '1px dashed #f97316',
                                 borderRadius: '6px',
-                                width: '240px',
+                                width: '100%',
                                 maxWidth: '240px',
+                                minWidth: 0,
+                                boxSizing: 'border-box',
                                 boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
                                 transition: 'all 0.2s',
                                 position: 'relative',
@@ -18361,7 +21664,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     Pending Save...
                                 </div>
                             </div>
-                            <div style={{ display: 'flex', gap: '2px' }}>
+                            <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
                                 <button
                                     type="button"
                                     onClick={(e) => {
@@ -18405,8 +21708,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             background: 'white',
                             border: `1px solid ${vis === 'Private' ? '#fecaca' : '#e2e8f0'}`,
                             borderRadius: '6px',
-                            width: '240px',
+                            width: '100%',
                             maxWidth: '240px',
+                            minWidth: 0,
+                            boxSizing: 'border-box',
                             boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
                             transition: 'all 0.2s',
                             position: 'relative',
@@ -18455,7 +21760,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                 {att.Division ? ` · ${att.Division}` : ''}
                             </div>
                         </div>
-                        <div style={{ display: 'flex', gap: '2px' }}>
+                        <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }}>
                             <button
                                 type="button"
                                 onClick={() => handleDownloadAttachment(att.ID, att.FileName)}
@@ -18598,8 +21903,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         let next = value;
         if (key === 'pricingTerms') {
             pricingTermsUserTouchedRef.current = true;
-            next = ensurePricingTableColgroupInHtml(
-                updatePricingTableFooterCellsInHtml(value, null)
+            next = applyTableRowHeightModelInHtmlString(
+                ensurePricingTableColgroupInHtml(
+                    updatePricingTableFooterCellsInHtml(value, null)
+                )
             );
         }
         const normalized = clauseEditorHtmlContainsTable(next)
@@ -18651,7 +21958,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                 : lineBase;
                         const grandWithVat =
                             taxedBase != null
-                                ? calcPricingTotalsFromBase(taxedBase).grandWithVat
+                                ? (liveTable
+                                      ? resolvePricingVatTotals(liveTable, taxedBase).grandWithVat
+                                      : grandWithVatForPricingTable(liveTable, lineBase))
                                 : null;
                         if (grandWithVat != null) {
                             patchClause41LumpSumInWysiwyg(wys, grandWithVat, numberToWordsBHD);
@@ -18708,6 +22017,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     const handlePreviewClauseEditorChange = useCallback(
         (contentKey, isCustom, clauseId, val) => {
+            if (suppressClauseEditorStateWritesRef.current) return val;
             markQuoteDraftEdited();
             if (isCustom) {
                 updateCustomClause(clauseId, 'content', val);
@@ -18725,12 +22035,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     : html;
     if (contentKey === 'pricingTerms') {
                 const synced = recalcPricingTermsEditorHtml(val, numberToWordsBHD);
-                const displayHtml =
+                const displayHtml = applyTableRowHeightModelInHtmlString(
                     synced != null
                         ? synced
                         : ensurePricingTableColgroupInHtml(
                               updatePricingTableFooterCellsInHtml(val, null)
-                          );
+                          )
+                );
                 updateClauseContent(contentKey, persistHtml(displayHtml));
                 return displayHtml;
             }
@@ -19179,13 +22490,42 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 '#quote-preview .quote-clause-inline-editor .jodit-wysiwyg'
             );
             if (wys) {
-                if (!wys.querySelector('table')) {
+                const hasTable = Boolean(wys.querySelector('table'));
+                if (!hasTable) {
                     normalizeClauseListHtml(wys);
                 }
                 stripClauseEditorSpuriousBlankRows(wys);
-                finalizeAllOfficePasteTablesFormatting(wys, wys.ownerDocument?.defaultView);
+                /* Office finalize walks every cell's computed style. Skip tables already baked. */
+                if (hasTable) {
+                    const officeTables = wys.querySelectorAll(
+                        'table[data-ems-paste-source="office"], table[data-ems-col-widths], table.ems-office-paste-table'
+                    );
+                    const needsOfficeFinalize = [...officeTables].some(
+                        (table) => table.getAttribute('data-ems-paste-formatted') !== '1'
+                    );
+                    if (needsOfficeFinalize) {
+                        finalizeAllOfficePasteTablesFormatting(
+                            wys,
+                            wys.ownerDocument?.defaultView
+                        );
+                    }
+                }
                 normalizeClauseProseTextColors(wys);
-                stabilizeClauseEditorTablesForExport(wys);
+                if (hasTable) {
+                    stabilizeClauseEditorTablesForExport(wys);
+                }
+                // Pricing: lock 24px / multi-fit on live DOM so baked attrs survive into clause state.
+                if (contentKey === 'pricingTerms') {
+                    wys
+                        .querySelectorAll(
+                            'table#ems-auto-price-summary-table, table[id^="ems-auto-price-summary-table"], table[data-ems-pricing-cols="fixed"]'
+                        )
+                        .forEach((table) => {
+                            if (!table.hasAttribute('data-ems-row-heights-custom')) {
+                                fitEmsPricingSummaryTableRowHeights(table, { allowMeasure: true });
+                            }
+                        });
+                }
                 if (wys.querySelector('img[src^="blob:"]')) {
                     await inlineBlobImagesInDomRoot(wys);
                 }
@@ -19194,14 +22534,28 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 // Pricing: always recompute VAT/Total/Grand from the live table before leaving edit.
                 // Stale debounced pending HTML can keep an old VAT cell while Grand looks correct.
                 if (contentKey === 'pricingTerms' && !isCustom) {
-                    const synced = recalcPricingTermsEditorHtml(val, numberToWordsBHD);
-                    val = normalizeClauseHtmlForHistory(
-                        synced != null
-                            ? synced
-                            : ensurePricingTableColgroupInHtml(
-                                  updatePricingTableFooterCellsInHtml(val, null)
-                              )
+                    // VAT sync patches the live DOM — re-fit heights afterward, then serialize.
+                    recalcPricingTermsEditorHtml(val, numberToWordsBHD);
+                    wys
+                        .querySelectorAll(
+                            'table#ems-auto-price-summary-table, table[id^="ems-auto-price-summary-table"], table[data-ems-pricing-cols="fixed"]'
+                        )
+                        .forEach((table) => {
+                            if (!table.hasAttribute('data-ems-row-heights-custom')) {
+                                fitEmsPricingSummaryTableRowHeights(table, { allowMeasure: true });
+                            }
+                        });
+                    val = normalizeClauseHtmlForHistory(wys.innerHTML);
+                    // Persist resized column px before colgroup/VAT helpers can fall back to 72%/28%.
+                    val = bakePricingColWidthsFromLiveDom(wys, val);
+                    val = applyTableRowHeightModelInHtmlString(
+                        ensurePricingTableColgroupInHtml(
+                            updatePricingTableFooterCellsInHtml(val, null)
+                        )
                     );
+                    // Colgroup helper must not drop data-ems-col-widths — re-bake from live.
+                    val = bakePricingColWidthsFromLiveDom(wys, val);
+                    val = normalizeEmsPricingTableTextAlignInHtml(val);
                 }
                 pendingPreviewClauseSyncRef.current = {
                     contentKey,
@@ -19226,11 +22580,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     /** Re-run A4 page packing + cover-letter gaps + table column widths (same as after refresh). */
     const alignQuotePreviewPages = useCallback(async () => {
-        /* Busy + empty groups first so the overlay stays until measured pack repopulates sheets. */
-        flushSync(() => {
-            setQuoteAlignPageBusy(true);
-            setClauseSegmentPageGroups([]);
-        });
+        /* Keep current sheets visible — clearing to [] forced a blank hang on large quotes. */
+        setQuoteAlignPageBusy(true);
         const editingKey = expandedClause;
         if (editingKey) {
             await commitActiveClausePreviewEdit(editingKey);
@@ -19245,11 +22596,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         }
         lastClausePackSigRef.current = '';
         clausePackMeasureRetryRef.current = 0;
-        clausePackTightFitRef.current = true;
-        flushSync(() => {
-            setClausePackSplitMode(true);
-            setClauseSegmentPageGroups([]);
-        });
+        /* Fast/dense pack — fine-split caused blank pages; full multi-fill was multi-second. */
+        clausePackAlignGenRef.current += 1;
+        clausePackTightFitRef.current = false;
+        clausePackFastAlignRef.current = true;
+        clausePackSegmentHeightCacheRef.current.clear();
+        setClausePackSplitMode(false);
         setClausePackRetryNonce((n) => n + 1);
         setQuoteAlignPageNonce((n) => n + 1);
         if (!coverSignatoryLayoutLockedRef.current) {
@@ -19263,20 +22615,24 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 applyEqualCoverGaps(letter);
                 requestAnimationFrame(() => {
                     applyEqualCoverGaps(letter);
-                    requestAnimationFrame(() => applyEqualCoverGaps(letter));
                 });
             }
         }
         requestAnimationFrame(() => {
             const root = document.getElementById('quote-preview');
-            if (root) initializeAllOfficePastedTableColumns(root);
+            if (root) {
+                initializeAllOfficePastedTableColumns(root);
+                root.querySelectorAll('.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)').forEach((sheet) => {
+                    relaxTableRowHeightsForClausePackMeasure(sheet);
+                });
+            }
         });
     }, [commitActiveClausePreviewEdit, expandedClause]);
 
     /** Safety: never leave “Aligning page…” stuck if measured pack never settles. */
     useEffect(() => {
         if (!quoteAlignPageBusy) return undefined;
-        const safety = window.setTimeout(() => setQuoteAlignPageBusy(false), 8000);
+        const safety = window.setTimeout(() => setQuoteAlignPageBusy(false), 4000);
         return () => window.clearTimeout(safety);
     }, [quoteAlignPageBusy, quoteAlignPageNonce]);
 
@@ -19301,41 +22657,73 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (block instanceof HTMLElement) {
                 captureClauseEditScrollAnchor(block, key);
             }
+            /* Invalidate only the edited clause so segment rebuild is incremental. */
+            clauseSegmentBuildCacheRef.current.delete(String(key));
+            if (key === 'pricingTerms') {
+                clauseSegmentBuildCacheRef.current.delete('showPricingTerms');
+            }
         }
         void commitActiveClausePreviewEdit(key).finally(() => {
             bumpEditingClauseReflow();
-            // After pricing edit, force VAT footer into stored HTML before unmounting the editor
-            // so normal-mode segments cannot keep a stale VAT cell.
-            if (key === 'pricingTerms') {
-                flushSync(() => {
-                    setClauseContent((prev) => {
-                        const current = String(prev?.pricingTerms || '');
-                        if (!clauseHtmlHasEmsAutoPricingTable(current)) return prev;
-                        const fixed = ensurePricingTableColgroupInHtml(
-                            updatePricingTableFooterCellsInHtml(current, null)
-                        );
-                        if (pricingFooterAmountsSig(fixed) === pricingFooterAmountsSig(current)) {
-                            return prev;
-                        }
-                        const next = { ...prev, pricingTerms: fixed };
-                        clauseContentRef.current = next;
-                        return next;
-                    });
-                });
-            }
+            /*
+             * Commit already reconciled pricing VAT/colgroup into pending sync.
+             * Avoid a second flushSync bake here — it doubled exit-edit cost on large quotes.
+             */
             editingClauseLiveHtmlRef.current = { key: null, html: '' };
             setEditingClauseLiveSig('');
             const host = document.getElementById(EMS_QUOTE_PREVIEW_TOOLBAR_ID);
             hideTableResizeHandles(host?.__emsActiveClauseEditorJodit, { force: true });
             hideAllEmsTableResizeHandles();
             setExpandedClause(null);
-            // Paint-time safety: patch pricing VAT cells after React commits the normal-mode preview.
+            /* Defer live row-height bake until idle so normal-mode preview paints first. */
+            const bakeAfterExit = () => {
+                const root = document.getElementById('quote-preview');
+                if (!root) return;
+                forcePricingVatInDomRoot(root);
+                if (key !== 'pricingTerms') {
+                    const editedBlocks = root.querySelectorAll(
+                        `.quote-clause-block[data-clause-edit-key="${CSS.escape(String(key))}"]`
+                    );
+                    if (editedBlocks.length) {
+                        editedBlocks.forEach((block) => applyAllTableRowHeightsInRoot(block));
+                    } else {
+                        applyAllTableRowHeightsInRoot(root);
+                    }
+                    return;
+                }
+                const current = String(clauseContentRef.current?.pricingTerms || '');
+                if (!clauseHtmlHasEmsAutoPricingTable(current)) {
+                    applyAllTableRowHeightsInRoot(root);
+                    return;
+                }
+                const baked = fitPricingTablesInRootAndBakeIntoHtml(root, current);
+                let nextHtml = ensurePricingTableColgroupInHtml(baked);
+                if (!/data-ems-row-heights=/i.test(nextHtml)) {
+                    nextHtml = applyTableRowHeightModelInHtmlString(nextHtml);
+                }
+                if (nextHtml && nextHtml !== current) {
+                    setClauseContent((prev) => {
+                        const next = { ...prev, pricingTerms: nextHtml };
+                        clauseContentRef.current = next;
+                        return next;
+                    });
+                } else {
+                    applyAllTableRowHeightsInRoot(root);
+                }
+                /*
+                 * Soft re-pack only — force fine-split OFF.
+                 * Fine mode shattered every clause into tiny segments → blank pages.
+                 */
+                lastClausePackSigRef.current = '';
+                clausePackMeasureRetryRef.current = 0;
+                clausePackTightFitRef.current = false;
+                clausePackFastAlignRef.current = false;
+                setClausePackSplitMode(false);
+                setClausePackRetryNonce((n) => n + 1);
+            };
+            /* Prefer rAF so browse paints, then bake+align in the next frames (faster than idle 900ms). */
             requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    const root = document.getElementById('quote-preview');
-                    if (!root) return;
-                    forcePricingVatInDomRoot(root);
-                });
+                requestAnimationFrame(bakeAfterExit);
             });
         });
     }, [
@@ -19360,6 +22748,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (expandedClause) {
                 void commitActiveClausePreviewEdit(expandedClause);
             }
+            // Drop frozen preview segments so pricing VAT is re-reconciled when leaving
+            // pricing (or switching clauses). Stale freeze kept a wrong VAT cell visible.
+            clauseSegmentsFrozenWhileEditingRef.current = [];
             if (target) {
                 const blocks = document.querySelectorAll(
                     '#quote-preview .quote-clause-block[data-clause-edit-key]'
@@ -19373,6 +22764,18 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 });
                 if (anchorBlock instanceof HTMLElement) {
                     captureClauseEditScrollAnchor(anchorBlock, target);
+                    /*
+                     * Browse paint has correct BOQ columns; enter-edit was scrambling them.
+                     * Snapshot live widths from .clause-content before React swaps in Jodit.
+                     */
+                    const browseContent = anchorBlock.querySelector(
+                        '.clause-content:not(.jodit-wysiwyg)'
+                    );
+                    if (browseContent) {
+                        captureBrowseScheduleColumnWidthsFromRoot(browseContent);
+                    } else {
+                        captureBrowseScheduleColumnWidthsFromRoot(anchorBlock);
+                    }
                 }
             }
             setExpandedClause(target);
@@ -19392,12 +22795,22 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     }, [browsePreviousQuotesRevisions, expandedClause, exitClausePreviewEdit]);
 
     /**
-     * Capture the full clause setup for template save/update — flushes the inline editor first,
+     * Capture the full clause setup for template save/update — awaits inline-editor flush first,
      * includes custom clauses, heading HTML, tables, and list formatting without dropping fields.
      */
-    const captureClauseTemplateSnapshot = useCallback(() => {
+    const captureClauseTemplateSnapshot = useCallback(async () => {
+        // Pull live Jodit HTML before commit (commit is async when blob images are inlined).
+        const livePending = resolveActiveClauseEditorPending();
+        if (livePending?.contentKey != null && livePending.val != null) {
+            pendingPreviewClauseSyncRef.current = livePending;
+            editingClauseLiveHtmlRef.current = {
+                key: livePending.contentKey,
+                html: livePending.val,
+            };
+        }
+
         if (expandedClause) {
-            commitActiveClausePreviewEdit(expandedClause);
+            await commitActiveClausePreviewEdit(expandedClause);
         } else {
             flushPreviewClauseEditorSync({ recordHistory: false });
         }
@@ -19464,14 +22877,24 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         expandedClause,
         flushPreviewClauseEditorSync,
         orderedClauses,
+        resolveActiveClauseEditorPending,
     ]);
 
     const applyClauseTemplateConfig = useCallback(
         (config, opts = {}) => {
-            if (expandedClause) {
-                exitClausePreviewEdit();
-            } else {
-                flushPreviewClauseEditorSync({ recordHistory: false });
+            // Do NOT call exitClausePreviewEdit() here — it commits the open Jodit HTML
+            // asynchronously and can overwrite the template after setState.
+            suppressClauseEditorStateWritesRef.current = true;
+            cancelPreviewClauseEditorSyncTimer();
+            pendingPreviewClauseSyncRef.current = null;
+            editingClauseLiveHtmlRef.current = { key: null, html: '' };
+            clauseSegmentsFrozenWhileEditingRef.current = [];
+            try {
+                const host = document.getElementById(EMS_QUOTE_PREVIEW_TOOLBAR_ID);
+                hideTableResizeHandles(host?.__emsActiveClauseEditorJodit, { force: true });
+                hideAllEmsTableResizeHandles();
+            } catch (_) {
+                /* ignore */
             }
 
             const normalized = normalizeLoadedClauseTemplateConfig(config);
@@ -19484,24 +22907,30 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
             quoteDraftClausesLockedRef.current = false;
             quoteDraftPendingClauseReapplyRef.current = false;
+            quoteDraftSkipClauseReapplyRef.current = true;
             pricingTermsUserTouchedRef.current = opts.resetPricingTermsTouch === false ? false : true;
 
             resetGlobalClauseHistory(clauseEditorHistoryRef.current);
             clauseHtmlSnapshotRef.current = {};
 
-            setClauses(normalized.clauses);
-            setClauseContent(loadedContent);
-            setClauseHeadingHtml(normalized.clauseHeadingHtml);
-            setCustomClauses(normalized.customClauses);
-            setOrderedClauses(normalized.orderedClauses);
-            clauseContentRef.current = loadedContent;
-            editingClauseLiveHtmlRef.current = { key: null, html: '' };
-            setEditingClauseLiveSig('');
-            setExpandedClause(null);
+            try {
+                flushSync(() => {
+                    setExpandedClause(null);
+                    setEditingClauseLiveSig('');
+                    setClauses(normalized.clauses);
+                    setClauseContent(loadedContent);
+                    setClauseHeadingHtml(normalized.clauseHeadingHtml);
+                    setCustomClauses(normalized.customClauses);
+                    setOrderedClauses(normalized.orderedClauses);
+                });
+                clauseContentRef.current = loadedContent;
+            } finally {
+                suppressClauseEditorStateWritesRef.current = false;
+            }
 
             if (!opts.silent) alert('Template loaded successfully!');
         },
-        [expandedClause, exitClausePreviewEdit, flushPreviewClauseEditorSync]
+        [cancelPreviewClauseEditorSyncTimer]
     );
 
     const handleSaveTemplate = useCallback(async () => {
@@ -19520,12 +22949,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         }
 
         try {
+            const clausesConfig = await captureClauseTemplateSnapshot();
             const res = await fetch(`${API_BASE}/api/quotes/config/templates`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     templateName,
-                    clausesConfig: captureClauseTemplateSnapshot(),
+                    clausesConfig,
                     createdBy: clauseTemplateUserEmail,
                 }),
             });
@@ -19534,12 +22964,24 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 const data = await res.json().catch(() => ({}));
                 const savedId = data?.id != null ? String(data.id) : '';
                 if (savedId) setSelectedTemplateId(savedId);
-                alert(
-                    data?.message === 'Template updated'
-                        ? 'Template updated successfully!'
-                        : 'Template saved successfully!'
-                );
                 await refreshClauseTemplates();
+                const verified = await verifySavedClauseTemplate(
+                    savedId || selectedTemplateId,
+                    clausesConfig,
+                    clauseTemplateUserEmail
+                );
+                if (!verified.ok) {
+                    alert(
+                        `Template was saved but verification failed: ${verified.reason || 'content mismatch'}. ` +
+                            'Open the template again and use Update if the preview looks wrong.'
+                    );
+                } else {
+                    alert(
+                        data?.message === 'Template updated'
+                            ? 'Template updated successfully!'
+                            : 'Template saved successfully!'
+                    );
+                }
             } else {
                 let serverMsg = '';
                 try {
@@ -19576,6 +23018,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         if (!clauseTemplateUserEmail) return alert('Sign in to update clause templates.');
 
         try {
+            const clausesConfig = await captureClauseTemplateSnapshot();
             const res = await fetch(
                 `${API_BASE}/api/quotes/config/templates/${selectedTemplateId}`,
                 {
@@ -19583,15 +23026,27 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         templateName,
-                        clausesConfig: captureClauseTemplateSnapshot(),
+                        clausesConfig,
                         userEmail: clauseTemplateUserEmail,
                     }),
                 }
             );
 
             if (res.ok) {
-                alert('Template updated successfully!');
                 await refreshClauseTemplates();
+                const verified = await verifySavedClauseTemplate(
+                    selectedTemplateId,
+                    clausesConfig,
+                    clauseTemplateUserEmail
+                );
+                if (!verified.ok) {
+                    alert(
+                        `Template was updated but verification failed: ${verified.reason || 'content mismatch'}. ` +
+                            'Try Update again if the loaded preview looks wrong.'
+                    );
+                } else {
+                    alert('Template updated successfully!');
+                }
             } else if (res.status === 409) {
                 alert('Another template already uses this name. Choose a different name or save as new.');
             } else if (res.status === 403) {
@@ -19668,7 +23123,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (!tmpl) return;
 
             try {
-                const config = JSON.parse(tmpl.ClausesConfig);
+                const config = parseStoredClauseTemplateConfig(
+                    tmpl.ClausesConfig ?? tmpl.clausesConfig
+                );
                 applyClauseTemplateConfig(config, opts);
             } catch (err) {
                 console.error('Error parsing template:', err);
@@ -19716,6 +23173,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         quoteDraftClausesLockedRef.current = false;
         quoteDraftPendingClauseReapplyRef.current = false;
+        quoteDraftSkipClauseReapplyRef.current = true;
         pricingTermsUserTouchedRef.current = true;
         resetGlobalClauseHistory(clauseEditorHistoryRef.current);
         clauseHtmlSnapshotRef.current = {};
@@ -19812,7 +23270,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         usersList,
     ]);
 
-    const handleExportTemplate = useCallback(() => {
+    const handleExportTemplate = useCallback(async () => {
         let templateName = savedTemplateName.trim();
         let config = null;
 
@@ -19824,8 +23282,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (tmpl) {
                 templateName = String(tmpl.TemplateName || templateName || 'Template').trim();
                 try {
-                    const raw = tmpl.ClausesConfig ?? tmpl.clausesConfig;
-                    config = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                    config = parseStoredClauseTemplateConfig(
+                        tmpl.ClausesConfig ?? tmpl.clausesConfig
+                    );
                 } catch (err) {
                     console.error('[handleExportTemplate] parse', err);
                     alert('Could not read the selected template for export.');
@@ -19836,7 +23295,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         if (!config) {
             templateName = templateName || 'Clause Template';
-            config = captureClauseTemplateSnapshot();
+            config = await captureClauseTemplateSnapshot();
         }
 
         const payload = buildClauseTemplateExportFile({
@@ -20150,7 +23609,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         if (!expandedClause) return '';
         const isCustom = String(expandedClause).startsWith('custom_');
         if (isCustom) {
-            return customClauses.find((c) => c.id === expandedClause)?.content || '';
+            const raw = customClauses.find((c) => c.id === expandedClause)?.content || '';
+            const trimmed = String(raw).trim();
+            if (!trimmed || trimmed === '<p></p>' || trimmed === '<br>') {
+                return '<p><br></p>';
+            }
+            return raw;
         }
         const raw = clauseContent[expandedClause] || '';
         const renumberCtx = resolveClauseDisplayRenumberContext(
@@ -20400,7 +23864,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         // 3. Fallback: Absolute hard-override for BMS users (Requested by User) — skipped when a concrete tab job supplies codes (HVAC vs BMS).
         if (!branchCodesFromActiveQuoteTab && !personalProfile && textRefersToBms(userDept) && !textRefersToIbms(userDept)) {
-            console.log('[getQuotePayload] HARD OVERRIDE: BMS user detected, forcing AAC/BMP identity');
             effectiveDivisionCode = 'BMP';
             effectiveDeptCode = 'AAC';
             identitySource = 'BMSHardOverride';
@@ -20420,8 +23883,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             effectiveDeptCode = branchCodesFromActiveQuoteTab.departmentCode || effectiveDeptCode || 'AAC';
             identitySource = 'ActiveQuoteTabJob';
         }
-
-        console.log(`[getQuotePayload] Final Identity: Dept=${effectiveDeptCode}, Div=${effectiveDivisionCode} (Source: ${identitySource})`);
 
         return {
             divisionCode: effectiveDivisionCode,
@@ -20551,8 +24012,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             status: 'Saved',
             digitalSignaturesJson: serializeDigitalStampsForApi(quoteDigitalStamps),
             approvalWorkflowJson: serializeApprovalWorkflowJson(approvalWorkflowSteps),
+            pageOrientationsJson: serializePageOrientationsForApi(quotePageOrientations),
         };
-    }, [enquiryData, selectedJobs, pricingSummary, currentUser, quoteListDivision, pricingData, validityDays, preparedBy, loadedQuotePreparedByEmail, usersList, preparedByOptions, divisionPickerOptions, clauses, clauseContent, clauseHeadingHtml, ownjobBasePriceForEnquiryQuoteTotal, customClauses, orderedClauses, quoteDate, customerReference, reasonForRevision, quoteTypeList, subject, signatory, signatoryDesignation, coSignatory, coSignatoryDesignation, approvalWorkflowSteps, toName, toAddress, toPhone, toEmail, toFax, toAttention, activeQuoteTab, calculatedTabs, effectiveQuoteTabs, selectedLeadId, jobsPool, enquiryData?.divisionsHierarchy, enquiryData?.companyDetails, quoteDigitalStamps]);
+    }, [enquiryData, selectedJobs, pricingSummary, currentUser, quoteListDivision, pricingData, validityDays, preparedBy, loadedQuotePreparedByEmail, usersList, preparedByOptions, divisionPickerOptions, clauses, clauseContent, clauseHeadingHtml, ownjobBasePriceForEnquiryQuoteTotal, customClauses, orderedClauses, quoteDate, customerReference, reasonForRevision, quoteTypeList, subject, signatory, signatoryDesignation, coSignatory, coSignatoryDesignation, approvalWorkflowSteps, toName, toAddress, toPhone, toEmail, toFax, toAttention, activeQuoteTab, calculatedTabs, effectiveQuoteTabs, selectedLeadId, jobsPool, enquiryData?.divisionsHierarchy, enquiryData?.companyDetails, quoteDigitalStamps, quotePageOrientations]);
 
     /**
      * Flush inline editors and merge live Jodit buffers — used before Draft Save so PricingTerms
@@ -20731,6 +24193,51 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         buildQuoteDraftFingerprintPayloadRef.current = buildQuoteDraftFingerprintPayload;
     }, [getQuotePayload, buildQuoteDraftFingerprintPayload]);
 
+    /** Toolbar props — never call getQuotePayload during render (that logged in a tight loop). */
+    const quoteToolbarLeadJobName = React.useMemo(() => {
+        try {
+            return String(
+                normalizeLeadJobNameForDbTuple(
+                    resolveRootLeadJobLabelForQuotes(
+                        (pricingData?.jobs && pricingData.jobs.length > 0 ? pricingData.jobs : null) ||
+                            jobsPool ||
+                            [],
+                        selectedLeadId,
+                        enquiryData?.leadJobPrefix || ''
+                    ),
+                    (pricingData?.jobs && pricingData.jobs.length > 0 ? pricingData.jobs : null) ||
+                        jobsPool ||
+                        [],
+                    selectedLeadId,
+                    enquiryData?.leadJobPrefix || '',
+                    enquiryData?.divisionsHierarchy || jobsPool
+                ) || ''
+            ).trim();
+        } catch {
+            return '';
+        }
+    }, [
+        pricingData?.jobs,
+        jobsPool,
+        selectedLeadId,
+        enquiryData?.leadJobPrefix,
+        enquiryData?.divisionsHierarchy,
+    ]);
+    const quoteToolbarOwnJobName = React.useMemo(() => {
+        try {
+            const tabs =
+                calculatedTabs && calculatedTabs.length > 0 ? calculatedTabs : effectiveQuoteTabs || [];
+            const { ownJobName, useDepartmentForOwnJob } = resolveOwnJobNameForQuoteScope({
+                tabs,
+                activeQuoteTab,
+                quoteListDivision,
+            });
+            return useDepartmentForOwnJob ? '' : String(ownJobName || '').trim();
+        } catch {
+            return '';
+        }
+    }, [calculatedTabs, effectiveQuoteTabs, activeQuoteTab, quoteListDivision]);
+
     const approvalStepsSkipSaveRef = useRef(false);
     const approvalStepsFetchSeqRef = useRef(0);
 
@@ -20792,6 +24299,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             setApprovalRequestSent(Boolean(data.approvalRequestSent));
             setApprovalWorkflowCreatorCompanyName(String(data.createdByCompanyName || '').trim());
             setApprovalWorkflowCreatorDivisionName(String(data.createdByDivisionName || '').trim());
+            setApprovalWorkflowMode(String(data.approvalMode || '').trim());
             const apiBranding = data.creatorCompanyBranding;
             setApprovalWorkflowCreatorBranding(
                 apiBranding && apiBranding.name
@@ -20835,6 +24343,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             setApprovalWorkflowCreatorCompanyName('');
             setApprovalWorkflowCreatorDivisionName('');
             setApprovalWorkflowCreatorBranding(null);
+            setApprovalWorkflowMode('');
         }
     }, [embeddedApprovalReview, quoteModuleApprovalWorkflowEnabled]);
 
@@ -21114,26 +24623,31 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     const saveQuoteDraft = useCallback(async (opts = {}) => {
         const force = opts === true || opts?.force === true;
+        const quiet = opts?.quiet === true;
         if (!enquiryData) return null;
         if (!force && !isQuoteDraftDirty) return null;
         // Finalized quotes (real quote number) cannot be edited via draft save.
         // Revision flow clears quoteId before calling with force + quoteNo.
         if (quoteId && !embeddedApprovalReview && !(force && Number(opts?.quoteNo) > 0)) {
-            alert(
-                'This quote is already finalized. Turn off "Previous Quotes / Revisions", update the draft, then use Send for Approval to create the next revision.'
-            );
+            if (!quiet) {
+                alert(
+                    'This quote is already finalized. Turn off "Previous Quotes / Revisions", update the draft, then use Send for Approval to create the next revision.'
+                );
+            }
             return null;
         }
         if (!canCollaborateOnQuoteDraft()) {
-            alert('You do not have permission to save this draft.');
+            if (!quiet) alert('You do not have permission to save this draft.');
             return null;
         }
         if (!enquiryData?.leadJobPrefix || !hasSelectedCustomer) {
-            alert('Select lead job and customer before saving.');
+            if (!quiet) alert('Select lead job and customer before saving.');
             return null;
         }
-        setSavingDraft(true);
-        setSaving(true);
+        if (!quiet) {
+            setSavingDraft(true);
+            setSaving(true);
+        }
         try {
             const liveTotal = await ensureLatestOwnjobTotalForQuotePersist();
             const saveMerge = resolveMergedClauseContentForDraftSave();
@@ -21190,6 +24704,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             }
             if (opts?.clearDigitalSignatures) {
                 payload.digitalSignaturesJson = serializeDigitalStampsForApi([]);
+                payload.clearDigitalSignatures = true;
+            } else if (opts?.digitalSignaturesOverride != null) {
+                payload.digitalSignaturesJson = serializeDigitalStampsForApi(
+                    opts.digitalSignaturesOverride
+                );
+            }
+            if (opts?.pageOrientationsOverride != null) {
+                payload.pageOrientationsJson = serializePageOrientationsForApi(
+                    opts.pageOrientationsOverride
+                );
             }
             const res = await fetch(`${API_BASE}/api/quotes/quote-drafts`, {
                 method: 'POST',
@@ -21204,7 +24728,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 } catch {
                     /* ignore */
                 }
-                alert(detail || 'Failed to save quote draft.');
+                if (!quiet) alert(detail || 'Failed to save quote draft.');
                 return null;
             }
             const data = await res.json();
@@ -21229,11 +24753,39 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             clauseContentRef.current = nextClauseContent;
             setClauseContent((prev) => ({ ...prev, ...nextClauseContent }));
 
+            /** Server keeps stamps other users placed after this screen loaded — show them too. */
+            const storedDraftStamps =
+                !opts?.clearDigitalSignatures &&
+                !opts?.forceNewDraft &&
+                quoteDraftId != null &&
+                String(newDraftId) === String(quoteDraftId) &&
+                Array.isArray(data.digitalSignatures)
+                    ? data.digitalSignatures
+                    : null;
+            if (storedDraftStamps) {
+                setQuoteDigitalStamps((prev) => {
+                    const next = unionDigitalStamps(prev, storedDraftStamps);
+                    if (next === prev) return prev;
+                    const ctx = stampScopeRef.current;
+                    if (ctx?.requestNo) saveStampsForEnquiry(ctx.requestNo, next, ctx.leadKey, ctx.customer);
+                    return next;
+                });
+            }
+            const sigJsonForRow =
+                opts?.clearDigitalSignatures
+                    ? serializeDigitalStampsForApi([])
+                    : storedDraftStamps
+                      ? serializeDigitalStampsForApi(storedDraftStamps)
+                      : opts?.digitalSignaturesOverride != null
+                        ? serializeDigitalStampsForApi(opts.digitalSignaturesOverride)
+                        : payload.digitalSignaturesJson;
             quoteDraftLoadedRowRef.current = {
                 ...(quoteDraftLoadedRowRef.current || {}),
                 ...apiFields,
                 PricingTerms: pricingTermsSaved,
                 pricingTerms: pricingTermsSaved,
+                DigitalSignaturesJson: sigJsonForRow,
+                digitalSignaturesJson: sigJsonForRow,
                 QuoteNo: effectiveQuoteNo,
                 quoteNo: effectiveQuoteNo,
                 ID: newDraftId ?? quoteDraftId,
@@ -21261,11 +24813,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             return data;
         } catch (err) {
             console.error('[saveQuoteDraft]', err);
-            alert('Failed to save quote draft.');
+            if (!quiet) alert('Failed to save quote draft.');
             return null;
         } finally {
-            setSavingDraft(false);
-            setSaving(false);
+            if (!quiet) {
+                setSavingDraft(false);
+                setSaving(false);
+            }
         }
     }, [
         enquiryData,
@@ -21307,6 +24861,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             quoteDraftClausesLockedRef.current = false;
             quoteDraftLoadedRowRef.current = null;
             quoteDraftPendingClauseReapplyRef.current = false;
+            quoteDraftSkipClauseReapplyRef.current = false;
             browsePrevQuotesLatchRef.current = false;
             browsePrevQuotesInitSnapDoneRef.current = false;
         }
@@ -21408,26 +24963,33 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 if (row) {
                     quoteDraftScopeKeyRef.current = scopeKey;
                     quoteDraftLoadedRowRef.current = row;
-                    quoteDraftPendingClauseReapplyRef.current = true;
                     setQuoteDraftId(quoteRowId(row) ?? null);
-                    const applyRow = loadQuoteRef.current;
-                    if (applyRow) {
-                        applyRow(row, {
-                            isDraftRow: true,
-                            skipPreparedSignatory: true,
-                            applySavedDigitalSignatures: true,
-                            preserveRecipient: true,
-                        });
+                    if (quoteDraftSkipClauseReapplyRef.current) {
+                        quoteDraftPendingClauseReapplyRef.current = false;
+                        markDraftHydrateSkipAutoLoad();
+                        setQuoteDraftHydrated(true);
+                        armQuoteDraftBaselineCapture();
                     } else {
-                        applyQuoteClauseBundleFromRow(row, {
-                            sync: true,
-                            lockDraftClauses: true,
-                            isDraftRow: true,
-                        });
+                        quoteDraftPendingClauseReapplyRef.current = true;
+                        const applyRow = loadQuoteRef.current;
+                        if (applyRow) {
+                            applyRow(row, {
+                                isDraftRow: true,
+                                skipPreparedSignatory: true,
+                                applySavedDigitalSignatures: true,
+                                preserveRecipient: true,
+                            });
+                        } else {
+                            applyQuoteClauseBundleFromRow(row, {
+                                sync: false,
+                                lockDraftClauses: true,
+                                isDraftRow: true,
+                            });
+                        }
+                        markDraftHydrateSkipAutoLoad();
+                        setQuoteDraftHydrated(true);
+                        armQuoteDraftBaselineCapture();
                     }
-                    markDraftHydrateSkipAutoLoad();
-                    setQuoteDraftHydrated(true);
-                    armQuoteDraftBaselineCapture();
                 } else {
                     // No active EnquiryQuotesDraft (e.g. last quote was approved/promoted).
                     // Wait for scoped EnquiryQuotes so we can seed from the latest revision.
@@ -21440,40 +25002,49 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     if (latestApproved) {
                         quoteDraftScopeKeyRef.current = scopeKey;
                         quoteDraftLoadedRowRef.current = latestApproved;
-                        quoteDraftPendingClauseReapplyRef.current = true;
                         setQuoteDraftId(null);
-                        const applyRow = loadQuoteRef.current;
-                        if (applyRow) {
-                            applyRow(latestApproved, {
-                                isDraftRow: true,
-                                seedFromLatestApproved: true,
-                                skipPreparedSignatory: true,
-                                applySavedDigitalSignatures: false,
-                                preserveRecipient: true,
-                            });
+                        if (quoteDraftSkipClauseReapplyRef.current) {
+                            quoteDraftPendingClauseReapplyRef.current = false;
+                            markDraftHydrateSkipAutoLoad();
+                            setQuoteDraftHydrated(true);
+                            armQuoteDraftBaselineCapture();
                         } else {
-                            applyQuoteClauseBundleFromRow(latestApproved, {
-                                sync: true,
-                                lockDraftClauses: true,
-                                isDraftRow: true,
-                            });
-                            const qn = Number(
-                                latestApproved.QuoteNo ?? latestApproved.quoteNo ?? 0
-                            );
-                            setRevisionSourceQuoteNoBoth(
-                                Number.isFinite(qn) && qn > 0 ? qn : 0
-                            );
+                            quoteDraftPendingClauseReapplyRef.current = true;
+                            const applyRow = loadQuoteRef.current;
+                            if (applyRow) {
+                                applyRow(latestApproved, {
+                                    isDraftRow: true,
+                                    seedFromLatestApproved: true,
+                                    skipPreparedSignatory: true,
+                                    applySavedDigitalSignatures: false,
+                                    preserveRecipient: true,
+                                });
+                            } else {
+                                applyQuoteClauseBundleFromRow(latestApproved, {
+                                    sync: false,
+                                    lockDraftClauses: true,
+                                    isDraftRow: true,
+                                });
+                                const qn = Number(
+                                    latestApproved.QuoteNo ?? latestApproved.quoteNo ?? 0
+                                );
+                                setRevisionSourceQuoteNoBoth(
+                                    Number.isFinite(qn) && qn > 0 ? qn : 0
+                                );
+                            }
+                            markDraftHydrateSkipAutoLoad();
+                            setQuoteDraftHydrated(true);
+                            armQuoteDraftBaselineCapture();
                         }
-                        markDraftHydrateSkipAutoLoad();
-                        setQuoteDraftHydrated(true);
-                        armQuoteDraftBaselineCapture();
                     } else {
                         quoteDraftScopeKeyRef.current = scopeKey;
                         quoteDraftLoadedRowRef.current = null;
                         quoteDraftPendingClauseReapplyRef.current = false;
                         quoteDraftClausesLockedRef.current = false;
                         pricingTermsUserTouchedRef.current = false;
-                        applyNoDraftQuoteDefaultsRef.current?.();
+                        if (!quoteDraftSkipClauseReapplyRef.current) {
+                            applyNoDraftQuoteDefaultsRef.current?.();
+                        }
                         setQuoteDraftId(null);
                         setQuoteDraftHydrated(true);
                         armQuoteDraftBaselineCapture();
@@ -21520,15 +25091,39 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     /**
      * Re-apply draft clause bodies after pricing finishes loading — calculateSummary / auto-table effects
      * can overwrite clause state if they run between draft fetch and pricing hydration.
+     * Never flushSync here: a second sync apply doubled DOMParser/A4 pack and froze large drafts.
      */
     React.useLayoutEffect(() => {
         if (browsePreviousQuotesRevisions) return;
+        if (quoteDraftSkipClauseReapplyRef.current) {
+            quoteDraftPendingClauseReapplyRef.current = false;
+            return;
+        }
         if (!quoteDraftPendingClauseReapplyRef.current) return;
         const row = quoteDraftLoadedRowRef.current;
         if (!row) return;
         if (!pricingStableSig) return;
+
+        const live = clauseContentRef.current || {};
+        const rowPtLen = String(row.PricingTerms ?? row.pricingTerms ?? '').trim().length;
+        const livePtLen = String(live.pricingTerms ?? '').trim().length;
+        const rowSowLen = String(row.ScopeOfWork ?? row.scopeOfWork ?? '').trim().length;
+        const liveSowLen = String(live.scopeOfWork ?? '').trim().length;
+        /* Draft already painted — only nudge Align Page; skip full clause re-parse. */
+        if (
+            quoteDraftClausesLockedRef.current &&
+            rowPtLen > 0 &&
+            livePtLen > 0 &&
+            Math.abs(rowPtLen - livePtLen) < 8 &&
+            rowSowLen === liveSowLen
+        ) {
+            quoteDraftPendingClauseReapplyRef.current = false;
+            pendingAutoAlignPreviewRef.current = true;
+            return;
+        }
+
         applyQuoteClauseBundleFromRow(row, {
-            sync: true,
+            sync: false,
             lockDraftClauses: true,
             isDraftRow: true,
         });
@@ -21864,31 +25459,84 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         stampScopeRef.current = digitalStampScope;
     }, [digitalStampScope]);
 
-    /** Refresh placed stamps from EnquiryQuotes when a saved quote is open (multi-user). */
+    /** Refresh placed stamps from EnquiryQuotes when a saved quote is open (multi-user).
+     *  First load takes the stored list; tab-focus refreshes only add stamps other users placed since. */
     useEffect(() => {
         const qid = quoteId;
         if (qid == null || String(qid).trim() === '') return undefined;
         let cancelled = false;
-        (async () => {
+        const pull = async (initial) => {
             try {
                 const stamps = await fetchQuoteDigitalStamps(qid);
                 if (cancelled || !stamps.length) return;
-                setQuoteDigitalStamps(
-                    stamps.map((s) => ({
-                        ...s,
-                        removableBeforeNextCommit: false,
-                    }))
-                );
+                if (initial) {
+                    setQuoteDigitalStamps(
+                        stamps.map((s) => ({
+                            ...s,
+                            removableBeforeNextCommit: false,
+                        }))
+                    );
+                    return;
+                }
+                setQuoteDigitalStamps((prev) => unionDigitalStamps(prev, stamps));
             } catch (e) {
                 console.warn('[QuoteForm] fetchQuoteDigitalStamps failed', e);
             }
-        })();
+        };
+        void pull(true);
+        const onVisible = () => {
+            if (document.visibilityState === 'visible') void pull(false);
+        };
+        window.addEventListener('focus', onVisible);
+        document.addEventListener('visibilitychange', onVisible);
         return () => {
             cancelled = true;
+            window.removeEventListener('focus', onVisible);
+            document.removeEventListener('visibilitychange', onVisible);
         };
     }, [quoteId]);
 
+    /** Draft open (Quote module draft mode or Approvals): show every stamp stored on EnquiryQuotesDraft,
+     *  including ones other users placed after this screen loaded. Re-pulls when the tab regains focus. */
     useEffect(() => {
+        const did = quoteDraftId;
+        if (did == null || String(did).trim() === '') return undefined;
+        if (quoteId != null && String(quoteId).trim() !== '') return undefined;
+        if (browsePreviousQuotesRevisions && !embeddedApprovalReview) return undefined;
+        let cancelled = false;
+        const pull = async () => {
+            try {
+                const stamps = await fetchQuoteDraftDigitalStamps(did);
+                if (cancelled || !stamps.length) return;
+                setQuoteDigitalStamps((prev) => {
+                    const next = unionDigitalStamps(prev, stamps);
+                    if (next === prev) return prev;
+                    const ctx = stampScopeRef.current;
+                    if (ctx?.requestNo) saveStampsForEnquiry(ctx.requestNo, next, ctx.leadKey, ctx.customer);
+                    return next;
+                });
+            } catch (e) {
+                console.warn('[QuoteForm] fetchQuoteDraftDigitalStamps failed', e);
+            }
+        };
+        void pull();
+        const onVisible = () => {
+            if (document.visibilityState === 'visible') void pull();
+        };
+        window.addEventListener('focus', onVisible);
+        document.addEventListener('visibilitychange', onVisible);
+        return () => {
+            cancelled = true;
+            window.removeEventListener('focus', onVisible);
+            document.removeEventListener('visibilitychange', onVisible);
+        };
+    }, [quoteDraftId, quoteId, browsePreviousQuotesRevisions, embeddedApprovalReview]);
+
+    useEffect(() => {
+        // Approvals always shows stamps stored on the server row (other users' stamps are not in this browser).
+        if (embeddedApprovalReview) {
+            return;
+        }
         if (!digitalStampScope) {
             setQuoteDigitalStamps([]);
             return;
@@ -21905,16 +25553,33 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             digitalStampScope.customer
         );
         setQuoteDigitalStamps((prev) => (JSON.stringify(prev) === JSON.stringify(loaded) ? prev : loaded));
-    }, [digitalStampScope, quoteId, browsePreviousQuotesRevisions]);
+    }, [digitalStampScope, quoteId, browsePreviousQuotesRevisions, embeddedApprovalReview]);
 
     const commitQuoteDigitalStamps = useCallback((updater) => {
         setQuoteDigitalStamps((prev) => {
             const next = typeof updater === 'function' ? updater(prev) : updater;
             const ctx = stampScopeRef.current;
             if (ctx?.requestNo) saveStampsForEnquiry(ctx.requestNo, next, ctx.leadKey, ctx.customer);
+            // Draft mode: persist stamps to EnquiryQuotesDraft so Approvals / reload can restore them.
+            // (Finalized quotes use appendQuoteDigitalStamp → EnquiryQuotes instead.)
+            // Never full-save from Previous Quotes browse: the form there is not the draft and would
+            // overwrite the draft's Signatory / Subject / clauses with the browse view's values.
+            const hasFinalQuoteId = quoteId != null && String(quoteId).trim() !== '';
+            if (!hasFinalQuoteId && !embeddedApprovalReview && !browsePreviousQuotesRevisionsRef.current) {
+                if (digitalStampDraftSaveTimerRef.current) {
+                    clearTimeout(digitalStampDraftSaveTimerRef.current);
+                }
+                digitalStampDraftSaveTimerRef.current = setTimeout(() => {
+                    void saveQuoteDraftRef.current?.({
+                        force: true,
+                        quiet: true,
+                        digitalSignaturesOverride: next,
+                    });
+                }, 400);
+            }
             return next;
         });
-    }, []);
+    }, [quoteId, embeddedApprovalReview]);
     useLayoutEffect(() => {
         commitQuoteDigitalStampsRef.current = commitQuoteDigitalStamps;
     }, [commitQuoteDigitalStamps]);
@@ -21927,6 +25592,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             designation,
             xPct: xIn,
             yPct: yIn,
+            anchor,
+            anchorDxMm,
+            anchorDyMm,
             showNameOnStamp = true,
             showDateTimeOnStamp = true,
         }) => {
@@ -21942,6 +25610,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 sheetIndex: sheetIdx,
                 xPct,
                 yPct,
+                ...(sheetIdx === 1 ? stampAnchorFields({ anchor, anchorDxMm, anchorDyMm }) : {}),
                 imageDataUrl: croppedImageDataUrl,
                 displayName: (displayName || digitalStampUserDisplayName || '').trim(),
                 designation: (designation || digitalStampUserDesignation || '').trim(),
@@ -21987,6 +25656,39 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 }
                 return;
             }
+            const draftIdForStamp = quoteDraftId;
+            if (draftIdForStamp != null && String(draftIdForStamp).trim() !== '') {
+                setQuoteDigitalStamps((prev) => [...prev, newStamp]);
+                if (sheetIdx === 1) {
+                    syncCoverSignatoryLockDom(true);
+                }
+                try {
+                    const { stamps: fromServer } = await appendQuoteDraftDigitalStamp(draftIdForStamp, newStamp);
+                    setQuoteDigitalStamps((prev) => {
+                        const next = unionDigitalStamps(prev, fromServer);
+                        const ctx = stampScopeRef.current;
+                        if (ctx?.requestNo) saveStampsForEnquiry(ctx.requestNo, next, ctx.leadKey, ctx.customer);
+                        return next;
+                    });
+                } catch (err) {
+                    console.error('[handlePlaceDigitalStamp] draft', err);
+                    setQuoteDigitalStamps((prev) => prev.filter((s) => s.id !== newStamp.id));
+                    alert(`Failed to save signature on this quote: ${err.message || err}`);
+                }
+                return;
+            }
+            if (browsePreviousQuotesRevisionsRef.current) {
+                alert(
+                    'There is no saved quote or draft on screen to sign.\n\n' +
+                        'Turn off "Previous Quotes / Revisions" to sign the draft, or open the quote from Approvals.'
+                );
+                return;
+            }
+            if (!quoteDraftHydrated) {
+                alert('The quote draft is still loading. Please wait a moment and place the signature again.');
+                return;
+            }
+            // No draft row yet — commit + quiet-save creates EnquiryQuotesDraft with this stamp.
             commitQuoteDigitalStamps((prev) => [...prev, newStamp]);
             if (sheetIdx === 1) {
                 syncCoverSignatoryLockDom(true);
@@ -21996,6 +25698,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             currentUser,
             commitQuoteDigitalStamps,
             quoteId,
+            quoteDraftId,
+            quoteDraftHydrated,
             digitalStampUserDisplayName,
             digitalStampUserDesignation,
             scopedEnquiryQuotesParams,
@@ -22008,7 +25712,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     }, []);
 
     const handleSignaturePlacementAt = useCallback(
-        ({ sheetIndex, xPct, yPct }) => {
+        ({ sheetIndex, xPct, yPct, anchor, anchorDxMm, anchorDyMm }) => {
             if (!toolbarDragSignatureImageUrl) {
                 setSignaturePlacementActive(false);
                 return;
@@ -22018,6 +25722,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 sheetIndex,
                 xPct,
                 yPct,
+                anchor,
+                anchorDxMm,
+                anchorDyMm,
                 displayName: digitalStampUserDisplayName,
                 designation: digitalStampUserDesignation,
                 showNameOnStamp: toolbarStampPrefs.showNameOnStamp,
@@ -22067,14 +25774,18 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 sigDragActiveRef.current = false;
                 return;
             }
-            const xPct = ((e.clientX - rect.left) / rect.width) * 100;
-            const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+            const refH = quoteSheetReferenceHeightPx(sheet, rect);
+            if (!refH) {
+                sigDragActiveRef.current = false;
+                return;
+            }
+            const xPct = Math.min(96, Math.max(2, ((e.clientX - rect.left) / rect.width) * 100));
+            const yPct = Math.min(92, Math.max(2, ((e.clientY - rect.top) / refH) * 100));
 
             const preview = document.getElementById('quote-preview');
             const sheets = preview ? queryQuotePreviewVisibleSheets(preview) : [];
-            const sheetIndex0 = Math.max(0, sheets.indexOf(sheet));
-            /** Stamps filter uses 1-based page index (`sheetIdx + 1`). */
-            const sheetIndex = sheetIndex0 + 1;
+            const sheetIndex = quoteSheetPageNumber(sheet, sheets.indexOf(sheet));
+            const anchor = sheetIndex === 1 ? computeCoverStampAnchor(sheet, e.clientX, e.clientY) : null;
 
             dragSignaturePayloadRef.current = null;
             handlePlaceDigitalStamp({
@@ -22084,6 +25795,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 designation: digitalStampUserDesignation,
                 xPct,
                 yPct,
+                ...(anchor || {}),
                 showNameOnStamp: payload.showNameOnStamp,
                 showDateTimeOnStamp: payload.showDateTimeOnStamp,
             });
@@ -22239,9 +25951,28 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             const next = { ...prev };
             if (next[sheetIdx] === 'landscape') delete next[sheetIdx];
             else next[sheetIdx] = 'landscape';
+            // Persist to collaborative draft so Approvals restores landscape (not session-only).
+            if (!embeddedApprovalReview && quoteDraftId) {
+                if (pageOrientDraftSaveTimerRef.current) {
+                    clearTimeout(pageOrientDraftSaveTimerRef.current);
+                }
+                pageOrientDraftSaveTimerRef.current = setTimeout(() => {
+                    void saveQuoteDraftRef.current?.({
+                        force: true,
+                        pageOrientationsOverride: next,
+                        quiet: true,
+                    });
+                }, 500);
+            }
             return next;
         });
-    }, [quotePreviewPageInfo.current, sheets, expandedClause]);
+    }, [
+        quotePreviewPageInfo.current,
+        sheets,
+        expandedClause,
+        embeddedApprovalReview,
+        quoteDraftId,
+    ]);
 
     useEffect(() => {
         if (!isQuotePreviewVisible) return undefined;
@@ -22305,12 +26036,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     );
 
     const handleMoveDigitalStamp = useCallback(
-        (id, xPct, yPct) => {
+        (id, xPct, yPct, anchorPatch) => {
             if (String(id).startsWith('inherited-')) return;
             commitQuoteDigitalStamps((prev) => {
                 const t = prev.find((s) => s.id === id);
                 if (!t || t.removableBeforeNextCommit !== true) return prev;
-                return prev.map((s) => (s.id === id ? { ...s, xPct, yPct } : s));
+                return prev.map((s) =>
+                    s.id === id ? { ...s, xPct, yPct, ...stampAnchorFields(anchorPatch) } : s
+                );
             });
         },
         [commitQuoteDigitalStamps]
@@ -22327,6 +26060,22 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         },
         [commitQuoteDigitalStamps]
     );
+
+    const renderQuotePreviewStamp = (stamp, landscape, anchoredInSignOff) => {
+        const editable = !stamp.inheritedFromSubJob && stamp.removableBeforeNextCommit === true;
+        return (
+            <QuoteSignatureStamp
+                key={stamp.id}
+                stamp={stamp}
+                landscape={landscape}
+                anchoredInSignOff={anchoredInSignOff}
+                onRemove={handleRemoveDigitalStamp}
+                onMove={handleMoveDigitalStamp}
+                allowRemove={editable}
+                allowMove={editable}
+            />
+        );
+    };
 
     /** Parent own-job tab: show this tab's stamps plus latest saved stamps from each direct subjob quote row. */
     const quotePreviewDigitalStamps = React.useMemo(() => {
@@ -22726,6 +26475,49 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         try {
             const printContent = document.getElementById('quote-preview');
+            try {
+                /* PDF captures the same paginated DOM as preview — do not re-pack. */
+                const previewRoot = document.getElementById('quote-preview');
+                if (previewRoot) {
+                    skipOverflowPeelRef.current = true;
+                    previewRoot
+                        .querySelectorAll(
+                            '.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)'
+                        )
+                        .forEach((sheet) => relaxTableRowHeightsForClausePackMeasure(sheet));
+                    if (typeof document !== 'undefined' && document.fonts?.ready) {
+                        await document.fonts.ready.catch(() => {});
+                    }
+                    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+                    previewRoot
+                        .querySelectorAll(
+                            '.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)'
+                        )
+                        .forEach((sheet) => relaxTableRowHeightsForClausePackMeasure(sheet));
+                    /* PDF route: same visibility gate as preview (unit fully inside one sheet). */
+                    const vis = assertSegmentVisibilityOnSheets(
+                        previewRoot,
+                        sanitizedClauseSegmentPageGroups,
+                        clauseSegmentsForPagination.length,
+                        {
+                            reservePx: CONTENT_END_GAP_PX,
+                            usablePx: EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
+                        }
+                    );
+                    if (!vis.ok) {
+                        setQuotePackIntegrityFailed(true);
+                        skipOverflowPeelRef.current = false;
+                        throw new Error(
+                            'Quote pagination integrity check failed — some content may be clipped. PDF download is disabled until pagination succeeds.'
+                        );
+                    }
+                    setQuotePackIntegrityFailed(false);
+                    skipOverflowPeelRef.current = false;
+                }
+            } catch (packErr) {
+                skipOverflowPeelRef.current = false;
+                console.warn('[PDF] pre-capture paint flush skipped', packErr);
+            }
 
             const tCapture = quotePerfStart('PDF — DOM clone & capture');
             const fragmentHtml = printRoot
@@ -22738,9 +26530,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
             const tHtml = quotePerfStart('PDF — HTML generation');
             const serverOrigin = getQuotePdfServerOrigin();
-            const html = buildQuotePrintDocumentHtml(printWithHeader, fragmentHtml, tableStyles, serverOrigin, 'preview', {
-                pdfAssetOriginRewriteFrom: typeof window !== 'undefined' ? window.location.origin : '',
-            });
+            const html = buildQuotePrintDocumentHtml(
+                printWithHeader,
+                fragmentHtml,
+                tableStyles,
+                serverOrigin,
+                'preview',
+                {
+                    pdfAssetOriginRewriteFrom:
+                        typeof window !== 'undefined' ? window.location.origin : '',
+                }
+            );
             stages.htmlGenMs = tHtml.end({ chars: html?.length || 0 });
 
             const safeRef = String(quoteNumber || quoteId || 'Draft').replace(/\//g, '_');
@@ -22950,6 +26750,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
      * Falls back to html2pdf, then browser Print / Save as PDF.
      */
     const downloadPDF = async () => {
+        if (quotePackIntegrityFailed) {
+            alert(
+                'Quote pagination integrity check failed — some content may be missing. PDF download is disabled until pagination succeeds.'
+            );
+            return;
+        }
         setIsUploading(true);
         setExportBusyLabel('Generating PDF...');
         try {
@@ -23692,6 +27498,98 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         preparedByOptions,
     ]);
 
+    /** Approved workflow steps → signature images above matching Signatory / Co-Signatory names.
+     *  Skip only when that same person also placed a stamp on the cover (sheet 1), so their
+     *  signature does not appear twice. Other users' stamps never hide it. */
+    const approvalCoverSignatureImages = React.useMemo(() => {
+        const displaySignatory = String(
+            subjobQuoteA4HeaderDisplay?.signatory ?? signatory ?? ''
+        ).trim();
+        const displayCoSignatory = String(
+            subjobQuoteA4HeaderDisplay?.coSignatory ?? coSignatory ?? ''
+        ).trim();
+        const resolved = resolveApprovalCoverSignatureImages(
+            approvalWorkflowSteps,
+            displaySignatory,
+            displayCoSignatory
+        );
+        const coverStamps = (quotePreviewDigitalStamps || []).filter(
+            (s) => Number(s.sheetIndex) === 1 && s.imageDataUrl
+        );
+        if (!coverStamps.length) return resolved;
+
+        const nameKey = (s) =>
+            String(s || '')
+                .trim()
+                .toLowerCase()
+                .replace(/\s+/g, ' ');
+        const emailsForPerson = (personName) => {
+            const target = nameKey(personName);
+            const out = new Set();
+            for (const step of approvalWorkflowSteps || []) {
+                if (nameKey(step?.approverName) !== target) continue;
+                const em = normalizeSignatureEmail(step?.approverEmail);
+                if (em) out.add(em);
+            }
+            return out;
+        };
+        const stampMatches = (personName) => {
+            const target = nameKey(personName);
+            if (!target) return false;
+            const emails = emailsForPerson(personName);
+            return coverStamps.some((st) => {
+                if (nameKey(st.displayName) === target) return true;
+                const em = normalizeSignatureEmail(st.placedByEmail);
+                return !!em && emails.has(em);
+            });
+        };
+        return {
+            signatory: stampMatches(displaySignatory) ? '' : resolved.signatory,
+            coSignatory: stampMatches(displayCoSignatory) ? '' : resolved.coSignatory,
+        };
+    }, [
+        approvalWorkflowSteps,
+        signatory,
+        coSignatory,
+        subjobQuoteA4HeaderDisplay?.signatory,
+        subjobQuoteA4HeaderDisplay?.coSignatory,
+        quotePreviewDigitalStamps,
+    ]);
+
+    /** Cover page has a placed digital stamp (sheet 1) — used for layout spacer + name fallback. */
+    const coverHasDigitalStamp = React.useMemo(
+        () =>
+            (quotePreviewDigitalStamps || []).some(
+                (s) => Number(s.sheetIndex) === 1 && s.imageDataUrl
+            ),
+        [quotePreviewDigitalStamps]
+    );
+
+    /** Printed cover Signatory name — fall back to cover-stamp caption if the row Signatory is blank.
+     *  Always shown in the formal Signatory line (Previous Quotes / Approvals / draft). */
+    const coverSignatoryNameDisplay = React.useMemo(() => {
+        const fromRow = String(
+            subjobQuoteA4HeaderDisplay?.signatory ?? signatory ?? ''
+        ).trim();
+        if (fromRow) return fromRow;
+        const coverStamp = (quotePreviewDigitalStamps || []).find(
+            (s) => Number(s.sheetIndex) === 1 && String(s.displayName || '').trim()
+        );
+        return String(coverStamp?.displayName || '').trim();
+    }, [
+        subjobQuoteA4HeaderDisplay?.signatory,
+        signatory,
+        quotePreviewDigitalStamps,
+    ]);
+
+    const coverCoSignatoryNameDisplay = React.useMemo(() => {
+        const fromRow = String(
+            subjobQuoteA4HeaderDisplay?.coSignatory ?? coSignatory ?? ''
+        ).trim();
+        if (fromRow) return fromRow;
+        return '';
+    }, [subjobQuoteA4HeaderDisplay?.coSignatory, coSignatory]);
+
     /** Quote Ref line in A4 preview: saved quotes when browsing; Draft / *-Draft from left-panel ref when not. */
     const quoteRefDisplayForPreview = React.useMemo(() => {
         if (embeddedApprovalReview) {
@@ -23838,8 +27736,31 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     ]);
 
     /**
-     * Draft + Previous Quotes + Approvals: run Align Page once preview content is ready so A4 packing
-     * uses measured tight fit instead of the fast estimated layout alone.
+     * Queue Align Page whenever clause layout content changes (load / draft / tab).
+     * Deduped per layout key so we do not loop.
+     */
+    const lastAutoAlignLayoutKeyRef = useRef('');
+    useEffect(() => {
+        if (!quoteShellReady || showQuoteListSummaryOverQuote) return;
+        if (shouldBlankQuotePreviewInBrowse) return;
+        if (!clauseSegmentsForPagination.length) return;
+        if (expandedClause) return;
+        const key = String(clausePaginationLayoutKey || '');
+        if (!key || lastAutoAlignLayoutKeyRef.current === key) return;
+        lastAutoAlignLayoutKeyRef.current = key;
+        pendingAutoAlignPreviewRef.current = true;
+    }, [
+        quoteShellReady,
+        showQuoteListSummaryOverQuote,
+        shouldBlankQuotePreviewInBrowse,
+        clauseSegmentsForPagination.length,
+        clausePaginationLayoutKey,
+        expandedClause,
+    ]);
+
+    /**
+     * Run real Align Page automatically after preview content is ready
+     * (same work as the Align Page button — dense BOQ/schedule packing).
      */
     useEffect(() => {
         if (!pendingAutoAlignPreviewRef.current) return;
@@ -23850,27 +27771,30 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         }
         if (quotePreviewUpdating) return;
         if (expandedClause) return;
+        /* Wait for draft hydrate when a collaborative draft is still loading. */
         if (
             !embeddedApprovalReview &&
             !browsePreviousQuotesRevisions &&
+            quoteDraftLoadedRowRef.current &&
             !quoteDraftHydrated
         ) {
             return;
         }
 
         let cancelled = false;
-        let raf2 = 0;
-        const raf1 = requestAnimationFrame(() => {
-            raf2 = requestAnimationFrame(() => {
+        let timeoutId = 0;
+        let rafId = 0;
+        timeoutId = window.setTimeout(() => {
+            rafId = requestAnimationFrame(() => {
                 if (cancelled || !pendingAutoAlignPreviewRef.current) return;
                 pendingAutoAlignPreviewRef.current = false;
                 void alignQuotePreviewPagesRef.current?.();
             });
-        });
+        }, 40);
         return () => {
             cancelled = true;
-            cancelAnimationFrame(raf1);
-            if (raf2) cancelAnimationFrame(raf2);
+            if (timeoutId) window.clearTimeout(timeoutId);
+            if (rafId) cancelAnimationFrame(rafId);
         };
     }, [
         embeddedApprovalReview,
@@ -23886,6 +27810,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         quoteNumber,
         activeQuoteTab,
         loadedEnquiryQuoteRowForPreview,
+        sheets.length,
     ]);
 
     const attentionSelectOptions = React.useMemo(() => {
@@ -24841,13 +28766,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                 <CreatableSelect
                                     isDisabled={
                                         !enquiryData ||
-                                        selectedLeadId == null ||
-                                        String(selectedLeadId).trim() === ''
+                                        ((selectedLeadId == null ||
+                                            String(selectedLeadId).trim() === '') &&
+                                            !String(enquiryData?.leadJobPrefix || '').trim())
                                     }
                                     placeholder={
                                         !enquiryData
                                             ? 'Select enquiry first'
-                                            : !selectedLeadId
+                                            : selectedLeadId == null &&
+                                                !String(enquiryData?.leadJobPrefix || '').trim()
                                               ? 'Select lead job first'
                                               : 'Select customer…'
                                     }
@@ -25208,7 +29135,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                     if (!activeTabRealId) return s;
                                                     s.add(String(activeTabRealId));
                                                     let changed = true;
-                                                    while (changed) {
+                                                    let guard = 0;
+                                                    const maxGuard = Math.max(8, (jobsPool.length || 0) + 4);
+                                                    while (changed && guard < maxGuard) {
+                                                        guard += 1;
                                                         changed = false;
                                                         jobsPool.forEach((j) => {
                                                             const jId = String(j.id || j.ItemID || j.ID || '');
@@ -25511,13 +29441,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                     if (isStrictlyLimited) {
                                                         const isActualAncestor = matchingJobs.some(job => {
                                                             const jobIdStr = String(job.id || job.ItemID || job.ID);
-                                                            let curr = activeTabRealId ? jobsPool.find(j => String(j.id || j.ItemID || j.ID) === String(activeTabRealId)) : null;
-                                                            while (curr && (curr.parentId || curr.ParentID)) {
-                                                                const pid = String(curr.parentId || curr.ParentID);
-                                                                if (pid === jobIdStr) return true;
-                                                                curr = jobsPool.find(pj => String(pj.id || pj.ItemID || pj.ID) === pid);
-                                                            }
-                                                            return false;
+                                                            const tabJob = activeTabRealId
+                                                                ? jobsPool.find(j => String(j.id || j.ItemID || j.ID) === String(activeTabRealId))
+                                                                : null;
+                                                            if (!tabJob) return false;
+                                                            return forEachJobAncestor(tabJob, jobsPool, (_j, pid) => pid === jobIdStr);
                                                         });
                                                         if (isActualAncestor) return false;
                                                     }
@@ -25593,6 +29521,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                         {/* Pricing Summary visible only when Previous Quotes is OFF */}
                                                         {!browsePreviousQuotesRevisions && (
                                                             <div
+                                                                key={`pricing-summary-${quoteCurrencyCode}`}
                                                                 style={{
                                                                     padding: '8px',
                                                                     background: '#f0fdf4',
@@ -26208,7 +30137,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     />
 
                                     {/* Select template, then click Load to apply it to the quote preview. */}
-                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                    <div
+                                        style={{
+                                            display: 'flex',
+                                            gap: '8px',
+                                            width: '100%',
+                                            minWidth: 0,
+                                            alignItems: 'center',
+                                        }}
+                                    >
                                         <select
                                             value={selectedTemplateId}
                                             onChange={(e) => {
@@ -26228,7 +30165,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                 }
                                             }}
                                             style={{
-                                                flex: 1,
+                                                flex: '1 1 0%',
+                                                minWidth: 0,
+                                                maxWidth: '100%',
                                                 ...QUOTE_LEFT_COMPACT_CONTROL,
                                                 fontSize: '12px',
                                                 background: '#ffffff',
@@ -26264,6 +30203,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                 fontSize: '12px',
                                                 fontWeight: 600,
                                                 whiteSpace: 'nowrap',
+                                                flexShrink: 0,
                                                 opacity: selectedTemplateId ? 1 : 0.45,
                                             }}
                                             title="Load the selected template into the quote clauses"
@@ -26284,6 +30224,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                 background: '#ffffff',
                                                 border: '1px solid #fecaca',
                                                 borderRadius: '4px',
+                                                flexShrink: 0,
                                                 cursor:
                                                     selectedTemplateId &&
                                                     !isDefaultClauseTemplateId(selectedTemplateId)
@@ -26313,13 +30254,23 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                             >
                                                 Pick a saved quote ref from this enquiry to copy its Quote Details (subject, prepared by, attention of, …) and clause content into your new revision.
                                             </p>
-                                            <div style={{ display: 'flex', gap: '8px' }}>
+                                            <div
+                                                style={{
+                                                    display: 'flex',
+                                                    gap: '8px',
+                                                    width: '100%',
+                                                    minWidth: 0,
+                                                    alignItems: 'center',
+                                                }}
+                                            >
                                                 <select
                                                     value={selectedPrevRevisionQuoteId}
                                                     onChange={(e) => setSelectedPrevRevisionQuoteId(e.target.value)}
                                                     disabled={prevRevisionQuoteOptions.length === 0}
                                                     style={{
-                                                        flex: 1,
+                                                        flex: '1 1 0%',
+                                                        minWidth: 0,
+                                                        maxWidth: '100%',
                                                         ...QUOTE_LEFT_COMPACT_CONTROL,
                                                         fontSize: '12px',
                                                         background: '#ffffff',
@@ -26373,6 +30324,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                         fontSize: '12px',
                                                         fontWeight: 600,
                                                         whiteSpace: 'nowrap',
+                                                        flexShrink: 0,
                                                         opacity:
                                                             selectedPrevRevisionQuoteId && !browsePreviousQuotesRevisions
                                                                 ? 1
@@ -26660,7 +30612,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             overflow: 'hidden',
                         }}
                     >
-                    {showQuoteListSummaryOverQuote ? (
+                    {showQuoteListSummaryOverQuote && !embeddedApprovalReview ? (
                         quoteListSummaryBody
                     ) : quoteShellReady ? (
                         <div
@@ -26752,9 +30704,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             <div
                                 className="no-print quote-approval-side-panel"
                                 style={{
-                                    width: embeddedApprovalReview ? '240px' : '225px',
-                                    minWidth: embeddedApprovalReview ? '220px' : '177px',
-                                    maxWidth: embeddedApprovalReview ? '280px' : '258px',
+                                    width: embeddedApprovalReview ? '260px' : '225px',
+                                    minWidth: embeddedApprovalReview ? '240px' : '177px',
+                                    maxWidth: embeddedApprovalReview ? '300px' : '258px',
                                     flexShrink: 0,
                                     flexGrow: 0,
                                     display: 'flex',
@@ -26764,7 +30716,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     maxHeight: '100%',
                                     alignSelf: 'stretch',
                                     overflow: 'hidden',
-                                    padding: '12px 14px',
+                                    padding: '10px 12px',
                                     background: '#f8fafc',
                                     border: '1px solid #e2e8f0',
                                     borderRadius: '8px',
@@ -26774,10 +30726,83 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                 }}
                             >
                                 {quotePreviewStatusBar}
+                                {(() => {
+                                    const attachmentCount =
+                                        (quoteAttachments || []).filter((a) =>
+                                            canViewQuotePrivateAttachment(a)
+                                        ).length + pendingFiles.length;
+                                    const tabBtn = (id, label) => {
+                                        const active = quoteSidePanelTab === id;
+                                        return (
+                                            <button
+                                                type="button"
+                                                role="tab"
+                                                aria-selected={active}
+                                                onClick={() => setQuoteSidePanelTab(id)}
+                                                style={{
+                                                    flex: 1,
+                                                    minWidth: 0,
+                                                    padding: '6px 8px',
+                                                    fontSize: '12px',
+                                                    fontWeight: active ? 700 : 600,
+                                                    color: active ? '#1d4ed8' : '#64748b',
+                                                    background: active ? '#fff' : 'transparent',
+                                                    border: 'none',
+                                                    borderBottom: active
+                                                        ? '2px solid #2563eb'
+                                                        : '2px solid transparent',
+                                                    cursor: 'pointer',
+                                                    borderRadius: '6px 6px 0 0',
+                                                    lineHeight: 1.2,
+                                                }}
+                                            >
+                                                {label}
+                                            </button>
+                                        );
+                                    };
+                                    return (
+                                        <>
+                                            <div
+                                                role="tablist"
+                                                aria-label="Workflow and attachments"
+                                                style={{
+                                                    display: 'flex',
+                                                    gap: '2px',
+                                                    flexShrink: 0,
+                                                    marginTop: '6px',
+                                                    marginBottom: '8px',
+                                                    borderBottom: '1px solid #e2e8f0',
+                                                }}
+                                            >
+                                                {tabBtn('workflow', 'Workflow')}
+                                                {tabBtn(
+                                                    'attachments',
+                                                    attachmentCount > 0
+                                                        ? `Attachments (${attachmentCount})`
+                                                        : 'Attachments'
+                                                )}
+                                            </div>
+                                            <div
+                                                role="tabpanel"
+                                                style={{
+                                                    flex: 1,
+                                                    minHeight: 0,
+                                                    display: 'flex',
+                                                    flexDirection: 'column',
+                                                    overflow: 'hidden',
+                                                }}
+                                            >
+                                                {quoteSidePanelTab === 'workflow' ? (
                                 <QuoteApprovalWorkflow
                                     steps={approvalWorkflowSteps}
                                     stepsLoading={approvalWorkflowStepsLoading}
-                                    onChange={setApprovalWorkflowSteps}
+                                    onChange={(nextSteps) => {
+                                        setApprovalWorkflowSteps(
+                                            normalizeApprovalStepsFromApi(
+                                                Array.isArray(nextSteps) ? nextSteps : []
+                                            )
+                                        );
+                                    }}
                                     approverOptions={computedApproverOptions}
                                     viewOnly={embeddedApprovalReview || !quoteModuleApprovalWorkflowEnabled}
                                     approvalReviewMode={embeddedApprovalReview}
@@ -26815,6 +30840,21 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     currentUserName={currentUser?.FullName || currentUser?.name || ''}
                                     apiBase={API_BASE}
                                     onStepsUpdated={(steps, meta) => {
+                                        if (Array.isArray(steps) && meta?.action !== 'rollback') {
+                                            setApprovalWorkflowSteps(
+                                                normalizeApprovalStepsFromApi(steps)
+                                            );
+                                        }
+                                        if (
+                                            embeddedApprovalReview &&
+                                            (meta?.action === 'approved' ||
+                                                meta?.action === 'rejected') &&
+                                            !meta?.optimistic
+                                        ) {
+                                            queueMicrotask(() => {
+                                                void fetchApprovalStepsFromServerRef.current?.();
+                                            });
+                                        }
                                         if (meta?.action === 'rollback') {
                                             if (
                                                 embeddedApprovalReview &&
@@ -26868,22 +30908,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     projectName={String(enquiryData?.enquiry?.ProjectName || '').trim()}
                                     customerName={String(toName || '').trim()}
                                     quoteSubject={String(subject || '').trim()}
-                                    leadJobName={(() => {
-                                        try {
-                                            return String(getQuotePayload()?.leadJob || '').trim();
-                                        } catch {
-                                            return '';
-                                        }
-                                    })()}
-                                    ownJob={(() => {
-                                        try {
-                                            return String(getQuotePayload()?.ownJob || '').trim();
-                                        } catch {
-                                            return '';
-                                        }
-                                    })()}
+                                    leadJobName={quoteToolbarLeadJobName}
+                                    ownJob={quoteToolbarOwnJobName}
                                     quoteNumber={String(quoteNumber || '').trim()}
+                                    approvalMode={approvalWorkflowMode}
                                     onApprovalSent={(data) => {
+                                        if (data?.approvalMode) {
+                                            setApprovalWorkflowMode(String(data.approvalMode));
+                                        }
                                         if (data?.correctionRequired || data?.approvalUnlocked) {
                                             setApprovalRequestSent(false);
                                         } else if (data?.approvalRequestSent) {
@@ -26907,39 +30939,18 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     }}
                                     beforeSendApproval={prepareQuoteDraftForApprovalSend}
                                 />
-
-                                <div
-                                    style={{
-                                        borderTop: '1px solid #e2e8f0',
-                                        margin: '8px 0',
-                                        flexShrink: 0,
-                                    }}
-                                />
-
+                                                ) : (
                                 <div
                                     style={{
                                         display: 'flex',
                                         flexDirection: 'column',
                                         gap: embeddedApprovalReview ? '10px' : '12px',
-                                        flex: embeddedApprovalReview ? '1 1 40%' : '1 1 50%',
+                                        flex: '1 1 auto',
                                         minHeight: 0,
                                         overflowY: 'auto',
+                                        height: '100%',
                                     }}
                                 >
-                                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#475569', fontSize: '13px', fontWeight: '600' }}>
-                                        <Paperclip size={18} className="text-blue-500" />
-                                        <span>
-                                            Attachments{' '}
-                                            {(quoteAttachments.length > 0 || pendingFiles.length > 0) &&
-                                                `(${
-                                                    (quoteAttachments || []).filter((a) =>
-                                                        canViewQuotePrivateAttachment(a)
-                                                    ).length + pendingFiles.length
-                                                })`}
-                                        </span>
-                                    </div>
-                                </div>
                                 {quoteEmailDraftHref && (
                                     <div style={{ fontSize: '11px', color: '#475569', lineHeight: 1.45 }}>
                                         <div style={{ color: '#334155', marginBottom: '4px' }}>
@@ -26984,8 +30995,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
                                         <div style={{ fontSize: '12px', fontWeight: 700, color: '#1d4ed8' }}>
                                             1. Public Attachments{' '}
-                                            <span style={{ fontWeight: 500, color: '#64748b', fontSize: '11px' }}>
-                                                (Visible to all assigned users - Own Division + Other division members in this enquiry)
+                                            <span style={{ fontWeight: 500, color: '#64748b', fontSize: '8.8px' }}>
+                                                (Assigned ConcernedSE + their CCMailIds + Approvers + Admin)
                                             </span>
                                         </div>
                                         <button
@@ -27021,8 +31032,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' }}>
                                         <div style={{ fontSize: '12px', fontWeight: 700, color: '#b91c1c' }}>
                                             2. Private Attachments{' '}
-                                            <span style={{ fontWeight: 500, color: '#64748b', fontSize: '11px' }}>
-                                                (Your division members assigned in this enquiry + your managers only)
+                                            <span style={{ fontWeight: 500, color: '#64748b', fontSize: '8.8px' }}>
+                                                (Own-job ConcernedSE + their CCMailIds + Approvers + Admin)
                                             </span>
                                         </div>
                                         <button
@@ -27060,6 +31071,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     </div>
                                 )}
                                 </div>
+                                                )}
+                                            </div>
+                                        </>
+                                    );
+                                })()}
                             </div>
 
                             {/* Preview scroll host — clause toolbar is above this row (full panel width). */}
@@ -27087,6 +31103,28 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     !expandedClause && (quotePreviewUpdating || quoteAlignPageBusy)
                                 }
                             >
+                            {quotePackIntegrityFailed && !expandedClause ? (
+                                <div
+                                    role="alert"
+                                    style={{
+                                        position: 'absolute',
+                                        top: 8,
+                                        left: 8,
+                                        right: 8,
+                                        zIndex: 140,
+                                        padding: '10px 12px',
+                                        borderRadius: 6,
+                                        background: '#fef2f2',
+                                        border: '1px solid #fecaca',
+                                        color: '#991b1b',
+                                        fontSize: 13,
+                                        fontWeight: 600,
+                                        boxShadow: '0 2px 8px rgba(15,23,42,0.12)',
+                                    }}
+                                >
+                                    Pagination error — some content is clipped or missing. PDF download is disabled. Click Align Page, then try again.
+                                </div>
+                            ) : null}
                             {(quotePreviewUpdating || quoteAlignPageBusy) && !expandedClause ? (
                                 <div
                                     className="quote-preview-content-loading"
@@ -27103,7 +31141,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         aria-hidden="true"
                                     />
                                     <span className="quote-preview-content-loading__text">
-                                        {quoteAlignPageBusy ? 'Aligning page…' : 'Updating preview…'}
+                                        {quoteAlignPageBusy ? 'Paginating…' : 'Updating preview…'}
                                     </span>
                                 </div>
                             ) : null}
@@ -27134,6 +31172,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     </div>
                                 </div>
                             <style>{tableStyles}</style>
+                            <style>{buildQuotePackFontFaceCss(
+                                typeof window !== 'undefined' ? window.location.origin : ''
+                            )}</style>
                             <style>
                                 {`
                                     .quote-print-repeat-strip {
@@ -27338,6 +31379,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     .quote-header-address-panel-contact-line span:last-child {
                                         flex: 1 1 auto;
                                         min-width: 0;
+                                        white-space: normal;
+                                        overflow-wrap: anywhere;
+                                        word-break: break-word;
+                                        line-height: 1.25;
                                     }
                                     .quote-header-quote-panel > .quote-header-address-panel-row--header {
                                         flex-shrink: 0;
@@ -27348,6 +31393,30 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         top: 0;
                                         pointer-events: none;
                                         visibility: hidden;
+                                        width: 180mm;
+                                        box-sizing: border-box;
+                                        font-family: ${QUOTE_PACK_FONT_STACK};
+                                        font-size: 13px;
+                                        line-height: 1.4;
+                                    }
+                                    .quote-clause-measure-host .clause-content,
+                                    .quote-clause-measure-host .clause-content span,
+                                    .quote-clause-measure-host .clause-content font {
+                                        white-space: normal !important;
+                                    }
+                                    /* R8: measure with the same compact Selawik metrics as continuation sheets. */
+                                    .quote-clause-measure-host table td,
+                                    .quote-clause-measure-host table th {
+                                        padding-top: 1px !important;
+                                        padding-bottom: 1px !important;
+                                        font-size: 12.5px !important;
+                                        line-height: 15px !important;
+                                        overflow: visible !important;
+                                    }
+                                    .quote-clause-measure-host .clause-content,
+                                    .quote-clause-measure-host .clause-content p,
+                                    .quote-clause-measure-host .clause-content li {
+                                        line-height: 1.4 !important;
                                     }
                                     #quote-preview {
                                         display: flex;
@@ -27365,7 +31434,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         overflow-x: visible;
                                         overflow-y: visible;
                                         margin: 0 auto;
-                                        font-family: 'Segoe UI', 'Segoe UI Web (West European)', system-ui, -apple-system, sans-serif;
+                                        font-family: ${QUOTE_PACK_FONT_STACK};
                                     }
                                     .quote-preview-column-host {
                                         position: relative;
@@ -27754,12 +31823,29 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     .quote-preview-clause-edit-bar--idle .jodit-toolbar__box {
                                         opacity: 0.72;
                                     }
-                                    /* Table resize handles live on document.body — hide when not editing a clause. */
-                                    body:has(#quote-preview .quote-preview-clause-edit-bar--idle) .ems-table-col-resizer,
-                                    body:has(#quote-preview .quote-preview-clause-edit-bar--idle) .ems-table-row-resizer {
+                                    /* Table resize handles — never paint on non-editing sheets (C2 stray mark). */
+                                    body:has(#quote-preview:not(.quote-preview--clause-editing)) .ems-table-col-resizer,
+                                    body:has(#quote-preview:not(.quote-preview--clause-editing)) .ems-table-row-resizer,
+                                    body:has(#quote-preview:not(.quote-preview--clause-editing)) .jodit-table-resizer,
+                                    #quote-preview:not(.quote-preview--clause-editing) .ems-table-col-resizer,
+                                    #quote-preview:not(.quote-preview--clause-editing) .ems-table-row-resizer,
+                                    #quote-preview:not(.quote-preview--clause-editing) .jodit-table-resizer,
+                                    #quote-preview .quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing) .ems-table-col-resizer,
+                                    #quote-preview .quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing) .ems-table-row-resizer,
+                                    #quote-preview .quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing) .jodit-table-resizer {
                                         display: none !important;
                                         pointer-events: none !important;
                                         visibility: hidden !important;
+                                        opacity: 0 !important;
+                                        width: 0 !important;
+                                        height: 0 !important;
+                                    }
+                                    body:has(#quote-preview.quote-preview--clause-editing) .ems-table-col-resizer,
+                                    body:has(#quote-preview.quote-preview--clause-editing) .ems-table-row-resizer {
+                                        display: block !important;
+                                        pointer-events: auto !important;
+                                        visibility: visible !important;
+                                        opacity: 1 !important;
                                     }
                                     .jodit-color-picker .ems-bgcolor-none-row {
                                         display: flex;
@@ -28066,7 +32152,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         line-height: 1.6 !important;
                                         padding: 0 !important;
                                         margin: 0 !important;
-                                        min-height: 0 !important;
+                                        min-height: 1.6em !important;
                                         height: auto !important;
                                         width: 100% !important;
                                         max-width: 100% !important;
@@ -28074,9 +32160,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         user-select: text !important;
                                         -webkit-user-select: text !important;
                                         caret-color: auto !important;
+                                        cursor: text !important;
                                         white-space: normal !important;
-                                        overflow-wrap: anywhere !important;
+                                        overflow-wrap: break-word !important;
                                         word-wrap: break-word !important;
+                                        word-break: normal !important;
                                         overflow-x: visible !important;
                                         overflow-y: visible !important;
                                         text-align: left !important;
@@ -28085,16 +32173,50 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         font-family: inherit !important;
                                         position: static !important;
                                     }
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table[data-ems-paste-source="office"],
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table[data-ems-col-widths]:not([data-ems-pricing-cols="fixed"]):not([id^="ems-auto-price-summary-table"]),
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table.ems-office-paste-table {
+                                        table-layout: fixed !important;
+                                    }
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table[data-ems-paste-source="office"] td,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table[data-ems-paste-source="office"] th,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table[data-ems-col-widths]:not([data-ems-pricing-cols="fixed"]) td,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table[data-ems-col-widths]:not([data-ems-pricing-cols="fixed"]) th,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table.ems-office-paste-table td,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table.ems-office-paste-table th {
+                                        overflow-wrap: break-word !important;
+                                        word-break: normal !important;
+                                        max-width: none !important;
+                                    }
                                     #quote-preview .quote-clause-inline-editor--word-flow .jodit-wysiwyg {
                                         background: #fff !important;
                                         color: #0f172a !important;
                                     }
                                     #quote-preview .quote-clause-inline-editor .jodit-wysiwyg p,
-                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg div:not(table div):not(td div):not(th div) {
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg div:not(table):not(thead):not(tbody):not(tfoot):not(tr),
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg li,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg span,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg font,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg b,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg strong,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg i,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg em,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg u,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg a {
                                         white-space: normal !important;
                                         word-wrap: break-word !important;
                                         overflow-wrap: anywhere !important;
+                                        word-break: break-word !important;
                                         max-width: 100% !important;
+                                    }
+                                    /* Do not let prose wrap rules 1ch-break Qty/Unit/Amount inside BOQ cells. */
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table td,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table th,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table td *,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg table th * {
+                                        overflow-wrap: break-word !important;
+                                        word-break: normal !important;
+                                        max-width: none !important;
                                     }
                                     #quote-preview .quote-clause-inline-editor .jodit-wysiwyg > p {
                                         margin-top: 0 !important;
@@ -28343,15 +32465,74 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         page-break-after: always;
                                         break-after: page;
                                     }
-                                    .quote-a4-sheet:last-child {
-                                        page-break-after: auto;
-                                        break-after: auto;
+                                    /* R6: break only between sheets — never after the last real sheet. */
+                                    .quote-a4-sheet:not(:has(~ .quote-a4-sheet)) {
+                                        page-break-after: auto !important;
+                                        break-after: auto !important;
                                     }
                                     .quote-a4-sheet--continuation {
                                         min-height: 297mm;
                                         max-height: 297mm;
                                         height: 297mm;
                                         overflow: hidden;
+                                        /* Fixed bands: logo 21mm, content 220mm, footer 26mm. */
+                                        grid-template-rows: ${QUOTE_A4_LOGO_BAND_MM}mm minmax(0, 1fr) ${QUOTE_A4_FOOTER_BAND_MM}mm !important;
+                                    }
+                                    .quote-a4-sheet--continuation > .quote-sheet-logo-row {
+                                        height: ${QUOTE_A4_LOGO_BAND_MM}mm !important;
+                                        min-height: ${QUOTE_A4_LOGO_BAND_MM}mm !important;
+                                        max-height: ${QUOTE_A4_LOGO_BAND_MM}mm !important;
+                                        margin-bottom: 0 !important;
+                                        overflow: hidden !important;
+                                        box-sizing: border-box !important;
+                                    }
+                                    .quote-a4-sheet--continuation > .footer-section {
+                                        height: ${QUOTE_A4_FOOTER_BAND_MM}mm !important;
+                                        min-height: ${QUOTE_A4_FOOTER_BAND_MM}mm !important;
+                                        max-height: ${QUOTE_A4_FOOTER_BAND_MM}mm !important;
+                                        align-self: end !important;
+                                        justify-content: flex-end !important;
+                                        overflow: hidden !important;
+                                        box-sizing: border-box !important;
+                                    }
+                                    .quote-a4-sheet--continuation > .quote-sheet-main-flex {
+                                        height: 100% !important;
+                                        min-height: 0 !important;
+                                        overflow: hidden !important;
+                                    }
+                                    /* TEMP: content-area start (36mm) and end (41mm from the bottom). */
+                                    #quote-preview .quote-content-area-mark {
+                                        position: absolute;
+                                        left: 15mm;
+                                        right: 15mm;
+                                        z-index: 40;
+                                        pointer-events: none;
+                                        height: 0;
+                                        border-top: 2px solid #e11d48;
+                                        color: #e11d48;
+                                        font-size: 10px;
+                                        font-weight: 700;
+                                        line-height: 1;
+                                        letter-spacing: 0.04em;
+                                        white-space: nowrap;
+                                    }
+                                    #quote-preview .quote-content-area-mark--start {
+                                        top: 36mm;
+                                    }
+                                    #quote-preview .quote-content-area-mark--end {
+                                        top: 256mm;
+                                        border-top-color: #2563eb;
+                                        color: #2563eb;
+                                    }
+                                    #quote-preview .quote-a4-sheet--landscape .quote-content-area-mark--end {
+                                        top: 169mm;
+                                    }
+                                    #quote-preview .quote-content-area-mark span {
+                                        position: absolute;
+                                        top: 2px;
+                                        left: 0;
+                                        background: #fff;
+                                        padding: 0 4px;
                                     }
                                     .quote-a4-sheet--landscape {
                                         width: 297mm !important;
@@ -28410,7 +32591,110 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     #quote-preview .quote-a4-sheet--continuation .content-section {
                                         flex: 0 1 auto !important;
                                         max-height: 100% !important;
-                                        overflow: hidden;
+                                        /* Dev: never hide overpack — verify/integrity must catch it. */
+                                        overflow: ${typeof import.meta !== 'undefined' && import.meta.env?.DEV ? 'visible' : 'hidden'};
+                                        padding-top: 1px;
+                                        box-sizing: border-box;
+                                    }
+                                    ${typeof import.meta !== 'undefined' && import.meta.env?.DEV
+                                        ? `#quote-preview .quote-a4-sheet--continuation {
+                                        overflow: visible !important;
+                                    }
+                                    #quote-preview .quote-a4-sheet--continuation > .quote-sheet-main-flex {
+                                        overflow: visible !important;
+                                    }`
+                                        : ''}
+                                    #quote-preview .ems-boq-note-label {
+                                        margin: 0 0 4px !important;
+                                        font-weight: 600;
+                                    }
+                                    /* Continuation fragments must not add a new-paragraph top gap. */
+                                    #quote-preview .clause-content > p[data-ems-para-continue="1"],
+                                    #quote-preview .clause-content > table[data-ems-clause-row-continue="1"],
+                                    #quote-preview .clause-content > table[data-ems-clause-row-continue="1"] p[data-ems-para-continue="1"] {
+                                        margin-top: 0 !important;
+                                    }
+                                    #quote-preview .content-section > .quote-clause-block--continuation:first-child .clause-content > table:first-child,
+                                    #quote-preview .content-section > .quote-clause-block--continuation:first-child .clause-content > p:first-child {
+                                        margin-top: 0 !important;
+                                    }
+                                    #quote-preview .clause-content p[style*="text-align: justify"],
+                                    #quote-preview .clause-content p[style*="text-align:justify"],
+                                    #quote-preview .clause-content div[style*="text-align: justify"],
+                                    #quote-preview .clause-content div[style*="text-align:justify"] {
+                                        text-align: left !important;
+                                        text-align-last: left !important;
+                                    }
+                                    #quote-preview .ems-boq-note-block {
+                                        margin: 6px 0 10px;
+                                        font-size: 13px;
+                                        line-height: 1.45;
+                                    }
+                                    #quote-preview .quote-a4-sheet--continuation .quote-clause-heading-panel {
+                                        margin-top: 8px;
+                                    }
+                                    #quote-preview .quote-a4-sheet--continuation .quote-clause-block:first-child .quote-clause-heading-panel {
+                                        margin-top: 0;
+                                    }
+                                    /*
+                                     * R8: Selawik metrics are taller than prior Arial at line-height:1.25.
+                                     * Keep pre-font-change row visual size with explicit compact metrics
+                                     * (do not let rows grow and overflow the content band).
+                                     */
+                                    #quote-preview .quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing) table tr,
+                                    #quote-preview .quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing) table td,
+                                    #quote-preview .quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing) table th {
+                                        height: auto !important;
+                                        min-height: 0 !important;
+                                        max-height: none !important;
+                                    }
+                                    #quote-preview .quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing) table td,
+                                    #quote-preview .quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing) table th {
+                                        padding-top: 1px !important;
+                                        padding-bottom: 1px !important;
+                                        font-size: 12.5px !important;
+                                        line-height: 15px !important;
+                                        overflow: visible !important;
+                                    }
+                                    #quote-preview .quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing) .clause-content {
+                                        line-height: 1.4 !important;
+                                        overflow: visible !important;
+                                    }
+                                    #quote-preview .quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing) .clause-content p,
+                                    #quote-preview .quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing) .clause-content li {
+                                        line-height: 1.4 !important;
+                                        overflow: visible !important;
+                                    }
+                                    #quote-preview .quote-sheet-logo-row,
+                                    #quote-preview .quote-continuation-header {
+                                        display: flex !important;
+                                        flex-direction: row !important;
+                                        justify-content: flex-end !important;
+                                        align-items: flex-start !important;
+                                        width: 100% !important;
+                                    }
+                                    #quote-preview .quote-sheet-logo-row > div,
+                                    #quote-preview .quote-continuation-header > div {
+                                        display: flex !important;
+                                        flex-direction: row !important;
+                                        justify-content: flex-end !important;
+                                        align-items: flex-start !important;
+                                        width: 100% !important;
+                                        text-align: right !important;
+                                    }
+                                    #quote-preview .quote-sheet-logo-row img,
+                                    #quote-preview .quote-continuation-header img {
+                                        height: auto !important;
+                                        width: auto !important;
+                                        max-height: 21mm !important;
+                                        max-width: 100% !important;
+                                        object-fit: contain !important;
+                                        object-position: right top !important;
+                                        display: block !important;
+                                        margin-left: auto !important;
+                                        margin-right: 0 !important;
+                                        float: none !important;
+                                        position: static !important;
                                     }
                                     #quote-preview.quote-preview--clause-editing {
                                         background: #fff !important;
@@ -28514,9 +32798,32 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         grid-row: 1;
                                         flex-shrink: 0;
                                         display: flex;
+                                        flex-direction: row;
                                         justify-content: flex-end;
+                                        align-items: flex-start;
                                         width: 100%;
                                         margin-bottom: ${EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM};
+                                        box-sizing: border-box;
+                                    }
+                                    .quote-sheet-logo-row > div {
+                                        display: flex;
+                                        flex-direction: row;
+                                        justify-content: flex-end;
+                                        align-items: flex-start;
+                                        width: 100%;
+                                        text-align: right;
+                                        box-sizing: border-box;
+                                    }
+                                    .quote-sheet-logo-row img {
+                                        display: block;
+                                        height: auto;
+                                        width: auto;
+                                        max-height: 21mm;
+                                        max-width: 100%;
+                                        object-fit: contain;
+                                        object-position: right top;
+                                        margin-left: auto;
+                                        margin-right: 0;
                                     }
                                     /**
                                      * With Header off: letterhead invisible but space preserved (no vertical shift).
@@ -28654,6 +32961,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     }
                                     .quote-header-quote-panel--no-header .quote-header-quote-panel-mid {
                                         border-radius: 5px;
+                                        overflow: visible;
+                                        min-height: min-content;
                                     }
                                     .quote-header-quote-panel-body {
                                         display: flex;
@@ -28781,6 +33090,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         color: #000;
                                         font-weight: 400;
                                     }
+                                    .quote-header-quote-panel-value--email {
+                                        display: block;
+                                        white-space: normal;
+                                        overflow-wrap: anywhere;
+                                        word-break: break-word;
+                                        line-height: 1.25;
+                                    }
                                     .quote-cover-page1-spacer {
                                         flex: 1 1 auto;
                                         min-height: 0;
@@ -28794,6 +33110,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         display: flex;
                                         flex-direction: column;
                                         overflow: visible;
+                                        margin-bottom: ${EMS_QUOTE_COVER_SIGNATORY_LIFT_PX}px;
                                     }
                                     .quote-cover-signatory-block {
                                         flex: 0 0 auto;
@@ -28831,11 +33148,35 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         color: #0f172a;
                                         font-weight: 600;
                                     }
+                                    .quote-cover-signatory-col:has(.quote-cover-approval-sig) .quote-cover-sign-off-for {
+                                        margin-bottom: 4px;
+                                    }
+                                    .quote-cover-approval-sig {
+                                        flex: 0 0 auto;
+                                        display: flex;
+                                        align-items: center;
+                                        justify-content: flex-start;
+                                        min-height: calc(1.58em * 3.15);
+                                        margin: 0 0 2px 0;
+                                        max-width: 100%;
+                                    }
+                                    .quote-cover-signatory-col--co .quote-cover-approval-sig {
+                                        justify-content: flex-end;
+                                    }
+                                    .quote-cover-approval-sig img {
+                                        max-height: 56px;
+                                        max-width: min(200px, 100%);
+                                        width: auto;
+                                        height: auto;
+                                        object-fit: contain;
+                                        display: block;
+                                    }
                                     .quote-cover-signatory-line {
                                         margin-top: 0;
                                         min-height: calc(13px * 1.58);
                                         font-size: 13px;
                                         line-height: 1.58;
+                                        font-weight: 600;
                                         color: #0f172a;
                                     }
                                     .quote-cover-signatory-designation {
@@ -29070,6 +33411,26 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         min-height: 0 !important;
                                         overflow: hidden !important;
                                     }
+                                    /* While editing, keep empty / <br>-only paragraphs as a caret hit-target.
+                                       The rules above collapse them for PDF packing and leave nowhere to click. */
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg.clause-content > p:last-child:empty,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg > p:last-child:empty,
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg.clause-content > p:last-child:has(> br:only-child),
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg > p:last-child:has(> br:only-child) {
+                                        display: block !important;
+                                        visibility: visible !important;
+                                        height: auto !important;
+                                        min-height: 1.6em !important;
+                                        font-size: inherit !important;
+                                        line-height: 1.6 !important;
+                                        overflow: visible !important;
+                                        margin: 0 !important;
+                                        padding: 0 !important;
+                                    }
+                                    #quote-preview .quote-clause-inline-editor .jodit-wysiwyg {
+                                        min-height: 1.6em !important;
+                                        cursor: text !important;
+                                    }
                                     #quote-preview .clause-content ul,
                                     #quote-preview .clause-content ol {
                                         margin-top: 1.6px !important;
@@ -29078,9 +33439,31 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         font-size: inherit !important;
                                     }
                                     #quote-preview .clause-content li {
-                                        margin-bottom: 1.6px !important;
-                                        line-height: 1.45 !important;
+                                        margin-bottom: 0.35em !important;
+                                        line-height: 1.5 !important;
                                         font-size: inherit !important;
+                                        height: auto !important;
+                                        max-height: none !important;
+                                        overflow: visible !important;
+                                    }
+                                    #quote-preview .clause-content p,
+                                    #quote-preview .clause-content li {
+                                        max-width: 100% !important;
+                                    }
+                                    #quote-preview .clause-content span,
+                                    #quote-preview .clause-content font,
+                                    #quote-preview .clause-content b,
+                                    #quote-preview .clause-content strong,
+                                    #quote-preview .clause-content i,
+                                    #quote-preview .clause-content em,
+                                    #quote-preview .clause-content u,
+                                    #quote-preview .clause-content a {
+                                        max-width: none !important;
+                                        height: auto !important;
+                                        line-height: inherit !important;
+                                        white-space: normal !important;
+                                        overflow-wrap: anywhere !important;
+                                        word-break: break-word !important;
                                     }
                                     #quote-preview .clause-content li:last-child {
                                         margin-bottom: 0 !important;
@@ -29122,8 +33505,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         border: 1px solid #64748b !important;
                                     }
                                     ${EMS_TABLE_NO_BORDER_CELL_OVERRIDE_CSS}
+                                    ${EMS_CELL_SPLIT_TABLE_CSS}
                                     ${EMS_QUOTE_PRICING_TABLE_COLUMN_SYNC_CSS}
                                     ${EMS_QUOTE_PRICING_TABLE_PRESENTATION_CSS}
+                                    ${EMS_QUOTE_PRICING_TABLE_ALIGN_CSS}
                                     ${EMS_QUOTE_PRICING_TABLE_COMPACT_ROW_CSS}
                                     #quote-preview .quote-clause-heading-panel + .clause-content > table#ems-auto-price-summary-table:first-child,
                                     #quote-preview .clause-content > table#ems-auto-price-summary-table:first-child,
@@ -29135,10 +33520,19 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         margin-top: ${EMS_QUOTE_PRICING_TABLE_MARGIN_TOP} !important;
                                         border: ${EMS_QUOTE_PRICING_TABLE_OUTER_BORDER} !important;
                                         border-collapse: collapse !important;
-                                        width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
-                                        max-width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
                                         table-layout: fixed !important;
                                         box-sizing: border-box !important;
+                                    }
+                                    #quote-preview .clause-content table#ems-auto-price-summary-table:not([data-ems-col-widths]),
+                                    #quote-preview .clause-content table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]),
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"]:not([data-ems-col-widths]) {
+                                        width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
+                                        max-width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
+                                    }
+                                    #quote-preview .clause-content table#ems-auto-price-summary-table[data-ems-col-widths],
+                                    #quote-preview .clause-content table[id^="ems-auto-price-summary-table"][data-ems-col-widths],
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"][data-ems-col-widths] {
+                                        max-width: 100% !important;
                                     }
                                     #quote-preview .clause-content table#ems-auto-price-summary-table th,
                                     #quote-preview .clause-content table#ems-auto-price-summary-table td,
@@ -29150,9 +33544,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         font-size: 11px !important;
                                     }
                                     #quote-preview .clause-content table#ems-auto-price-summary-table thead th,
+                                    #quote-preview .clause-content table#ems-auto-price-summary-table thead td,
                                     #quote-preview .clause-content table[id^="ems-auto-price-summary-table"] thead th,
-                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"] thead th {
+                                    #quote-preview .clause-content table[id^="ems-auto-price-summary-table"] thead td,
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"] thead th,
+                                    #quote-preview .clause-content table[data-ems-pricing-cols="fixed"] thead td {
                                         background: ${EMS_QUOTE_PRICING_TABLE_HEADER_BG} !important;
+                                        background-color: ${EMS_QUOTE_PRICING_TABLE_HEADER_BG} !important;
                                         color: ${EMS_QUOTE_PRICING_TABLE_HEADER_COLOR} !important;
                                         font-weight: 600 !important;
                                         border: ${EMS_QUOTE_PRICING_TABLE_HEAD_CELL_BORDER} !important;
@@ -29194,9 +33592,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     }
                                     #quote-preview .quote-cover-sign-off {
                                         min-height: ${EMS_QUOTE_COVER_SIGN_OFF_MIN_HEIGHT_PREVIEW} !important;
+                                        margin-bottom: ${EMS_QUOTE_COVER_SIGNATORY_LIFT_PX}px !important;
                                     }
                                     #quote-preview .quote-cover-sign-off-for {
                                         margin-bottom: calc(1.58em * ${EMS_QUOTE_COVER_SIGN_OFF_FOR_GAP_EM} * ${EMS_QUOTE_COVER_SIGN_OFF_PREVIEW_HEIGHT_SCALE}) !important;
+                                    }
+                                    #quote-preview .quote-cover-signatory-col:has(.quote-cover-approval-sig) .quote-cover-sign-off-for {
+                                        margin-bottom: 4px !important;
                                     }
                                     #quote-preview .quote-cover-signatory-block {
                                         margin-bottom: ${EMS_QUOTE_COVER_SIGNATORY_BLOCK_BOTTOM_OFFSET} !important;
@@ -29277,6 +33679,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                             visibility: visible !important;
                                             overflow: visible !important;
                                         }
+                                        .quote-a4-sheet:not(:has(~ .quote-a4-sheet)) {
+                                            page-break-after: auto !important;
+                                            break-after: auto !important;
+                                        }
 
                                         .quote-a4-sheet--landscape,
                                         .quote-a4-sheet[data-page-orientation="landscape"] {
@@ -29288,6 +33694,38 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                             max-height: 210mm !important;
                                         }
 
+                                        .quote-a4-sheet--continuation {
+                                            height: 297mm !important;
+                                            min-height: 297mm !important;
+                                            max-height: 297mm !important;
+                                            overflow: hidden !important;
+                                            grid-template-rows: 21mm minmax(0, 1fr) 26mm !important;
+                                        }
+                                        .quote-a4-sheet--landscape.quote-a4-sheet--continuation,
+                                        .quote-a4-sheet--continuation[data-page-orientation="landscape"] {
+                                            height: 210mm !important;
+                                            min-height: 210mm !important;
+                                            max-height: 210mm !important;
+                                        }
+                                        .quote-a4-sheet--continuation > .quote-sheet-logo-row {
+                                            display: flex !important;
+                                            flex-direction: row !important;
+                                            justify-content: flex-end !important;
+                                            align-items: flex-start !important;
+                                            height: 21mm !important;
+                                            min-height: 21mm !important;
+                                            max-height: 21mm !important;
+                                            margin-bottom: 0 !important;
+                                            width: 100% !important;
+                                        }
+                                        .quote-a4-sheet--continuation > .footer-section {
+                                            height: 26mm !important;
+                                            min-height: 26mm !important;
+                                            max-height: 26mm !important;
+                                            align-self: end !important;
+                                            justify-content: flex-end !important;
+                                        }
+
                                         .quote-a4-sheet--continuation .quote-sheet-main-flex {
                                             min-height: 0 !important;
                                             overflow: visible !important;
@@ -29295,6 +33733,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         .quote-a4-sheet--continuation .content-section {
                                             flex: 0 1 auto !important;
                                             overflow: visible !important;
+                                            padding-top: 1px;
+                                            box-sizing: border-box;
+                                        }
+                                        .clause-content > p[data-ems-para-continue="1"],
+                                        .clause-content > table[data-ems-clause-row-continue="1"] {
+                                            margin-top: 0 !important;
                                         }
 
                                         #quote-print-root[data-print-with-header='1'] .quote-sheet-logo-row,
@@ -29370,24 +33814,37 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                             display: block !important;
                                         }
 
-                                        /* Logo top-right: inline-block honors parent text-align:right (block flow), margin-left:auto covers the flex path */
                                         .quote-sheet-logo-row,
                                         .quote-continuation-header {
+                                            display: flex !important;
+                                            flex-direction: row !important;
+                                            justify-content: flex-end !important;
+                                            align-items: flex-start !important;
+                                            width: 100% !important;
                                             text-align: right !important;
                                         }
                                         .quote-sheet-logo-row > div,
                                         .quote-continuation-header > div {
+                                            display: flex !important;
+                                            flex-direction: row !important;
+                                            justify-content: flex-end !important;
+                                            align-items: flex-start !important;
                                             width: 100% !important;
                                             text-align: right !important;
-                                            display: block !important;
                                         }
                                         .quote-sheet-logo-row img,
                                         .quote-continuation-header img {
-                                            max-height: 68px !important;
-                                            display: inline-block !important;
+                                            height: auto !important;
+                                            width: auto !important;
+                                            max-height: 21mm !important;
+                                            max-width: 100% !important;
+                                            object-fit: contain !important;
+                                            object-position: right top !important;
+                                            display: block !important;
                                             margin-left: auto !important;
                                             margin-right: 0 !important;
                                             float: none !important;
+                                            position: static !important;
                                         }
                                         .no-print { display: none !important; }
                                         .quote-a4-sheet { box-shadow: none !important; }
@@ -29519,7 +33976,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         className="quote-clause-measure-host"
                                         aria-hidden
                                     >
-                                        {clausePackSplitMode ? clauseSegmentsForPagination.map((seg, segIdx) => (
+                                        {mountClauseMeasureSegments
+                                            ? clauseSegmentsForPagination.map((seg, segIdx) => (
                                             <div
                                                 key={`measure-${seg.key}`}
                                                 data-segment-measure-index={segIdx}
@@ -29558,11 +34016,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                 ) : null}
                                                 <div
                                                     className="clause-content"
-                                                    style={{ fontSize: '13px', lineHeight: '1.45' }}
+                                                    style={{ fontSize: '13px', lineHeight: '1.4' }}
                                                     dangerouslySetInnerHTML={{ __html: seg.html }}
                                                 />
                                             </div>
-                                        )) : null}
+                                        ))
+                                            : null}
                                     </div>
 
                                     {sheets.map((sheet, sheetIdx) => {
@@ -29580,18 +34039,37 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                             );
                                         const sheetIsLandscape =
                                             quotePageOrientations[sheetIdx] === 'landscape';
+                                        const coverSignOffRendered = sheetIdx === 0 && !sheetHasEditingBlock;
                                         const sheetNode = (
                                         <div 
                                             key={`sheet-${sheetIdx}`} 
                                             data-sheet-index={sheetIdx}
+                                            {...(Number.isInteger(sheet.packGroupIdx)
+                                                ? { 'data-pack-group': String(sheet.packGroupIdx) }
+                                                : {})}
                                             data-page-orientation={sheetIsLandscape ? 'landscape' : 'portrait'}
                                             className={`quote-a4-sheet${sheetIdx > 0 ? ' quote-a4-sheet--continuation' : ''}${sheetHasEditingBlock ? ' quote-a4-sheet--clause-editing' : ''}${sheetIsLandscape ? ' quote-a4-sheet--landscape' : ''}`}
                                             onDragOver={handleQuoteSheetSignatureDragOver}
                                             onDrop={handleQuotePreviewSignatureDrop}
                                         >
+                                            <div className="quote-content-area-mark quote-content-area-mark--start no-print" aria-hidden="true">
+                                                <span>CONTENT START</span>
+                                            </div>
+                                            <div className="quote-content-area-mark quote-content-area-mark--end no-print" aria-hidden="true">
+                                                <span>CONTENT END</span>
+                                            </div>
                                             {!sheetHasEditingBlock ? (
                                             <div className="quote-sheet-logo-row" style={{ width: '100%' }}>
-                                                <div style={{ textAlign: 'right', width: '100%' }}>
+                                                <div
+                                                    style={{
+                                                        display: 'flex',
+                                                        flexDirection: 'row',
+                                                        justifyContent: 'flex-end',
+                                                        alignItems: 'flex-start',
+                                                        width: '100%',
+                                                        textAlign: 'right',
+                                                    }}
+                                                >
                                                     {quoteLogoCandidateRaws?.length ? (
                                                         <QuoteHeaderLogo candidates={quoteLogoCandidateRaws} />
                                                     ) : null}
@@ -29849,7 +34327,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                                 </span>
                                                                                 E-mail:
                                                                             </span>
-                                                                            <span className="quote-header-quote-panel-value">
+                                                                            <span
+                                                                                className="quote-header-quote-panel-value quote-header-quote-panel-value--email"
+                                                                                style={quoteCoverEmailFitStyle(
+                                                                                    subjobQuoteA4HeaderDisplay
+                                                                                        ? subjobQuoteA4HeaderDisplay?.preparedByEmail ||
+                                                                                              quotePreviewPreparedByEmailDisplay
+                                                                                        : quotePreviewPreparedByEmailDisplay
+                                                                                )}
+                                                                            >
                                                                                 {subjobQuoteA4HeaderDisplay
                                                                                     ? subjobQuoteA4HeaderDisplay?.preparedByEmail ||
                                                                                       quotePreviewPreparedByEmailDisplay
@@ -30105,16 +34591,33 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                     {sheetIdx === 0 && !sheetHasEditingBlock ? (
                                                         <>
                                                             <div className="quote-cover-page1-spacer" aria-hidden="true" />
-                                                            <div className="quote-cover-sign-off quote-cover-body-panel quote-preview-panel-shell">
+                                                            <div
+                                                                className="quote-cover-sign-off quote-cover-body-panel quote-preview-panel-shell"
+                                                                style={{ position: 'relative' }}
+                                                            >
+                                                                {quotePreviewDigitalStamps
+                                                                    .filter(isCoverSignOffAnchoredStamp)
+                                                                    .map((stamp) =>
+                                                                        renderQuotePreviewStamp(stamp, sheetIsLandscape, true)
+                                                                    )}
                                                                 <div className="quote-cover-signatory-block">
                                                                     <div className="quote-cover-signatory-col">
                                                                         <p className="quote-cover-sign-off-for">For {quoteCoverOfferCompanyName},</p>
+                                                                        {/* Reserve in-flow height when a cover digital stamp is present (approval overlay is suppressed
+                                                                            to avoid a double image). Without this spacer the printed Signatory name sits under the
+                                                                            absolute stamp and looks missing in Previous Quotes / Approvals. */}
+                                                                        {approvalCoverSignatureImages.signatory || coverHasDigitalStamp ? (
+                                                                            <div className="quote-cover-approval-sig" aria-hidden="true">
+                                                                                {approvalCoverSignatureImages.signatory ? (
+                                                                                    <img
+                                                                                        src={approvalCoverSignatureImages.signatory}
+                                                                                        alt=""
+                                                                                    />
+                                                                                ) : null}
+                                                                            </div>
+                                                                        ) : null}
                                                                         <div className="quote-cover-signatory-line">
-                                                                            {String(
-                                                                                subjobQuoteA4HeaderDisplay
-                                                                                    ? subjobQuoteA4HeaderDisplay.signatory
-                                                                                    : signatory || ''
-                                                                            ).trim() || '\u00A0'}
+                                                                            {coverSignatoryNameDisplay || '\u00A0'}
                                                                         </div>
                                                                         <div className="quote-cover-signatory-designation">
                                                                             {String(
@@ -30124,19 +34627,19 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                             ).trim() || '\u00A0'}
                                                                         </div>
                                                                     </div>
-                                                                    {String(
-                                                                        subjobQuoteA4HeaderDisplay
-                                                                            ? subjobQuoteA4HeaderDisplay.coSignatory
-                                                                            : coSignatory || ''
-                                                                    ).trim() ? (
+                                                                    {coverCoSignatoryNameDisplay ? (
                                                                         <div className="quote-cover-signatory-col quote-cover-signatory-col--co">
                                                                             <p className="quote-cover-sign-off-for">For {quoteCoverOfferCompanyName},</p>
+                                                                            {approvalCoverSignatureImages.coSignatory ? (
+                                                                                <div className="quote-cover-approval-sig" aria-hidden="true">
+                                                                                    <img
+                                                                                        src={approvalCoverSignatureImages.coSignatory}
+                                                                                        alt=""
+                                                                                    />
+                                                                                </div>
+                                                                            ) : null}
                                                                             <div className="quote-cover-signatory-line">
-                                                                                {String(
-                                                                                    subjobQuoteA4HeaderDisplay
-                                                                                        ? subjobQuoteA4HeaderDisplay.coSignatory
-                                                                                        : coSignatory || ''
-                                                                                ).trim()}
+                                                                                {coverCoSignatoryNameDisplay}
                                                                             </div>
                                                                             <div className="quote-cover-signatory-designation">
                                                                                 {String(
@@ -30200,23 +34703,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
                                             {/* Digital Stamps (parent tab includes subjob signatures as read-only overlays) */}
                                             {quotePreviewDigitalStamps
-                                                .filter((s) => s.sheetIndex === sheetIdx + 1)
-                                                .map((stamp) => (
-                                                    <QuoteSignatureStamp
-                                                        key={stamp.id}
-                                                        stamp={stamp}
-                                                        onRemove={handleRemoveDigitalStamp}
-                                                        onMove={handleMoveDigitalStamp}
-                                                        allowRemove={
-                                                            !stamp.inheritedFromSubJob &&
-                                                            stamp.removableBeforeNextCommit === true
-                                                        }
-                                                        allowMove={
-                                                            !stamp.inheritedFromSubJob &&
-                                                            stamp.removableBeforeNextCommit === true
-                                                        }
-                                                    />
-                                                ))}
+                                                .filter((s) => {
+                                                    if (coverSignOffRendered && isCoverSignOffAnchoredStamp(s)) {
+                                                        return false;
+                                                    }
+                                                    // Pagination can differ between screens; a stamp saved on a page that
+                                                    // does not exist here is shown on the last page instead of being dropped.
+                                                    const lastPage = Math.max(1, Number(quotePreviewTotalPages) || 1);
+                                                    const page = Math.min(Math.max(1, Number(s.sheetIndex) || 1), lastPage);
+                                                    return page === sheetIdx + 1;
+                                                })
+                                                .map((stamp) => renderQuotePreviewStamp(stamp, sheetIsLandscape, false))}
                                         </div>
                                         );
 
@@ -30232,8 +34729,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         </div>
                             </>
                         </div>
-                    ) : !enquiryData && !enquiryLeadLoading ? (
-                        quoteListSummaryBody
                     ) : embeddedApprovalReview ? (
                         <div style={{
                             flex: 1,
@@ -30253,14 +34748,22 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                 <UserCheck size={48} />
                             </div>
                             <h3 style={{ fontSize: '16px', fontWeight: '600', color: '#475569', marginBottom: '8px' }}>
-                                Loading Quote for Approval
+                                {enquiryLeadLoading || !enquiryData
+                                    ? 'Loading Quote for Approval'
+                                    : 'Preparing Quote Preview'}
                             </h3>
                             <p style={{ fontSize: '13px', maxWidth: '320px' }}>
                                 {enquiryLeadLoading
                                     ? 'Loading enquiry details…'
-                                    : 'Preparing the quote preview for your review…'}
+                                    : enquiryDivisionScopeNotice
+                                      ? enquiryDivisionScopeNotice
+                                      : !enquiryData
+                                        ? 'Loading enquiry and quote for your review…'
+                                        : 'Preparing the quote preview for your review…'}
                             </p>
                         </div>
+                    ) : !enquiryData && !enquiryLeadLoading ? (
+                        quoteListSummaryBody
                     ) : (
                         <div style={{
                             flex: 1,
@@ -30310,7 +34813,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     setSignatureVaultOpen(false);
                     const email = signatureLibraryEmail;
                     if (email) {
-                        void fetchUserSignatureLibrary(email).then((master) => {
+                        void waitForSignatureLibrarySave()
+                            .then(() => fetchUserSignatureLibrary(email))
+                            .then((master) => {
                             setUserSignatureLibrary(master.signatures || []);
                             setUserDefaultSignatureId(master.defaultSignatureId || null);
                         });

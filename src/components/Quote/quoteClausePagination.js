@@ -1,7 +1,7 @@
 /**
  * Split clause HTML into measurable segments and pack them across A4 continuation sheets.
- * User HTML is never restructured (no paragraph→table conversion, no cell splitting).
- * Large tables may be split one <tr> per segment for height packing only; segments are rejoined on render.
+ * Units are the smallest safe pieces (heading, paragraph, clause-row fragment, table row).
+ * Large tables are split one <tr> per segment for height packing; segments are rejoined on render.
  */
 
 import {
@@ -17,18 +17,131 @@ import {
 
 const EMS_AUTO_PRICE_SUMMARY_TABLE_ID = 'ems-auto-price-summary-table';
 
+/** True when table is a BOQ / schedule (SL.NO, Qty, Unit, or more than 2 columns). */
+function tableLooksLikeBoqSchedule(table) {
+    if (!table) return false;
+    const id = String(table.id || table.getAttribute?.('id') || '').trim();
+    /* Pricing summary with user-inserted columns is still the EMS price table. */
+    if (
+        id === EMS_AUTO_PRICE_SUMMARY_TABLE_ID ||
+        id.startsWith(`${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}--`)
+    ) {
+        return false;
+    }
+    const rows = [...(table.rows || table.querySelectorAll?.('tr') || [])];
+    const maxCells = Math.max(0, ...rows.map((r) => r.cells?.length || 0));
+    const headerText = String(
+        table.querySelector?.('thead')?.textContent || rows[0]?.textContent || ''
+    )
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+    if (/\bsl\.?\s*no\b/.test(headerText)) return maxCells >= 2;
+    if (/\bqty\b|\bquantity\b/.test(headerText) && /\bunit\b/.test(headerText)) {
+        return maxCells >= 3;
+    }
+    return false;
+}
+
+/**
+ * EMS auto Total/Discount/VAT table only.
+ * Must NOT match BOQ tables that were wrongly given id ems-auto-price-summary-table--…
+ */
+function isEmsAutoPriceSummaryTableId(table) {
+    if (!table) return false;
+    if (tableLooksLikeBoqSchedule(table)) return false;
+    const id = String(table.id || table.getAttribute?.('id') || '').trim();
+    return (
+        id === EMS_AUTO_PRICE_SUMMARY_TABLE_ID ||
+        id.startsWith(`${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}--`)
+    );
+}
+
+/** Footer labels that must not contribute to the stamped pricing base total. */
+const PRICING_SPLIT_FOOTER_LABEL_RE =
+    /^(Total(\s*\([^)]*\))?|Discount\b|Final\s+Discounted\b|VAT\b|Grand\s+Total\b)/i;
+
+/**
+ * Sum line amounts across all body rows before the pricing footer — used when
+ * splitting the summary table so each page fragment carries the full base.
+ * @param {HTMLTableRowElement[]} rows
+ * @returns {number | null}
+ */
+function sumPricingLineAmountsForSplitStamp(rows) {
+    if (!rows?.length) return null;
+    let sum = 0;
+    let found = false;
+    for (const row of rows) {
+        const cells = row?.cells || [];
+        if (cells.length < 2) continue;
+        const label = String(cells[0].textContent || '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const rowKind = String(row.getAttribute?.('data-ems-row') || '')
+            .trim()
+            .toLowerCase();
+        if (
+            PRICING_SPLIT_FOOTER_LABEL_RE.test(label) ||
+            /^(total|discount|final-discounted|vat|grand-vat)$/.test(rowKind)
+        ) {
+            break;
+        }
+        const amtText = String(cells[cells.length - 1].textContent || '')
+            .replace(/,/g, '')
+            .replace(/[^\d.\-]/g, ' ')
+            .trim();
+        const m = amtText.match(/-?\d+(?:\.\d+)?/);
+        if (!m) continue;
+        const n = parseFloat(m[0]);
+        if (!Number.isFinite(n)) continue;
+        sum += n;
+        found = true;
+    }
+    if (!found) return null;
+    return Math.round(sum * 1000) / 1000;
+}
+
+function pricingSummaryColgroupHtml(table) {
+    const existing = table?.querySelector?.('colgroup');
+    const colN = existing?.querySelectorAll?.('col')?.length || 0;
+    /* Keep 2-col OR 3-col (Sl.No|Desc|Amount). Never collapse 3→2 — that right-aligned Description. */
+    if (existing && (colN === 2 || colN === 3)) {
+        return existing.outerHTML;
+    }
+    const row = table?.querySelector?.('thead tr, tr');
+    const logicalCols = [...(row?.cells || [])].reduce(
+        (n, c) => n + Math.max(1, Number(c.colSpan) || 1),
+        0
+    );
+    if (logicalCols >= 3 || (row?.cells?.length || 0) >= 3) {
+        return '<colgroup><col style="width:10%" /><col style="width:62%" /><col style="width:28%" /></colgroup>';
+    }
+    return '<colgroup><col style="width:72%" /><col style="width:28%" /></colgroup>';
+}
+
 /** Extra px reserved so packed content never overlaps continuation logo/footer (PDF uses 13px/1.45 vs editor 12px). */
 /** Reserve logo/footer band on continuation sheets (PDF font metrics vs measure). */
 /** Reserve logo/footer + Chromium/Edge print metrics vs client measure host (~5% on Server PDF). */
-const PACK_HEIGHT_SAFETY_PX = 48;
-/** Tighter safety when user clicks Align Page (fills sheet slack without changing A4 / header / footer). */
-const PACK_HEIGHT_SAFETY_PX_TIGHT = 12;
+/**
+ * Reserve above the content-end line inside the existing A4 content box (footer/A4 unchanged).
+ * Text must finish 12px before that line so a wrapped row is not cropped.
+ */
+/** Bottom reserve inside the 220mm / 832px content box (not extra gap between units). */
+export const PACK_HEIGHT_SAFETY_PX = 12;
+/** Tighter safety when user clicks Align Page (fills the fixed 220mm content box). */
+const PACK_HEIGHT_SAFETY_PX_TIGHT = 10;
 /** Measure vs print slack allowed when pulling the next segment up during Align Page. */
-const PACK_ALIGN_FILL_SLACK_PX = 88;
-/** Default slack when sum-of-segment heights says a group fits but merged DOM measure is high. */
-const PACK_SUM_HEIGHT_FILL_SLACK_PX = 54;
-/** Only split UL/OL into per-item segments when list is long (avoids one segment per bullet → 37 pages). */
-const PACK_LIST_SPLIT_MIN_ITEMS = 10;
+const PACK_ALIGN_FILL_SLACK_PX = 8;
+/**
+ * Sum-of-parts slack when checking fit. List items measured as separate blocks each carry
+ * UL/clause margins that collapse when rejoined — without slack, pages stay half-empty.
+ * Kept small so fill cannot pack a block that then paints through the footer.
+ */
+const PACK_SUM_HEIGHT_FILL_SLACK_PX = 8;
+/** Zero slack for fit — any positive slack overpacked sheets and hid units under overflow:hidden. */
+const PACK_MERGED_HEIGHT_FIT_SLACK_PX = 0;
+/** Per-item by default so subheadings are not stranded above an unsplit list block. */
+const PACK_LIST_SPLIT_MIN_ITEMS = 1;
 
 function resolveListSplitMinItems(options = {}) {
     if (options.splitListsPerItem) return 1;
@@ -106,7 +219,7 @@ function wrapSingleListItem(listEl, li, itemNumber = 1) {
 }
 
 /**
- * @typedef {{ tightFit?: boolean }} ClausePackOptions
+ * @typedef {{ tightFit?: boolean, fastAlign?: boolean }} ClausePackOptions
  */
 
 function resolvePackSafetyPx(options) {
@@ -120,10 +233,10 @@ function resolvePackFillLimitPx(usablePx, options) {
     return base + PACK_ALIGN_FILL_SLACK_PX;
 }
 
-/** Pull-up fill pass — merged DOM height is checked; reserve only a small anti-clip tail. */
+/** Pull-up fill pass — merged DOM height is checked; keep a clear band above the footer. */
 function resolvePackSlackFillLimitPx(usablePx, options) {
     if (options?.tightFit) return resolvePackFillLimitPx(usablePx, options);
-    const antiClipTailPx = 44;
+    const antiClipTailPx = PACK_HEIGHT_SAFETY_PX;
     return Math.max(usablePx - antiClipTailPx, 200);
 }
 
@@ -133,7 +246,7 @@ function sumSegmentHeightsPx(group, segmentHeightsPx) {
 }
 
 function resolvePackFillSlackPx(options) {
-    return options?.tightFit ? 36 : PACK_SUM_HEIGHT_FILL_SLACK_PX;
+    return options?.tightFit ? 12 : PACK_SUM_HEIGHT_FILL_SLACK_PX;
 }
 
 /** 15mm padding on each side of every A4 sheet (portrait or landscape). */
@@ -147,6 +260,23 @@ export function quoteA4InnerContentMm(isLandscape = false) {
         innerWidthMm: pageW - QUOTE_A4_SHEET_PADDING_MM * 2,
         innerHeightMm: pageH - QUOTE_A4_SHEET_PADDING_MM * 2,
     };
+}
+
+/** Continuation sheet bands. Content starts 36mm from the top and ends at 256mm. */
+export const QUOTE_A4_LOGO_BAND_MM = 21;
+export const QUOTE_A4_FOOTER_BAND_MM = 26;
+
+/** Fixed continuation content box: 180×220mm portrait, 267×133mm landscape. */
+export function quoteContinuationContentMm(isLandscape = false) {
+    const { innerWidthMm, innerHeightMm } = quoteA4InnerContentMm(isLandscape);
+    return {
+        widthMm: innerWidthMm,
+        heightMm: innerHeightMm - QUOTE_A4_LOGO_BAND_MM - QUOTE_A4_FOOTER_BAND_MM,
+    };
+}
+
+export function quoteContinuationContentPx(isLandscape = false) {
+    return Math.round((quoteContinuationContentMm(isLandscape).heightMm / 25.4) * 96);
 }
 
 function resolvePackLimitForContinuationPage(continuationPageIdx, fallbackUsablePx, options = {}) {
@@ -165,7 +295,15 @@ function resolvePackSlackLimitForContinuationPage(continuationPageIdx, fallbackU
     return resolvePackSlackFillLimitPx(fallbackUsablePx, options);
 }
 
-/** Authoritative fit check — overflowTest mirrors continuation sheet overflow:hidden. */
+/** True when any segment in the group is a row-split table fragment (BOQ continuation). */
+function groupHasSplitTableSegment(group, segments) {
+    if (!group?.length || !segments?.length) return false;
+    return group.some((idx) =>
+        /data-ems-table-split\s*=\s*["']?1/i.test(String(segments[idx]?.html || ''))
+    );
+}
+
+/** Authoritative fit check — rejoined/merged paint height is the source of truth. */
 function groupFitsPackLimit(
     group,
     measureMergedGroupPx,
@@ -177,29 +315,68 @@ function groupFitsPackLimit(
     if (!group?.length) return false;
     const pageIdx =
         continuationPageIdx != null ? continuationPageIdx : options._continuationPageIdx ?? null;
-    if (typeof options.overflowTestForPage === 'function' && pageIdx != null) {
-        return !options.overflowTestForPage(pageIdx, group);
-    }
-    if (typeof options.overflowTest === 'function' && pageIdx == null) {
-        return !options.overflowTest(group);
-    }
     if (pageIdx != null) {
         limit = resolvePackLimitForContinuationPage(pageIdx, limit, options);
     }
+    const mergeSlack = options?.tightFit
+        ? PACK_MERGED_HEIGHT_FIT_SLACK_PX + 8
+        : PACK_MERGED_HEIGHT_FIT_SLACK_PX;
+    const segments = options?.segments || null;
+    const isSplitTableGroup = groupHasSplitTableSegment(group, segments);
+    /*
+     * Always pass pageIdx when known — default-arg measure fns report .length === 1.
+     * Merged height is authoritative. Sum/estimate overrides previously packed pages
+     * that clipped (estimate too low) or stayed half-empty (sum too high / peel).
+     */
     const merged =
-        pageIdx != null && measureMergedGroupPx.length >= 2
-            ? measureMergedGroupPx(group, pageIdx)
-            : measureMergedGroupPx(group);
-    if (merged <= limit) return true;
-    if (!segmentHeightsPx?.length) return false;
+        typeof measureMergedGroupPx === 'function'
+            ? pageIdx != null
+                ? measureMergedGroupPx(group, pageIdx)
+                : measureMergedGroupPx(group)
+            : 0;
+    if (merged > 0) {
+        if (merged > limit + mergeSlack) return false;
+        return true;
+    }
+    /* Prefer merged-only packing: if measure returned 0, do not trust estimates (overpack risk). */
+    if (options?.preferMergedOnly && typeof measureMergedGroupPx === 'function') {
+        return false;
+    }
+    /* Measure host not ready — fall back to thead-once / compact sum. */
     const sumSlack = resolvePackFillSlackPx(options);
-    if (merged > limit + Math.min(18, Math.round(sumSlack * 0.35))) return false;
+    const splitEst = isSplitTableGroup
+        ? estimateSplitTableGroupHeightPx(group, segmentHeightsPx, segments)
+        : 0;
+    if (isSplitTableGroup) {
+        if (splitEst > 0) return splitEst <= limit + sumSlack;
+        if (segmentHeightsPx?.length) {
+            const sumH = sumSegmentHeightsPx(group, segmentHeightsPx);
+            return sumH > 0 && sumH <= Math.max(160, limit - 24);
+        }
+        return false;
+    }
+    if (segmentHeightsPx?.length) {
+        const sumH = sumSegmentHeightsPx(group, segmentHeightsPx);
+        if (sumH > 0 && sumH <= limit + sumSlack) return true;
+    }
+    if (!options?.fastAlign) {
+        if (typeof options.overflowTestForPage === 'function' && pageIdx != null) {
+            return !options.overflowTestForPage(pageIdx, group);
+        }
+        if (typeof options.overflowTest === 'function' && pageIdx == null) {
+            return !options.overflowTest(group);
+        }
+    }
+    if (!segmentHeightsPx?.length) return false;
     return sumSegmentHeightsPx(group, segmentHeightsPx) <= limit + sumSlack;
 }
 
 /** Same limit for initial pack and fill when overflowTest is used; else fill may use tighter tail. */
 function resolvePackFillLimitPxForFillPass(usablePx, options) {
-    if (typeof options?.overflowTest === 'function') {
+    if (
+        typeof options?.overflowTest === 'function' ||
+        typeof options?.overflowTestForPage === 'function'
+    ) {
         return resolvePackFillLimitPx(usablePx, options);
     }
     return resolvePackSlackFillLimitPx(usablePx, options);
@@ -284,65 +461,14 @@ export function segmentHtmlContainsTable(html) {
 }
 
 /**
- * BOQ rows with many stacked <p>/<div> in one cell are split into one <tr> per block so pagination can pack by height.
+ * Keep each BOQ/pricing <tr> intact (same as edit mode).
+ * Do NOT split description cells into extra rows — that repeated Qty/Unit/Amount and
+ * looked broken in preview. Page packing moves whole rows to the next sheet instead.
  * @param {HTMLTableRowElement} row
  * @returns {HTMLTableRowElement[]}
  */
-function expandTableRowForPagination(row, rowIndex, grid) {
-    if (!row?.cells?.length) return [row];
-    if (officePasteTableRowHasMergedSpans(row)) return [row];
-    if (
-        Number.isInteger(rowIndex) &&
-        rowIndex >= 0 &&
-        grid &&
-        officePasteTableRowIsSpanContinuation(rowIndex, grid)
-    ) {
-        return [row];
-    }
-    const cells = [...row.cells];
-    let targetIdx = -1;
-    let maxBlocks = 0;
-    for (let i = 0; i < cells.length; i += 1) {
-        const blocks = [...cells[i].children].filter(
-            (c) =>
-                c.nodeType === Node.ELEMENT_NODE &&
-                /^(P|DIV|UL|OL|LI|H[1-6])$/i.test(c.tagName)
-        );
-        if (blocks.length > maxBlocks) {
-            maxBlocks = blocks.length;
-            targetIdx = i;
-        }
-    }
-    if (targetIdx < 0 || maxBlocks <= 1) return [row];
-
-    const targetCell = cells[targetIdx];
-    const blocks = [...targetCell.children].filter(
-        (c) =>
-            c.nodeType === Node.ELEMENT_NODE &&
-            /^(P|DIV|UL|OL|LI|H[1-6])$/i.test(c.tagName)
-    );
-    if (blocks.length <= 1) return [row];
-
-    /** @type {HTMLTableRowElement[]} */
-    const out = [];
-    blocks.forEach((block, blockIdx) => {
-        const tr = /** @type {HTMLTableRowElement} */ (row.cloneNode(true));
-        const clonedCells = [...tr.cells];
-        const cell = clonedCells[targetIdx];
-        if (!cell) return;
-        cell.innerHTML = block.outerHTML;
-        if (blockIdx > 0) {
-            for (let i = 0; i < targetIdx; i += 1) {
-                const c = clonedCells[i];
-                if (!c) continue;
-                if (String(c.textContent || '').replace(/\u00a0/g, ' ').trim()) {
-                    c.innerHTML = '<p>\u00a0</p>';
-                }
-            }
-        }
-        out.push(tr);
-    });
-    return out.length ? out : [row];
+function expandTableRowForPagination(row, _rowIndex, _grid) {
+    return row ? [row] : [];
 }
 
 /**
@@ -352,7 +478,21 @@ function expandTableRowForPagination(row, rowIndex, grid) {
  */
 function getTableColgroupHtml(table) {
     const colgroup = table.querySelector('colgroup');
-    if (colgroup) return colgroup.outerHTML;
+    if (colgroup) {
+        const cols = colgroup.querySelectorAll('col');
+        const colHtml = colgroup.innerHTML || '';
+        /*
+         * Never reuse a 2-col 72/28 summary colgroup on a wider BOQ table — that makes
+         * SL.NO huge and Amount(BHD) stack vertically.
+         */
+        const row = table.querySelector('tr');
+        const cellCount = row?.cells?.length || 0;
+        if (cellCount > 2 && cols.length === 2 && /72%|28%/.test(colHtml)) {
+            /* fall through to stored widths / empty */
+        } else {
+            return colgroup.outerHTML;
+        }
+    }
 
     const stored = String(table.getAttribute('data-ems-col-widths') || '').trim();
     if (!stored) return '';
@@ -363,10 +503,33 @@ function getTableColgroupHtml(table) {
         .filter((px) => px > 0);
     if (!widths.length) return '';
 
+    const row = table.querySelector('tr');
+    const cellCount = row?.cells?.length || 0;
+    if (cellCount > 2 && widths.length === 2) return '';
+
     const cols = widths
         .map((px) => `<col style="width:${px}px" width="${px}">`)
         .join('');
     return `<colgroup>${cols}</colgroup>`;
+}
+
+/**
+ * Slice full-table `data-ems-row-heights` to thead + one body row for a split fragment.
+ * Copying the entire CSV onto every 1-row fragment made pack measure lock the wrong/tall rows.
+ * @param {string} tableAttrs
+ * @param {number[]} fragmentHeightPx
+ */
+function withSlicedRowHeightsAttr(tableAttrs, fragmentHeightPx) {
+    const attrs = String(tableAttrs || '');
+    if (!fragmentHeightPx?.length || !/data-ems-row-heights=/i.test(attrs)) return attrs;
+    const csv = fragmentHeightPx.map((h) => (h > 0 ? String(Math.round(h)) : '0')).join(',');
+    if (/data-ems-row-heights\s*=\s*"/i.test(attrs)) {
+        return attrs.replace(/data-ems-row-heights\s*=\s*"[^"]*"/i, `data-ems-row-heights="${csv}"`);
+    }
+    if (/data-ems-row-heights\s*=\s*'/i.test(attrs)) {
+        return attrs.replace(/data-ems-row-heights\s*=\s*'[^']*'/i, `data-ems-row-heights='${csv}'`);
+    }
+    return attrs;
 }
 
 /**
@@ -385,51 +548,199 @@ function splitTableToRowSegmentHtml(table) {
     /** @type {HTMLTableRowElement | null} */
     let headerRowPromotedToThead = null;
     const thead = table.querySelector('thead');
+    const ownRows = [...table.querySelectorAll('tr')].filter((tr) => tr.closest('table') === table);
+    const thRows = ownRows.filter((tr) => tr.querySelector('th'));
+    /*
+     * Terms tables use <th> for every label (Delivery / Validity / Payment / Warranty).
+     * Promoting the first row and then dropping every later <th> row deleted Payment
+     * and left Warranty clipped under the footer.
+     * Only a real <thead>, or a single header row, is repeated.
+     */
+    const promoteFirstDataRow =
+        !thead && thRows.length === 1 && thRows[0] === ownRows[0];
     if (thead) {
         theadHtml = thead.outerHTML;
-    } else {
-        const firstTr = table.querySelector('tbody tr, tr');
-        if (firstTr && firstTr.querySelector('th')) {
-            theadHtml = `<thead>${firstTr.outerHTML}</thead>`;
-            headerRowPromotedToThead = /** @type {HTMLTableRowElement} */ (firstTr);
-        }
+    } else if (promoteFirstDataRow) {
+        theadHtml = `<thead>${ownRows[0].outerHTML}</thead>`;
+        headerRowPromotedToThead = /** @type {HTMLTableRowElement} */ (ownRows[0]);
     }
 
     const bodyRows = [...table.querySelectorAll('tbody tr')].filter(
-        (tr) => tr !== headerRowPromotedToThead
+        (tr) => tr.closest('table') === table && tr !== headerRowPromotedToThead
     );
     const allRows =
         bodyRows.length > 0
             ? bodyRows
-            : [...table.querySelectorAll('tr')].filter((tr) => {
-                  if (tr === headerRowPromotedToThead) return false;
-                  if (theadHtml && tr.querySelector('th')) return false;
-                  return true;
-              });
+            : ownRows.filter((tr) => tr !== headerRowPromotedToThead);
 
     if (!allRows.length) return [table.outerHTML];
 
-    const tableId = String(table.id || table.getAttribute('id') || '').trim();
-    const keepWhole =
-        tableId === EMS_AUTO_PRICE_SUMMARY_TABLE_ID && allRows.length <= 12;
-    if (keepWhole) return [table.outerHTML];
+    const isPriceSummary = isEmsAutoPriceSummaryTableId(table);
+    /* Always split pricing summary by row so Discount/VAT/Grand can move to the next page. */
+    if (!isPriceSummary && allRows.length < 2) {
+        return [table.outerHTML];
+    }
 
+    const fullHeights = String(table.getAttribute('data-ems-row-heights') || '')
+        .split(',')
+        .map((s) => parseFloat(String(s).trim()) || 0);
+    /*
+     * Always row-split multi-row tables (BOQ / pricing / office paste). Keeping a
+     * medium table atomic left large blank bands (e.g. rows 1–4 on page 2, row 5
+     * stranded on page 3 despite free space above the footer).
+     */
+
+    const allTr = [...table.querySelectorAll('tr')];
+    const theadTrCount = thead
+        ? thead.querySelectorAll('tr').length
+        : headerRowPromotedToThead
+          ? 1
+          : 0;
+
+    /* BOQ: never rewrite row cells — only paginate intact rows. */
     const splitId = `ems-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    const splitOpen = tableAttrs
-        ? `<table ${tableAttrs} data-ems-table-split="1" data-ems-split-id="${splitId}">`
-        : `<table data-ems-table-split="1" data-ems-split-id="${splitId}">`;
-    const colgroupHtml = getTableColgroupHtml(table);
+    let attrsForSplit = tableAttrs;
+    if (!isPriceSummary && /id=["']ems-auto-price-summary-table/i.test(attrsForSplit)) {
+        /* Strip wrongly assigned summary ids from BOQ so later passes do not treat it as EMS summary. */
+        attrsForSplit = attrsForSplit
+            .replace(/\s*id=["']ems-auto-price-summary-table(?:--[^"']*)?["']/gi, '')
+            .replace(/\s*data-ems-pricing-cols=["']fixed["']/gi, '');
+    }
+    /*
+     * Pricing summary: stamp full pre-VAT base onto every row fragment so normal-mode
+     * VAT/Total reconcile cannot rebuild Total from only the rows on the current page.
+     */
+    if (isPriceSummary && !/data-ems-pricing-base-total=/i.test(attrsForSplit)) {
+        const stampedBase = sumPricingLineAmountsForSplitStamp(allRows);
+        if (stampedBase != null) {
+            attrsForSplit = `${attrsForSplit} data-ems-pricing-base-total="${stampedBase}"`.trim();
+        }
+    }
+    const colgroupHtml = isPriceSummary
+        ? pricingSummaryColgroupHtml(table)
+        : getTableColgroupHtml(table);
+
+    const rowLooksLikeBoqNote = (row) => {
+        const text = String(row?.textContent || '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        return /^notes?\s*:/i.test(text) || /^note\b/i.test(text);
+    };
+
+    /** Note: always emit a real "Note:" label ABOVE bullets (Excel often leaves only ":"). */
+    const buildBoqNoteBlockOuterHtml = (row) => {
+        const cells = [...(row.cells || [])];
+        /** @type {string[]} */
+        const bodyParts = [];
+        const isLoneNoteLabel = (text) =>
+            /^notes?\s*:?\s*$/i.test(text) ||
+            /^:\s*$/.test(text) ||
+            (/^notes?\s*:/i.test(text) && text.length <= 48);
+        const pushBodyHtml = (html) => {
+            const t = String(html || '')
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (!t || isLoneNoteLabel(t)) return;
+            bodyParts.push(html);
+        };
+        cells.forEach((c) => {
+            const html = String(c.innerHTML || '').trim();
+            if (!html) return;
+            const text = String(c.textContent || '')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (isLoneNoteLabel(text)) return;
+            if (/notes?\s*:/i.test(text) || /<(ul|ol)\b/i.test(html)) {
+                const doc = new DOMParser().parseFromString(
+                    `<div id="ems-note-cell">${html}</div>`,
+                    'text/html'
+                );
+                const root = doc.getElementById('ems-note-cell');
+                if (root) {
+                    [...root.childNodes].forEach((n) => {
+                        if (n.nodeType !== Node.ELEMENT_NODE) {
+                            const t = String(n.textContent || '').trim();
+                            if (t && !isLoneNoteLabel(t)) pushBodyHtml(`<p>${t}</p>`);
+                            return;
+                        }
+                        const el = /** @type {Element} */ (n);
+                        const t = String(el.textContent || '')
+                            .replace(/\s+/g, ' ')
+                            .trim();
+                        if (isLoneNoteLabel(t)) return;
+                        /* Strip a leading "Note:" run inside a mixed block. */
+                        if (/^notes?\s*:/i.test(t) && el.childNodes.length) {
+                            const clone = /** @type {HTMLElement} */ (el.cloneNode(true));
+                            const first = clone.firstChild;
+                            if (first && first.nodeType === Node.TEXT_NODE) {
+                                first.textContent = String(first.textContent || '').replace(
+                                    /^notes?\s*:\s*/i,
+                                    ''
+                                );
+                            }
+                            const cleaned = clone.outerHTML;
+                            const ct = String(clone.textContent || '')
+                                .replace(/\s+/g, ' ')
+                                .trim();
+                            if (ct) pushBodyHtml(cleaned);
+                            return;
+                        }
+                        pushBodyHtml(el.outerHTML);
+                    });
+                    return;
+                }
+            }
+            pushBodyHtml(html);
+        });
+        if (!bodyParts.length && !String(row?.textContent || '').trim()) return '';
+        const inner = `<p class="ems-boq-note-label" data-ems-boq-note-label="1"><strong>Note:</strong></p>${bodyParts.join('')}`;
+        return `<div class="ems-boq-note-block" data-ems-boq-note="1" data-ems-keep-with-next="1">${inner}</div>`;
+    };
 
     /** @type {string[]} */
     const out = [];
-    for (const row of allRows) {
-        const rowIndex = gridRows.indexOf(row);
-        for (const rowPart of expandTableRowForPagination(row, rowIndex, grid)) {
-            annotateOfficePasteSplitRowRowspanLeads(rowPart, rowIndex, grid);
-            out.push(
-                `${splitOpen}${colgroupHtml}${theadHtml}<tbody>${rowPart.outerHTML}</tbody></table>`
-            );
+    /** After a Note row, stop using this split-id so header is not repeated above Notes. */
+    let noteMode = false;
+    for (let bodyIdx = 0; bodyIdx < allRows.length; bodyIdx += 1) {
+        const row = allRows[bodyIdx];
+        if (!isPriceSummary && rowLooksLikeBoqNote(row)) {
+            noteMode = true;
+            /* Extract Note as prose OUTSIDE the table — prevents thead repeating above it. */
+            const noteOuter = buildBoqNoteBlockOuterHtml(row);
+            if (noteOuter) out.push(noteOuter);
+            continue;
         }
+        if (noteMode && !isPriceSummary) {
+            /* Trailing non-note rows after Note: still emit as table fragments with NEW id. */
+        }
+        const rowIndex = gridRows.indexOf(row);
+        const absTrIndex = allTr.indexOf(row);
+        const bodyHeightIdx = absTrIndex >= 0 ? absTrIndex : theadTrCount + bodyIdx;
+        /** @type {number[]} */
+        const fragmentHeights = [];
+        for (let t = 0; t < theadTrCount; t += 1) {
+            fragmentHeights.push(fullHeights[t] || 0);
+        }
+        fragmentHeights.push(fullHeights[bodyHeightIdx] || 0);
+        const useSplitId = noteMode ? `${splitId}-postnote` : splitId;
+        const splitAttrs = withSlicedRowHeightsAttr(attrsForSplit, fragmentHeights);
+        const splitOpen = splitAttrs
+            ? `<table ${splitAttrs} data-ems-table-split="1" data-ems-split-id="${useSplitId}">`
+            : `<table data-ems-table-split="1" data-ems-split-id="${useSplitId}">`;
+        if (isPriceSummary) {
+            /* Keep label|amount as-is — never delete cells. */
+            out.push(
+                `${splitOpen}${colgroupHtml}${theadHtml}<tbody>${row.outerHTML}</tbody></table>`
+            );
+            continue;
+        }
+        /* Whole row only — do not expand/split cell content (that scrambled BOQ lines). */
+        const rowClone = /** @type {HTMLTableRowElement} */ (row.cloneNode(true));
+        annotateOfficePasteSplitRowRowspanLeads(rowClone, rowIndex, grid);
+        out.push(
+            `${splitOpen}${colgroupHtml}${theadHtml}<tbody>${rowClone.outerHTML}</tbody></table>`
+        );
     }
     return out.length ? out : [table.outerHTML];
 }
@@ -448,14 +759,17 @@ function ensureMultiRowTablesSplit(segments, options = {}) {
     const root = doc.getElementById('ems-clause-root');
     if (!root) return segments;
 
-    const tables = [...root.querySelectorAll('table')];
+    /* Ignore nested in-cell vertical-split tables (data-ems-cell-split). */
+    const tables = [...root.querySelectorAll('table')].filter(
+        (t) => t.getAttribute('data-ems-cell-split') !== 'v'
+    );
     if (tables.length !== 1) return segments;
 
     const table = /** @type {HTMLTableElement} */ (tables[0]);
     const rowCount = table.querySelectorAll('tbody tr, tr').length;
     const minRows = Number.isFinite(options.splitTableMinRows)
         ? Math.max(1, options.splitTableMinRows)
-        : 4;
+        : 2;
     if (rowCount < minRows) return segments;
 
     const rowSegments = splitTableToRowSegmentHtml(table);
@@ -522,33 +836,157 @@ export function splitClauseHtmlToSegments(html, options = {}) {
 
     const tableSplitMinRows = Number.isFinite(options.splitTableMinRows)
         ? Math.max(1, options.splitTableMinRows)
-        : 4;
+        : 2;
 
     const countTableBodyRows = (table) => {
+        const ownRows = [...table.querySelectorAll('tr')].filter((tr) => tr.closest('table') === table);
         const thead = table.querySelector('thead');
-        const tbodyRows = table.querySelectorAll('tbody tr');
-        if (tbodyRows.length) {
-            return [...tbodyRows].filter((tr) => !thead?.contains(tr)).length || tbodyRows.length;
+        if (thead) {
+            return ownRows.filter((tr) => !thead.contains(tr)).length;
         }
-        return [...table.querySelectorAll('tr')].filter((tr) => !tr.querySelector('th')).length;
+        /* Label cells are often <th>. That is still a body row, not a reason to skip the split. */
+        return ownRows.length;
     };
 
     const processElement = (el) => {
         const tag = el.tagName;
         if (tag === 'TABLE') {
             const table = /** @type {HTMLTableElement} */ (el);
-            if (countTableBodyRows(table) >= tableSplitMinRows) {
+            /* Pricing summary: always one segment per footer row so it can continue on the next page. */
+            if (isEmsAutoPriceSummaryTableId(table) || countTableBodyRows(table) >= tableSplitMinRows) {
                 splitTable(table);
-            } else {
-                push(table.outerHTML);
+                return;
             }
+            /*
+             * A one-row Word wrapper holds the real paragraphs/table in a cell.
+             * Keeping it as one segment left the next clause on the following page
+             * and a gap under the last paragraph.
+             */
+            const directRows = [...table.rows].filter((row) => row.closest('table') === table);
+            const cells = directRows.length === 1 ? [...directRows[0].cells] : [];
+            /*
+             * Clause row 3.01-style: one row, label | body with many paragraphs.
+             * Split BETWEEN body paragraphs — label only on the first fragment.
+             */
+            if (directRows.length === 1 && cells.length === 2) {
+                const labelCell = cells[0];
+                const bodyCell = cells[1];
+                let bodyBlocks = [...bodyCell.children].filter((child) =>
+                    /^(P|DIV|UL|OL|TABLE|H[1-6])$/i.test(child.tagName)
+                );
+                /*
+                 * Single wrapping DIV with inner paragraphs — unwrap so we can split
+                 * between/inside paragraphs (otherwise 3.01 stays one tall atomic unit).
+                 */
+                if (
+                    bodyBlocks.length === 1 &&
+                    /^DIV$/i.test(bodyBlocks[0].tagName) &&
+                    bodyBlocks[0].children.length >= 1
+                ) {
+                    const inner = [...bodyBlocks[0].children].filter((child) =>
+                        /^(P|DIV|UL|OL|TABLE|H[1-6])$/i.test(child.tagName)
+                    );
+                    if (inner.length >= 1) bodyBlocks = inner;
+                }
+                if (bodyBlocks.length >= 1) {
+                    const colgroup =
+                        table.querySelector('colgroup')?.outerHTML ||
+                        '<colgroup><col style="width:12%" /><col style="width:88%" /></colgroup>';
+                    const tableOpenAttrs = [...table.attributes]
+                        .filter((a) => a.name !== 'data-ems-table-split' && a.name !== 'data-ems-split-id')
+                        .map((a) => `${a.name}="${String(a.value).replace(/"/g, '&quot;')}"`)
+                        .join(' ');
+                    const labelHtml = labelCell.outerHTML;
+                    const emptyLabel = labelCell.cloneNode(false);
+                    emptyLabel.innerHTML = '';
+                    const emptyLabelHtml = emptyLabel.outerHTML;
+                    let fragIdx = 0;
+                    const pushClauseRowFrag = (innerHtml) => {
+                        const label = fragIdx === 0 ? labelHtml : emptyLabelHtml;
+                        const contAttr =
+                            fragIdx > 0 ? ' data-ems-clause-row-continue="1"' : '';
+                        fragIdx += 1;
+                        const bodyShell = /** @type {HTMLElement} */ (bodyCell.cloneNode(false));
+                        bodyShell.innerHTML = innerHtml;
+                        push(
+                            `<table ${tableOpenAttrs} data-ems-clause-row-split="1"${contAttr}>${colgroup}<tbody><tr>${label}${bodyShell.outerHTML}</tr></tbody></table>`
+                        );
+                    };
+                    bodyBlocks.forEach((block) => {
+                        if (/^TABLE$/i.test(block.tagName)) {
+                            processElement(block);
+                            return;
+                        }
+                        if (/^(UL|OL)$/i.test(block.tagName)) {
+                            splitListToItemSegments(/** @type {HTMLElement} */ (block));
+                            return;
+                        }
+                        if (/^P$/i.test(block.tagName)) {
+                            for (const part of splitLongParagraphElement(
+                                /** @type {HTMLElement} */ (block)
+                            )) {
+                                pushClauseRowFrag(part);
+                            }
+                            return;
+                        }
+                        pushClauseRowFrag(block.outerHTML);
+                    });
+                    if (fragIdx > 0) return;
+                }
+            }
+            const splittable = cells.some((td) => {
+                const blocks = [...td.children].filter((child) =>
+                    /^(P|DIV|TABLE|UL|OL|H[1-6])$/i.test(child.tagName)
+                );
+                if (blocks.length >= 2) return true;
+                const nested = [...td.children].find((child) => /^TABLE$/i.test(child.tagName));
+                if (!(nested instanceof HTMLTableElement)) return false;
+                const nestedRows = [...nested.rows].filter((row) => row.closest('table') === nested);
+                return nestedRows.length >= tableSplitMinRows;
+            });
+            if (splittable) {
+                cells.forEach((td) => {
+                    [...td.childNodes].forEach((child) => {
+                        if (child.nodeType === Node.TEXT_NODE) {
+                            const text = String(child.textContent || '').trim();
+                            if (text) push(`<p>${text}</p>`);
+                            return;
+                        }
+                        if (child.nodeType === Node.ELEMENT_NODE) {
+                            processElement(/** @type {Element} */ (child));
+                        }
+                    });
+                });
+                return;
+            }
+            push(table.outerHTML);
             return;
         }
         if (tag === 'UL' || tag === 'OL') {
             splitListToItemSegments(el);
             return;
         }
+        if (tag === 'SPAN' || tag === 'FONT') {
+            const blockChildren = [...el.children].filter((c) =>
+                /^(P|DIV|TABLE|UL|OL|H[1-6]|FIGURE|SECTION|ARTICLE)$/i.test(c.tagName)
+            );
+            if (blockChildren.length > 0) {
+                blockChildren.forEach((child) => processElement(/** @type {Element} */ (child)));
+                return;
+            }
+        }
         if (tag === 'DIV' || tag === 'FIGURE' || tag === 'SECTION' || tag === 'ARTICLE') {
+            /*
+             * BOQ Note block: keep label + bullets as ONE pack unit (or label+first-li
+             * then remaining items). Unwrapping put bullets on sheet N and "Note:" on N+1.
+             */
+            if (
+                el.getAttribute?.('data-ems-boq-note') === '1' ||
+                el.classList?.contains?.('ems-boq-note-block')
+            ) {
+                pushBoqNoteBlockSegments(el, push);
+                return;
+            }
             const blockChildren = [...el.children].filter((c) => c.nodeType === Node.ELEMENT_NODE);
             if (blockChildren.length > 0) {
                 blockChildren.forEach((child) => processElement(/** @type {Element} */ (child)));
@@ -650,11 +1088,159 @@ function splitTableTailSegments(htmlParts) {
     return out.length ? out : htmlParts;
 }
 
-/** Split multi-paragraph blobs for Align Page — never rewrite lists or strip inline formatting. */
+/** ~90 chars ≈ one wrapped line at 13px / 180mm. */
+const PACK_CHARS_PER_LINE = 90;
+const PACK_MIN_LINES_EACH_SIDE = 2;
+
+/** True when the last wrapped "line" of a fragment is a single short word (orphan). */
+function endsWithOneWordOrphan(text) {
+    const raw = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!raw) return false;
+    const lastBreak = raw.lastIndexOf(' ');
+    if (lastBreak < 0) return raw.length <= 12;
+    const lastWord = raw.slice(lastBreak + 1);
+    const before = raw.slice(0, lastBreak).trim();
+    if (!before) return false;
+    /* One-word last line: short final token after a long preceding run. */
+    return lastWord.length <= 12 && before.length >= PACK_CHARS_PER_LINE;
+}
+
+function splitPlainAtWordBoundary(text, maxChars) {
+    const raw = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!raw) return [];
+    if (raw.length <= maxChars) return [raw];
+    /** @type {string[]} */
+    const parts = [];
+    let rest = raw;
+    const minKeep = PACK_CHARS_PER_LINE * PACK_MIN_LINES_EACH_SIDE;
+    while (rest.length > maxChars) {
+        let cut = rest.lastIndexOf(' ', maxChars);
+        if (cut < Math.floor(maxChars * 0.45)) cut = maxChars;
+        let head = rest.slice(0, cut).trim();
+        rest = rest.slice(cut).trim();
+        /* No one-word last line on the first fragment (e.g. "... The" | "remaining..."). */
+        if (head && endsWithOneWordOrphan(head)) {
+            const orphanBreak = head.lastIndexOf(' ');
+            if (orphanBreak > Math.floor(maxChars * 0.4)) {
+                const orphan = head.slice(orphanBreak + 1).trim();
+                head = head.slice(0, orphanBreak).trim();
+                rest = `${orphan} ${rest}`.trim();
+            }
+        }
+        if (head) parts.push(head);
+    }
+    if (rest) parts.push(rest);
+    while (parts.length >= 2 && parts[parts.length - 1].length < minKeep) {
+        const last = parts.pop();
+        parts[parts.length - 1] = `${parts[parts.length - 1]} ${last}`.trim();
+    }
+    /* Still avoid a one-word final fragment when the previous part can absorb a cut. */
+    while (parts.length >= 2 && endsWithOneWordOrphan(parts[parts.length - 2])) {
+        const prev = parts[parts.length - 2];
+        const orphanBreak = prev.lastIndexOf(' ');
+        if (orphanBreak < Math.floor(prev.length * 0.4)) break;
+        const orphan = prev.slice(orphanBreak + 1).trim();
+        parts[parts.length - 2] = prev.slice(0, orphanBreak).trim();
+        parts[parts.length - 1] = `${orphan} ${parts[parts.length - 1]}`.trim();
+        if (!parts[parts.length - 2]) {
+            parts.splice(parts.length - 2, 1);
+            break;
+        }
+    }
+    return parts.filter(Boolean);
+}
+
+/**
+ * Keep Note: label + all bullets as ONE pack unit so the label never lands on
+ * a different sheet than its bullets (R7).
+ * @param {Element} el
+ * @param {(html: string) => void} push
+ */
+function pushBoqNoteBlockSegments(el, push) {
+    const children = [...el.children].filter((c) => c.nodeType === Node.ELEMENT_NODE);
+    if (!children.length) {
+        push(el.outerHTML);
+        return;
+    }
+    const hasLabel = children.some(
+        (c) =>
+            c.getAttribute?.('data-ems-boq-note-label') === '1' ||
+            c.classList?.contains?.('ems-boq-note-label') ||
+            /^notes?\s*:?\s*$/i.test(String(c.textContent || '').replace(/\s+/g, ' ').trim())
+    );
+    const labelHtml = hasLabel
+        ? ''
+        : '<p class="ems-boq-note-label" data-ems-boq-note-label="1"><strong>Note:</strong></p>';
+    const inner = `${labelHtml}${children.map((c) => c.outerHTML).join('')}`;
+    push(
+        `<div class="ems-boq-note-block" data-ems-boq-note="1" data-ems-keep-with-next="1">${inner}</div>`
+    );
+}
+
+function cloneOpenTag(el, extraAttrs = '') {
+    const tag = el.tagName.toLowerCase();
+    const attrs = [...el.attributes]
+        .map((a) => ` ${a.name}="${String(a.value).replace(/"/g, '&quot;')}"`)
+        .join('');
+    return `<${tag}${attrs}${extraAttrs}>`;
+}
+
+/**
+ * Split a long paragraph into line-sized chunks (≥2 lines each side) so sheets fill.
+ * Prefers <br> boundaries; otherwise word-boundary character chunks.
+ * Continuation fragments are marked so preview/PDF can continue seamlessly (no extra gap).
+ */
+function splitLongParagraphElement(pEl) {
+    if (!pEl || !/^P$/i.test(pEl.tagName)) return [pEl.outerHTML];
+    const paraId = `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const open0 = cloneOpenTag(pEl, ` data-ems-para-split="${paraId}"`);
+    const openCont = cloneOpenTag(
+        pEl,
+        ` data-ems-para-split="${paraId}" data-ems-para-continue="1"`
+    );
+    const close = `</${pEl.tagName.toLowerCase()}>`;
+    const stamp = (htmlInner, isCont) => `${isCont ? openCont : open0}${htmlInner}${close}`;
+    const brParts = String(pEl.innerHTML || '').split(/<br\s*\/?>/i);
+    if (brParts.length >= PACK_MIN_LINES_EACH_SIDE * 2) {
+        /** @type {string[]} */
+        const chunks = [];
+        /* Prefer 2–3 lines so leftover sheet space can take the next fragment. */
+        const group = PACK_MIN_LINES_EACH_SIDE;
+        for (let i = 0; i < brParts.length; i += group) {
+            const slice = brParts.slice(i, i + group);
+            if (i + group >= brParts.length && slice.length < PACK_MIN_LINES_EACH_SIDE && chunks.length) {
+                chunks[chunks.length - 1] = `${chunks[chunks.length - 1].replace(
+                    new RegExp(`${close}$`),
+                    ''
+                )}<br>${slice.join('<br>')}${close}`;
+                break;
+            }
+            chunks.push(stamp(slice.join('<br>'), i > 0));
+        }
+        return chunks.length ? chunks : [pEl.outerHTML];
+    }
+    const plain = String(pEl.textContent || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const estLines = Math.max(1, Math.ceil(plain.length / PACK_CHARS_PER_LINE));
+    if (estLines < PACK_MIN_LINES_EACH_SIDE * 2 + 1) return [pEl.outerHTML];
+    /* Prefer 2-line fragments so leftover sheet space (e.g. ~95mm) can take the next piece. */
+    const chunkLines = PACK_MIN_LINES_EACH_SIDE;
+    const texts = splitPlainAtWordBoundary(plain, chunkLines * PACK_CHARS_PER_LINE);
+    if (texts.length <= 1) return [pEl.outerHTML];
+    return texts.map((t, i) => stamp(t, i > 0));
+}
+
+/** Split multi-paragraph / Word DIV blobs; also chop long single paragraphs at line size. */
 function expandParagraphListSegments(htmlParts) {
     if (!htmlParts?.length || typeof DOMParser === 'undefined') return htmlParts || [];
     /** @type {string[]} */
     const out = [];
+    const pushSplitP = (el) => {
+        for (const part of splitLongParagraphElement(el)) {
+            if (part?.trim()) out.push(part.trim());
+        }
+    };
     for (const part of htmlParts) {
         const t = String(part || '').trim();
         if (!t || /<table\b/i.test(t) || /<ul\b|<ol\b/i.test(t)) {
@@ -668,8 +1254,14 @@ function expandParagraphListSegments(htmlParts) {
             continue;
         }
         const children = [...root.children].filter((c) => c.nodeType === Node.ELEMENT_NODE);
-        const allP = children.length > 1 && children.every((c) => /^P$/i.test(c.tagName));
-        if (allP) {
+        if (children.length === 1 && /^P$/i.test(children[0].tagName)) {
+            pushSplitP(children[0]);
+            continue;
+        }
+        const blockOk =
+            children.length > 1 &&
+            children.every((c) => /^(P|DIV|H[1-6]|SECTION|ARTICLE)$/i.test(c.tagName));
+        if (blockOk) {
             for (let i = 0; i < children.length; i += 1) {
                 const c = children[i];
                 const h = String(c.outerHTML || '').trim();
@@ -692,7 +1284,17 @@ function expandParagraphListSegments(htmlParts) {
                     i += run - 1;
                     continue;
                 }
-                out.push(h);
+                if (/^P$/i.test(c.tagName)) pushSplitP(c);
+                else if (/^DIV$/i.test(c.tagName)) {
+                    const innerPs = [...c.children].filter((x) => /^P$/i.test(x.tagName));
+                    if (innerPs.length >= 2) {
+                        innerPs.forEach((p) => pushSplitP(p));
+                    } else {
+                        out.push(h);
+                    }
+                } else {
+                    out.push(h);
+                }
             }
             continue;
         }
@@ -704,7 +1306,7 @@ function expandParagraphListSegments(htmlParts) {
 function packIndicesByHeightSum(indices, heights, usablePx, options = {}) {
     if (!indices?.length) return [];
     const perPage = typeof options?.usablePxForContinuationPage === 'function';
-    const fudge = options?.tightFit ? 28 : 24;
+    const fudge = options?.tightFit ? 12 : 8;
     /** @type {number[][]} */
     const pages = [];
     let cur = [];
@@ -774,6 +1376,20 @@ function buildRejoinedTableOuterHtml(doc, template, rows) {
     const thead = table.querySelector('thead');
     if (thead) thead.after(tbody);
     else table.appendChild(tbody);
+    /* Rebuild row-height CSV for rejoined row count (template only had thead + first body). */
+    if (table.hasAttribute('data-ems-row-heights')) {
+        const heights = [...table.querySelectorAll('tr')].map((tr) => {
+            const attrH = parseFloat(tr.getAttribute('height') || '0');
+            if (attrH > 0) return Math.round(attrH);
+            const styleH = parseFloat(String(tr.style?.height || '').replace(/px$/i, ''));
+            return styleH > 0 ? Math.round(styleH) : 0;
+        });
+        if (heights.some((h) => h > 0)) {
+            table.setAttribute('data-ems-row-heights', heights.join(','));
+        } else {
+            table.removeAttribute('data-ems-row-heights');
+        }
+    }
     syncOfficePasteTableColumnLayout(table);
     return table.outerHTML;
 }
@@ -800,11 +1416,6 @@ export function rejoinSplitTableHtml(html) {
 
     const splitTables = [...root.querySelectorAll('table[data-ems-table-split="1"]')];
     if (splitTables.length === 0) return raw;
-    if (splitTables.length === 1) {
-        const only = /** @type {HTMLTableElement} */ (splitTables[0]);
-        const rows = getSplitTableBodyRows(only);
-        return buildRejoinedTableOuterHtml(doc, only, rows);
-    }
 
     /** @type {Map<string, { template: HTMLTableElement, rows: HTMLTableRowElement[], tables: HTMLTableElement[] }>} */
     const groups = new Map();
@@ -838,6 +1449,7 @@ export function rejoinSplitTableHtml(html) {
         group.tables.slice(1).forEach((tb) => tb.remove());
     }
 
+    /* Always return full root — never drop prose (3.1 / payment terms) after a lone table fragment. */
     return root.innerHTML.trim() || raw;
 }
 
@@ -847,13 +1459,28 @@ export function rejoinSplitTableHtml(html) {
  * @param {ClausePackOptions & { splitListsPerItem?: boolean, splitTableMinRows?: number }} [options]
  * @returns {ClauseSegment[]}
  */
+function isBlankPackHtml(html) {
+    const raw = String(html || '').trim();
+    if (!raw) return true;
+    const plain = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').replace(/\u00a0/g, ' ').trim();
+    return !plain;
+}
+
+/** Drop trailing blank-only parts so the next clause does not sit under a system gap. */
+function trimTrailingBlankParts(parts) {
+    if (!parts?.length) return parts || [];
+    let end = parts.length;
+    while (end > 0 && isBlankPackHtml(parts[end - 1])) end -= 1;
+    return end < parts.length ? parts.slice(0, Math.max(end, 1)) : parts;
+}
+
 export function buildClauseSegmentsForPagination(activeClausesList, formatBodyHtml, options = {}) {
     /** @type {ClauseSegment[]} */
     const out = [];
     activeClausesList.forEach((clause, clauseIdx) => {
         const displayMajor = clauseIdx + 1;
         const bodyHtml = formatBodyHtml(clause.content, clause.listKey, displayMajor);
-        const parts = splitClauseHtmlToSegments(bodyHtml, options);
+        const parts = trimTrailingBlankParts(splitClauseHtmlToSegments(bodyHtml, options));
         parts.forEach((html, partIdx) => {
             const key = `${clause.listKey ?? clause.key ?? clause.id ?? clauseIdx}-${partIdx}`;
             out.push({
@@ -870,13 +1497,30 @@ export function buildClauseSegmentsForPagination(activeClausesList, formatBodyHt
 }
 
 const SINGLE_ITEM_LIST_RE = /^<(ul|ol)(\s[^>]*)?>\s*(<li[\s\S]*?<\/li>)\s*<\/\1>$/i;
+const PARA_SPLIT_CONT_RE =
+    /^(.*)(<p\b[^>]*\bdata-ems-para-split=["']([^"']+)["'][^>]*>)([\s\S]*)<\/p>\s*$/i;
+const PARA_CONTINUE_RE =
+    /^<p\b[^>]*\bdata-ems-para-continue=["']?1["']?[^>]*\bdata-ems-para-split=["']([^"']+)["'][^>]*>([\s\S]*)<\/p>$/i;
+const PARA_CONTINUE_RE_ALT =
+    /^<p\b[^>]*\bdata-ems-para-split=["']([^"']+)["'][^>]*\bdata-ems-para-continue=["']?1["']?[^>]*>([\s\S]*)<\/p>$/i;
 
-/** Merge consecutive single-&lt;li&gt; list fragments into one list when rendered on the same sheet. */
+/** Merge consecutive single-&lt;li&gt; list fragments / paragraph split pieces on the same sheet. */
 function appendSegmentHtmlToAcc(acc, html) {
     const prev = String(acc || '').trim();
     const next = String(html || '').trim();
     if (!prev) return next;
     if (!next) return prev;
+
+    /* Seamlessly continue a split paragraph (no inserted paragraph break / gap). */
+    const cont = next.match(PARA_CONTINUE_RE) || next.match(PARA_CONTINUE_RE_ALT);
+    if (cont) {
+        const splitId = cont[1];
+        const contInner = cont[2];
+        const prevPara = prev.match(PARA_SPLIT_CONT_RE);
+        if (prevPara && prevPara[3] === splitId) {
+            return `${prevPara[1]}${prevPara[2]}${prevPara[4]} ${contInner}</p>`;
+        }
+    }
 
     const nextMatch = next.match(SINGLE_ITEM_LIST_RE);
     if (!nextMatch) return prev + next;
@@ -905,6 +1549,55 @@ function appendSegmentHtmlToAcc(acc, html) {
  * @param {number[]} segmentIndices global segment indices for this sheet
  * @param {ClauseSegment[]} segments
  */
+/**
+ * Mark the segment index on the row or block that will still exist after split
+ * tables are joined back together. Packing then measures the painted page instead
+ * of guessing a line count.
+ * @param {string} html
+ * @param {number} segIndex
+ */
+function stampPackSegmentHtml(html, segIndex) {
+    const raw = String(html || '').trim();
+    if (!raw) return raw;
+    const attr = ` data-ems-pack-seg="${segIndex}"`;
+    const splitId = readEmsSplitIdFromHtml(raw);
+    const tableAttr = splitId ? ` data-ems-pack-table="${splitId}"` : '';
+    const trAttr = ` data-ems-pack-seg="${segIndex}"${tableAttr}`;
+    const tbodyCount = (raw.match(/<tbody\b/gi) || []).length;
+    const trCount = (raw.match(/<tr\b/gi) || []).length;
+    /* One body row and no nested table: stamp that row without a parse. */
+    if (tbodyCount === 1 && trCount > 0 && trCount <= 3 && !/<tbody[\s\S]*<tbody/i.test(raw)) {
+        return raw.replace(/<tbody(\s[^>]*)?>\s*<tr\b/i, (open) => open.replace(/<tr\b/i, `<tr${trAttr}`));
+    }
+    if (/<tr\b/i.test(raw) && typeof DOMParser !== 'undefined') {
+        const doc = new DOMParser().parseFromString(`<div id="ems-stamp">${raw}</div>`, 'text/html');
+        const root = doc.getElementById('ems-stamp');
+        if (root) {
+            const rows = [...root.querySelectorAll('tr')].filter((tr) => {
+                if (tr.closest('thead')) return false;
+                const table = tr.closest('table');
+                return Boolean(table) && !table.parentElement?.closest('table');
+            });
+            if (rows.length) {
+                rows.forEach((tr) => {
+                    tr.setAttribute('data-ems-pack-seg', String(segIndex));
+                    if (splitId) tr.setAttribute('data-ems-pack-table', splitId);
+                });
+                return root.innerHTML.trim();
+            }
+        }
+    } else if (/<tr\b/i.test(raw)) {
+        return raw.replace(/<tr\b/i, `<tr${trAttr}`);
+    }
+    if (/<li\b/i.test(raw)) {
+        return raw.replace(/<li\b/gi, `<li${attr}`);
+    }
+    if (/^<[a-zA-Z]/.test(raw)) {
+        return raw.replace(/^<([a-zA-Z0-9:-]+)/, `<$1${attr}`);
+    }
+    return `<div${attr}>${raw}</div>`;
+}
+
 export function mergeSegmentsIntoSheetBlocks(segmentIndices, segments) {
     /** @type {Array<{ clause: object, bodyHtml: string, showHeading: boolean, displayMajor: number, listKey: string }>} */
     const blocks = [];
@@ -931,17 +1624,26 @@ export function mergeSegmentsIntoSheetBlocks(segmentIndices, segments) {
     for (const si of segmentIndices) {
         const seg = segments[si];
         if (!seg) continue;
+        const stamped = stampPackSegmentHtml(seg.html, si);
         if (seg.clauseIdx !== curClauseIdx) {
             flush();
             curClauseIdx = seg.clauseIdx;
             head = seg;
-            acc = seg.html;
+            acc = stamped;
         } else {
-            acc = appendSegmentHtmlToAcc(acc, seg.html);
+            acc = appendSegmentHtmlToAcc(acc, stamped);
         }
     }
     flush();
     return blocks;
+}
+
+function packDebugEnabled() {
+    return false;
+}
+
+function packDebugLog() {
+    /* debug logging removed after diagnosis */
 }
 
 /**
@@ -962,12 +1664,25 @@ export function packSegmentIndicesByMergedHeight(
     const pages = [];
     let cur = [];
     let pageIdx = 0;
+    const segments = options?.segments || null;
 
     for (const i of indices) {
         const tryGroup = [...cur, i];
         const usable = perPage
             ? resolvePackLimitForContinuationPage(pageIdx, usablePx, options)
             : resolvePackFillLimitPx(usablePx, options);
+        const used =
+            typeof measureMergedGroupPx === 'function' && cur.length
+                ? measureMergedGroupPx(cur, pageIdx)
+                : sumSegmentHeightsPx(cur, segmentHeightsPx);
+        const nextH =
+            typeof measureMergedGroupPx === 'function'
+                ? Math.max(
+                      0,
+                      (measureMergedGroupPx(tryGroup, pageIdx) || 0) - (used || 0)
+                  )
+                : Math.max(segmentHeightsPx?.[i] || 0, 1);
+        const remaining = Math.max(0, usable - (used || 0));
         const fits = groupFitsPackLimit(
             tryGroup,
             measureMergedGroupPx,
@@ -977,6 +1692,25 @@ export function packSegmentIndicesByMergedHeight(
             pageIdx
         );
         if (cur.length > 0 && !fits) {
+            const unitTaller =
+                typeof measureMergedGroupPx === 'function'
+                    ? measureMergedGroupPx([i], pageIdx + 1) > usable
+                    : Math.max(segmentHeightsPx?.[i] || 0, 1) > usable;
+            const keepWith =
+                groupEndsWithSubheading(cur, segments) ||
+                Boolean(segments?.[cur[cur.length - 1]]?.showHeading);
+            packDebugLog('break', {
+                page: pageIdx,
+                used,
+                remaining,
+                nextUnit: nextH,
+                nextIdx: i,
+                reason: unitTaller
+                    ? 'unit-taller-than-page'
+                    : keepWith
+                      ? 'keep-together-block-does-not-fit'
+                      : 'next-unit-does-not-fit',
+            });
             pages.push(cur);
             pageIdx += 1;
             cur = [i];
@@ -984,13 +1718,30 @@ export function packSegmentIndicesByMergedHeight(
             cur = tryGroup;
         }
     }
-    if (cur.length) pages.push(cur);
+    if (cur.length) {
+        const usable = perPage
+            ? resolvePackLimitForContinuationPage(pageIdx, usablePx, options)
+            : resolvePackFillLimitPx(usablePx, options);
+        const used =
+            typeof measureMergedGroupPx === 'function'
+                ? measureMergedGroupPx(cur, pageIdx)
+                : sumSegmentHeightsPx(cur, segmentHeightsPx);
+        packDebugLog('page-final', {
+            page: pageIdx,
+            used,
+            remaining: Math.max(0, usable - (used || 0)),
+            segs: cur.length,
+            reason: 'end-of-content',
+        });
+        pages.push(cur);
+    }
     return pages;
 }
 
 /**
  * If a page group is only prose (e.g. BOQ intro) and the next group starts the table, merge forward
  * so the intro is not stranded on an otherwise empty sheet.
+ * Same clause only — never glue Scope bullets onto Pricing (that left one LI on a blank page).
  * @param {number[][]} groups
  * @param {ClauseSegment[]} segments
  */
@@ -1013,7 +1764,12 @@ export function mergeIntroOnlyGroupsForward(groups, segments) {
                 const seg = segments[idx];
                 return seg && segmentHtmlContainsTable(seg.html);
             });
-        if (onlyProse && nextHasTable) {
+        const sameClause =
+            g?.length &&
+            next?.length &&
+            segments[g[0]]?.clauseIdx != null &&
+            segments[g[0]]?.clauseIdx === segments[next[0]]?.clauseIdx;
+        if (onlyProse && nextHasTable && sameClause) {
             out.push([...g, ...next]);
             i += 2;
         } else {
@@ -1226,6 +1982,103 @@ export function enforcePackedSegmentGroups(
  * @param {(groupIndices: number[]) => number} measureMergedGroupPx
  * @param {number} usablePx
  */
+/** True for clause sub-heads like "4.3. Supply, Installation…" (not a list item). */
+function isSubheadingLikeSegmentHtml(html) {
+    const raw = String(html || '');
+    if (/<li\b/i.test(raw) || /<table\b/i.test(raw)) return false;
+    const plain = raw
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!plain || plain.length > 220) return false;
+    return /^\d+(?:\.\d+)+\.?\s+\S/.test(plain);
+}
+
+function groupEndsWithSubheading(group, segments) {
+    if (!group?.length || !segments?.length) return false;
+    const seg = segments[group[group.length - 1]];
+    return Boolean(seg && isSubheadingLikeSegmentHtml(seg.html));
+}
+
+/**
+ * If a sheet ends on a numbered subheading (4.3. …) and the next sheet continues the
+ * same clause, pull following segments up — avoids a near-empty page under the heading.
+ */
+function fillOrphanSubheadingPageGroups(
+    groups,
+    measureMergedGroupPx,
+    usablePx,
+    segments,
+    options = {},
+    segmentHeightsPx = null
+) {
+    if (!groups?.length || groups.length < 2 || !segments?.length) return groups || [];
+    const perPage = typeof options?.usablePxForContinuationPage === 'function';
+    const result = groups.map((g) => [...g]);
+    for (let i = 0; i < result.length - 1; i += 1) {
+        if (!groupEndsWithSubheading(result[i], segments)) continue;
+        const next = result[i + 1];
+        if (!next?.length) continue;
+        const headSeg = segments[result[i][result[i].length - 1]];
+        const nextSeg = segments[next[0]];
+        if (
+            headSeg?.clauseIdx == null ||
+            headSeg.clauseIdx !== nextSeg?.clauseIdx
+        ) {
+            continue;
+        }
+        const baseLimit = perPage
+            ? resolvePackSlackLimitForContinuationPage(i, usablePx, options)
+            : resolvePackFillLimitPxForFillPass(usablePx, options);
+        /* Slightly freer pull after a subheading — still hard-capped by merged measure. */
+        const limit = baseLimit + 24;
+        let pulled = 0;
+        while (next.length > 0 && pulled < 48) {
+            const tryGroup = [...result[i], next[0]];
+            if (
+                !groupFitsPackLimit(
+                    tryGroup,
+                    measureMergedGroupPx,
+                    limit,
+                    segmentHeightsPx,
+                    options,
+                    i
+                )
+            ) {
+                break;
+            }
+            result[i].push(next.shift());
+            pulled += 1;
+        }
+        if (next.length === 0) {
+            result.splice(i + 1, 1);
+        }
+    }
+    /*
+     * Still orphaned (heading last on page, body on next): keep heading with its body
+     * by moving it to the next sheet rather than leaving a blank band under it.
+     */
+    for (let i = 0; i < result.length - 1; i += 1) {
+        if (!groupEndsWithSubheading(result[i], segments)) continue;
+        if (result[i].length <= 0) continue;
+        const next = result[i + 1];
+        if (!next?.length) continue;
+        const headIdx = result[i][result[i].length - 1];
+        const headSeg = segments[headIdx];
+        const nextSeg = segments[next[0]];
+        if (headSeg?.clauseIdx == null || headSeg.clauseIdx !== nextSeg?.clauseIdx) continue;
+        /* Only move when the heading page would otherwise stay sparse (≤2 trailing blocks). */
+        if (result[i].length > 3) continue;
+        result[i].pop();
+        result[i + 1] = [headIdx, ...next];
+        if (result[i].length === 0) {
+            result.splice(i, 1);
+            i -= 1;
+        }
+    }
+    return result.filter((g) => g.length > 0);
+}
+
 export function fillSegmentPageGroupsSlack(
     groups,
     measureMergedGroupPx,
@@ -1240,17 +2093,22 @@ export function fillSegmentPageGroupsSlack(
     const result = groups.map((g) => [...g]);
     let changed = true;
     let guard = 0;
-    while (changed && guard < result.length * 12) {
+    /* fastAlign: bounded pull-up sweeps — enough to clear blank bands without multi-second packs. */
+    const maxGuard = options?.fastAlign
+        ? Math.max(result.length * 12, 48)
+        : result.length * 40;
+    while (changed && guard < maxGuard) {
         guard += 1;
         changed = false;
         for (let i = 0; i < result.length - 1; i++) {
-            if (groupEndsWithManualBlankSpacers(result[i], segments)) continue;
             const next = result[i + 1];
             if (!next?.length) continue;
 
-            const limit = perPage
+            const orphanHead = groupEndsWithSubheading(result[i], segments);
+            const limitBase = perPage
                 ? resolvePackSlackLimitForContinuationPage(i, usablePx, options)
                 : resolvePackFillLimitPxForFillPass(usablePx, options);
+            const limit = orphanHead ? limitBase + 36 : limitBase;
             const mergedAll = [...result[i], ...next];
             if (
                 groupFitsPackLimit(
@@ -1293,7 +2151,123 @@ export function fillSegmentPageGroupsSlack(
             }
         }
     }
+    return fillOrphanSubheadingPageGroups(
+        result.filter((g) => g.length > 0),
+        measureMergedGroupPx,
+        usablePx,
+        segments,
+        options,
+        segmentHeightsPx
+    );
+}
+
+/**
+ * Short clause tables (Terms: Delivery / Validity / Payment / Warranty) are 2 columns.
+ * A last row that "fits" the limit still paints into the footer and overflow:hidden
+ * hides it. Wide BOQ schedules are left to the normal limit so pages stay dense.
+ * @param {{ html?: string } | null | undefined} seg
+ */
+function segmentIsFooterClipRiskRow(seg) {
+    const html = String(seg?.html || '');
+    if (!/data-ems-table-split\s*=\s*["']?1/i.test(html)) return false;
+    const widthAttr = html.match(/data-ems-col-widths=["']([^"']+)["']/i);
+    if (widthAttr) {
+        const n = widthAttr[1]
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean).length;
+        if (n >= 4) return false;
+    }
+    const colTags = html.match(/<col\b/gi);
+    if (colTags && colTags.length >= 4) return false;
+    return true;
+}
+
+/**
+ * Move trailing segments off pages that still measure over the limit so content
+ * continues on the next sheet instead of being clipped into the footer.
+ *
+ * IMPORTANT: never peel from sum-of-fragment heights for row-split tables — each
+ * fragment carries a thead, so the sum wildly overestimates and leaves half-empty
+ * pages (Total/VAT on page N, Grand Total alone on N+1). Use rejoined merged measure.
+ */
+export function peelOverfullPageGroups(
+    groups,
+    measureMergedGroupPx,
+    usablePx,
+    segments,
+    options = {},
+    segmentHeightsPx = null
+) {
+    if (!groups?.length) return groups || [];
+    const perPage = typeof options?.usablePxForContinuationPage === 'function';
+    /** @type {number[][]} */
+    const result = groups.map((g) => [...g]);
+    let guard = 0;
+    const maxGuard = Math.max(result.length * 24, 96);
+    /* Zero noise — any overshoot must peel so overflow:hidden never hides units. */
+    const peelNoisePx = 0;
+    while (guard < maxGuard) {
+        guard += 1;
+        let peeled = false;
+        for (let i = 0; i < result.length; i += 1) {
+            const group = result[i];
+            if (!group?.length || group.length <= 1) continue;
+            const limit = perPage
+                ? resolvePackLimitForContinuationPage(i, usablePx, options)
+                : resolvePackFillLimitPx(usablePx, options);
+            const pageIdx = i;
+            /*
+             * Peel ONLY when rejoined content truly exceeds the content box.
+             * Sum-of-segment peels double-counted list/clause margins and emptied
+             * pages that still painted fine (enquiry 1515 half-empty sheets).
+             */
+            const merged =
+                typeof measureMergedGroupPx === 'function'
+                    ? measureMergedGroupPx(group, pageIdx)
+                    : 0;
+            const overMerged = merged > 0 && merged > limit + peelNoisePx;
+            const overClip =
+                typeof options?.overflowTestForPage === 'function' &&
+                options.overflowTestForPage(i, group);
+            if (!overMerged && !overClip) continue;
+
+            /* Peel last segment onto the next page (create page if needed). */
+            const moved = group.pop();
+            if (moved == null) continue;
+            if (i + 1 < result.length) {
+                result[i + 1] = [moved, ...result[i + 1]];
+            } else {
+                result.push([moved]);
+            }
+            if (!group.length) {
+                result.splice(i, 1);
+            }
+            peeled = true;
+            break;
+        }
+        if (!peeled) break;
+    }
     return result.filter((g) => g.length > 0);
+}
+
+/** @deprecated use peelOverfullPageGroups */
+function peelOverfullSplitTableGroups(
+    groups,
+    measureMergedGroupPx,
+    usablePx,
+    segments,
+    options = {},
+    segmentHeightsPx = null
+) {
+    return peelOverfullPageGroups(
+        groups,
+        measureMergedGroupPx,
+        usablePx,
+        segments,
+        options,
+        segmentHeightsPx
+    );
 }
 
 /**
@@ -1302,6 +2276,217 @@ export function fillSegmentPageGroupsSlack(
  * @param {(groupIndices: number[]) => number} measureMergedGroupPx
  * @param {number} usablePx
  * @param {ClauseSegment[]} segments
+ */
+/** Table body row that is a section label (e.g. "General") — keep with the next data row. */
+function isTableSectionHeaderSegmentHtml(html) {
+    const raw = String(html || '');
+    if (!/data-ems-table-split\s*=\s*["']?1/i.test(raw)) return false;
+    const plain = raw
+        .replace(/<thead\b[\s\S]*?<\/thead>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!plain || plain.length > 48) return false;
+    return /^(general|notes?|scope|exclusions?|assumptions?|terms?)\s*:?$/i.test(plain);
+}
+
+/** Note label(+first bullet) block — never leave it alone without its bullet. */
+function isBoqNoteKeepSegmentHtml(html) {
+    return /data-ems-boq-note\s*=\s*["']?1/i.test(String(html || ''));
+}
+
+/**
+ * Keep-with applies only when the current unit does NOT already carry body content
+ * (heading-only) OR is a table section / Note label that must glue the next row/bullet.
+ * Gluing an extra segment onto showHeading segments that already include the first
+ * body unit deferred Payment/OHS/References and left 40–110mm gaps (9-sheet regression).
+ */
+function segmentNeedsKeepWithNext(seg) {
+    if (!seg) return false;
+    if (isTableSectionHeaderSegmentHtml(seg.html)) return true;
+    if (isBoqNoteKeepSegmentHtml(seg.html) && /data-ems-keep-with-next/i.test(String(seg.html || ''))) {
+        /* Note block already includes first bullet — do not glue yet another unit. */
+        return false;
+    }
+    if (!seg.showHeading) return false;
+    const plain = String(seg.html || '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/\u00a0/g, ' ')
+        .trim();
+    /* Heading flag with no/minimal body — glue the real first unit. */
+    return plain.length < 8;
+}
+
+/**
+ * After greedy pack: never leave a heading (or General sub-header) alone at the bottom.
+ * Move it onto the next sheet with its keep-with content. Verify-down only.
+ */
+function keepHeadingsWithFollowingContent(groups, segments) {
+    if (!groups?.length || groups.length < 2 || !segments?.length) return groups || [];
+    const result = groups.map((g) => [...g]);
+    for (let i = 0; i < result.length - 1; i += 1) {
+        const cur = result[i];
+        if (!cur?.length) continue;
+        const lastIdx = cur[cur.length - 1];
+        const last = segments[lastIdx];
+        const next = result[i + 1];
+        if (!next?.length || !last) continue;
+        const nextSeg = segments[next[0]];
+        const sameClause =
+            last.clauseIdx != null && nextSeg?.clauseIdx === last.clauseIdx;
+        if (!sameClause) continue;
+        const isClauseHead = Boolean(last.showHeading);
+        const isSub = groupEndsWithSubheading(cur, segments);
+        const isSectionRow = isTableSectionHeaderSegmentHtml(last.html);
+        const headHasBody = String(last.html || '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim().length >= 8;
+        /*
+         * Only move a true orphan heading (no body yet) or a General sub-header.
+         * Moving a heading segment that already includes the first body unit opened
+         * large blank bands on the previous sheet.
+         */
+        if (isSectionRow || isSub || (isClauseHead && !headHasBody)) {
+            cur.pop();
+            result[i + 1] = [lastIdx, ...next];
+            if (!cur.length) {
+                result.splice(i, 1);
+                i -= 1;
+            }
+        }
+    }
+    return result.filter((g) => g.length > 0);
+}
+
+/** Drop leading blank spacer segments on a sheet (split artifact, not user intent at page top). */
+function trimLeadingBlankSegmentsOnPages(groups, segments) {
+    if (!groups?.length || !segments?.length) return groups || [];
+    return groups
+        .map((g, pageIdx) => {
+            if (!g?.length || pageIdx === 0) return g;
+            let start = 0;
+            while (start < g.length) {
+                const html = String(segments[g[start]]?.html || '');
+                const plain = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+                const isBlank =
+                    !plain &&
+                    !segments[g[start]]?.showHeading &&
+                    (/<br\s*\/?>/i.test(html) || /&nbsp;/i.test(html) || !html.trim());
+                if (!isBlank) break;
+                start += 1;
+            }
+            return start > 0 ? g.slice(start) : g;
+        })
+        .filter((g) => g.length > 0);
+}
+
+/**
+ * Cheap integrity: every segment index appears exactly once.
+ * @returns {{ ok: boolean, missing: number[], dupes: number[] }}
+ */
+export function assertSegmentPageGroupsIntegrity(groups, segmentCount) {
+    const n = Math.max(0, segmentCount | 0);
+    const seen = new Map();
+    for (const g of groups || []) {
+        for (const idx of g || []) {
+            seen.set(idx, (seen.get(idx) || 0) + 1);
+        }
+    }
+    /** @type {number[]} */
+    const missing = [];
+    /** @type {number[]} */
+    const dupes = [];
+    for (let i = 0; i < n; i += 1) {
+        const c = seen.get(i) || 0;
+        if (c === 0) missing.push(i);
+        else if (c > 1) dupes.push(i);
+    }
+    return { ok: missing.length === 0 && dupes.length === 0, missing, dupes };
+}
+
+/**
+ * Visibility-aware integrity: each packed unit must be fully inside its sheet
+ * content box (top >= contentTop, bottom <= contentTop + usable - reserve).
+ * DOM-presence-only checks missed units clipped by overflow:hidden (e.g. 3.03).
+ * @returns {{ ok: boolean, clipped: Array<{ seg: number, sheet: number, reason: string }>, missing: number[], dupes: number[] }}
+ */
+export function assertSegmentVisibilityOnSheets(
+    previewRoot,
+    groups,
+    segmentCount,
+    options = {}
+) {
+    const base = assertSegmentPageGroupsIntegrity(groups, segmentCount);
+    /** @type {Array<{ seg: number, sheet: number, reason: string }>} */
+    const clipped = [];
+    if (!previewRoot || typeof previewRoot.querySelectorAll !== 'function') {
+        return { ...base, clipped, ok: base.ok };
+    }
+    const reserve = Number.isFinite(options.reservePx)
+        ? options.reservePx
+        : PACK_HEIGHT_SAFETY_PX;
+    const usableFallback = Number.isFinite(options.usablePx)
+        ? options.usablePx
+        : EMS_QUOTE_CONT_USABLE_PX_FALLBACK;
+    const contSheets = [
+        ...previewRoot.querySelectorAll(
+            '.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)'
+        ),
+    ];
+    contSheets.forEach((sheet, si) => {
+        const content = sheet.querySelector('.content-section');
+        if (!content) return;
+        const cRect = content.getBoundingClientRect();
+        const usable = sheet.classList.contains('quote-a4-sheet--landscape')
+            ? quoteContinuationContentPx(true)
+            : usableFallback;
+        const limitBottom = cRect.top + usable - reserve;
+        const limitTop = cRect.top;
+        const stamped = content.querySelectorAll('[data-ems-pack-seg]');
+        const nodes = stamped.length
+            ? [...stamped]
+            : [...content.querySelectorAll('.quote-clause-block')];
+        nodes.forEach((el) => {
+            const r = el.getBoundingClientRect();
+            if (r.height < 1 && r.width < 1) return;
+            const segAttr = el.getAttribute('data-ems-pack-seg');
+            const seg = segAttr != null ? parseInt(segAttr, 10) : -1;
+            const eps = 1.5;
+            if (r.bottom > limitBottom + eps) {
+                clipped.push({
+                    seg,
+                    sheet: si + 1,
+                    reason: 'extends-below-content-end-reserve',
+                });
+            } else if (r.top < limitTop - eps) {
+                clipped.push({
+                    seg,
+                    sheet: si + 1,
+                    reason: 'extends-above-content-start',
+                });
+            }
+        });
+        if (content.scrollHeight > content.clientHeight + 2) {
+            clipped.push({
+                seg: -1,
+                sheet: si + 1,
+                reason: 'content-scrollHeight-exceeds-clientHeight',
+            });
+        }
+    });
+    return {
+        ok: base.ok && clipped.length === 0,
+        missing: base.missing,
+        dupes: base.dupes,
+        clipped,
+    };
+}
+
+/**
+ * Deterministic pack: greedy place by measured unit heights, then verify-down only.
+ * NEVER pulls content up after the first placement (fill/slack was hiding units).
  */
 export function packClauseSegmentsForContinuationPages(
     indices,
@@ -1312,97 +2497,172 @@ export function packClauseSegmentsForContinuationPages(
     segmentHeightsPx = null
 ) {
     if (!indices?.length) return [];
-    const perPage = typeof options?.usablePxForContinuationPage === 'function';
-    const limit = resolvePackFillLimitPx(usablePx, options);
-    let groups;
-    if (segmentHeightsPx?.length) {
-        groups = packIndicesByHeightSum(indices, segmentHeightsPx, usablePx, options);
-        groups = groups.flatMap((group, pageIdx) => {
-            if (!group?.length) return [];
-            const pageLimit = perPage
-                ? resolvePackLimitForContinuationPage(pageIdx, usablePx, options)
-                : limit;
-            if (
-                groupFitsPackLimit(
-                    group,
-                    measureMergedGroupPx,
-                    pageLimit,
-                    segmentHeightsPx,
-                    options,
-                    pageIdx
-                )
-            ) {
-                return [group];
+    const packOpts = {
+        ...options,
+        segments,
+        tightFit: false,
+        fastAlign: true,
+        /* Disable sum/estimate fast-paths that understate height and overpack. */
+        preferMergedOnly: true,
+    };
+    const safety = Number.isFinite(options.packSafetyPx)
+        ? Math.max(0, options.packSafetyPx)
+        : PACK_HEIGHT_SAFETY_PX;
+    const limit = Math.max((usablePx || EMS_QUOTE_CONT_USABLE_PX_FALLBACK) - safety, 200);
+
+    /*
+     * Phase 1 — greedy by per-unit heights (measured once by caller).
+     * Prefer segmentHeightsPx; fall back to compact estimates only when missing.
+     */
+    const heights =
+        segmentHeightsPx?.length === (segments?.length || 0)
+            ? segmentHeightsPx.map((h) => Math.max(h || 0, 1))
+            : compactPackHeightsPx(segments, segmentHeightsPx);
+
+    /** @type {number[][]} */
+    const pages = [];
+    /** @type {number[]} */
+    let cur = [];
+    let sum = 0;
+    let pageSplitId = '';
+    const SPLIT_THEAD = 30;
+
+    const cost = (idx, splitId) => {
+        let h = Math.max(heights[idx] || 0, 1);
+        const html = String(segments[idx]?.html || '');
+        const sid = readEmsSplitIdFromHtml(html);
+        if (sid && sid !== splitId) h += SPLIT_THEAD;
+        return { h, sid };
+    };
+
+    for (let ii = 0; ii < indices.length; ii += 1) {
+        const idx = indices[ii];
+        const { h, sid } = cost(idx, pageSplitId);
+        const seg = segments[idx];
+        const nextIdx = indices[ii + 1];
+        const nextSeg = nextIdx != null ? segments[nextIdx] : null;
+        /*
+         * Keep-with-next (same clause): only for heading-only / General row units.
+         * Cap follow to ~2 lines (48px) or first table row (56px). Never glue a tall
+         * next clause-row onto a showHeading segment that already carries body HTML —
+         * that deferred Payment/OHS and left 40–70mm gaps (9-sheet regression).
+         */
+        const keepWithNext =
+            segmentNeedsKeepWithNext(seg) &&
+            nextSeg &&
+            nextSeg.clauseIdx === seg.clauseIdx;
+        let followH = 0;
+        let followSid = '';
+        let glueFollow = false;
+        if (keepWithNext) {
+            const followCost = cost(nextIdx, sid || pageSplitId);
+            const cap = segmentHtmlContainsTable(nextSeg.html) ? 56 : 48;
+            followH = followCost.h;
+            followSid = followCost.sid || '';
+            /* Only glue when the next unit is already a small "first 2 lines / first row". */
+            glueFollow = followH <= cap + 16;
+            if (!glueFollow) followH = 0;
+        }
+        const placeH = h + (glueFollow ? followH : 0);
+        if (cur.length > 0 && sum + placeH > limit) {
+            pages.push(cur);
+            cur = [];
+            sum = 0;
+            pageSplitId = '';
+            const again = cost(idx, '');
+            cur.push(idx);
+            sum = again.h;
+            pageSplitId = again.sid || '';
+            if (glueFollow) {
+                const followAgain = cost(nextIdx, pageSplitId);
+                cur.push(nextIdx);
+                sum += followAgain.h;
+                if (followAgain.sid) pageSplitId = followAgain.sid;
+                ii += 1;
             }
-            if (group.length <= 1) return [group];
-            return splitSegmentGroupByMergedHeight(
-                group,
-                measureMergedGroupPx,
-                pageLimit,
-                segmentHeightsPx,
-                options,
-                pageIdx
-            );
-        });
-    } else {
-        groups = packSegmentIndicesByMergedHeight(
-            indices,
-            measureMergedGroupPx,
-            usablePx,
-            options,
-            segmentHeightsPx
-        );
+            continue;
+        }
+        cur.push(idx);
+        sum += h;
+        if (sid) pageSplitId = sid;
+        if (glueFollow) {
+            cur.push(nextIdx);
+            sum += followH;
+            if (followSid) pageSplitId = followSid;
+            ii += 1;
+        }
     }
-    groups = mergeIntroOnlyGroupsForward(groups, segments);
-    groups = fillSegmentPageGroupsSlack(
-        groups,
-        measureMergedGroupPx,
-        usablePx,
-        segments,
-        options,
-        segmentHeightsPx
-    );
-    groups = rebalanceSegmentPageGroups(
-        groups,
-        measureMergedGroupPx,
-        usablePx,
-        options,
-        segmentHeightsPx
-    );
-    groups = fillSegmentPageGroupsSlack(
-        groups,
-        measureMergedGroupPx,
-        usablePx,
-        segments,
-        options,
-        segmentHeightsPx
-    );
-    if (options?.tightFit) {
-        groups = fillSegmentPageGroupsSlack(
+    if (cur.length) pages.push(cur);
+
+    let groups = pages.filter((g) => g.length > 0);
+    groups = keepHeadingsWithFollowingContent(groups, segments);
+
+    /*
+     * Phase 2 — verify DOWN only (max 3 sweeps). Move last unit to next sheet when
+     * rejoined measure exceeds the content box. Never pull content back up.
+     */
+    for (let sweep = 0; sweep < 3; sweep += 1) {
+        const before = groups.map((g) => g.join(',')).join('|');
+        groups = peelOverfullPageGroups(
             groups,
             measureMergedGroupPx,
             usablePx,
             segments,
-            options,
-            segmentHeightsPx
+            packOpts,
+            heights
         );
+        groups = keepHeadingsWithFollowingContent(groups, segments);
+        const after = groups.map((g) => g.join(',')).join('|');
+        if (before === after) break;
     }
-    groups = enforcePackedSegmentGroups(
-        groups,
-        indices,
-        measureMergedGroupPx,
-        usablePx,
-        options,
-        segmentHeightsPx
-    );
-    groups = fillSegmentPageGroupsSlack(
-        groups,
-        measureMergedGroupPx,
-        usablePx,
-        segments,
-        options,
-        segmentHeightsPx
-    );
+
+    groups = trimLeadingBlankSegmentsOnPages(groups, segments);
+    groups = ensureSegmentPageGroupsCoverAll(groups, segments.length);
+
+    const integrity = assertSegmentPageGroupsIntegrity(groups, segments.length);
+    if (!integrity.ok) {
+        console.error('[EMS pack] segment integrity failed — retrying with larger safety', integrity);
+        /* One scratch re-pack with larger safety (no fill-up). */
+        const limit2 = Math.max(limit - 40, 160);
+        /** @type {number[][]} */
+        const pages2 = [];
+        let c2 = [];
+        let s2 = 0;
+        let split2 = '';
+        for (const idx of indices) {
+            const { h, sid } = cost(idx, split2);
+            if (c2.length > 0 && s2 + h > limit2) {
+                pages2.push(c2);
+                c2 = [];
+                s2 = 0;
+                split2 = '';
+                const again = cost(idx, '');
+                c2.push(idx);
+                s2 = again.h;
+                split2 = again.sid || '';
+                continue;
+            }
+            c2.push(idx);
+            s2 += h;
+            if (sid) split2 = sid;
+        }
+        if (c2.length) pages2.push(c2);
+        groups = keepHeadingsWithFollowingContent(
+            pages2.filter((g) => g.length > 0),
+            segments
+        );
+        groups = peelOverfullPageGroups(
+            groups,
+            measureMergedGroupPx,
+            usablePx,
+            segments,
+            packOpts,
+            heights
+        );
+        groups = trimLeadingBlankSegmentsOnPages(groups, segments);
+        groups = ensureSegmentPageGroupsCoverAll(groups, segments.length);
+    }
+
     return groups.filter((group) => {
         if (!group?.length) return false;
         return group.some((idx) => {
@@ -1412,24 +2672,17 @@ export function packClauseSegmentsForContinuationPages(
     });
 }
 
-/** Continuation body height when DOM measure is not ready yet (~A4 inner minus logo/footer). */
-export const EMS_QUOTE_CONT_USABLE_PX_FALLBACK = 772;
+/** Fixed continuation content height: 220mm portrait / 133mm landscape. */
+export const EMS_QUOTE_CONT_USABLE_PX_FALLBACK = quoteContinuationContentPx(false);
 
-/** Portrait inner grid minus typical logo/footer band — reused for landscape height math. */
-const EMS_QUOTE_CONT_LOGO_FOOTER_BAND_PX =
-    Math.round(((297 - QUOTE_A4_SHEET_PADDING_MM * 2) / 25.4) * 96) - EMS_QUOTE_CONT_USABLE_PX_FALLBACK;
-
-/** Landscape continuation usable height when DOM measure is not ready (~210mm − padding − logo/footer). */
-export const EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK = Math.max(
-    200,
-    Math.round(((210 - QUOTE_A4_SHEET_PADDING_MM * 2) / 25.4) * 96) - EMS_QUOTE_CONT_LOGO_FOOTER_BAND_PX
-);
+/** Landscape continuation content height (267×133mm). */
+export const EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK = quoteContinuationContentPx(true);
 
 /** @deprecated Reserved in pack safety only — do not subtract from usable height (causes blank pages). */
 export const EMS_QUOTE_PRINT_CONTENT_FOOTER_GAP_PX = 0;
 
 /** Representative footer HTML so pack measure reserves the same band as rendered sheets. */
-export function buildQuotePackMeasureFooterHtml(minHeight = '72px') {
+export function buildQuotePackMeasureFooterHtml(minHeight = '96px') {
     return `<div class="footer-section" style="width:100%;min-height:${minHeight};box-sizing:border-box;padding-top:3px;display:flex;flex-direction:column;align-items:stretch">
         <div class="quote-print-page-indicator" style="font-size:11px;font-weight:600;color:#64748b;padding-bottom:3px">Page 1 of 5</div>
         <hr class="quote-section-rule" style="margin:1px 0 1.5px;border:0;border-top:0.35px solid #94a3b8;height:0;width:100%" aria-hidden="true"/>
@@ -1444,50 +2697,354 @@ export function buildQuotePackMeasureFooterHtml(minHeight = '72px') {
 }
 
 /**
+ * Prose height from line count. Ignore baked row-heights here — those values
+ * were treating a short paragraph as a full page and leaving the rest blank.
+ * Blank lines the user typed still count as lines.
+ * @param {{ showHeading?: boolean } | null | undefined} seg
+ * @param {string} html
+ * @returns {number | null}
+ */
+function estimateProseSegmentPx(seg, html) {
+    /* Split BOQ rows stay on the compact row cost. A line-count here was leaving a gap under the table. */
+    if (/data-ems-table-split\s*=\s*["']?1/i.test(html)) return null;
+    const rows = (html.match(/<tr\b/gi) || []).length;
+    const plain = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    /* A short Word table around one paragraph is still prose. Tall row-heights were opening a new page. */
+    if (/<table\b/i.test(html) && (rows > 4 || plain.length > 900)) return null;
+    const paras = (html.match(/<p\b/gi) || []).length;
+    const listItems = (html.match(/<li\b/gi) || []).length;
+    const breaks = (html.match(/<br\s*\/?>/gi) || []).length;
+    const linesFromText = Math.max(1, Math.ceil(plain.length / 90));
+    /* Empty <br> and extra <p> tags were counted as full lines and closed the page early. */
+    const lines = Math.max(
+        linesFromText,
+        Math.min(paras || 0, linesFromText + 1),
+        Math.min(listItems || 0, linesFromText + 1),
+        Math.min(breaks || 0, linesFromText)
+    );
+    let h = lines * 18 + 6;
+    if (seg?.showHeading) h += 32;
+    if (listItems) h += 4;
+    /* Keep prose cheap so short Terms / Programme clauses cannot reserve a half page. */
+    return Math.min(96, Math.max(plain ? 22 : 14, h));
+}
+
+/**
  * Rough per-segment height from HTML size (tables/lists weigh more than prose).
+ * Split table row fragments (`data-ems-table-split`) must stay compact: the old
+ * plain*0.42 + table*80 formula treated each 1-row mini-table as ~180px, so a
+ * 7–10 row pricing/BOQ table exploded across 3–4 pages with large whitespace.
  * @param {ClauseSegment[]} segments
  */
 export function estimateSegmentBlockHeightsPx(segments) {
     return (segments || []).map((seg) => {
         const html = String(seg?.html || '');
+        const proseH = estimateProseSegmentPx(seg, html);
+        if (proseH != null) return proseH;
         const plain = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (/data-ems-table-split\s*=\s*["']?1/i.test(html)) {
+            /*
+             * Prefer sliced data-ems-row-heights (thead…, body). Charge body only —
+             * thead is shared after rejoin; counting it per row left pages half-empty
+             * and pushed Total/VAT/payment lines to the next sheet.
+             */
+            const heightAttr = html.match(/data-ems-row-heights\s*=\s*["']([^"']+)["']/i);
+            if (heightAttr) {
+                const parts = String(heightAttr[1])
+                    .split(',')
+                    .map((s) => parseFloat(String(s).trim()) || 0)
+                    .filter((n) => n > 0);
+                const bodyH = parts.length ? parts[parts.length - 1] : 0;
+                if (bodyH > 0) {
+                    let h = Math.round(bodyH + 6);
+                    if (seg?.showHeading) h += 36;
+                    return Math.min(160, Math.max(28, h));
+                }
+            }
+            const bodyPlain = plain
+                .replace(/\bSl\.?\s*No\.?\b/gi, ' ')
+                .replace(/\bDescription\b/gi, ' ')
+                .replace(/\bAmount\s*\([^)]*\)/gi, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            const chars = Math.min((bodyPlain || plain).length, 240);
+            let h = 28 + Math.round(chars * 0.2);
+            if (seg?.showHeading) h += 36;
+            return Math.min(140, Math.max(28, h));
+        }
+        /* Prefer baked row-height sum for intact pricing/BOQ tables (accurate + compact). */
+        const heightAttr = html.match(/data-ems-row-heights\s*=\s*["']([^"']+)["']/i);
+        if (heightAttr) {
+            const sum = String(heightAttr[1])
+                .split(',')
+                .reduce((acc, s) => acc + (parseFloat(String(s).trim()) || 0), 0);
+            if (sum > 0) {
+                let h = Math.round(sum + 12);
+                if (seg?.showHeading) h += 32;
+                /*
+                 * Excel row locks on a short paragraph were larger than the painted
+                 * text, so the next clause started on a new page under a blank band.
+                 */
+                const rowCountHere = (html.match(/<tr\b/gi) || []).length;
+                const rowFloor = Math.max(rowCountHere, 1) * 28 + (seg?.showHeading ? 36 : 0);
+                const textH = Math.max(rowFloor, Math.ceil((plain.length || 1) / 80) * 20 + 12);
+                if (plain.length < 1500 && h > textH * 1.8) h = textH;
+                return Math.min(3200, Math.max(48, h));
+            }
+        }
+        const listCount = (html.match(/<li\b/gi) || []).length;
+        /* One list-item segment (paginated OL/UL) — multi-line Terms bullets need real height. */
+        if (listCount === 1 && /<(?:ul|ol)\b/i.test(html)) {
+            let h = 16 + Math.round(Math.min(plain.length, 320) * 0.22);
+            if (seg?.showHeading) h += 32;
+            return Math.min(160, Math.max(18, h));
+        }
         const tableCount = (html.match(/<table\b/gi) || []).length;
         const rowCount = (html.match(/<tr\b/gi) || []).length;
-        const listCount = (html.match(/<li\b/gi) || []).length;
-        let h = Math.round(plain.length * 0.42 + 48);
-        h += tableCount * 80;
-        h += Math.max(0, rowCount - tableCount * 3) * 22;
-        h += listCount * 18;
-        return Math.min(3200, Math.max(80, h));
+        let h = Math.round(Math.min(plain.length, 600) * 0.22 + 22);
+        h += tableCount * 36;
+        h += Math.max(0, rowCount - tableCount * 3) * 16;
+        h += listCount * 12;
+        if (seg?.showHeading) h += 32;
+        return Math.min(3200, Math.max(22, h));
     });
 }
 
+/** @param {string} html */
 /**
- * Pack segment indices onto continuation pages using estimated heights.
- * Used when measure DOM is not ready yet so preview never sticks at cover-only.
+ * One-line BOQ rows stay at 34px so a table split still fills the page.
+ * A wrapped terms row (Payment 7.01 is several lines) must reserve that height,
+ * or the following rows are painted past the content-end line and clipped.
+ * @param {string} html
+ */
+function splitPackBodyPx(html) {
+    const plain = String(html || '')
+        .replace(/<thead\b[\s\S]*?<\/thead>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const lines = Math.max(1, Math.ceil(plain.length / 72));
+    /* A second line must be reserved. Pricing it as one line pushed 2.01 through the content end and hid it. */
+    if (lines <= 1) return 34;
+    return Math.min(200, lines * 22 + 8);
+}
+
+function readEmsSplitIdFromHtml(html) {
+    const m = String(html || '').match(/data-ems-split-id\s*=\s*["']([^"']+)["']/i);
+    return m ? String(m[1] || '').trim() : '';
+}
+
+/**
+ * Cap runaway Excel-baked row px for pack math only (does not rewrite table HTML).
+ * Short BOQ lines are ~28–40px; 112px still left half-empty sheets (~7 rows/page).
+ */
+const PACK_MAX_SPLIT_BODY_ROW_PX = 44;
+const PACK_MAX_SPLIT_THEAD_ROW_PX = 36;
+
+/**
+ * Body / thead px from sliced `data-ems-row-heights` on a 1-row split fragment.
+ * @param {string} html
+ * @returns {{ bodyH: number, theadH: number }}
+ */
+function readSplitFragmentRowHeightsPx(html) {
+    const m = String(html || '').match(/data-ems-row-heights\s*=\s*["']([^"']+)["']/i);
+    if (!m) return { bodyH: 40, theadH: 28 };
+    const parts = String(m[1])
+        .split(',')
+        .map((s) => parseFloat(String(s).trim()) || 0);
+    const positive = parts.filter((n) => n > 0);
+    if (!positive.length) return { bodyH: 40, theadH: 28 };
+    if (positive.length === 1) {
+        return {
+            bodyH: Math.min(positive[0], PACK_MAX_SPLIT_BODY_ROW_PX),
+            theadH: 28,
+        };
+    }
+    const bodyH = Math.min(positive[positive.length - 1], PACK_MAX_SPLIT_BODY_ROW_PX);
+    const theadH = Math.min(
+        positive.slice(0, -1).reduce((a, b) => a + b, 0) || 28,
+        PACK_MAX_SPLIT_THEAD_ROW_PX
+    );
+    return { bodyH, theadH };
+}
+
+/**
+ * Thead charged once per page for row-split BOQ/pricing fragments.
+ * @param {number[]} group
+ * @param {number[] | null} segmentHeightsPx
+ * @param {ClauseSegment[] | null} segments
+ */
+function estimateSplitTableGroupHeightPx(group, segmentHeightsPx, segments) {
+    if (!group?.length || !segments?.length) return 0;
+    const BODY = 34;
+    const THEAD = 30;
+    let sum = 0;
+    let chargedTheadFor = '';
+    for (const gi of group) {
+        const seg = segments[gi];
+        const html = String(seg?.html || '');
+        const splitId = readEmsSplitIdFromHtml(html);
+        if (!splitId) {
+            sum += Math.max(segmentHeightsPx?.[gi] || 0, 1);
+            continue;
+        }
+        const headingH = seg?.showHeading ? 40 : 0;
+        if (chargedTheadFor !== splitId) {
+            sum += THEAD + headingH;
+            chargedTheadFor = splitId;
+        } else if (headingH) {
+            sum += headingH;
+        }
+        sum += BODY + 4;
+    }
+    return Math.round(sum);
+}
+
+/**
+ * Pack segments onto pages. Row-split tables (`data-ems-table-split`) pack by baked
+ * row heights with thead charged once per page — not once per fragment — so a
+ * 10-row pricing table fills one sheet instead of 1-row-per-page with blank space.
  * @param {ClauseSegment[]} segments
  * @param {number} usablePx
  */
+/**
+ * Pull following segments onto pages with leftover estimate height
+ * (e.g. last Scope bullet alone → Pricing heading + first table rows).
+ */
+function fillEstimatedPageGroupsByHeights(pages, segmentHeightPx, limit, segments = null) {
+    if (!pages?.length || pages.length < 2 || !segmentHeightPx?.length) return pages || [];
+    const result = pages.map((g) => [...g]);
+    let changed = true;
+    let guard = 0;
+    /*
+     * Top to bottom only: pull following content into any leftover room on page i,
+     * then page i+1, until nothing more fits. Do NOT push orphan headings down —
+     * that opened blank bands on the page above.
+     */
+    while (changed && guard < result.length * 40) {
+        guard += 1;
+        changed = false;
+        for (let pi = 0; pi < result.length - 1; pi += 1) {
+            const next = result[pi + 1];
+            if (!next?.length) continue;
+            let sum = result[pi].reduce((s, idx) => s + Math.max(segmentHeightPx[idx] || 0, 1), 0);
+            while (next.length > 0) {
+                const h = Math.max(segmentHeightPx[next[0]] || 0, 1);
+                if (sum + h > limit) break;
+                result[pi].push(next.shift());
+                sum += h;
+                changed = true;
+            }
+            if (next.length === 0) {
+                result.splice(pi + 1, 1);
+                changed = true;
+            }
+        }
+    }
+    return result.filter((g) => g.length > 0);
+}
+
 export function packSegmentsOntoPagesByEstimatedHeight(segments, usablePx = EMS_QUOTE_CONT_USABLE_PX_FALLBACK) {
     if (!segments?.length) return [];
-    const heights = estimateSegmentBlockHeightsPx(segments);
+    const hasSplit = segments.some((s) => /data-ems-table-split\s*=\s*["']?1/i.test(String(s?.html || '')));
+    if (!hasSplit) {
+        const heights = estimateSegmentBlockHeightsPx(segments);
+        const usable = Math.max(usablePx || EMS_QUOTE_CONT_USABLE_PX_FALLBACK, 240);
+        const packFudgePx = Math.min(20, Math.round(usable * 0.02));
+        const limit = Math.max(usable - PACK_HEIGHT_SAFETY_PX, 200) + packFudgePx;
+        const pages = [];
+        let cur = [];
+        let sum = 0;
+        for (let i = 0; i < segments.length; i++) {
+            const h = Math.max(heights[i] || 0, 1);
+            if (cur.length > 0 && sum + h > limit) {
+                pages.push(cur);
+                cur = [];
+                sum = 0;
+            }
+            cur.push(i);
+            sum += h;
+        }
+        if (cur.length) pages.push(cur);
+        return fillEstimatedPageGroupsByHeights(
+            pages.filter((g) => g.length > 0),
+            heights,
+            limit,
+            segments
+        );
+    }
+
+    const fallbackHeights = estimateSegmentBlockHeightsPx(segments);
     const usable = Math.max(usablePx || EMS_QUOTE_CONT_USABLE_PX_FALLBACK, 240);
-    const packFudgePx = Math.min(22, Math.round(usable * 0.02));
+    const limit = Math.max(usable - PACK_HEIGHT_SAFETY_PX, 200);
+    /** @type {number[][]} */
     const pages = [];
+    /** @type {number[]} */
     let cur = [];
     let sum = 0;
+    /** @type {string} */
+    let pageSplitId = '';
+    let pageChargedTheadForSplit = false;
+
+    /*
+     * Ignore Excel-baked row px for split packing. Those values are often 5–10× the
+     * painted row and leave ~3 short BOQ lines on an empty A4 page. Use compact
+     * fixed costs; live paint-fill corrects any slight overshoot.
+     */
+    const SPLIT_PACK_BODY_PX = 34;
+    const SPLIT_PACK_THEAD_PX = 30;
+
+    const heightForIndexOnPage = (i, isNewPage) => {
+        const seg = segments[i];
+        const html = String(seg?.html || '');
+        const splitId = readEmsSplitIdFromHtml(html);
+        if (!splitId) {
+            return Math.max(fallbackHeights[i] || 0, 1);
+        }
+        const headingH = seg?.showHeading ? 40 : 0;
+        const chargeThead =
+            isNewPage || !pageChargedTheadForSplit || pageSplitId !== splitId;
+        const bodyPx = Math.max(SPLIT_PACK_BODY_PX, splitPackBodyPx(html));
+        return Math.max(
+            24,
+            Math.round(bodyPx + (chargeThead ? SPLIT_PACK_THEAD_PX : 0) + headingH + 4)
+        );
+    };
+
     for (let i = 0; i < segments.length; i++) {
-        const h = Math.max(heights[i] || 0, 1);
-        if (cur.length > 0 && sum + h > usable + packFudgePx) {
+        const html = String(segments[i]?.html || '');
+        const splitId = readEmsSplitIdFromHtml(html);
+        let h = heightForIndexOnPage(i, cur.length === 0);
+        if (cur.length > 0 && sum + h > limit) {
             pages.push(cur);
             cur = [];
             sum = 0;
+            pageSplitId = '';
+            pageChargedTheadForSplit = false;
+            h = heightForIndexOnPage(i, true);
         }
         cur.push(i);
         sum += h;
+        if (splitId) {
+            pageSplitId = splitId;
+            pageChargedTheadForSplit = true;
+        }
     }
     if (cur.length) pages.push(cur);
-    return pages.filter((g) => g.length > 0);
+    /* Body-only fixed heights for fill (thead already charged on the page). */
+    const fillHeights = segments.map((seg, i) => {
+        const html = String(seg?.html || '');
+        if (!readEmsSplitIdFromHtml(html)) return Math.max(fallbackHeights[i] || 0, 1);
+        const headingH = seg?.showHeading ? 40 : 0;
+        const bodyPx = Math.max(SPLIT_PACK_BODY_PX, splitPackBodyPx(html));
+        return Math.max(22, Math.round(bodyPx + headingH + 4));
+    });
+    return fillEstimatedPageGroupsByHeights(
+        pages.filter((g) => g.length > 0),
+        fillHeights,
+        limit,
+        segments
+    );
 }
 
 /**
@@ -1502,26 +3059,257 @@ export function packSegmentsOntoPagesByEstimatedHeightPerPage(
     if (!segments?.length || typeof usablePxForPage !== 'function') {
         return packSegmentsOntoPagesByEstimatedHeight(segments);
     }
-    const heights = estimateSegmentBlockHeightsPx(segments);
+    const hasSplit = segments.some((s) =>
+        /data-ems-table-split\s*=\s*["']?1/i.test(String(s?.html || ''))
+    );
+    if (!hasSplit) {
+        const heights = estimateSegmentBlockHeightsPx(segments);
+        const pages = [];
+        let cur = [];
+        let sum = 0;
+        let pageIdx = 0;
+        for (let i = 0; i < segments.length; i++) {
+            const h = Math.max(heights[i] || 0, 1);
+            const usable = Math.max(usablePxForPage(pageIdx) || EMS_QUOTE_CONT_USABLE_PX_FALLBACK, 240);
+            const packFudgePx = Math.min(20, Math.round(usable * 0.02));
+            const pageLimit = Math.max(usable - PACK_HEIGHT_SAFETY_PX, 200) + packFudgePx;
+            if (cur.length > 0 && sum + h > pageLimit) {
+                pages.push(cur);
+                pageIdx += 1;
+                cur = [];
+                sum = 0;
+            }
+            cur.push(i);
+            sum += h;
+        }
+        if (cur.length) pages.push(cur);
+        const u0 = Math.max(usablePxForPage(0) || EMS_QUOTE_CONT_USABLE_PX_FALLBACK, 240);
+        const limit0 = Math.max(u0 - PACK_HEIGHT_SAFETY_PX, 200) + 20;
+        return fillEstimatedPageGroupsByHeights(
+            pages.filter((g) => g.length > 0),
+            heights,
+            limit0,
+            segments
+        );
+    }
+
+    const fallbackHeights = estimateSegmentBlockHeightsPx(segments);
+    /** @type {number[][]} */
     const pages = [];
+    /** @type {number[]} */
     let cur = [];
     let sum = 0;
     let pageIdx = 0;
+    let pageSplitId = '';
+    let pageChargedTheadForSplit = false;
+
+    const limitFor = (idx) =>
+        Math.max(
+            (usablePxForPage(idx) || EMS_QUOTE_CONT_USABLE_PX_FALLBACK) - PACK_HEIGHT_SAFETY_PX,
+            200
+        );
+
+    const SPLIT_PACK_BODY_PX = 34;
+    const SPLIT_PACK_THEAD_PX = 30;
+
+    const heightForIndexOnPage = (i, isNewPage) => {
+        const seg = segments[i];
+        const html = String(seg?.html || '');
+        const splitId = readEmsSplitIdFromHtml(html);
+        if (!splitId) return Math.max(fallbackHeights[i] || 0, 1);
+        const headingH = seg?.showHeading ? 40 : 0;
+        const chargeThead =
+            isNewPage || !pageChargedTheadForSplit || pageSplitId !== splitId;
+        const bodyPx = Math.max(SPLIT_PACK_BODY_PX, splitPackBodyPx(html));
+        return Math.max(
+            24,
+            Math.round(bodyPx + (chargeThead ? SPLIT_PACK_THEAD_PX : 0) + headingH + 4)
+        );
+    };
+
     for (let i = 0; i < segments.length; i++) {
-        const h = Math.max(heights[i] || 0, 1);
-        const usable = Math.max(usablePxForPage(pageIdx) || EMS_QUOTE_CONT_USABLE_PX_FALLBACK, 240);
-        const packFudgePx = Math.min(22, Math.round(usable * 0.02));
-        if (cur.length > 0 && sum + h > usable + packFudgePx) {
+        const splitId = readEmsSplitIdFromHtml(String(segments[i]?.html || ''));
+        let h = heightForIndexOnPage(i, cur.length === 0);
+        const limit = limitFor(pageIdx);
+        if (cur.length > 0 && sum + h > limit) {
             pages.push(cur);
             pageIdx += 1;
             cur = [];
             sum = 0;
+            pageSplitId = '';
+            pageChargedTheadForSplit = false;
+            h = heightForIndexOnPage(i, true);
         }
         cur.push(i);
         sum += h;
+        if (splitId) {
+            pageSplitId = splitId;
+            pageChargedTheadForSplit = true;
+        }
     }
     if (cur.length) pages.push(cur);
-    return pages.filter((g) => g.length > 0);
+    const fillHeights = segments.map((seg, i) => {
+        const html = String(seg?.html || '');
+        if (!readEmsSplitIdFromHtml(html)) return Math.max(fallbackHeights[i] || 0, 1);
+        const headingH = seg?.showHeading ? 40 : 0;
+        const bodyPx = splitPackBodyPx(html);
+        return Math.max(22, Math.round(bodyPx + headingH + 4));
+    });
+    return fillEstimatedPageGroupsByHeights(
+        pages.filter((g) => g.length > 0),
+        fillHeights,
+        limitFor(0),
+        segments
+    );
+}
+
+const SPLIT_PACK_BODY_PX_EXPORT = 34;
+
+/**
+ * Prefer compact split-row costs. Inflated Excel / measure-host heights were leaving
+ * half-empty pages and then clipping the rest under overflow:hidden.
+ * @param {ClauseSegment[]} segments
+ * @param {number[] | null | undefined} measuredPx
+ * @returns {number[]}
+ */
+export function compactPackHeightsPx(segments, measuredPx = null) {
+    return (segments || []).map((seg, i) => {
+        const html = String(seg?.html || '');
+        const measured = Math.max(measuredPx?.[i] || 0, 0);
+        const heading = seg?.showHeading ? 40 : 0;
+        if (/data-ems-table-split\s*=\s*["']?1/i.test(html)) {
+            /* One-line BOQ stays 34; wrapped terms rows reserve real lines (cap 96). */
+            const body = Math.min(96, Math.max(SPLIT_PACK_BODY_PX_EXPORT, splitPackBodyPx(html)));
+            return Math.max(22, body + heading);
+        }
+        if (/<table\b/i.test(html)) {
+            const theadHtml = html.match(/<thead\b[\s\S]*?<\/thead>/i)?.[0] || '';
+            const theadRows = theadHtml ? (theadHtml.match(/<tr\b/gi) || []).length : 0;
+            const allRows = (html.match(/<tr\b/gi) || []).length;
+            const bodyRows = Math.max(1, allRows - theadRows);
+            if (bodyRows <= 1) {
+                const body = Math.min(96, Math.max(SPLIT_PACK_BODY_PX_EXPORT, splitPackBodyPx(html)));
+                return Math.max(22, body + heading);
+            }
+            return Math.min(limitCssSafe(), bodyRows * SPLIT_PACK_BODY_PX_EXPORT + heading + 8);
+        }
+        const prose = estimateProseSegmentPx(seg, html);
+        if (prose != null) {
+            /* Prefer compact estimate over inflated measure-host heights. */
+            const capped = Math.min(96, prose);
+            if (measured > 0) return Math.min(measured, capped);
+            return capped;
+        }
+        if (measured > 0) return Math.min(measured, 120);
+        return Math.min(120, Math.max(estimateSegmentBlockHeightsPx([seg])[0] || 28, 1));
+    });
+}
+
+function limitCssSafe() {
+    return Math.max(EMS_QUOTE_CONT_USABLE_PX_FALLBACK - PACK_HEIGHT_SAFETY_PX, 200);
+}
+
+/**
+ * Every segment index must appear on exactly one page. Dropped rows were vanishing
+ * between page breaks (e.g. responsibility matrix 15–26).
+ * @param {number[][]} groups
+ * @param {number} segmentCount
+ * @returns {number[][]}
+ */
+export function ensureSegmentPageGroupsCoverAll(groups, segmentCount) {
+    const n = Math.max(0, segmentCount | 0);
+    if (n < 1) return [];
+    /** @type {number[][]} */
+    const next = (groups || []).map((g) => g.filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < n));
+    const covered = new Set(next.flat());
+    /** @type {number[]} */
+    const missing = [];
+    for (let i = 0; i < n; i += 1) {
+        if (!covered.has(i)) missing.push(i);
+    }
+    if (!missing.length) return next.filter((g) => g.length > 0);
+    if (!next.length) return [missing];
+    next[next.length - 1] = [...next[next.length - 1], ...missing];
+    return next.filter((g) => g.length > 0);
+}
+
+/**
+ * Pack every continuation page from compact heights.
+ * Top to bottom: fill each page until the next segment would cross the content-end
+ * limit, then start a new page. Pulls leftover space on each page from the next.
+ * @param {ClauseSegment[]} segments
+ * @param {number[]} heightsPx
+ * @param {number} [usablePx]
+ * @returns {number[][]}
+ */
+export function packSegmentsOntoPagesByHeights(
+    segments,
+    heightsPx,
+    usablePx = EMS_QUOTE_CONT_USABLE_PX_FALLBACK
+) {
+    return reflowContinuationPagesTopDown(segments, heightsPx, usablePx);
+}
+
+/**
+ * Full top-down reflow: ignore prior page breaks, place every segment from the top,
+ * fill each page to the content-end limit, then continue. Blank segments the user
+ * typed stay in order (they keep their space); they do not block later content from
+ * filling the rest of the page after them.
+ * @param {ClauseSegment[]} segments
+ * @param {number[] | null | undefined} [heightsPx]
+ * @param {number} [usablePx]
+ * @returns {number[][]}
+ */
+export function reflowContinuationPagesTopDown(
+    segments,
+    heightsPx = null,
+    usablePx = EMS_QUOTE_CONT_USABLE_PX_FALLBACK
+) {
+    if (!segments?.length) return [];
+    const usable = Math.max(usablePx || EMS_QUOTE_CONT_USABLE_PX_FALLBACK, 240);
+    const limit = Math.max(usable - PACK_HEIGHT_SAFETY_PX, 200);
+    const SPLIT_THEAD = 30;
+    const heights = compactPackHeightsPx(segments, heightsPx);
+    /** Cost including thead once per split table per page. */
+    const costOnPage = (i, pageSplitId) => {
+        const html = String(segments[i]?.html || '');
+        const splitId = readEmsSplitIdFromHtml(html);
+        let h = Math.max(heights[i] || 0, 1);
+        if (splitId && splitId !== pageSplitId) h += SPLIT_THEAD;
+        return { h, splitId };
+    };
+
+    /** @type {number[][]} */
+    const pages = [];
+    /** @type {number[]} */
+    let cur = [];
+    let sum = 0;
+    let pageSplitId = '';
+
+    for (let i = 0; i < segments.length; i += 1) {
+        const { h, splitId } = costOnPage(i, pageSplitId);
+        if (cur.length > 0 && sum + h > limit) {
+            pages.push(cur);
+            cur = [];
+            sum = 0;
+            pageSplitId = '';
+            const again = costOnPage(i, '');
+            cur.push(i);
+            sum = again.h;
+            pageSplitId = again.splitId || '';
+            continue;
+        }
+        cur.push(i);
+        sum += h;
+        if (splitId) pageSplitId = splitId;
+    }
+    if (cur.length) pages.push(cur);
+
+    /* No pull-up fill — measured pack verifies DOWN only (avoids fill↔peel oscillation). */
+    return ensureSegmentPageGroupsCoverAll(
+        pages.filter((g) => g.length > 0),
+        segments.length
+    );
 }
 
 /**

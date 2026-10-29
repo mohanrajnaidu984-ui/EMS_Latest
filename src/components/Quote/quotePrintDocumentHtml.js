@@ -3,9 +3,11 @@
  */
 
 import { QUOTE_UNIFIED_SHEET_EXPORT_CSS } from './quotePrintExportCss.js';
+import { peelQuoteSheetsThatOverflowFooter } from './quoteSheetOverflowPeel.js';
 import {
     buildEmsOfficePasteTablePresentationCss,
     initializeAllOfficePastedTableColumns,
+    expandClippedOfficeTableRowHeights,
 } from './clauseEditorTable.js';
 import { stripSpellMarksFromDom, stripSpellMarksFromHtml } from './clauseEditorSpellcheck.js';
 import {
@@ -35,6 +37,7 @@ import {
     EMS_QUOTE_COVER_SIGN_OFF_FOR_GAP_EM,
     EMS_QUOTE_COVER_SIGN_OFF_PREVIEW_HEIGHT_SCALE,
     EMS_QUOTE_COVER_SIGNATORY_BLOCK_BOTTOM_OFFSET,
+    EMS_QUOTE_COVER_SIGNATORY_LIFT_PX,
     EMS_QUOTE_PANEL_LABEL_NAV_GRADIENT,
     EMS_QUOTE_HEADER_ADDRESS_COL_MAX_WIDTH,
     EMS_QUOTE_HEADER_QUOTE_COL_WIDTH,
@@ -44,6 +47,8 @@ import {
     EMS_QUOTE_PRINT_FOOTER_RULE_WIDTH_PDF,
     EMS_QUOTE_PDF_TABLE_BORDER_WIDTH,
     EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM,
+    EMS_QUOTE_PDF_PREVIEW_GAP_PX,
+    EMS_QUOTE_PDF_FOOTER_GAP_EXTRA_PX,
     EMS_QUOTE_PRICING_TABLE_CELL_BORDER,
     EMS_QUOTE_PRICING_TABLE_OUTER_BORDER,
     EMS_QUOTE_PRICING_TABLE_HEAD_CELL_BORDER,
@@ -55,14 +60,16 @@ import {
     EMS_QUOTE_PRICING_TABLE_BORDER_COLOR,
     EMS_QUOTE_PRICING_TABLE_COLUMN_SYNC_CSS,
     EMS_QUOTE_PRICING_TABLE_PRESENTATION_CSS,
+    EMS_QUOTE_PRICING_TABLE_ALIGN_CSS,
     EMS_QUOTE_PRICING_TABLE_COMPACT_ROW_CSS,
     EMS_QUOTE_PRICING_TABLE_WIDTH,
 } from '../../constants/emsTheme';
-const QUOTE_APP_FONT_STACK = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+import { QUOTE_PACK_FONT_STACK, buildQuotePackFontFaceCss } from './quotePackFonts.js';
 
-/** Same stack as #quote-preview in QuoteForm.jsx — do not substitute Inter in PDF. */
-export const QUOTE_PREVIEW_FONT_STACK =
-    "'Segoe UI', 'Segoe UI Web (West European)', system-ui, -apple-system, sans-serif";
+const QUOTE_APP_FONT_STACK = QUOTE_PACK_FONT_STACK;
+
+/** Same stack as #quote-preview — Segoe UI → Selawik (bundled) so preview wrap == PDF wrap. */
+export const QUOTE_PREVIEW_FONT_STACK = QUOTE_PACK_FONT_STACK;
 
 function stripAtMediaPrintBlocks(css) {
     const s = String(css);
@@ -200,7 +207,8 @@ function readQuotePreviewZoomScale(root) {
 function elementOffsetWithinAncestor(el, ancestor, zoomRoot) {
     if (!el || !ancestor) return { left: 0, top: 0 };
     const zoom = zoomRoot ? readQuotePreviewZoomScale(zoomRoot) : 1;
-    if (zoom !== 1) {
+    // Live preview: elements may have different offsetParents (sheet vs positioned sign-off), so measure by rect.
+    if (zoomRoot || zoom !== 1) {
         const ar = ancestor.getBoundingClientRect();
         const er = el.getBoundingClientRect();
         return { left: (er.left - ar.left) / zoom, top: (er.top - ar.top) / zoom };
@@ -318,8 +326,14 @@ export function embedCoverPageStampsInSignatoryColumn(liveRoot, cloneRoot) {
     const liveForAt = elementOffsetWithinAncestor(liveFor, liveCol, zoomRoot);
     const liveGapBottom = liveForAt.top + liveFor.offsetHeight;
 
+    // Snapshot before moving: appendChild reorders the stamps in document order (sign-off → column),
+    // so re-querying by index inside the loop would hit the same stamp twice.
+    const cloneStamps = [...cloneSheet.querySelectorAll('.quote-digital-signature-stamp')];
+    const cloneForAt = elementOffsetWithinAncestor(cloneFor, cloneCol, null);
+    const cloneGapBottom = cloneForAt.top + cloneFor.offsetHeight;
+
     liveStamps.forEach((liveStamp, idx) => {
-        const cloneStamp = cloneSheet.querySelectorAll('.quote-digital-signature-stamp')[idx];
+        const cloneStamp = cloneStamps[idx];
         if (!cloneStamp) return;
 
         const liveStampAt = elementOffsetWithinAncestor(liveStamp, liveCol, zoomRoot);
@@ -329,8 +343,6 @@ export function embedCoverPageStampsInSignatoryColumn(liveRoot, cloneRoot) {
         cloneCol.appendChild(cloneStamp);
         cloneStamp.classList.add('quote-digital-signature-stamp--in-signatory-col');
 
-        const cloneForAt = elementOffsetWithinAncestor(cloneFor, cloneCol, null);
-        const cloneGapBottom = cloneForAt.top + cloneFor.offsetHeight;
         const left = cloneForAt.left + deltaLeft;
         const top = cloneGapBottom + deltaTop;
 
@@ -436,7 +448,10 @@ export function applyEqualCoverGaps(letterEl, options = {}) {
     const targetGap = Math.max(0, Math.round(gap1));
     const pb = parseFloat(window.getComputedStyle(letterEl).paddingBottom) || 0;
     const currentExtra = Math.max(0, pb - COVER_LETTER_PAD_BOTTOM_BASE_PX);
-    const extra = Math.max(0, Math.round(gap2 + currentExtra - targetGap));
+    const extra = Math.max(
+        0,
+        Math.round(gap2 + currentExtra - targetGap) - EMS_QUOTE_COVER_SIGNATORY_LIFT_PX
+    );
     const padBottom = COVER_LETTER_PAD_BOTTOM_BASE_PX + extra;
 
     letterEl.style.setProperty('--quote-cover-letter-pad-bottom', `${padBottom}px`);
@@ -489,20 +504,68 @@ function pinQuoteA4SheetGridInline(sheetEl, { isCover = false } = {}) {
     sheetEl.style.setProperty('min-width', sheetW, 'important');
     sheetEl.style.setProperty('max-width', sheetW, 'important');
     sheetEl.style.setProperty('padding', '15mm', 'important');
+    /* Keep 15mm padding on every sheet — do not shrink bottom padding (that pushed footers off-band). */
     sheetEl.style.setProperty('margin', '0', 'important');
     sheetEl.style.setProperty('height', sheetH, 'important');
     sheetEl.style.setProperty('min-height', sheetH, 'important');
     sheetEl.style.setProperty('max-height', sheetH, 'important');
     sheetEl.style.setProperty('display', 'grid', 'important');
     sheetEl.style.setProperty('grid-template-columns', 'minmax(0, 1fr)', 'important');
-    sheetEl.style.setProperty('grid-template-rows', 'auto minmax(0, 1fr) auto', 'important');
+    sheetEl.style.setProperty(
+        'grid-template-rows',
+        isCover ? 'auto minmax(0, 1fr) auto' : '21mm minmax(0, 1fr) 26mm',
+        'important'
+    );
     sheetEl.style.setProperty('align-content', 'stretch', 'important');
     sheetEl.style.setProperty('overflow', 'hidden', 'important');
     sheetEl.style.setProperty('page-break-after', 'auto', 'important');
     sheetEl.style.setProperty('break-after', 'auto', 'important');
 
     const logo = sheetEl.querySelector(':scope > .quote-sheet-logo-row');
-    if (logo) logo.style.setProperty('grid-row', '1', 'important');
+    if (logo) {
+        logo.style.setProperty('grid-row', '1', 'important');
+        logo.style.setProperty('display', 'flex', 'important');
+        logo.style.setProperty('flex-direction', 'row', 'important');
+        logo.style.setProperty('justify-content', 'flex-end', 'important');
+        logo.style.setProperty('align-items', 'flex-start', 'important');
+        logo.style.setProperty('width', '100%', 'important');
+        logo.style.setProperty('box-sizing', 'border-box', 'important');
+        if (!isCover) {
+            logo.style.setProperty('height', '21mm', 'important');
+            logo.style.setProperty('min-height', '21mm', 'important');
+            logo.style.setProperty('max-height', '21mm', 'important');
+            logo.style.setProperty('margin-bottom', '0', 'important');
+            logo.style.setProperty('overflow', 'hidden', 'important');
+        }
+        logo.querySelectorAll(':scope > div').forEach((wrap) => {
+            wrap.style.setProperty('display', 'flex', 'important');
+            wrap.style.setProperty('flex-direction', 'row', 'important');
+            wrap.style.setProperty('justify-content', 'flex-end', 'important');
+            wrap.style.setProperty('align-items', 'flex-start', 'important');
+            wrap.style.setProperty('width', '100%', 'important');
+            wrap.style.setProperty('text-align', 'right', 'important');
+            wrap.style.setProperty('box-sizing', 'border-box', 'important');
+        });
+        /* Aspect ratio: never set both width and height; keep right-aligned. */
+        logo.querySelectorAll('img').forEach((img) => {
+            img.style.setProperty('height', 'auto', 'important');
+            img.style.setProperty('width', 'auto', 'important');
+            img.style.setProperty('max-height', '21mm', 'important');
+            img.style.setProperty('max-width', '100%', 'important');
+            img.style.setProperty('object-fit', 'contain', 'important');
+            img.style.setProperty('object-position', 'right top', 'important');
+            img.style.setProperty('display', 'block', 'important');
+            img.style.setProperty('margin-left', 'auto', 'important');
+            img.style.setProperty('margin-right', '0', 'important');
+            img.style.setProperty('position', 'static', 'important');
+            img.style.removeProperty('left');
+            img.style.removeProperty('right');
+            img.style.removeProperty('top');
+            img.style.removeProperty('bottom');
+            img.style.removeProperty('min-height');
+            img.style.removeProperty('min-width');
+        });
+    }
 
     const main = sheetEl.querySelector(':scope > .quote-sheet-main-flex');
     if (main) {
@@ -559,6 +622,13 @@ function pinQuoteA4SheetGridInline(sheetEl, { isCover = false } = {}) {
         footer.style.removeProperty('margin-top');
         footer.style.removeProperty('order');
         footer.style.removeProperty('flex');
+        if (!isCover) {
+            footer.style.setProperty('height', '26mm', 'important');
+            footer.style.setProperty('min-height', '26mm', 'important');
+            footer.style.setProperty('max-height', '26mm', 'important');
+            footer.style.setProperty('justify-content', 'flex-end', 'important');
+            footer.style.setProperty('box-sizing', 'border-box', 'important');
+        }
     }
 
     if (isLandscape) {
@@ -984,62 +1054,68 @@ function loadImageFromUrl(url) {
 
 /**
  * Chromium page.pdf() often drops Lucide SVG strokes (colored tiles, empty glyphs).
- * Rasterize meta icons to PNG so PDF matches on-screen preview.
+ * Prefer PNG raster; always fall back to an inline SVG data-URI <img> so the PDF
+ * never keeps a live <svg> that prints as a blank coloured square.
  */
 export async function rasterizeQuoteMetaIconsInClone(cloneRoot) {
     if (!cloneRoot || typeof document === 'undefined') return;
     const wraps = [...cloneRoot.querySelectorAll(QUOTE_META_ICON_WRAP_SEL)];
     if (!wraps.length) return;
 
+    const replaceWithImg = (svg, src, w, h) => {
+        const replacement = document.createElement('img');
+        replacement.setAttribute('src', src);
+        replacement.setAttribute('alt', '');
+        replacement.setAttribute('width', String(w));
+        replacement.setAttribute('height', String(h));
+        replacement.style.cssText = `display:block;width:${w}px;height:${h}px;max-width:${w}px;max-height:${h}px;`;
+        svg.replaceWith(replacement);
+    };
+
     await Promise.all(
         wraps.map(async (wrap) => {
             const svg = wrap.querySelector('svg');
             if (!svg) return;
+            const w = Math.max(Number(svg.getAttribute('width')) || 11, 11);
+            const h = Math.max(Number(svg.getAttribute('height')) || 11, 11);
             try {
                 const cloneSvg = forceWhiteStrokeOnSvgClone(svg);
                 let svgStr = new XMLSerializer().serializeToString(cloneSvg);
                 if (!/\sxmlns=/.test(svgStr)) {
                     svgStr = svgStr.replace(/<svg\b/, '<svg xmlns="http://www.w3.org/2000/svg"');
                 }
-                const w = Math.max(Number(svg.getAttribute('width')) || 11, 11);
-                const h = Math.max(Number(svg.getAttribute('height')) || 11, 11);
-                const scale = 4;
-                const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgStr)}`;
-                const img = await loadImageFromUrl(dataUrl);
-                const canvas = document.createElement('canvas');
-                canvas.width = Math.ceil(w * scale);
-                canvas.height = Math.ceil(h * scale);
-                const ctx = canvas.getContext('2d');
-                if (!ctx) {
-                    /** Fallback: keep SVG but pin stroke attributes for Puppeteer. */
-                    svg.setAttribute('stroke', '#ffffff');
-                    svg.setAttribute('color', '#ffffff');
-                    svg.querySelectorAll('path, line, circle, polyline, polygon, rect').forEach((el) => {
-                        if (!el.getAttribute('stroke') || el.getAttribute('stroke') === 'currentColor') {
-                            el.setAttribute('stroke', '#ffffff');
-                        }
-                    });
-                    return;
+                const svgDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgStr)}`;
+                try {
+                    const scale = 4;
+                    const img = await loadImageFromUrl(svgDataUrl);
+                    const canvas = document.createElement('canvas');
+                    canvas.width = Math.ceil(w * scale);
+                    canvas.height = Math.ceil(h * scale);
+                    const ctx = canvas.getContext('2d');
+                    if (ctx) {
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        const png = canvas.toDataURL('image/png');
+                        replaceWithImg(svg, png, w, h);
+                        return;
+                    }
+                } catch {
+                    /* fall through to SVG data URI */
                 }
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                const png = canvas.toDataURL('image/png');
-                const replacement = document.createElement('img');
-                replacement.setAttribute('src', png);
-                replacement.setAttribute('alt', '');
-                replacement.setAttribute('width', String(w));
-                replacement.setAttribute('height', String(h));
-                replacement.style.cssText = `display:block;width:${w}px;height:${h}px;max-width:${w}px;max-height:${h}px;`;
-                svg.replaceWith(replacement);
+                replaceWithImg(svg, svgDataUrl, w, h);
             } catch {
                 try {
-                    svg.setAttribute('stroke', '#ffffff');
-                    svg.setAttribute('color', '#ffffff');
-                    svg.querySelectorAll('path, line, circle, polyline, polygon, rect').forEach((el) => {
-                        if (!el.getAttribute('stroke') || el.getAttribute('stroke') === 'currentColor') {
-                            el.setAttribute('stroke', '#ffffff');
-                        }
-                    });
+                    const cloneSvg = forceWhiteStrokeOnSvgClone(svg);
+                    let svgStr = new XMLSerializer().serializeToString(cloneSvg);
+                    if (!/\sxmlns=/.test(svgStr)) {
+                        svgStr = svgStr.replace(/<svg\b/, '<svg xmlns="http://www.w3.org/2000/svg"');
+                    }
+                    replaceWithImg(
+                        svg,
+                        `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgStr)}`,
+                        w,
+                        h
+                    );
                 } catch {
                     /* ignore */
                 }
@@ -1084,6 +1160,7 @@ export async function captureQuotePrintRootInnerHtmlForPdfAsync(rootEl) {
             });
         }
         initializeAllOfficePastedTableColumns(clone);
+        expandClippedOfficeTableRowHeights(clone);
         stripSpellMarksFromDom(clone);
         finalizeAllSheetsLayoutOnClone(clone, { preserveCoverLayout: hasCoverLetter });
         if (hasCoverLetter) {
@@ -1149,33 +1226,33 @@ const HTML2PDF_PAGE_BREAK_OVERRIDES = `
 [data-ems-pdf-export="1"] .quote-a4-sheet + .quote-a4-sheet {
     page-break-before: auto !important;
     break-before: auto !important;
-    page-break-after: auto !important;
-    break-after: auto !important;
+    page-break-after: always !important;
+    break-after: page !important;
 }
 [data-ems-pdf-export="1"] .quote-a4-sheet {
-    page-break-inside: auto !important;
-    break-inside: auto !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
 }
-[data-ems-pdf-export="1"] .quote-a4-sheet:last-of-type {
+[data-ems-pdf-export="1"] .quote-a4-sheet:not(:has(~ .quote-a4-sheet)) {
     page-break-after: avoid !important;
     break-after: avoid !important;
 }
 `;
 
-/** Puppeteer / data-preview-pdf — no inter-sheet breaks; keep each sheet intact (logo top, footer bottom). */
+/** Puppeteer / data-preview-pdf — break between sheets only (never after the last). */
 const PDF_PAGE_BREAK_OVERRIDES = `
 html[data-preview-pdf="1"] .quote-a4-sheet,
 html[data-preview-pdf="1"] .quote-a4-sheet + .quote-a4-sheet {
     page-break-before: auto !important;
     break-before: auto !important;
-    page-break-after: auto !important;
-    break-after: auto !important;
+    page-break-after: always !important;
+    break-after: page !important;
 }
 html[data-preview-pdf="1"] .quote-a4-sheet {
-    page-break-inside: auto !important;
-    break-inside: auto !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
 }
-html[data-preview-pdf="1"] .quote-a4-sheet:last-of-type {
+html[data-preview-pdf="1"] .quote-a4-sheet:not(:has(~ .quote-a4-sheet)) {
     page-break-after: avoid !important;
     break-after: avoid !important;
 }
@@ -1215,8 +1292,25 @@ ${HTML2PDF_PAGE_BREAK_OVERRIDES}
     box-sizing: border-box !important;
 }
 .quote-sheet-logo-row > div {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
     width: 100% !important;
     text-align: right !important;
+    box-sizing: border-box !important;
+}
+.quote-sheet-logo-row img {
+    display: block !important;
+    height: auto !important;
+    width: auto !important;
+    max-height: 21mm !important;
+    max-width: 100% !important;
+    object-fit: contain !important;
+    object-position: right top !important;
+    margin-left: auto !important;
+    margin-right: 0 !important;
+    position: static !important;
 }
 .header-section.quote-header-row {
     display: flex !important;
@@ -1438,6 +1532,7 @@ export async function prepareQuotePrintRootCloneForHtml2pdf(rootEl) {
             });
         }
         initializeAllOfficePastedTableColumns(clone);
+        expandClippedOfficeTableRowHeights(clone);
         stripSpellMarksFromDom(clone);
         finalizeAllSheetsLayoutOnClone(clone, { preserveCoverLayout: hasCoverLetter });
         if (hasCoverLetter) {
@@ -1504,6 +1599,11 @@ export function buildHtml2pdfOptions(filename, rootEl) {
                         '.quote-cover-meta-row-mid td:first-child, .quote-cover-meta-row-mid td:last-child'
                     )
                     .forEach(pin);
+                try {
+                    peelQuoteSheetsThatOverflowFooter(clonedDoc);
+                } catch {
+                    /* keep the download even if a sheet cannot be reflowed */
+                }
             },
         },
         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
@@ -1642,10 +1742,26 @@ html[data-preview-pdf="1"] .quote-sheet-logo-row {
     box-sizing: border-box !important;
 }
 html[data-preview-pdf="1"] .quote-sheet-logo-row > div {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
     width: 100% !important;
     max-width: 100% !important;
     text-align: right !important;
     box-sizing: border-box !important;
+}
+html[data-preview-pdf="1"] .quote-sheet-logo-row img {
+    display: block !important;
+    height: auto !important;
+    width: auto !important;
+    max-height: 21mm !important;
+    max-width: 100% !important;
+    object-fit: contain !important;
+    object-position: right top !important;
+    margin-left: auto !important;
+    margin-right: 0 !important;
+    position: static !important;
 }
 html[data-preview-pdf="1"] .header-section.quote-header-row {
     display: flex !important;
@@ -1805,6 +1921,10 @@ html[data-preview-pdf="1"] .quote-header-address-panel-contact-line {
 html[data-preview-pdf="1"] .quote-header-address-panel-contact-line span:last-child {
     flex: 1 1 auto !important;
     min-width: 0 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+    line-height: 1.25 !important;
 }
 html[data-preview-pdf="1"] .quote-header-quote-panel > .quote-header-address-panel-row--header {
     flex-shrink: 0 !important;
@@ -1822,6 +1942,8 @@ html[data-preview-pdf="1"] .quote-header-quote-panel {
 }
 html[data-preview-pdf="1"] .quote-header-quote-panel--no-header .quote-header-quote-panel-mid {
     border-radius: 5px !important;
+    overflow: visible !important;
+    min-height: min-content !important;
 }
 html[data-preview-pdf="1"] .quote-header-quote-panel-body {
     display: flex !important;
@@ -1981,6 +2103,13 @@ html[data-preview-pdf="1"] .quote-header-quote-panel-value {
     font-weight: 400 !important;
     box-sizing: border-box !important;
 }
+html[data-preview-pdf="1"] .quote-header-quote-panel-value--email {
+    display: block !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+    line-height: 1.25 !important;
+}
 html[data-preview-pdf="1"] .quote-section-rule {
     border: 0 !important;
     border-top: 1px solid #94a3b8 !important;
@@ -2019,6 +2148,7 @@ html[data-preview-pdf="1"] .quote-cover-first-page .quote-cover-body-panel {
 }
 html[data-preview-pdf="1"] .quote-cover-sign-off.quote-cover-body-panel {
     margin-top: 18px !important;
+    margin-bottom: ${EMS_QUOTE_COVER_SIGNATORY_LIFT_PX}px !important;
 }
 html[data-preview-pdf="1"] .quote-cover-sign-off.quote-cover-body-panel.quote-preview-panel-shell {
     overflow: visible !important;
@@ -2263,11 +2393,35 @@ html[data-preview-pdf="1"] .quote-cover-sign-off-for {
     color: #0f172a !important;
     font-weight: 600 !important;
 }
+html[data-preview-pdf="1"] .quote-cover-signatory-col:has(.quote-cover-approval-sig) .quote-cover-sign-off-for {
+    margin-bottom: 4px !important;
+}
+html[data-preview-pdf="1"] .quote-cover-approval-sig {
+    flex: 0 0 auto !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    min-height: calc(1.58em * ${EMS_QUOTE_COVER_SIGN_OFF_FOR_GAP_EM} * ${EMS_QUOTE_COVER_SIGN_OFF_PREVIEW_HEIGHT_SCALE}) !important;
+    margin: 0 0 2px 0 !important;
+    max-width: 100% !important;
+}
+html[data-preview-pdf="1"] .quote-cover-signatory-col--co .quote-cover-approval-sig {
+    justify-content: flex-end !important;
+}
+html[data-preview-pdf="1"] .quote-cover-approval-sig img {
+    max-height: 56px !important;
+    max-width: min(200px, 100%) !important;
+    width: auto !important;
+    height: auto !important;
+    object-fit: contain !important;
+    display: block !important;
+}
 html[data-preview-pdf="1"] .quote-cover-signatory-line {
     margin-top: 0 !important;
     min-height: calc(13px * 1.58) !important;
     font-size: 13px !important;
     line-height: 1.58 !important;
+    font-weight: 600 !important;
     color: #0f172a !important;
 }
 html[data-preview-pdf="1"] .quote-cover-signatory-designation {
@@ -2349,24 +2503,33 @@ html[data-preview-pdf="1"] img {
 }
 html[data-preview-pdf="1"] .quote-sheet-logo-row,
 html[data-preview-pdf="1"] .quote-continuation-header {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
+    width: 100% !important;
     text-align: right !important;
 }
 html[data-preview-pdf="1"] .quote-sheet-logo-row > div,
 html[data-preview-pdf="1"] .quote-continuation-header > div {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
     width: 100% !important;
     text-align: right !important;
-    display: block !important;
 }
 html[data-preview-pdf="1"] .quote-sheet-logo-row img,
 html[data-preview-pdf="1"] .quote-continuation-header img {
-    max-height: 68px !important;
+    max-height: 21mm !important;
     height: auto !important;
     width: auto !important;
-    max-width: 212px !important;
-    display: inline-block !important;
+    max-width: 100% !important;
+    display: block !important;
     margin-left: auto !important;
     margin-right: 0 !important;
     float: none !important;
+    position: static !important;
     object-fit: contain !important;
     object-position: right top !important;
     flex: 0 0 auto !important;
@@ -2481,20 +2644,24 @@ html[data-preview-pdf="1"] .quote-sheet-logo-row {
 }
 html[data-preview-pdf="1"] .quote-sheet-logo-row > div,
 html[data-preview-pdf="1"] .quote-continuation-header > div {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
     width: 100% !important;
     text-align: right !important;
-    display: block !important;
 }
 html[data-preview-pdf="1"] .quote-sheet-logo-row img,
 html[data-preview-pdf="1"] .quote-continuation-header img {
-    max-height: 68px !important;
+    max-height: 21mm !important;
     height: auto !important;
     width: auto !important;
-    max-width: 212px !important;
-    display: inline-block !important;
+    max-width: 100% !important;
+    display: block !important;
     margin-left: auto !important;
     margin-right: 0 !important;
     float: none !important;
+    position: static !important;
     object-fit: contain !important;
     object-position: right top !important;
 }
@@ -2655,6 +2822,44 @@ html[data-preview-pdf="1"] .clause-content th {
     -moz-osx-font-smoothing: grayscale !important;
     text-rendering: auto !important;
 }
+html[data-preview-pdf="1"] .clause-content p,
+html[data-preview-pdf="1"] .clause-content li {
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-wrap: break-word !important;
+    word-break: break-word !important;
+    max-width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+}
+/* Mirror the on-screen #quote-preview list rules exactly — pagination splits lists per item,
+   so every li is :last-child and must keep 0 bottom margin like the preview. */
+html[data-preview-pdf="1"] .clause-content ul,
+html[data-preview-pdf="1"] .clause-content ol {
+    margin-top: 1.6px !important;
+    margin-bottom: 1.6px !important;
+    line-height: 1.45 !important;
+    font-size: inherit !important;
+}
+html[data-preview-pdf="1"] .clause-content li {
+    margin-bottom: 0.35em !important;
+    line-height: 1.5 !important;
+}
+html[data-preview-pdf="1"] .clause-content li:last-child {
+    margin-bottom: 0 !important;
+}
+html[data-preview-pdf="1"] .clause-content span,
+html[data-preview-pdf="1"] .clause-content font,
+html[data-preview-pdf="1"] .clause-content a {
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-wrap: break-word !important;
+    word-break: break-word !important;
+    max-width: none !important;
+    height: auto !important;
+    line-height: inherit !important;
+}
 ${QUOTE_UNIFIED_SHEET_EXPORT_CSS}
 ${PDF_PAGE_BREAK_OVERRIDES}
 html[data-preview-pdf="1"] .quote-clause-heading-panel > h3:not([data-ems-heading-custom]) {
@@ -2693,6 +2898,7 @@ html[data-preview-pdf="1"] .footer-section > hr {
 }
 ${EMS_QUOTE_PRICING_TABLE_COLUMN_SYNC_CSS}
 ${EMS_QUOTE_PRICING_TABLE_PRESENTATION_CSS}
+${EMS_QUOTE_PRICING_TABLE_ALIGN_CSS}
 ${EMS_QUOTE_PRICING_TABLE_COMPACT_ROW_CSS}
 html[data-preview-pdf="1"] #ems-auto-price-summary-table,
 html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"],
@@ -2701,10 +2907,19 @@ html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] {
     margin-top: ${EMS_QUOTE_PRICING_TABLE_MARGIN_TOP} !important;
     font-size: 11px !important;
     line-height: 1.25 !important;
-    width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
-    max-width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
     table-layout: fixed !important;
     box-sizing: border-box !important;
+}
+html[data-preview-pdf="1"] #ems-auto-price-summary-table:not([data-ems-col-widths]),
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"]:not([data-ems-col-widths]),
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"]:not([data-ems-col-widths]) {
+    width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
+    max-width: ${EMS_QUOTE_PRICING_TABLE_WIDTH} !important;
+}
+html[data-preview-pdf="1"] #ems-auto-price-summary-table[data-ems-col-widths],
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"][data-ems-col-widths],
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"][data-ems-col-widths] {
+    max-width: 100% !important;
 }
 html[data-preview-pdf="1"] #ems-auto-price-summary-table th,
 html[data-preview-pdf="1"] #ems-auto-price-summary-table td,
@@ -2714,11 +2929,52 @@ html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] th,
 html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] td {
     border: ${EMS_QUOTE_PDF_TABLE_BORDER_WIDTH} solid ${EMS_QUOTE_PRICING_TABLE_BORDER_COLOR} !important;
     color: #0f172a !important;
+    /* Match on-screen schedule cells. The 13px clause rule makes rows taller than the preview and pushes the last row under the footer. */
+    font-size: 11px !important;
+    line-height: 1.25 !important;
+}
+html[data-preview-pdf="1"] table[data-ems-col-widths]:not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]) th,
+html[data-preview-pdf="1"] table[data-ems-col-widths]:not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]) td {
+    /* R8: same compact Selawik metrics as preview continuation (not the 11px pricing rule). */
+    font-size: 12.5px !important;
+    line-height: 15px !important;
+    overflow: visible !important;
+}
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"][data-ems-col-widths] th,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"][data-ems-col-widths] td,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"][data-ems-col-widths] th,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"][data-ems-col-widths] td {
+    font-size: 11px !important;
+    line-height: 1.25 !important;
+}
+html[data-preview-pdf="1"] #ems-auto-price-summary-table p,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] p,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] p,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"][data-ems-col-widths] p,
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"][data-ems-col-widths] li,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"][data-ems-col-widths] p,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"][data-ems-col-widths] li {
+    font-size: 11px !important;
+    line-height: 1.25 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
+html[data-preview-pdf="1"] table[data-ems-col-widths]:not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]) p,
+html[data-preview-pdf="1"] table[data-ems-col-widths]:not([id^="ems-auto-price-summary-table"]):not([data-ems-pricing-cols="fixed"]) li {
+    font-size: 12.5px !important;
+    line-height: 15px !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    overflow: visible !important;
 }
 html[data-preview-pdf="1"] #ems-auto-price-summary-table thead th,
+html[data-preview-pdf="1"] #ems-auto-price-summary-table thead td,
 html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] thead th,
-html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] thead th {
+html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] thead td,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] thead th,
+html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] thead td {
     background: ${EMS_QUOTE_PRICING_TABLE_HEADER_BG} !important;
+    background-color: ${EMS_QUOTE_PRICING_TABLE_HEADER_BG} !important;
     color: ${EMS_QUOTE_PRICING_TABLE_HEADER_COLOR} !important;
     font-weight: 600 !important;
     border: ${EMS_QUOTE_PRICING_TABLE_HEAD_CELL_BORDER} !important;
@@ -2749,35 +3005,16 @@ html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row=
     font-weight: 700 !important;
     border-top: 1px solid #94a3b8 !important;
 }
-html[data-preview-pdf="1"] #ems-auto-price-summary-table th:nth-child(2),
-html[data-preview-pdf="1"] #ems-auto-price-summary-table td:nth-child(2),
-html[data-preview-pdf="1"] #ems-auto-price-summary-table td[data-ems-amount],
-html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="total"] td:first-child,
-html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="discount"] td:first-child,
-html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="final-discounted"] td:first-child,
-html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="vat"] td:first-child,
-html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="grand-vat"] td:first-child,
-html[data-preview-pdf="1"] #ems-auto-price-summary-table tr[data-ems-row="grand"] td:first-child,
-html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] th:nth-child(2),
-html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] td:nth-child(2),
-html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] td[data-ems-amount],
-html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="total"] td:first-child,
-html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="discount"] td:first-child,
-html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="final-discounted"] td:first-child,
-html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="vat"] td:first-child,
-html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand-vat"] td:first-child,
-html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"] tr[data-ems-row="grand"] td:first-child,
-html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] th:nth-child(2),
-html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] td:nth-child(2),
-html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] td[data-ems-amount],
-html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="total"] td:first-child,
-html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="discount"] td:first-child,
-html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="final-discounted"] td:first-child,
-html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="vat"] td:first-child,
-html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand-vat"] td:first-child,
-html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"] tr[data-ems-row="grand"] td:first-child {
-    text-align: right !important;
-}
+${EMS_QUOTE_PRICING_TABLE_ALIGN_CSS.replace(
+    /table#ems-auto-price-summary-table/g,
+    'html[data-preview-pdf="1"] #ems-auto-price-summary-table'
+).replace(
+    /table\[id\^="ems-auto-price-summary-table"\]/g,
+    'html[data-preview-pdf="1"] table[id^="ems-auto-price-summary-table"]'
+).replace(
+    /table\[data-ems-pricing-cols="fixed"\]/g,
+    'html[data-preview-pdf="1"] table[data-ems-pricing-cols="fixed"]'
+)}
 /** Highest-specificity sheet pin — portrait default; landscape overrides via .quote-a4-sheet--landscape. */
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet:not(.quote-a4-sheet--landscape):not([data-page-orientation="landscape"]) {
     box-sizing: border-box !important;
@@ -2833,6 +3070,25 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet[data-page-orientation=
     page-break-after: auto !important;
     break-after: auto !important;
 }
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet.quote-a4-sheet--continuation:not(.quote-a4-sheet--landscape):not([data-page-orientation="landscape"]),
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet.quote-a4-sheet--continuation.quote-a4-sheet--landscape,
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet.quote-a4-sheet--continuation[data-page-orientation="landscape"] {
+    grid-template-rows: 21mm minmax(0, 1fr) 26mm !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote-sheet-logo-row {
+    height: 21mm !important;
+    min-height: 21mm !important;
+    max-height: 21mm !important;
+    margin-bottom: 0 !important;
+    box-sizing: border-box !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .footer-section {
+    height: 26mm !important;
+    min-height: 26mm !important;
+    max-height: 26mm !important;
+    justify-content: flex-end !important;
+    box-sizing: border-box !important;
+}
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet > .quote-sheet-logo-row {
     grid-row: 1 !important;
     margin-top: 0 !important;
@@ -2864,6 +3120,48 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet:not(.quote-a4-sheet--c
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet:not(.quote-a4-sheet--continuation) .quote-cover-sign-off {
     flex: 0 0 auto !important;
 }
+/* Match preview continuation bands exactly (21mm logo / 26mm footer / 15mm padding). */
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote-sheet-logo-row {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
+    height: 21mm !important;
+    min-height: 21mm !important;
+    max-height: 21mm !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    overflow: hidden !important;
+    box-sizing: border-box !important;
+    width: 100% !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote-sheet-logo-row > div {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-end !important;
+    align-items: flex-start !important;
+    height: auto !important;
+    max-height: 21mm !important;
+    min-height: 0 !important;
+    width: 100% !important;
+    text-align: right !important;
+    box-sizing: border-box !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote-sheet-logo-row img {
+    position: static !important;
+    height: auto !important;
+    width: auto !important;
+    max-height: 21mm !important;
+    max-width: 100% !important;
+    object-fit: contain !important;
+    object-position: right top !important;
+    display: block !important;
+    margin-left: auto !important;
+    margin-right: 0 !important;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation:not(.quote-a4-sheet--landscape):not([data-page-orientation="landscape"]) {
+    padding: 15mm !important;
+}
 `;
 
 export function buildQuotePrintDocumentHtml(printWithHeader, fragmentHtml, tableStyles, serverOrigin = '', pdfMode = false, options = {}) {
@@ -2885,25 +3183,19 @@ export function buildQuotePrintDocumentHtml(printWithHeader, fragmentHtml, table
         fragmentForBody = pinQuoteA4SheetsInFragmentHtml(fragmentForBody);
     }
 
-    const googleFontLinks = `
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">`;
-
     const htmlDataAttrs = usePreviewMatchedPdf ? ' data-preview-pdf="1"' : '';
-    const docFontStack = usePreviewMatchedPdf ? QUOTE_PREVIEW_FONT_STACK : QUOTE_APP_FONT_STACK;
-    const rootTypography = usePreviewMatchedPdf
-        ? '-webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: auto;'
-        : '-webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;';
+    const docFontStack = QUOTE_PREVIEW_FONT_STACK;
+    const rootTypography =
+        '-webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: auto;';
+    const fontFaceCss = buildQuotePackFontFaceCss(serverOrigin || '');
 
     const browserSavePdfHint = options?.browserSavePdfHint
-        ? `<div class="no-print ems-browser-pdf-hint" style="position:fixed;top:0;left:0;right:0;z-index:99999;padding:10px 14px;background:#eff6ff;border-bottom:1px solid #3b82f6;font:14px 'Segoe UI',system-ui,sans-serif;color:#1e3a8a;text-align:center;box-sizing:border-box;">In the print dialog, choose <strong>Save as PDF</strong> or <strong>Microsoft Print to PDF</strong>, then click Save.</div>`
+        ? `<div class="no-print ems-browser-pdf-hint" style="position:fixed;top:0;left:0;right:0;z-index:99999;padding:10px 14px;background:#eff6ff;border-bottom:1px solid #3b82f6;font:14px 'Segoe UI',Selawik,system-ui,Arial,sans-serif;color:#1e3a8a;text-align:center;box-sizing:border-box;">In the print dialog, choose <strong>Save as PDF</strong> or <strong>Microsoft Print to PDF</strong>, then click Save.</div>`
         : '';
     const docTitle = String(options?.documentTitle || 'EMS Quote').replace(/</g, '');
 
-    return `<!DOCTYPE html><html lang="en"${htmlDataAttrs}><head><title>${docTitle}</title>${baseTag}${
-        usePreviewMatchedPdf ? '' : googleFontLinks
-    }<style>
+    return `<!DOCTYPE html><html lang="en"${htmlDataAttrs}><head><title>${docTitle}</title>${baseTag}<style>
+        ${fontFaceCss}
         @page { size: A4 portrait; margin: 0; }
         @page quote-landscape { size: A4 landscape; margin: 0; }
         .quote-a4-sheet--landscape { page: quote-landscape; }
