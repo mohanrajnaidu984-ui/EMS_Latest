@@ -30,6 +30,7 @@ describe('quote page geometry', () => {
         expect(quoteContinuationContentPx(false)).toBe(831);
         expect(EMS_QUOTE_CONT_USABLE_PX_FALLBACK).toBe(831);
         expect(QUOTE_PAGE_GEOMETRY.usablePx).toBe(831);
+        expect(PACK_HEIGHT_SAFETY_PX).toBeGreaterThanOrEqual(12);
         expect(QUOTE_PAGE_GEOMETRY.packLimitPx).toBe(831 - PACK_HEIGHT_SAFETY_PX);
     });
 

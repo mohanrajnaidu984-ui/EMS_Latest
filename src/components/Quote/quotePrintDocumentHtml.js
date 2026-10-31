@@ -7,7 +7,6 @@ import { peelQuoteSheetsThatOverflowFooter } from './quoteSheetOverflowPeel.js';
 import {
     buildEmsOfficePasteTablePresentationCss,
     initializeAllOfficePastedTableColumns,
-    expandClippedOfficeTableRowHeights,
 } from './clauseEditorTable.js';
 import { stripSpellMarksFromDom, stripSpellMarksFromHtml } from './clauseEditorSpellcheck.js';
 import {
@@ -517,7 +516,7 @@ function pinQuoteA4SheetGridInline(sheetEl, { isCover = false } = {}) {
         'important'
     );
     sheetEl.style.setProperty('align-content', 'stretch', 'important');
-    sheetEl.style.setProperty('overflow', 'hidden', 'important');
+    sheetEl.style.setProperty('overflow', 'visible', 'important');
     sheetEl.style.setProperty('page-break-after', 'auto', 'important');
     sheetEl.style.setProperty('break-after', 'auto', 'important');
 
@@ -535,7 +534,9 @@ function pinQuoteA4SheetGridInline(sheetEl, { isCover = false } = {}) {
             logo.style.setProperty('min-height', '21mm', 'important');
             logo.style.setProperty('max-height', '21mm', 'important');
             logo.style.setProperty('margin-bottom', '0', 'important');
-            logo.style.setProperty('overflow', 'hidden', 'important');
+            // The logo already fits the fixed band. Nested overflow clips in a
+            // fragmented grid can suppress its image on later Chromium PDF pages.
+            logo.style.setProperty('overflow', 'visible', 'important');
         }
         logo.querySelectorAll(':scope > div').forEach((wrap) => {
             wrap.style.setProperty('display', 'flex', 'important');
@@ -590,6 +591,10 @@ function pinQuoteA4SheetGridInline(sheetEl, { isCover = false } = {}) {
             content.style.setProperty('min-height', '0', 'important');
             content.style.setProperty('max-height', '100%', 'important');
             content.style.setProperty('overflow', 'hidden', 'important');
+            for (const property of ['display', 'flex-direction', 'row-gap', 'column-gap']) {
+                const captured = content.getAttribute(`data-ems-preview-${property}`);
+                if (captured) content.style.setProperty(property, captured, 'important');
+            }
         }
     }
 
@@ -891,6 +896,36 @@ function cloneQuotePrintRootForExport(rootEl) {
     const root = rootEl || (typeof document !== 'undefined' ? document.getElementById('quote-print-root') : null);
     if (!root) return null;
     const clone = root.cloneNode(true);
+    // The export stylesheet contains legacy typography defaults. Freeze the
+    // typography/spacing that was actually paginated, before mounting the clone
+    // under print CSS. In particular a saved 1.1 table line-height must not become
+    // 1.4/1.45 after the last row has been assigned to a page.
+    const textSelector = '.quote-clause-block, .quote-clause-block *';
+    const sourceText = root.querySelectorAll(textSelector);
+    const clonedText = clone.querySelectorAll(textSelector);
+    const properties = ['font-family', 'font-size', 'font-weight', 'font-style',
+        'line-height', 'letter-spacing', 'word-spacing', 'text-align', 'vertical-align',
+        'padding-top', 'padding-bottom', 'margin-top', 'margin-bottom',
+        'white-space', 'word-break', 'overflow-wrap'];
+    sourceText.forEach((source, index) => {
+        const target = clonedText[index];
+        if (!target?.style) return;
+        const style = source.ownerDocument.defaultView.getComputedStyle(source);
+        properties.forEach(property => target.style.setProperty(property, style.getPropertyValue(property), 'important'));
+    });
+    // The preview can use block or flex flow depending on the document layout.
+    // Preserve its actual margin-collapse behavior; forcing either globally
+    // changes the accumulated height when several clauses share a page.
+    const liveContents = root.querySelectorAll('.quote-a4-sheet--continuation .content-section');
+    const cloneContents = clone.querySelectorAll('.quote-a4-sheet--continuation .content-section');
+    liveContents.forEach((source, index) => {
+        const target = cloneContents[index];
+        if (!target) return;
+        const style = source.ownerDocument.defaultView.getComputedStyle(source);
+        for (const property of ['display', 'flex-direction', 'row-gap', 'column-gap']) {
+            target.setAttribute(`data-ems-preview-${property}`, style.getPropertyValue(property));
+        }
+    });
     const removeSel = [
         '.quote-clause-measure-host',
         '.quote-print-footer-rule',
@@ -1160,7 +1195,8 @@ export async function captureQuotePrintRootInnerHtmlForPdfAsync(rootEl) {
             });
         }
         initializeAllOfficePastedTableColumns(clone);
-        expandClippedOfficeTableRowHeights(clone);
+        // Row expansion belongs to measured packing/live preview. Do not change
+        // validated page assignments by growing rows during export.
         stripSpellMarksFromDom(clone);
         finalizeAllSheetsLayoutOnClone(clone, { preserveCoverLayout: hasCoverLetter });
         if (hasCoverLetter) {
@@ -1532,7 +1568,7 @@ export async function prepareQuotePrintRootCloneForHtml2pdf(rootEl) {
             });
         }
         initializeAllOfficePastedTableColumns(clone);
-        expandClippedOfficeTableRowHeights(clone);
+        // Preserve the row dimensions already validated in the live preview.
         stripSpellMarksFromDom(clone);
         finalizeAllSheetsLayoutOnClone(clone, { preserveCoverLayout: hasCoverLetter });
         if (hasCoverLetter) {

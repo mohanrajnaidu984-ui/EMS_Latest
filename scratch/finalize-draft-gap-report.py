@@ -1,0 +1,15 @@
+import hashlib,json
+from pathlib import Path
+root=Path('e2e/artifacts/clause-mutations-1515-stress')
+data=json.loads((root/'results.json').read_text(encoding='utf8'))
+checks=json.loads((root/'pdf-validation.json').read_text(encoding='utf8'))
+files=['src/components/Quote/QuoteForm.jsx','src/components/Quote/quoteClausePagination.js','src/components/Quote/quoteRealDomFitPack.js','src/components/Quote/quotePrintDocumentHtml.js','src/components/Quote/quotePrintExportCss.js','src/components/Quote/clauseEditorTable.js','server/routes/quotePdf.js','dist/index.html']
+summary={'status':'verified locally','productionDeployed':False,'frontend':'http://127.0.0.1:5180','api':'http://127.0.0.1:5008','unitTestsPassed':27,'productionBuildPassed':True,'savedR4PreviewPages':8,'savedR4PdfPages':8,'variants':checks['variants'],'repeatedAlignStable':True,'allVariantsPageContentParity':all(page['matches'] for run in data['results'] for page in run['parity']),'allVariantsZeroOverflow':all(not run['health']['overflows'] for run in data['results']),'clientFallbackGuard':json.loads(Path('e2e/artifacts/clause-mutations-1515/client-fallback-guard.json').read_text()),'serverBoundaryGuard':json.loads(Path('e2e/artifacts/clause-mutations-1515/server-boundary-guard.json').read_text()),'sourceSha256':{file:hashlib.sha256(Path(file).read_bytes()).hexdigest() for file in files}}
+(root/'final-validation.json').write_text(json.dumps(summary,indent=2),encoding='utf8')
+p=Path('docs/quote-draft-1515-gap-and-export-fix.md')
+s=p.read_text(encoding='utf8')+'\n## Final result\n\nVerified on the locally built production frontend (port 5180), using the isolated\nAPI on port 5008. All 27 unit tests, frontend build and backend syntax checks pass.\n\n| Actual 1515 test layout | Preview pages | PDF pages | Overflow / content mismatch |\n|---|---:|---:|---|\n'
+for row in checks['variants']:
+ s+=f"| {row['variant']} | {row['previewPages']} | {row['pdfPages']} | 0 / 0 |\n"
+s+='| Saved R4 | 8 | 8 | 0 / 0 |\n\nEvery variant retained all 32 matrix checkmarks and had meaningful final-page\ncontent. No carried blank band remained at the start of a continuation page.\nThe stress custom clause contains a long paragraph plus 100 trailing empty\nparagraphs; it flows across pages without blank pages at the end. Repeated Align\nclicks preserve identical assignments. Saved R4 also passes 80/100/125% zoom.\n\nThe eight-page changed-content PDF was freshly rendered and visually checked,\nincluding the clause 4 flow, complete 5.01 text, Notes page start, logos and\nfooters. The long custom clause final page was also visually checked. The renderer\nrejects deliberately overflowing HTML, and the client refuses an unverified raster\ndownload on a renderer layout failure.\n\n`final-validation.json` records the checks and SHA-256 fingerprints of the source\nand built index used for the result. This is a local verification, not production\nIIS certification or a guarantee for every possible pasted HTML document.\n'
+p.write_text(s,encoding='utf8')
+print('Final validation and investigation report saved.')

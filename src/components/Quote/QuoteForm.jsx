@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useId } from 'react';
 import { createPortal, flushSync } from 'react-dom';
+import { readJsonInFlight } from '../../utils/inflightApiJson';
 import {
     FileText,
     Save,
@@ -143,8 +144,6 @@ import {
     initializeAllOfficePastedTableColumns,
     expandClippedOfficeTableRowHeights,
     applyAllTableRowHeightsInRoot,
-    applyTableRowHeightModel,
-    relaxTableRowHeightsForClausePackMeasure,
     isEmsPricingSummaryTable,
     fitPricingTablesInRootAndBakeIntoHtml,
     bakePricingColWidthsFromLiveDom,
@@ -189,14 +188,12 @@ import {
     EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
     EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK,
     mergeSegmentsIntoSheetBlocks,
-    packClauseSegmentsForContinuationPages,
     packSegmentsOntoPagesByEstimatedHeight,
     packSegmentsOntoPagesByEstimatedHeightPerPage,
     packSegmentsOntoPagesByHeights,
     reflowContinuationPagesTopDown,
     compactPackHeightsPx,
     ensureSegmentPageGroupsCoverAll,
-    keepHeadingsWithFollowingContent,
     assertSegmentPageGroupsIntegrity,
     assertSegmentVisibilityOnSheets,
     measureLiveContentFit,
@@ -207,16 +204,15 @@ import {
     QUOTE_A4_LOGO_BAND_MM,
     QUOTE_A4_FOOTER_BAND_MM,
     segmentPageGroupsEqual,
-    softSplitOversizedUnitHtml,
-    detectRepeatedPackState,
     splitClauseHtmlToSegments,
+    trimTrailingBlankParts,
+    trimDocumentTrailingBlankSegments,
 } from './quoteClausePagination';
 import {
     QUOTE_PAGE_GEOMETRY,
-    QUOTE_PACK_MEASURE_TABLE_CELL_CSS,
 } from './quotePageGeometry.js';
-const EMS_QUOTE_SHOW_CONTENT_MARKS =
-    typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV);
+/* Temporary CONTENT START/END geometry guides — permanently off (was DEV-only). */
+const EMS_QUOTE_SHOW_CONTENT_MARKS = false;
 import { QUOTE_PACK_FONT_STACK, buildQuotePackFontFaceCss } from './quotePackFonts.js';
 import { remapSymbolFontGreekInHtml } from './quoteSymbolFont';
 import { sanitizeQuoteRichHtml } from './quoteSanitizeHtml';
@@ -283,7 +279,6 @@ import {
     formatUserDepartments,
     userHasDepartment,
 } from '../../utils/userDepartments';
-import html2pdf from 'html2pdf.js';
 
 /**
  * Option (a): original on-sheet editor + CSS/PDF capture restored.
@@ -7730,6 +7725,44 @@ const indicesEqual = (a, b) => {
 const clausePaginateEqual = (a, b) =>
     indicesEqual(a?.pageOne, b?.pageOne) && clausePageGroupsEqual(a?.continuation, b?.continuation);
 
+/* Measurement and React rendering must consume identical normalized HTML. */
+function normalizeQuoteSheetBlocks(blocks) {
+    const stampedBlocks = stampSplitPricingBasesAcrossSheetBlocks(blocks);
+    const fixedBlocks = stampedBlocks.map((block) => {
+        const html = String(block.bodyHtml || '');
+        const needsVat =
+            block.listKey === 'showPricingTerms' ||
+            /data-ems-amount=["']vat["']/i.test(html) ||
+            /data-ems-row=["']vat["']/i.test(html) ||
+            /id=["']ems-auto-price-summary-table/i.test(html) ||
+            /data-ems-pricing-cols=["']fixed["']/i.test(html);
+        if (!needsVat) return block;
+        /*
+         * Split fragment with a Total row: always re-stamp Total from the full
+         * base (attr), even when VAT lives on another page (inconsistency check
+         * would skip and leave a page-local Total).
+         */
+        const splitHasTotal =
+            /data-ems-table-split=["']1["']/i.test(html) &&
+            (/data-ems-amount=["']total["']/i.test(html) ||
+                /data-ems-row=["']total["']/i.test(html) ||
+                />\s*Total(\s*<|\s*\()/i.test(html));
+        if (splitHasTotal || pricingFooterVatInconsistent(html)) {
+            return {
+                ...block,
+                bodyHtml: ensurePricingTableColgroupInHtml(
+                    reconcilePricingVatAmountCellsInHtml(html)
+                ),
+            };
+        }
+        return {
+            ...block,
+            bodyHtml: ensurePricingTableColgroupInHtml(html),
+        };
+    });
+    return fixedBlocks;
+}
+
 const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onApprovalActionComplete = null }) => {
     const { currentUser } = useAuth();
     const isAdmin = ['Admin', 'Admins'].includes(currentUser?.role || currentUser?.Roles);
@@ -8834,8 +8867,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 if (cancelled) return;
                 const list = Array.isArray(data.divisions) ? data.divisions : [];
                 setQuoteListDivisions(list);
-                setQuoteListDivision(() => {
+                setQuoteListDivision((previous) => {
                     if (!list.length) return '';
+                    if (list.includes(previous)) return previous;
                     const rawSaved = localStorage.getItem('quote_listDivision');
                     const saved = parseUserDepartments(rawSaved).filter((s) => list.includes(s));
                     // Single-select: prefer last saved division, else first accessible option.
@@ -10313,7 +10347,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     }, [quotePreviewPageInfo.current, isEditingQuotePreviewPageInput]);
 
     const quoteCoverLetterRef = useRef(null);
-    const clauseMeasureHostRef = useRef(null);
     const lastClausePackSigRef = useRef('');
     const lastPackedClauseMembershipRef = useRef('');
     const clausePackMeasureRetryRef = useRef(0);
@@ -10335,6 +10368,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const packedGroupsAwaitingPaintRef = useRef(null);
     /** Cache measured segment heights across Align retries (keyed by segment html signature). */
     const clausePackSegmentHeightCacheRef = useRef(new Map());
+    const lastMeasuredQuotePackRef = useRef(null);
     const alignQuotePreviewPagesRef = useRef(async () => {});
     /** True while Align Page (manual or auto) is measuring / packing sheets. */
     const [quoteAlignPageBusy, setQuoteAlignPageBusy] = useState(false);
@@ -10539,15 +10573,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         /* Incremental: rebuild only clauses whose content/split mode changed (exit-edit + load). */
         const cache = clauseSegmentBuildCacheRef.current;
         /* Bump when split/pack rules change so in-memory segment cache cannot keep stale layouts. */
-        const splitModeKey = `${clausePackSplitMode ? 'fine' : 'fast'}:v46-fill-pack-${isEmsFillPackEnabled() ? 'on' : 'off'}`;
+        const splitModeKey = `${clausePackSplitMode ? 'fine' : 'fast'}:v48-prose-rows-${isEmsFillPackEnabled() ? 'on' : 'off'}`;
         /** @type {typeof frozen} */
-        const next = [];
+        let next = [];
         const keepKeys = new Set();
         activeClausesList.forEach((clause, clauseIdx) => {
             const listKey = String(clause.listKey || clause.key || clause.id || clauseIdx);
             keepKeys.add(listKey);
             const content = String(clause.content || '');
-            const contentSig = `${content.length}:${content.slice(0, 64)}:${content.slice(-96)}`;
+            const contentSig = content;
             const cached = cache.get(listKey);
             if (
                 cached &&
@@ -10570,7 +10604,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 return;
             }
             const bodyHtml = formatBody(content, listKey, clauseIdx + 1);
-            const parts = splitClauseHtmlToSegments(bodyHtml, splitOpts);
+            const parts = trimTrailingBlankParts(splitClauseHtmlToSegments(bodyHtml, splitOpts));
             cache.set(listKey, { contentSig, splitModeKey, parts });
             const displayMajor = clauseIdx + 1;
             parts.forEach((html, partIdx) => {
@@ -10584,6 +10618,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 });
             });
         });
+        next = trimDocumentTrailingBlankSegments(next);
         [...cache.keys()].forEach((k) => {
             if (!keepKeys.has(k)) cache.delete(k);
         });
@@ -10629,12 +10664,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     ]);
 
     const isQuotePreviewVisible = quoteShellReady;
-
-    /** Off-screen measure nodes — always on when preview has clause segments (dense DOM pack). */
-    const mountClauseMeasureSegments = React.useMemo(
-        () => clauseSegmentsForPagination.length > 0,
-        [clauseSegmentsForPagination.length]
-    );
+    // Exact input identity: same-length edits in the middle of a clause must
+    // invalidate both segment and layout caches. No quote content is persisted.
+    const quotePackInputKey = React.useMemo(() => JSON.stringify([
+        enquiryData?.enquiry?.RequestNo, quoteId, quoteDraftId,
+        clauseSegmentsForPagination.map(seg => [seg.html, seg.clauseIdx, seg.showHeading,
+            seg.displayMajor, seg.clause?.listKey, seg.clause?.title]),
+        clauseHeadingHtml, quotePageOrientations,
+    ]), [enquiryData?.enquiry?.RequestNo, quoteId, quoteDraftId,
+        clauseSegmentsForPagination, clauseHeadingHtml, quotePageOrientations]);
 
     useEffect(() => {
         if (!isQuotePreviewVisible) return undefined;
@@ -10671,6 +10709,28 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             lastPackedClauseMembershipRef.current !== clausePreviewMembershipSig;
         if (expandedClause && !membershipChanged) return;
         lastPackedClauseMembershipRef.current = clausePreviewMembershipSig;
+
+        const cachedPack = lastMeasuredQuotePackRef.current;
+        const liveRoot = quotePreviewLayoutRef.current;
+        if (!expandedClause && cachedPack?.key === quotePackInputKey && liveRoot &&
+            document.fonts?.status !== 'loading' &&
+            segmentPageGroupsEqual(clauseSegmentPageGroups, cachedPack.groups) &&
+            [...liveRoot.querySelectorAll('.clause-content img')].every(img => img.complete && img.naturalWidth)) {
+            const visibility = assertSegmentVisibilityOnSheets(liveRoot, cachedPack.groups,
+                clauseSegmentsForPagination.length, { reservePx: PACK_HEIGHT_SAFETY_PX,
+                    usablePx: EMS_QUOTE_CONT_USABLE_PX_FALLBACK, segments: clauseSegmentsForPagination });
+            const signature = JSON.stringify(visibility.diagnostics?.map(d =>
+                [Math.round(d.lastBottomPx), d.clientHeight, d.usablePx]));
+            if (visibility.ok && signature === cachedPack.paintSignature) {
+                lastClausePackSigRef.current = JSON.stringify(cachedPack.groups);
+                clausePackFastAlignRef.current = false;
+                clausePackTightFitRef.current = false;
+                liveRoot.setAttribute('data-ems-pack-cache-hit', '1');
+                setQuotePackIntegrityFailed(false);
+                setQuoteAlignPageBusy(false);
+                return;
+            }
+        }
 
         let cancelled = false;
         lastClausePackSigRef.current = '';
@@ -10723,8 +10783,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
          * left orphan Scope bullets on near-empty sheets; measure shell is content-sized.
          */
         const preview = quotePreviewLayoutRef.current;
-        const host = clauseMeasureHostRef.current;
-        if (!preview || !host) {
+        if (!preview) {
             applyEstimatedPackQuick();
             setQuoteAlignPageBusy((busy) => (busy ? false : busy));
             return () => {
@@ -10734,7 +10793,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         /* Match PDF: inner content width depends on sheet orientation (210mm or 297mm page width). */
         const defaultInnerW = Math.round(quoteMmToPx(quoteA4InnerContentMm(false).innerWidthMm));
-        host.style.width = `${Math.max(280, defaultInnerW)}px`;
         /*
          * Keep measured heights for clauses that did not change. Clearing this on every
          * split-table pack remeasured the whole quote on exit-edit.
@@ -10768,94 +10826,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             );
         };
 
-        const measureHeights = () => {
-            const heightCache = clausePackSegmentHeightCacheRef.current;
-            return clauseSegmentsForPagination.map((seg, i) => {
-                const cacheKey = `v46-fill-pack:${seg?.key || i}:${String(seg?.html || '').length}:${String(seg?.html || '').slice(0, 48)}`;
-                if (heightCache.has(cacheKey)) return heightCache.get(cacheKey);
-                const emptySeg =
-                    !String(seg?.html || '').trim() && !seg?.showHeading;
-                if (emptySeg) {
-                    heightCache.set(cacheKey, 1);
-                    return 1;
-                }
-                const n = host.querySelector(`[data-segment-measure-index="${i}"]`);
-                if (!n) return 0;
-                /* Pack measure: natural row height (not stored locks — those inflate 1-row splits). */
-                if (n.querySelector?.('table')) {
-                    relaxTableRowHeightsForClausePackMeasure(n);
-                    void n.offsetHeight;
-                }
-                const splitTable = n.querySelector('table[data-ems-table-split="1"]');
-                let h;
-                if (splitTable || /data-ems-table-split\s*=\s*["']?1/i.test(String(seg?.html || ''))) {
-                    const headingH = seg?.showHeading ? 44 : 0;
-                    const bodyRow =
-                        splitTable?.querySelector('tbody > tr') ||
-                        n.querySelector('tbody > tr');
-                    const rowH = Math.round(
-                        bodyRow?.offsetHeight ||
-                            bodyRow?.getBoundingClientRect().height ||
-                            n.offsetHeight ||
-                            34
-                    );
-                    /* Cap row cost — inflated Excel/measure rows left 55–90mm BOQ/matrix gaps. */
-                    h = Math.min(72, Math.max(22, rowH + 4)) + headingH;
-                } else {
-                    /*
-                     * Single-li list segments: measure the LI only. Full block height
-                     * includes UL + clause-block margins that collapse when items rejoin
-                     * on a sheet — sum packing then left huge blank bands under Terms.
-                     */
-                    const soloLi = n.querySelector(
-                        '.clause-content > ul > li:only-child, .clause-content > ol > li:only-child'
-                    );
-                    if (soloLi && !seg?.showHeading) {
-                        /* offsetHeight only — getBoundingClientRect is scaled by preview zoom. */
-                        h = Math.max(Math.round(soloLi.offsetHeight || soloLi.scrollHeight || 0), 18) + 6;
-                    } else {
-                        const cs = typeof window !== 'undefined' ? window.getComputedStyle(n) : null;
-                        const marginY =
-                            (cs ? parseFloat(cs.marginTop) || 0 : 0) +
-                            (cs ? parseFloat(cs.marginBottom) || 0 : 0);
-                        h = Math.max(n.offsetHeight || 0, n.scrollHeight || 0, 1);
-                        h = Math.round(h + marginY);
-                    }
-                }
-                /*
-                 * +2px safety per unit so greedy sum never understates paint height
-                 * (understate → overpack → overflow:hidden hides content).
-                 */
-                if (h > 0) {
-                    h = Math.round(h + 2);
-                    heightCache.set(cacheKey, h);
-                }
-                return h;
-            });
-        };
-
         const applyPack = () => {
             if (cancelled) return;
+            const packStartedAt = performance.now();
             const peelEpochAtStart = livePeelEpochRef.current;
             const previewRoot = quotePreviewLayoutRef.current;
-            const heights = measureHeights();
-            /* Wait only when measure nodes are missing — empty segments are height 1, not "not ready". */
-            const missingNode = heights.some((h, i) => {
-                if (h > 0) return false;
-                const seg = clauseSegmentsForPagination[i];
-                return Boolean(String(seg?.html || '').trim() || seg?.showHeading);
-            });
-            if (missingNode) {
-                if (clausePackMeasureRetryRef.current < 4) {
-                    clausePackMeasureRetryRef.current += 1;
-                    requestAnimationFrame(() => applyPack());
-                } else {
-                    applyEstimatedPack();
-                    setQuoteAlignPageBusy((busy) => (busy ? false : busy));
-                }
-                return;
-            }
-            clausePackMeasureRetryRef.current = 0;
+            const heights = compactPackHeightsPx(clauseSegmentsForPagination, null);
             previewRoot
                 ?.querySelectorAll('[data-pack-merge-measure]')
                 ?.forEach((el) => el.remove());
@@ -10889,11 +10865,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 document.body.appendChild(mergeMeasureEl);
             }
 
+            let measureSheet = null;
             const configureMergeMeasureShellWidth = (innerWPx) => {
                 const w = `${Math.max(280, innerWPx)}px`;
                 if (mergeMeasureEl) mergeMeasureEl.style.width = w;
                 const shell = mergeMeasureEl?.querySelector('[data-pack-measure-shell]');
                 if (shell) shell.style.width = w;
+                if (measureSheet) {
+                    const landscape = innerWPx > defaultInnerW + 1;
+                    measureSheet.classList.toggle('quote-a4-sheet--landscape', landscape);
+                    measureSheet.setAttribute('data-page-orientation', landscape ? 'landscape' : 'portrait');
+                }
             };
 
             /*
@@ -10904,41 +10886,49 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             const computeContUsablePx = (isLandscape) =>
                 Math.max(quoteContinuationContentPx(isLandscape), 200);
             const portraitContUsablePx = computeContUsablePx(false);
-            const fillPackUsablePx = portraitContUsablePx;
             /* Measure fonts/line-heights MUST match live continuation paint (13px/1.4). */
-            mergeMeasureEl.innerHTML = `<div data-pack-measure-shell data-ems-pack-measure="1" class="quote-clause-measure-host" style="width:${Math.max(280, defaultInnerW)}px;box-sizing:border-box;overflow:visible;display:block;height:auto;max-height:none;min-height:0;font-family:${QUOTE_PACK_FONT_STACK};font-size:13px;line-height:1.4">
-                <style>
-                  [data-pack-measure-content] table td,
-                  [data-pack-measure-content] table th {
-                    ${QUOTE_PACK_MEASURE_TABLE_CELL_CSS}
-                  }
-                  [data-pack-measure-content] .clause-content,
-                  [data-pack-measure-content] .clause-content p,
-                  [data-pack-measure-content] .clause-content li {
-                    font-size: 13px !important;
-                    line-height: 1.4 !important;
-                    overflow: visible !important;
-                  }
-                </style>
-                <div data-pack-measure-content class="content-section" style="display:block;position:relative;width:100%;box-sizing:border-box;height:${fillPackUsablePx}px;max-height:${fillPackUsablePx}px;min-height:${fillPackUsablePx}px;overflow:hidden"></div>
-            </div>`;
+            /* Measure under the actual preview selectors and page ancestry. A bare
+             * .quote-clause-measure-host misses #quote-preview continuation rules;
+             * the old pack and live recovery therefore disagreed about every row.
+             * This isolated shallow clone has no React children or application IDs
+             * beyond the CSS root, and is outside the preview zoom transform. */
+            mergeMeasureEl.replaceChildren();
+            const measurePreview = previewRoot.cloneNode(false);
+            measurePreview.classList.remove('quote-preview--clause-editing');
+            measurePreview.style.setProperty('transform', 'none', 'important');
+            measurePreview.style.setProperty('font-family', getComputedStyle(previewRoot).fontFamily);
+            measurePreview.setAttribute('data-ems-pack-measure', '1');
+            const liveSheet = previewRoot.querySelector('.quote-a4-sheet--continuation');
+            measureSheet = liveSheet ? liveSheet.cloneNode(false) : document.createElement('div');
+            measureSheet.className = 'quote-a4-sheet quote-a4-sheet--continuation';
+            measureSheet.removeAttribute('id');
+            measureSheet.removeAttribute('data-pack-group');
+            const liveMain = liveSheet?.querySelector('.quote-sheet-main-flex');
+            const measureMain = liveMain ? liveMain.cloneNode(false) : document.createElement('div');
+            measureMain.className = 'quote-sheet-main-flex';
+            const liveContent = liveSheet?.querySelector('.content-section');
+            const contentClone = liveContent ? liveContent.cloneNode(false) : document.createElement('div');
+            contentClone.className = 'content-section';
+            contentClone.setAttribute('data-pack-measure-content', '1');
+            const logoBand = document.createElement('div');
+            logoBand.className = 'quote-sheet-logo-row';
+            const footerBand = document.createElement('div');
+            footerBand.className = 'footer-section';
+            measureMain.appendChild(contentClone);
+            measureSheet.append(logoBand, measureMain, footerBand);
+            measurePreview.appendChild(measureSheet);
+            mergeMeasureEl.appendChild(measurePreview);
 
             const measureContent = mergeMeasureEl.querySelector('[data-pack-measure-content]');
 
             const usablePxForContinuationPage = (continuationPageIdx) =>
                 computeContUsablePx(isContinuationSheetLandscape(continuationPageIdx));
 
-            const packContentLimitPxForPage = (continuationPageIdx) =>
-                Math.max(
-                    usablePxForContinuationPage(continuationPageIdx) - PACK_HEIGHT_SAFETY_PX,
-                    200
-                );
-
             const renderBlocksHtml = (groupIndices) => {
-                const blocks = mergeSegmentsIntoSheetBlocks(
+                const blocks = normalizeQuoteSheetBlocks(mergeSegmentsIntoSheetBlocks(
                     groupIndices,
                     clauseSegmentsForPagination
-                );
+                ));
                 return blocks
                     .map((block) => {
                         const blockContentKey =
@@ -10959,7 +10949,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         const heading = block.showHeading
                             ? `<div class="quote-clause-heading-panel quote-preview-panel-shell"><h3${headingCustomAttr}>${headingInner}</h3></div>`
                             : '';
-                        return `<div class="quote-clause-block quote-clause-block--continuation">${heading}<div class="clause-content" style="font-size:13px;line-height:1.4">${block.bodyHtml}</div></div>`;
+                        return `<div class="quote-clause-block quote-clause-block--continuation">${heading}<div class="clause-content" style="font-size:13px">${block.bodyHtml}</div></div>`;
                     })
                     .join('');
             };
@@ -10968,51 +10958,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 if (!groupIndices?.length || !measureContent) return;
                 configureMergeMeasureShellWidth(innerWidthPxForContinuation(continuationPageIdx));
                 measureContent.innerHTML = renderBlocksHtml(groupIndices);
-                /*
-                 * BOQ/office schedules often carry inflated data-ems-row-heights from Excel.
-                 * Re-locking them here made ~3 short rows measure as a full A4 page → huge
-                 * blank bands. Measure natural height (matches on-sheet paint). Keep locks
-                 * only for EMS pricing summary so VAT/Total packing stays accurate.
-                 * A4 size, footer, and table column formatting are unchanged.
-                 */
-                relaxTableRowHeightsForClausePackMeasure(measureContent);
-                measureContent.querySelectorAll?.('table')?.forEach((table) => {
-                    if (isEmsPricingSummaryTable(table)) {
-                        applyTableRowHeightModel(table);
-                    }
-                });
+                /* These transforms also run after React paints each preview page.
+                 * Column initialization can change wrapping dramatically; measuring
+                 * before it is not a measurement of the document we display. */
+                initializeAllOfficePastedTableColumns(measureContent);
+                stripStrikethroughFromQuoteTablesInRoot(measureContent);
+                forcePricingVatInDomRoot(measureContent);
+                expandClippedOfficeTableRowHeights(measureContent, { includePackMeasure: true });
+                /* Preserve the row dimensions in the rendered HTML. Relaxing only
+                 * this DOM makes a later React render restore taller saved rows. */
                 void measureContent.offsetHeight;
-            };
-
-            /** Legacy auto-height scrollHeight (fallback packer only). */
-            const readPackMeasureContentPx = () => {
-                if (!measureContent) return 0;
-                const prev = {
-                    height: measureContent.style.height,
-                    maxHeight: measureContent.style.maxHeight,
-                    minHeight: measureContent.style.minHeight,
-                    overflow: measureContent.style.overflow,
-                };
-                measureContent.style.height = 'auto';
-                measureContent.style.maxHeight = 'none';
-                measureContent.style.minHeight = '0';
-                measureContent.style.overflow = 'visible';
-                void measureContent.offsetHeight;
-                const inner = measureContent.firstElementChild;
-                const candidates = [measureContent, inner].filter(Boolean);
-                let h = 0;
-                for (const el of candidates) {
-                    h = Math.max(
-                        h,
-                        Math.round(el.scrollHeight || 0),
-                        Math.round(el.offsetHeight || 0)
-                    );
-                }
-                measureContent.style.height = prev.height;
-                measureContent.style.maxHeight = prev.maxHeight;
-                measureContent.style.minHeight = prev.minHeight;
-                measureContent.style.overflow = prev.overflow;
-                return h;
             };
 
             /**
@@ -11033,7 +10988,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     };
                 }
                 preparePackMeasureContent(groupIndices, continuationPageIdx);
-                measureContent.style.display = 'block';
                 measureContent.style.position = 'relative';
                 measureContent.style.height = `${usable}px`;
                 measureContent.style.maxHeight = `${usable}px`;
@@ -11056,24 +11010,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 };
             };
 
-            /** Cache merged measures within one pack run — fill/enforce re-ask the same groups. */
-            const mergedMeasureCache = new Map();
-            const measureMergedGroupPx = (groupIndices, continuationPageIdx = 0) => {
-                if (!groupIndices?.length || !measureContent) return 0;
-                const cacheKey = `${continuationPageIdx}|${groupIndices.join(',')}`;
-                if (mergedMeasureCache.has(cacheKey)) {
-                    return mergedMeasureCache.get(cacheKey);
-                }
-                preparePackMeasureContent(groupIndices, continuationPageIdx);
-                const contentH = readPackMeasureContentPx();
-                const h =
-                    contentH > 0
-                        ? contentH
-                        : groupIndices.reduce((s, gi) => s + Math.max(heights[gi] || 0, 1), 0);
-                mergedMeasureCache.set(cacheKey, h);
-                return h;
-            };
-
             const measureFitCached = (() => {
                 const cache = new Map();
                 return (groupIndices, continuationPageIdx = 0) => {
@@ -11085,46 +11021,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 };
             })();
 
-            const overflowTestForPage = (continuationPageIdx, groupIndices) => {
-                if (!groupIndices?.length || !measureContent) return false;
-                if (isEmsFillPackEnabled()) {
-                    const fit = measureFitFixedBox(groupIndices, continuationPageIdx);
-                    return !fit.ok;
-                }
-                const limit = packContentLimitPxForPage(continuationPageIdx);
-                preparePackMeasureContent(groupIndices, continuationPageIdx);
-                const natural = readPackMeasureContentPx();
-                return natural > limit + 8;
-            };
-
-            const packOptions = {
-                tightFit: true,
-                usablePxForContinuationPage,
-                overflowTestForPage,
-                segments: clauseSegmentsForPagination,
-                packSafetyPx:
-                    PACK_HEIGHT_SAFETY_PX +
-                    (packVisibilityRecoveryRef.current > 0 ? 24 : 0),
-            };
-
             const remaining = clauseSegmentsForPagination.map((_, i) => i);
-            const useFillPack = isEmsFillPackEnabled();
-
-            let continuation = useFillPack
-                ? packSegmentsByRealDomFit(remaining, {
+            let continuation;
+            try {
+                continuation = packSegmentsByRealDomFit(remaining, {
                       segments: clauseSegmentsForPagination,
                       measureFit: measureFitCached,
                       usablePx: portraitContUsablePx,
                       reservePx: PACK_HEIGHT_SAFETY_PX,
-                  })
-                : packClauseSegmentsForContinuationPages(
-                      remaining,
-                      measureMergedGroupPx,
-                      portraitContUsablePx,
-                      clauseSegmentsForPagination,
-                      packOptions,
-                      heights
-                  );
+                  });
             if (!continuation.length) {
                 continuation = reflowContinuationPagesTopDown(
                     clauseSegmentsForPagination,
@@ -11132,8 +11037,32 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     portraitContUsablePx
                 );
             }
+            /* The duplicate CSS root exists only during this synchronous measure.
+             * Never leave it for preview queries, integrity checks or PDF capture. */
+            if (import.meta.env.DEV) {
+                previewRoot.setAttribute('data-ems-pack-measure-results', JSON.stringify(
+                    continuation.map((group, pageIdx) => {
+                        const fit = measureFitFixedBox(group, pageIdx);
+                        const top = measureContent.getBoundingClientRect().top;
+                        return { group, ...fit, units: [...measureContent.querySelectorAll('[data-ems-pack-seg]')].map(el => {
+                            const rect = el.getBoundingClientRect();
+                            const cell = el.querySelector('td,th') || el;
+                            const style = getComputedStyle(cell);
+                            return { id: el.dataset.emsPackSeg, bottom: rect.bottom - top,
+                                height: rect.height, width: rect.width, cellWidth: cell.getBoundingClientRect().width,
+                                font: style.font, padding: style.padding, text: el.textContent.slice(0, 80) };
+                        }) };
+                    })
+                ));
+            }
+            } finally {
+                mergeMeasureEl.remove();
+            }
             const sig = JSON.stringify(continuation);
             if (cancelled) return;
+            lastMeasuredQuotePackRef.current = { key: quotePackInputKey, groups: continuation };
+            previewRoot.setAttribute('data-ems-pack-cache-hit', '0');
+            previewRoot.setAttribute('data-ems-pack-ms', String(Math.round(performance.now() - packStartedAt)));
             /* Peel advanced during measure — do not overwrite newer peel with stale pack. */
             if (livePeelEpochRef.current !== peelEpochAtStart) {
                 setQuoteAlignPageBusy((busy) => (busy ? false : busy));
@@ -11159,7 +11088,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             livePeelEpochRef.current += 1;
             setFooterClipPeelKick((k) => k + 1);
             releaseAlignFlag();
-            setQuoteAlignPageBusy((busy) => (busy ? false : busy));
         };
 
         /* Instant estimate so sheets paint; measured pack is debounced to avoid freezes. */
@@ -11230,6 +11158,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         quoteAlignPageNonce,
         clausePackSplitMode,
         quotePageOrientations,
+        quotePackInputKey,
     ]);
 
     /** If measured packing never settles, nudge a remeasure (capped — uncapped froze the tab). */
@@ -11283,13 +11212,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             return;
         }
         initializeAllOfficePastedTableColumns(root);
-        /*
-         * Excel row locks (80–120px) make the packer think a page is full after a few
-         * lines and leave blank bands. Continuation preview uses natural row height.
-         */
-        root.querySelectorAll('.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)').forEach((sheet) => {
-            relaxTableRowHeightsForClausePackMeasure(sheet);
-        });
+        expandClippedOfficeTableRowHeights(root);
         /* Re-run when page packing changes — mid-table page breaks must not re-measure columns locally. */
     }, [clausePaginationLayoutKey, clauseSegmentPageGroups]);
 
@@ -11342,369 +11265,33 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         );
     }, [clauseSegmentPageGroups, clauseSegmentsForPagination, quotePageOrientations]);
 
-    /**
-     * Overlap-only verify-down: move units past CONTENT END to the next sheet.
-     * Does not re-pack. Keeps kicking until fit or safety cap so a single skipped
-     * frame cannot leave BOQ rows painted over the footer.
-     */
+    /** The packer owns page breaks; live paint validates, never repacks by
+     * summed heights or moves missing units to a trailing page out of order. */
     const CONTENT_END_GAP_PX = PACK_HEIGHT_SAFETY_PX;
-    const footerClipPeelKeyRef = useRef('');
-    const MAX_FOOTER_CLIP_PEELS = 64;
     useLayoutEffect(() => {
-        if (!isQuotePreviewVisible || expandedClause) return;
-        if (skipOverflowPeelRef.current) return;
-        const packKey = `${clausePaginationLayoutKey}|${quoteAlignPageNonce}|live-pack-v15-geom`;
-        if (footerClipPeelKeyRef.current !== packKey) {
-            footerClipPeelKeyRef.current = packKey;
-            footerClipPeelCountRef.current = 0;
-        }
-        if (!sanitizedClauseSegmentPageGroups?.length) return;
-        const root = document.getElementById('quote-preview');
-        if (!root) return;
-        /* C2: detach orphaned col/row resizers left on document.body after exit-edit. */
-        if (!expandedClause && typeof document !== 'undefined') {
-            document
-                .querySelectorAll(
-                    '.ems-table-col-resizer, .ems-table-row-resizer, .jodit-table-resizer'
-                )
-                .forEach((el) => {
-                    if (!el.closest?.('.quote-a4-sheet--clause-editing')) el.remove();
-                });
-        }
-        root
-            .querySelectorAll(
-                '.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)'
-            )
-            .forEach((sheet) => relaxTableRowHeightsForClausePackMeasure(sheet));
-
-        const contSheets = [
-            ...root.querySelectorAll(
-                '.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)'
-            ),
-        ];
-        if (!contSheets.length) return;
-
-        /** @type {number[][]} */
-        let nextGroups = sanitizedClauseSegmentPageGroups.map((g) => [...g]);
-        let changed = false;
-
-        const resolvePackGroupIdx = (sheet, fallbackSi) => {
-            const packAttr = sheet.getAttribute('data-pack-group');
-            if (packAttr != null && packAttr !== '') {
-                const n = parseInt(packAttr, 10);
-                if (Number.isInteger(n) && n >= 0) return n;
-            }
-            return fallbackSi;
-        };
-
-        /**
-         * Measure against the painted CONTENT END mark in viewport px.
-         * Temporarily un-clip so overflow:hidden cannot hide failing unit bottoms
-         * (that left 8.01 / matrix rows "missing" while still in the page group).
-         */
-        const measureSheetFit = (sheet) => {
-            const content = sheet.querySelector('.content-section');
-            if (!content) return null;
-            const usable = quoteContinuationContentPx(
-                sheet.classList.contains('quote-a4-sheet--landscape')
-            );
-            const prevOverflow = content.style.overflow;
-            const prevMaxH = content.style.maxHeight;
-            content.style.overflow = 'visible';
-            content.style.maxHeight = 'none';
-            void content.offsetHeight;
-
-            const endMark = sheet.querySelector('.quote-content-area-mark--end');
-            const zoom = Math.max(getQuotePreviewZoomFactor(content) || 1, 0.05);
-            const cRect = content.getBoundingClientRect();
-            let markTopViewport = null;
-            if (endMark && typeof endMark.getBoundingClientRect === 'function') {
-                markTopViewport = endMark.getBoundingClientRect().top;
-            }
-            const limitPx = markTopViewport != null
-                ? (markTopViewport - cRect.top) / zoom - 0.5
-                : Math.max(usable - CONTENT_END_GAP_PX, 200);
-            const markTop = markTopViewport != null
-                ? markTopViewport
-                : cRect.top + limitPx * zoom;
-
-            const stamped = [...content.querySelectorAll('[data-ems-pack-seg]')];
-            const nodes = stamped.length
-                ? stamped
-                : [...content.querySelectorAll('.quote-clause-block')];
-            /** @type {Array<{ seg: number, bottomPx: number, topPx: number, overshootPx: number, tag: string, reason: string, measurement: string }>} */
-            const failures = [];
-            let lastBottomPx = 0;
-            nodes.forEach((el) => {
-                const r = el.getBoundingClientRect();
-                const topPx = (r.top - cRect.top) / zoom;
-                const bottomPx = (r.bottom - cRect.top) / zoom;
-                if (bottomPx > lastBottomPx) lastBottomPx = bottomPx;
-                /* Straddle or fully past CONTENT END — must move (never half-cut / hide). */
-                if (r.bottom <= markTop + 0.5) return;
-                const segAttr = el.getAttribute('data-ems-pack-seg');
-                const seg = segAttr != null ? parseInt(segAttr, 10) : -1;
-                failures.push({
-                    seg: Number.isInteger(seg) ? seg : -1,
-                    bottomPx,
-                    topPx,
-                    overshootPx: bottomPx - limitPx,
-                    tag: el.tagName?.toLowerCase?.() || '?',
-                    reason: 'extends-below-content-end-reserve',
-                    measurement: 'viewport-mark-unclipped',
-                });
-            });
-
-            content.style.overflow = prevOverflow;
-            content.style.maxHeight = prevMaxH;
-
-            return {
-                content,
-                fit: {
-                    ok: failures.length === 0,
-                    limitPx,
-                    lastBottomPx,
-                    failures,
-                    zoom,
-                    usablePx: usable,
-                },
-            };
-        };
-
-        /**
-         * Move units from `moveFrom` onward onto the next sheet.
-         * moveFrom may be 0 — a unit that straddles CONTENT END must leave this page.
-         */
-        const peelGroupAt = (packGroupIdx, moveFrom) => {
-            const group = nextGroups[packGroupIdx];
-            if (!group?.length) return false;
-            const from = Math.max(0, Math.min(moveFrom, group.length - 1));
-            const moved = group.splice(from);
-            if (!moved.length) return false;
-            const destIdx = packGroupIdx + 1;
-            if (destIdx < nextGroups.length) {
-                nextGroups[destIdx] = [...moved, ...nextGroups[destIdx]];
-            } else {
-                nextGroups.push([...moved]);
-            }
-            return true;
-        };
-
-        /** If cut would orphan a heading-only unit, include that heading in the move. */
-        const backUpOrphanHeading = (group, cutPos) => {
-            if (cutPos <= 0 || !group?.length) return cutPos;
-            const prevIdx = group[cutPos - 1];
-            const prev = clauseSegmentsForPagination[prevIdx];
-            if (!prev) return cutPos;
-            if (prev.showHeading) {
-                const plain = String(prev.html || '')
-                    .replace(/<[^>]+>/g, ' ')
-                    .replace(/\s+/g, ' ')
-                    .trim();
-                if (plain.length < 8) return cutPos - 1;
-            }
-            /* Heading segment that only carries the title (body lives in following units). */
-            if (prev.showHeading && cutPos === 1) return 0;
-            return cutPos;
-        };
-
-        for (let si = 0; si < contSheets.length; si += 1) {
-            const sheet = contSheets[si];
-            const measured = measureSheetFit(sheet);
-            if (!measured || measured.fit.ok) continue;
-
-            let packGroupIdx = resolvePackGroupIdx(sheet, si);
-            let group = nextGroups[packGroupIdx];
-
-            const failingSegs = (measured.fit.failures || [])
-                .map((f) => f.seg)
-                .filter((seg) => Number.isInteger(seg) && seg >= 0);
-
-            if ((!group || !group.length) && failingSegs.length) {
-                for (let gi = 0; gi < nextGroups.length; gi += 1) {
-                    const g = nextGroups[gi];
-                    if (!g?.length) continue;
-                    if (g.some((idx) => failingSegs.includes(idx))) {
-                        packGroupIdx = gi;
-                        group = g;
-                        break;
-                    }
-                }
-            }
-            if (!group?.length) continue;
-
-            let cutPos = -1;
-            for (let gi = 0; gi < group.length; gi += 1) {
-                if (failingSegs.includes(group[gi])) {
-                    cutPos = gi;
-                    break;
-                }
-            }
-            let moveFrom = cutPos;
-            if (moveFrom < 0 || moveFrom >= group.length) {
-                const overshootPx = Math.max(
-                    0,
-                    (measured.fit.lastBottomPx || 0) - (measured.fit.limitPx || 0)
-                );
-                const n = Math.min(
-                    group.length,
-                    Math.max(1, Math.ceil(overshootPx / 16) || 1)
-                );
-                moveFrom = Math.max(0, group.length - n);
-            }
-            moveFrom = backUpOrphanHeading(group, moveFrom);
-
-            if (group.length === 1) {
-                const f0 = measured.fit.failures?.[0];
-                const unitH =
-                    f0 && Number.isFinite(f0.topPx)
-                        ? f0.bottomPx - f0.topPx
-                        : measured.fit.lastBottomPx || 0;
-                if (unitH > (measured.fit.limitPx || 0) + 2) {
-                    /*
-                     * Sole unit taller than one page — soft-split at safe HTML boundaries.
-                     * Never abandon to overflow:hidden clipping.
-                     */
-                    const segIdx = group[0];
-                    const seg = clauseSegmentsForPagination[segIdx];
-                    const baseKey = String(seg?.key || `seg-${segIdx}`);
-                    if (!oversizedSoftSplitPartsRef.current.has(baseKey)) {
-                        const parts = softSplitOversizedUnitHtml(seg?.html || '', {
-                            maxParts: 12,
-                        });
-                        if (parts.length >= 2) {
-                            oversizedSoftSplitPartsRef.current.set(baseKey, parts);
-                            livePeelEpochRef.current += 1;
-                            setQuotePackIntegrityFailed(true);
-                            setOversizedSoftSplitNonce((n) => n + 1);
-                            /* Segment list rebuilds; skip group peel this frame. */
-                            return;
-                        }
-                    }
-                    /* Unsplittable oversized unit — fail loudly; PDF stays blocked. */
-                    console.error(
-                        '[EMS pack] unsplittable oversized unit',
-                        { sheet: si + 1, seg: segIdx, unitH, limitPx: measured.fit.limitPx }
-                    );
-                    setQuotePackIntegrityFailed(true);
-                    continue;
-                }
-                if (peelGroupAt(packGroupIdx, 0)) {
-                    changed = true;
-                    break;
-                }
-                continue;
-            }
-            if (peelGroupAt(packGroupIdx, moveFrom)) {
-                changed = true;
-                break;
-            }
-            if (peelGroupAt(packGroupIdx, group.length - 1)) {
-                changed = true;
-                break;
-            }
-        }
-
-        if (changed) {
-            nextGroups = keepHeadingsWithFollowingContent(
-                nextGroups.filter((g) => g.length > 0),
-                clauseSegmentsForPagination
-            );
-            nextGroups = ensureSegmentPageGroupsCoverAll(
-                nextGroups.filter((g) => g.length > 0),
-                clauseSegmentsForPagination.length
-            );
-            if (detectRepeatedPackState(peelSeenStatesRef.current, nextGroups)) {
-                console.error('[EMS pack] repeated peel state — stopping', {
-                    peels: footerClipPeelCountRef.current,
-                });
-                setQuotePackIntegrityFailed(true);
-                return;
-            }
-            livePeelEpochRef.current += 1;
-            lastClausePackSigRef.current = JSON.stringify(nextGroups);
-            packedGroupsAwaitingPaintRef.current = nextGroups;
-            footerClipPeelCountRef.current += 1;
-            /* Groups change re-runs this effect — do NOT also kick (that caused max update depth). */
-            if (footerClipPeelCountRef.current >= MAX_FOOTER_CLIP_PEELS) {
-                setQuotePackIntegrityFailed(true);
-            }
-            setClauseSegmentPageGroups((prev) =>
-                segmentPageGroupsEqual(prev, nextGroups) ? prev : nextGroups
-            );
-            return;
-        }
-
-        const vis = assertSegmentVisibilityOnSheets(
-            root,
-            nextGroups,
-            clauseSegmentsForPagination.length,
-            {
-                reservePx: CONTENT_END_GAP_PX,
-                usablePx: EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
-                segments: clauseSegmentsForPagination,
-            }
+        if (!isQuotePreviewVisible || expandedClause || skipOverflowPeelRef.current) return;
+        const root = quotePreviewLayoutRef.current;
+        if (!root || !sanitizedClauseSegmentPageGroups.length) return;
+        const visibility = assertSegmentVisibilityOnSheets(
+            root, sanitizedClauseSegmentPageGroups, clauseSegmentsForPagination.length,
+            { reservePx: CONTENT_END_GAP_PX,
+              usablePx: EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
+              segments: clauseSegmentsForPagination }
         );
-        if (vis.ok) {
-            setQuotePackIntegrityFailed(false);
+        setQuotePackIntegrityFailed(!visibility.ok);
+        const measured = lastMeasuredQuotePackRef.current;
+        if (measured?.key === quotePackInputKey &&
+            segmentPageGroupsEqual(measured.groups, sanitizedClauseSegmentPageGroups)) {
+            if (visibility.ok) measured.paintSignature = JSON.stringify(visibility.diagnostics?.map(d =>
+                [Math.round(d.lastBottomPx), d.clientHeight, d.usablePx]));
+            setQuoteAlignPageBusy(false);
+        }
+        if (visibility.ok) {
             setQuotePackDownloadAnyway(false);
             packVisibilityRecoveryRef.current = 0;
-            return;
         }
-        if (vis.missingFromDom?.length) {
-            /*
-             * Segments assigned to a page but not painted (clipped away / skipped).
-             * Pull them onto a fresh trailing sheet so nothing stays hidden.
-             */
-            const missingSet = new Set(vis.missingFromDom);
-            /** @type {number[]} */
-            const rescued = [];
-            nextGroups = nextGroups.map((g) => {
-                const keep = [];
-                for (const idx of g) {
-                    if (missingSet.has(idx)) rescued.push(idx);
-                    else keep.push(idx);
-                }
-                return keep;
-            });
-            if (rescued.length) {
-                nextGroups.push(rescued);
-                nextGroups = keepHeadingsWithFollowingContent(
-                    nextGroups.filter((g) => g.length > 0),
-                    clauseSegmentsForPagination
-                );
-                nextGroups = ensureSegmentPageGroupsCoverAll(
-                    nextGroups.filter((g) => g.length > 0),
-                    clauseSegmentsForPagination.length
-                );
-                livePeelEpochRef.current += 1;
-                lastClausePackSigRef.current = JSON.stringify(nextGroups);
-                packedGroupsAwaitingPaintRef.current = nextGroups;
-                footerClipPeelCountRef.current += 1;
-                setClauseSegmentPageGroups((prev) =>
-                    segmentPageGroupsEqual(prev, nextGroups) ? prev : nextGroups
-                );
-                return;
-            }
-            if (packVisibilityRecoveryRef.current < 1) {
-                packVisibilityRecoveryRef.current = 1;
-                clausePackSegmentHeightCacheRef.current.clear();
-                setClausePackRetryNonce((n) => n + 1);
-                return;
-            }
-        }
-        /* No peel progress possible this frame — stop. Never kick without a group change. */
-        setQuotePackIntegrityFailed(true);
-    }, [
-        sanitizedClauseSegmentPageGroups,
-        clauseSegmentsForPagination,
-        isQuotePreviewVisible,
-        expandedClause,
-        clausePaginationLayoutKey,
-        quoteAlignPageNonce,
-        clausePackSplitMode,
-        footerClipPeelKick,
-    ]);
+    }, [sanitizedClauseSegmentPageGroups, clauseSegmentsForPagination,
+        isQuotePreviewVisible, expandedClause, footerClipPeelKick, quotePackInputKey]);
 
     const sheets = React.useMemo(() => {
         const res = [{ isFirstPage: true, blocks: [] }];
@@ -11734,39 +11321,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             }
             // Reconcile AFTER split/rejoin so dangerouslySetInnerHTML cannot re-apply a stale VAT cell.
             // Stamp full base across split-id siblings first so Total is not page-local.
-            const stampedBlocks = stampSplitPricingBasesAcrossSheetBlocks(blocks);
-            const fixedBlocks = stampedBlocks.map((block) => {
-                const html = String(block.bodyHtml || '');
-                const needsVat =
-                    block.listKey === 'showPricingTerms' ||
-                    /data-ems-amount=["']vat["']/i.test(html) ||
-                    /data-ems-row=["']vat["']/i.test(html) ||
-                    /id=["']ems-auto-price-summary-table/i.test(html) ||
-                    /data-ems-pricing-cols=["']fixed["']/i.test(html);
-                if (!needsVat) return block;
-                /*
-                 * Split fragment with a Total row: always re-stamp Total from the full
-                 * base (attr), even when VAT lives on another page (inconsistency check
-                 * would skip and leave a page-local Total).
-                 */
-                const splitHasTotal =
-                    /data-ems-table-split=["']1["']/i.test(html) &&
-                    (/data-ems-amount=["']total["']/i.test(html) ||
-                        /data-ems-row=["']total["']/i.test(html) ||
-                        />\s*Total(\s*<|\s*\()/i.test(html));
-                if (splitHasTotal || pricingFooterVatInconsistent(html)) {
-                    return {
-                        ...block,
-                        bodyHtml: ensurePricingTableColgroupInHtml(
-                            reconcilePricingVatAmountCellsInHtml(html)
-                        ),
-                    };
-                }
-                return {
-                    ...block,
-                    bodyHtml: ensurePricingTableColgroupInHtml(html),
-                };
-            });
+            const fixedBlocks = normalizeQuoteSheetBlocks(blocks);
             res.push({
                 isFirstPage: false,
                 blocks: fixedBlocks,
@@ -14259,6 +13814,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
      * Primitives-only key so the scoped-quote fetch does not re-run when `pricingData` / `jobsPool`
      * object references change but LeadJob / OwnJob / ToName are unchanged (main cause of flicker).
      */
+    const scopedQuotePanelIsSubjob = Boolean((calculatedTabs || [])
+        .find(tab => String(tab.id) === String(activeQuoteTab))?.isSubJobTab);
     const scopedQuotePanelFetchKey = React.useMemo(() => {
         const p = scopedEnquiryQuotesParams;
         if (!p) return null;
@@ -14268,8 +13825,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             p.leadJobName,
             p.toName,
             p.ownJobName ?? '',
+            p.leadBranchCode ?? '',
             p.useDepartmentForOwnJob ? '1' : '0',
-            p.useDepartmentForOwnJob ? divKey : '',
+            divKey,
+            scopedQuotePanelIsSubjob ? '1' : '0',
             em,
             String(scopedQuotePanelRefreshNonce),
         ].join('\x1e');
@@ -14277,7 +13836,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         scopedEnquiryQuotesParams?.leadJobName,
         scopedEnquiryQuotesParams?.toName,
         scopedEnquiryQuotesParams?.ownJobName,
+        scopedEnquiryQuotesParams?.leadBranchCode,
         scopedEnquiryQuotesParams?.useDepartmentForOwnJob,
+        scopedQuotePanelIsSubjob,
         quoteListDivision,
         currentUser?.email,
         currentUser?.EmailId,
@@ -14338,10 +13899,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 if (divisionForScopedFetch) qs.set('division', divisionForScopedFetch);
 
                 const url = `${API_BASE}/api/quotes/by-enquiry/${encodeURIComponent(rn)}?${qs.toString()}`;
-                const res = await fetch(url);
+                const res = await readJsonInFlight(url);
                 if (cancelled) return;
                 if (res.ok) {
-                    const rows = await res.json();
+                    const rows = res.data;
                     setQuoteScopedForPanel(Array.isArray(rows) ? rows : []);
                 } else {
                     setQuoteScopedForPanel([]);
@@ -14363,7 +13924,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         scopedQuotePanelFetchKey,
         browsePreviousQuotesRevisions,
         activeQuoteTab,
-        calculatedTabs,
+        scopedQuotePanelIsSubjob,
         quoteListDivision,
         currentUser?.email,
         currentUser?.EmailId,
@@ -19926,7 +19487,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     const fetchExistingQuotes = useCallback(async (requestNo) => {
         try {
-            console.log('[fetchExistingQuotes] START fetching for:', requestNo);
             const em = (currentUser?.email || currentUser?.EmailId || '').toString();
             const params = new URLSearchParams();
             if (em) params.set('userEmail', em);
@@ -19934,16 +19494,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (wfQid) params.set('quoteId', String(wfQid));
             const qs = params.toString() ? `?${params.toString()}` : '';
             const url = `${API_BASE}/api/quotes/by-enquiry/${encodeURIComponent(requestNo)}${qs}`;
-            console.log('[fetchExistingQuotes] URL:', url);
 
-            const res = await fetch(url);
-            console.log('[fetchExistingQuotes] Response status:', res.status);
+            const res = await readJsonInFlight(url);
 
             if (res.ok) {
-                const quotes = await res.json();
-                console.log('[fetchExistingQuotes] Received quotes payload:', quotes);
-                console.log('[fetchExistingQuotes] Count:', quotes.length);
-                quotes.forEach(q => console.log('  -', q.QuoteNumber, '| To:', q.ToName, '| OwnJob:', q.OwnJob, '| IdentityCode:', q.IdentityCode));
+                const quotes = res.data;
                 setExistingQuotes(quotes);
                 return quotes;
             }
@@ -19952,7 +19507,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             console.error('[fetchExistingQuotes] Error:', err);
         }
         return null;
-    }, [currentUser]);
+    }, [currentUser?.email, currentUser?.EmailId]);
 
     // Trigger fetch when enquiry is loaded (skip in Approvals — exact row is loaded separately).
     useEffect(() => {
@@ -23042,9 +22597,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             const root = document.getElementById('quote-preview');
             if (root) {
                 initializeAllOfficePastedTableColumns(root);
-                root.querySelectorAll('.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)').forEach((sheet) => {
-                    relaxTableRowHeightsForClausePackMeasure(sheet);
-                });
             }
         });
     }, [commitActiveClausePreviewEdit, expandedClause]);
@@ -26900,20 +26452,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 const previewRoot = document.getElementById('quote-preview');
                 if (previewRoot) {
                     skipOverflowPeelRef.current = true;
-                    previewRoot
-                        .querySelectorAll(
-                            '.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)'
-                        )
-                        .forEach((sheet) => relaxTableRowHeightsForClausePackMeasure(sheet));
                     if (typeof document !== 'undefined' && document.fonts?.ready) {
                         await document.fonts.ready.catch(() => {});
                     }
                     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-                    previewRoot
-                        .querySelectorAll(
-                            '.quote-a4-sheet--continuation:not(.quote-a4-sheet--clause-editing)'
-                        )
-                        .forEach((sheet) => relaxTableRowHeightsForClausePackMeasure(sheet));
                     /* PDF route: same visibility gate as preview (unit fully inside one sheet). */
                     const vis = assertSegmentVisibilityOnSheets(
                         previewRoot,
@@ -27130,13 +26672,46 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     /** Warm PDF cache only when user hovers Download — never auto-launch Chromium on quote tab load. */
     const warmQuotePdfCacheOnIntent = React.useCallback(() => {
         if (!serverPdfEnabled || !isQuotePreviewVisible) return;
+        if (quotePackIntegrityFailed && !quotePackDownloadAnyway) return;
         const preview = document.getElementById('quote-preview');
         if (!preview?.querySelector('.quote-a4-sheet')) return;
+        try {
+            const vis = assertSegmentVisibilityOnSheets(
+                preview,
+                sanitizedClauseSegmentPageGroups,
+                clauseSegmentsForPagination.length,
+                {
+                    reservePx: PACK_HEIGHT_SAFETY_PX,
+                    usablePx: EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
+                    segments: clauseSegmentsForPagination,
+                }
+            );
+            if (!vis.ok) {
+                setQuotePackIntegrityFailed(true);
+                return;
+            }
+        } catch {
+            return;
+        }
         const key = buildQuotePdfExportCacheKey();
         const cache = quotePdfBlobCacheRef.current;
         if (cache.key === key && (cache.blob || cache.promise)) return;
         void fetchQuotePdfBlob({ bypassCache: false }).catch(() => {});
-    }, [serverPdfEnabled, isQuotePreviewVisible, enquiryData, quoteNumber, quoteId, grandTotal, printWithHeader, orderedClauses, pricingData]);
+    }, [
+        serverPdfEnabled,
+        isQuotePreviewVisible,
+        enquiryData,
+        quoteNumber,
+        quoteId,
+        grandTotal,
+        printWithHeader,
+        orderedClauses,
+        pricingData,
+        quotePackIntegrityFailed,
+        quotePackDownloadAnyway,
+        sanitizedClauseSegmentPageGroups,
+        clauseSegmentsForPagination,
+    ]);
 
     /**
      * Client-side PDF (html2pdf) when the API/Puppeteer path is unavailable.
@@ -27168,6 +26743,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         try {
             const tRender = quotePerfStart('PDF html2pdf — rendering');
+            const { default: html2pdf } = await import('html2pdf.js');
             await html2pdf().set(buildHtml2pdfOptions(fname, clone)).from(clone).save();
             stages.renderMs = tRender.end();
             stages.totalMs = tTotal.end();
@@ -27184,7 +26760,44 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
      * Falls back to html2pdf, then browser Print / Save as PDF.
      */
     const downloadPDF = async () => {
-        if (quotePackIntegrityFailed && !quotePackDownloadAnyway) {
+        /*
+         * Always re-validate live sheet visibility before any download path
+         * (warm cache / link / html2pdf). Never let a stale warm blob bypass the gate.
+         */
+        const previewRootForGate = document.getElementById('quote-preview');
+        if (previewRootForGate && clauseSegmentsForPagination?.length) {
+            const visGate = assertSegmentVisibilityOnSheets(
+                previewRootForGate,
+                sanitizedClauseSegmentPageGroups,
+                clauseSegmentsForPagination.length,
+                {
+                    reservePx: PACK_HEIGHT_SAFETY_PX,
+                    usablePx: EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
+                    segments: clauseSegmentsForPagination,
+                }
+            );
+            if (!visGate.ok) {
+                setQuotePackIntegrityFailed(true);
+                quotePdfBlobCacheRef.current = {
+                    key: '',
+                    blob: null,
+                    fileName: '',
+                    promise: null,
+                };
+                const allowUnverified =
+                    Boolean(quotePackDownloadAnyway) &&
+                    typeof import.meta !== 'undefined' &&
+                    Boolean(import.meta.env?.DEV);
+                if (!allowUnverified) {
+                    alert(
+                        'Quote pagination integrity check failed — some content may be missing. PDF download is disabled until pagination succeeds.'
+                    );
+                    return;
+                }
+            } else {
+                setQuotePackIntegrityFailed(false);
+            }
+        } else if (quotePackIntegrityFailed && !quotePackDownloadAnyway) {
             alert(
                 'Quote pagination integrity check failed — some content may be missing. PDF download is disabled until pagination succeeds.'
             );
@@ -27196,14 +26809,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (serverPdfEnabled) {
                 try {
                     /**
-                     * Reuse hover-warmed blob when available (instant local-like download).
+                     * Reuse hover-warmed blob only after the live gate above passed.
                      * Otherwise use delivery=link so the browser download manager streams via GET
                      * (avoids holding large PDFs in JS memory; works better through IIS/ARR).
                      */
                     const key = buildQuotePdfExportCacheKey();
                     const cache = quotePdfBlobCacheRef.current;
                     const canReuseWarm =
-                        cache.key === key && Boolean(cache.blob || cache.promise);
+                        !quotePackIntegrityFailed &&
+                        cache.key === key &&
+                        Boolean(cache.blob || cache.promise);
                     if (canReuseWarm) {
                         const { blob, fileName } = await fetchQuotePdfBlob({
                             bypassCache: false,
@@ -27220,8 +26835,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     const linkResult = await fetchQuotePdfBlobInner({
                         forceFreshLayout: true,
                         delivery: 'link',
-                    });
-                    if (linkResult?.delivery === 'link' && linkResult.downloadPath) {
+                    });                    if (linkResult?.delivery === 'link' && linkResult.downloadPath) {
                         const tDl = quotePerfStart('PDF — native link download');
                         triggerNativeUrlDownload(linkResult.downloadPath, linkResult.fileName);
                         tDl.end();
@@ -27236,6 +26850,11 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     tDl.end();
                     return;
                 } catch (serverErr) {
+                    // A failed layout check is a document error, not an unavailable
+                    // renderer. A raster fallback must not bypass that check.
+                    if (/PDF layout validation failed|pagination integrity check failed/i.test(String(serverErr?.message || serverErr))) {
+                        throw serverErr;
+                    }
                     console.warn(
                         '[downloadPDF] server PDF failed (Puppeteer/Chrome), falling back to client html2pdf — overlays use HTML2PDF_EXPORT_STYLES:',
                         serverErr && serverErr.message ? serverErr.message : serverErr
@@ -33981,24 +33600,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     #quote-preview .clause-content p + p {
                                         margin-top: 1.6px !important;
                                     }
-                                    #quote-preview .clause-content > p:last-child:empty {
-                                        display: none !important;
-                                        margin: 0 !important;
-                                        padding: 0 !important;
-                                        height: 0 !important;
-                                        min-height: 0 !important;
-                                    }
-                                    #quote-preview .clause-content > p:last-child:has(> br:only-child) {
-                                        margin: 0 !important;
-                                        padding: 0 !important;
-                                        line-height: 0 !important;
-                                        font-size: 0 !important;
-                                        height: 0 !important;
-                                        min-height: 0 !important;
-                                        overflow: hidden !important;
-                                    }
-                                    /* While editing, keep empty / <br>-only paragraphs as a caret hit-target.
-                                       The rules above collapse them for PDF packing and leave nowhere to click. */
+                                    /*
+                                     * Do not collapse empty / <br> paragraphs in normal mode.
+                                     * User-created blank lines are kept by trimTrailingBlankParts (2+ trailing
+                                     * blanks retained; only a lone editor-noise blank is dropped).
+                                     * Edit mode still needs an explicit caret hit-target below.
+                                     */
                                     #quote-preview .quote-clause-inline-editor .jodit-wysiwyg.clause-content > p:last-child:empty,
                                     #quote-preview .quote-clause-inline-editor .jodit-wysiwyg > p:last-child:empty,
                                     #quote-preview .quote-clause-inline-editor .jodit-wysiwyg.clause-content > p:last-child:has(> br:only-child),
@@ -34557,59 +34164,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         />
                                     ) : (
                                         <div>
-                                    <div
-                                        ref={clauseMeasureHostRef}
-                                        className="quote-clause-measure-host"
-                                        aria-hidden
-                                    >
-                                        {mountClauseMeasureSegments
-                                            ? clauseSegmentsForPagination.map((seg, segIdx) => (
-                                            <div
-                                                key={`measure-${seg.key}`}
-                                                data-segment-measure-index={segIdx}
-                                                className="quote-clause-block quote-clause-block--continuation quote-clause-section"
-                                                style={{
-                                                    width: '100%',
-                                                    maxWidth: '100%',
-                                                    boxSizing: 'border-box',
-                                                }}
-                                            >
-                                                {seg.showHeading ? (
-                                                    <div className="quote-clause-heading-panel quote-preview-panel-shell">
-                                                        <h3
-                                                            {...(clauseHeadingHtmlHasCustomTypography(
-                                                                clauseHeadingHtml[
-                                                                    resolveQuoteClauseContentKey(
-                                                                        seg.clause.listKey
-                                                                    ) || seg.clause.listKey
-                                                                ]
-                                                            )
-                                                                ? { 'data-ems-heading-custom': '1' }
-                                                                : {})}
-                                                            dangerouslySetInnerHTML={{
-                                                                __html: getClauseDisplayHeadingHtml(
-                                                                    clauseHeadingHtml,
-                                                                    resolveQuoteClauseContentKey(
-                                                                        seg.clause.listKey
-                                                                    ) || seg.clause.listKey,
-                                                                    seg.clause.listKey,
-                                                                    seg.displayMajor,
-                                                                    seg.clause.title
-                                                                ),
-                                                            }}
-                                                        />
-                                                    </div>
-                                                ) : null}
-                                                <div
-                                                    className="clause-content"
-                                                    style={{ fontSize: '13px', lineHeight: '1.4' }}
-                                                    dangerouslySetInnerHTML={{ __html: seg.html }}
-                                                />
-                                            </div>
-                                        ))
-                                            : null}
-                                    </div>
-
                                     {sheets.map((sheet, sheetIdx) => {
                                         if (shouldSkipSheetWhileEditingClause(sheet, expandedClause)) {
                                             return null;

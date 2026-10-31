@@ -11,6 +11,15 @@ const CACHE_MS = 2000;
 
 let lastNetSample = null; // { at, rx, tx }
 let cachedNet = { rxMbps: null, txMbps: null, utilizationPct: null, adapter: null, error: null };
+let networkSampleInFlight = null;
+function refreshNetworkSample() {
+    if (!networkSampleInFlight) {
+        networkSampleInFlight = sampleNetwork()
+            .catch(() => cachedNet)
+            .finally(() => { networkSampleInFlight = null; });
+    }
+    return networkSampleInFlight;
+}
 
 function cpuTimesAggregate() {
     const cpus = os.cpus() || [];
@@ -166,15 +175,9 @@ async function getHostMetrics() {
         cpuPercent = sampleCpuPercent();
     }
 
-    // Network sample is async; kick it but don't block forever
-    try {
-        await Promise.race([
-            sampleNetwork(),
-            new Promise((r) => setTimeout(r, 1200)),
-        ]);
-    } catch (_) {
-        /* ignore */
-    }
+    // The optional Windows NIC probe must never delay the usage API.
+    // Return the latest rolling sample and share one probe between callers.
+    void refreshNetworkSample();
 
     const ram = ramSnapshot();
     const proc = processMemorySnapshot();
@@ -197,7 +200,7 @@ async function getHostMetrics() {
         },
         ram,
         processMemory: proc,
-        network: { ...cachedNet },
+        network: { ...cachedNet, sampledAt: lastNetSample ? new Date(lastNetSample.at).toISOString() : null },
         http: {
             keepAliveTimeoutMs: parseInt(process.env.HTTP_KEEP_ALIVE_TIMEOUT_MS || '310000', 10),
             headersTimeoutMs: parseInt(process.env.HTTP_HEADERS_TIMEOUT_MS || '315000', 10),
@@ -216,7 +219,7 @@ setInterval(() => {
 }, 2000).unref?.();
 
 setInterval(() => {
-    sampleNetwork().catch(() => {});
+    void refreshNetworkSample();
 }, 5000).unref?.();
 
 module.exports = {

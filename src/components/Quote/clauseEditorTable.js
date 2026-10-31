@@ -4931,11 +4931,11 @@ export function reapplyStoredTableRowHeights(table) {
  * "Unit Price in BHD" / "Total Price in BHD". Grow only the clipped row — A4 and footer stay put.
  * @param {ParentNode|null|undefined} root
  */
-export function expandClippedOfficeTableRowHeights(root) {
+export function expandClippedOfficeTableRowHeights(root, { includePackMeasure = false } = {}) {
     if (!root?.querySelectorAll) return;
     root.querySelectorAll(EMS_OFFICE_PASTE_TABLE_SELECTOR).forEach((table) => {
         if (isEmsPricingSummaryTable(table)) return;
-        if (table.closest?.('.quote-clause-measure-host, [data-pack-merge-measure], [data-ems-pack-measure]')) {
+        if (!includePackMeasure && table.closest?.('.quote-clause-measure-host, [data-pack-merge-measure], [data-ems-pack-measure]')) {
             return;
         }
         if (
@@ -4957,6 +4957,9 @@ export function expandClippedOfficeTableRowHeights(root) {
         rows.forEach((row, i) => {
             const locked = Math.round(heights[i] || 0);
             if (!(locked > 0)) return;
+            // Most saved rows already fit. Avoid relayout of every row for each
+            // candidate page; only lift locks when the cell actually clips.
+            if (![...row.cells].some(cell => cell.scrollHeight > cell.clientHeight + 1)) return;
             const natural = measureRowUnclippedHeightPx(row);
             if (!(natural > locked + 1)) return;
             const next = Math.max(MIN_TABLE_ROW_HEIGHT, natural);
@@ -10807,7 +10810,7 @@ export function isOfficePasteTableEl(table) {
     // (compactOfficePasteTableSpacing would strip data-ems-row-heights → tall rows after exit).
     if (isEmsPricingSummaryTable(table)) return false;
     // Word pastes frequently use <o:p> and MsoNormal classes without `data-ems-paste-source`.
-    if (table.querySelector?.('o\\:p, .MsoNormal, [style*="mso-"]')) return true;
+    if (table.getElementsByTagName('o:p').length || table.querySelector?.('.MsoNormal, [style*="mso-"]')) return true;
     return (
         table.getAttribute?.('data-ems-paste-source') === 'office' ||
         table.classList?.contains?.('ems-office-paste-table') ||

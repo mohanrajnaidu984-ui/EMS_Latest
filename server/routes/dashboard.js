@@ -397,21 +397,21 @@ function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, divi
                 WHERE 1=1 ${baseFilter} ${quoteScopeFilter}
             ),
             Dates AS (
-                SELECT EnquiryDate as DateVal, 'Enquiry' as Type FROM FilteredEnquiries WHERE MONTH(EnquiryDate) = @month AND YEAR(EnquiryDate) = @year
+                SELECT EnquiryDate as DateVal, 'Enquiry' as Type FROM FilteredEnquiries WHERE EnquiryDate >= @rangeStart AND EnquiryDate < @rangeEnd
                 UNION ALL
                 SELECT fe.DueDate as DateVal, 'Due' as Type
                 FROM FilteredEnquiries fe
-                WHERE MONTH(fe.DueDate) = @month AND YEAR(fe.DueDate) = @year
+                WHERE fe.DueDate >= @rangeStart AND fe.DueDate < @rangeEnd
                   AND CAST(fe.DueDate AS DATE) >= CAST(@today AS DATE)
                   AND ${dueNoQuoteSql}
                 UNION ALL
                 SELECT fe.DueDate as DateVal, 'Lapsed' as Type 
                 FROM FilteredEnquiries fe
-                WHERE MONTH(fe.DueDate) = @month AND YEAR(fe.DueDate) = @year
+                WHERE fe.DueDate >= @rangeStart AND fe.DueDate < @rangeEnd
                 AND CAST(fe.DueDate AS DATE) < CAST(@today AS DATE)
                 AND ${dueNoQuoteSql}
                 UNION ALL
-                SELECT SiteVisitDate as DateVal, 'SiteVisit' as Type FROM FilteredEnquiries WHERE MONTH(SiteVisitDate) = @month AND YEAR(SiteVisitDate) = @year
+                SELECT SiteVisitDate as DateVal, 'SiteVisit' as Type FROM FilteredEnquiries WHERE SiteVisitDate >= @rangeStart AND SiteVisitDate < @rangeEnd
                 UNION ALL
                 SELECT CAST(eq.QuoteDate AS DATE) AS DateVal,
                     CASE WHEN ISNULL(eq.RevisionNo, 0) = 0 THEN 'NewQuote' ELSE 'RevQuote' END AS Type
@@ -419,7 +419,7 @@ function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, divi
                 JOIN EnquiryMaster em ON eq.RequestNo = em.RequestNo
                 WHERE 1=1 ${baseFilter} ${quoteScopeFilter}
                   AND eq.QuoteDate IS NOT NULL
-                  AND MONTH(eq.QuoteDate) = @month AND YEAR(eq.QuoteDate) = @year
+                  AND eq.QuoteDate >= @rangeStart AND eq.QuoteDate < @rangeEnd
             )
             SELECT 
                 CONVERT(VARCHAR(10), DateVal, 23) as Date,
@@ -434,52 +434,7 @@ function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, divi
             WHERE DateVal IS NOT NULL
             GROUP BY CONVERT(VARCHAR(10), DateVal, 23)`;
 
-    const totalsPart = `
-            WITH FilteredEnquiries AS (
-                SELECT RequestNo, EnquiryDate, DueDate, SiteVisitDate, Status 
-                FROM EnquiryMaster em
-                WHERE 1=1 ${baseFilter}
-            ),
-            FilteredQuotes AS (
-                SELECT eq.CreatedAt, eq.UpdatedAt, eq.QuoteDate, eq.RequestNo
-                FROM EnquiryQuotes eq
-                JOIN EnquiryMaster em ON eq.RequestNo = em.RequestNo
-                WHERE 1=1 ${baseFilter} ${quoteScopeFilter}
-            )
-            SELECT 
-                (SELECT COUNT(DISTINCT RequestNo) FROM FilteredEnquiries WHERE MONTH(EnquiryDate) = @month AND YEAR(EnquiryDate) = @year) as enquiries,
-                (SELECT COUNT(DISTINCT fe.RequestNo)
-                 FROM FilteredEnquiries fe
-                 WHERE MONTH(fe.DueDate) = @month AND YEAR(fe.DueDate) = @year
-                   AND CAST(fe.DueDate AS DATE) >= CAST(@today AS DATE)
-                   AND ${dueNoQuoteSql}) as due,
-                (SELECT COUNT(DISTINCT fe.RequestNo)
-                 FROM FilteredEnquiries fe
-                 WHERE MONTH(fe.DueDate) = @month AND YEAR(fe.DueDate) = @year
-                   AND CAST(fe.DueDate AS DATE) < CAST(@today AS DATE)
-                   AND ${dueNoQuoteSql}) as lapsed,
-                (SELECT COUNT(*)
-                 FROM EnquiryQuotes eq
-                 JOIN EnquiryMaster em ON eq.RequestNo = em.RequestNo
-                 WHERE 1=1 ${baseFilter} ${quoteScopeFilter}
-                   AND eq.QuoteDate IS NOT NULL
-                   AND MONTH(eq.QuoteDate) = @month AND YEAR(eq.QuoteDate) = @year
-                   AND ISNULL(eq.RevisionNo, 0) = 0) as newQuoted,
-                (SELECT COUNT(*)
-                 FROM EnquiryQuotes eq
-                 JOIN EnquiryMaster em ON eq.RequestNo = em.RequestNo
-                 WHERE 1=1 ${baseFilter} ${quoteScopeFilter}
-                   AND eq.QuoteDate IS NOT NULL
-                   AND MONTH(eq.QuoteDate) = @month AND YEAR(eq.QuoteDate) = @year
-                   AND ISNULL(eq.RevisionNo, 0) > 0) as revQuoted,
-                (SELECT COUNT(*)
-                 FROM EnquiryQuotes eq
-                 JOIN EnquiryMaster em ON eq.RequestNo = em.RequestNo
-                 WHERE 1=1 ${baseFilter} ${quoteScopeFilter}
-                   AND eq.QuoteDate IS NOT NULL
-                   AND MONTH(eq.QuoteDate) = @month AND YEAR(eq.QuoteDate) = @year) as quoted`;
-
-    return `${dailyPart} ; ${totalsPart}`;
+    return dailyPart;
 }
 
 function splitDashboardCalendarBatchResult(result) {
@@ -493,12 +448,18 @@ function splitDashboardCalendarBatchResult(result) {
     return { daily, totals: reconcileCalendarTotalsFromDaily(daily, null) };
 }
 
+
+// One date-range query supplies all visible months; daily rows already define KPI totals.
+function bindCalendarRange(request, fromYear, fromMonth, toYear, toMonth) {
+    request.input('rangeStart', sql.Date, new Date(Date.UTC(fromYear, fromMonth - 1, 1)));
+    request.input('rangeEnd', sql.Date, new Date(Date.UTC(toYear, toMonth, 1)));
+}
+
 async function runDashboardCalendarMonthQuery(reqQuery, month, year) {
     const resolved = await resolveDashboardAccessMode(reqQuery.userEmail, reqQuery.userRole);
     const request = new sql.Request();
     const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(request, reqQuery, resolved);
-    request.input('month', sql.Int, parseInt(month, 10));
-    request.input('year', sql.Int, parseInt(year, 10));
+    bindCalendarRange(request, Number(year), Number(month), Number(year), Number(month));
     const result = await request.query(
         buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, reqQuery.division)
     );
@@ -807,42 +768,23 @@ router.get('/calendars-history', async (req, res) => {
         );
         const resolved = await resolveDashboardAccessMode(req.query.userEmail, req.query.userRole);
 
-        const runOne = async (m, y) => {
-            const request = new sql.Request();
-            const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(request, req.query, resolved);
-            request.input('month', sql.Int, parseInt(m, 10));
-            request.input('year', sql.Int, parseInt(y, 10));
-            const result = await request.query(
-                buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, req.query.division)
-            );
-            return splitDashboardCalendarBatchResult(result);
-        };
-
-        const payloads = await Promise.all(monthList.map(({ month, year }) => runOne(month, year)));
-        const monthPayloadByKey = new Map();
-        monthList.forEach((meta, idx) => {
-            monthPayloadByKey.set(dashboardMonthPayloadKey(meta.year, meta.month), payloads[idx]);
-        });
-
         const anchorY = parseInt(anchorYear, 10);
-        const missingYearMonths = [];
-        for (let m = 1; m <= 12; m++) {
-            const key = dashboardMonthPayloadKey(anchorY, m);
-            if (!monthPayloadByKey.has(key)) {
-                missingYearMonths.push({ month: m, year: anchorY });
-            }
+        const allMonths = [...monthList, ...Array.from({length: 12}, (_, i) => ({month: i + 1, year: anchorY}))];
+        const ordered = allMonths.slice().sort((a, b) => a.year - b.year || a.month - b.month);
+        const request = new sql.Request();
+        const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(request, req.query, resolved);
+        bindCalendarRange(request, ordered[0].year, ordered[0].month, ordered.at(-1).year, ordered.at(-1).month);
+        const result = await request.query(buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, req.query.division));
+        const daily = result.recordset || [];
+        const monthPayloadByKey = new Map();
+        for (const meta of allMonths) {
+            const key = dashboardMonthPayloadKey(meta.year, meta.month);
+            if (monthPayloadByKey.has(key)) continue;
+            const prefix = String(meta.year) + '-' + String(meta.month).padStart(2, '0');
+            const rows = daily.filter(row => String(row.Date).startsWith(prefix));
+            monthPayloadByKey.set(key, { daily: rows, totals: reconcileCalendarTotalsFromDaily(rows, null) });
         }
-        if (missingYearMonths.length > 0) {
-            const extraPayloads = await Promise.all(
-                missingYearMonths.map(({ month, year }) => runOne(month, year)),
-            );
-            missingYearMonths.forEach((meta, idx) => {
-                monthPayloadByKey.set(
-                    dashboardMonthPayloadKey(meta.year, meta.month),
-                    extraPayloads[idx],
-                );
-            });
-        }
+        const payloads = monthList.map(meta => monthPayloadByKey.get(dashboardMonthPayloadKey(meta.year, meta.month)));
 
         const yearTotals = sumDashboardYearTotals(monthPayloadByKey, anchorY);
 
@@ -876,8 +818,7 @@ router.get('/calendars-pair', async (req, res) => {
         const runOne = async (m, y) => {
             const request = new sql.Request();
             const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(request, req.query, resolved);
-            request.input('month', sql.Int, parseInt(m, 10));
-            request.input('year', sql.Int, parseInt(y, 10));
+            bindCalendarRange(request, Number(y), Number(m), Number(y), Number(m));
             const result = await request.query(
                 buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, req.query.division)
             );

@@ -110,6 +110,42 @@ test.describe('Live quote pagination validation (enquiry 1515)', () => {
             expect(meta.contentH, `sheet ${meta.sheet} content height`).toBeGreaterThan(200);
         }
 
+        /* Coverage / uniqueness (application pipeline, not selector noise). */
+        if (health.duplicateSegs?.length) {
+            report.unresolved.push(
+                `Phase1 duplicate packed segs: ${health.duplicateSegs.slice(0, 12).join(',')}`
+            );
+        }
+        if (health.sparseSheets?.length) {
+            report.unresolved.push(
+                `Phase1 avoidable sparse sheets (≤2 units, <35% filled): ${health.sparseSheets.join(',')}`
+            );
+        }
+
+        /* Determinism: repeated Align must settle to zero overflows (sheet count may vary slightly). */
+        const health2 = await alignUntilStable(page, 3);
+        report.phases.phase1.alignRepeat = {
+            sheets1: health.totalSheets,
+            sheets2: health2.totalSheets,
+            overflows1: health.overflows.length,
+            overflows2: health2.overflows.length,
+            stamped1: health.stampedTotal,
+            stamped2: health2.stampedTotal,
+            sparse2: health2.sparseSheets,
+        };
+        if (health2.overflows.length !== 0) {
+            report.unresolved.push(
+                `Phase1 Align re-run left overflows: sheets ${health.totalSheets}→${health2.totalSheets}, overflows ${health2.overflows.length}`
+            );
+        } else if (
+            health.overflows.length === 0 &&
+            Math.abs(health2.totalSheets - health.totalSheets) > 2
+        ) {
+            report.unresolved.push(
+                `Phase1 Align sheet-count drift (overflows clear): ${health.totalSheets}→${health2.totalSheets}`
+            );
+        }
+
         /*
          * Soft-assert geometry: record overflow failure but keep the browser session so
          * later phases can still capture PDF / failure-handling evidence.
@@ -123,11 +159,19 @@ test.describe('Live quote pagination validation (enquiry 1515)', () => {
                 '[Phase1] OVERFLOWS (not production-ready):',
                 JSON.stringify(health.overflows, null, 2)
             );
+            /* Hard-fail — soft-pass hid the still-broken pagination algorithm. */
+            expect(
+                health.overflows,
+                `overflows remain after Align×${health.alignAttempts}`
+            ).toEqual([]);
         } else {
-            report.phases.phase1.passed = !health.integrityBanner;
+            report.phases.phase1.passed =
+                !health.integrityBanner &&
+                !(health.duplicateSegs?.length) &&
+                !(health.sparseSheets?.length > 2);
             expect(health.integrityBanner).toBe(false);
+            expect(health.duplicateSegs || []).toEqual([]);
         }
-        /* Do not hard-fail here — later phases still collect PDF / gate evidence. */
     });
 
     test('Phase 2 — zoom 80 / 100 / 125% visibility', async () => {
@@ -136,8 +180,10 @@ test.describe('Live quote pagination validation (enquiry 1515)', () => {
         const zoomResults = [];
         for (const z of zooms) {
             await setBrowserZoom(page, z);
-            await clickAlignPage(page).catch(() => {});
-            const health = await measurePaginationHealth(page);
+            const health = await alignUntilStable(page, 2).catch(async () => {
+                await clickAlignPage(page).catch(() => {});
+                return measurePaginationHealth(page);
+            });
             await page.screenshot({
                 path: path.join(ARTIFACT_DIR, `preview-zoom-${z}.png`),
                 fullPage: false,
@@ -289,7 +335,11 @@ test.describe('Live quote pagination validation (enquiry 1515)', () => {
         const alertMsgs = [];
         const onDlg = async (d) => {
             alertMsgs.push(d.message());
-            await d.accept().catch(() => d.dismiss());
+            try {
+                await d.accept();
+            } catch {
+                /* already handled by another listener */
+            }
         };
         page.on('dialog', onDlg);
 

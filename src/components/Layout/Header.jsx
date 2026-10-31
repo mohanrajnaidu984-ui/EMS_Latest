@@ -9,6 +9,7 @@ import { EMS_CHATBOX_UNREAD_CHANGED } from '../../constants/chatboxEvents';
 import { isChatboxEnabled, disconnectChatboxSocket } from '../../utils/chatboxSocket';
 
 import { useAuth } from '../../context/AuthContext';
+import { preloadAppModule } from '../../utils/modulePreload';
 
 const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
   const { currentUser } = useAuth();
@@ -371,6 +372,8 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
                           aria-expanded={isSubmenuOpen}
                           aria-haspopup="true"
                           data-ems-main-nav-id={item.id}
+                          onPointerEnter={() => preloadAppModule(item.id)}
+                          onFocus={() => preloadAppModule(item.id)}
                         >
                           <i className={`bi ${item.icon} me-2 ems-top-nav-link__icon`}></i>
                           {item.label}
@@ -383,6 +386,8 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
                                 <button
                                   type="button"
                                   role="menuitem"
+                                  onPointerEnter={() => preloadAppModule(child.id)}
+                                  onFocus={() => preloadAppModule(child.id)}
                                   className={`ems-top-nav-submenu__item${activeTab === child.id ? ' active' : ''}`}
                                   onClick={() => {
                                     setOpenSubmenuId(null);
@@ -412,6 +417,8 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
                         onClick={() => onNavigate(item.id)}
                         aria-current={isActive ? 'page' : undefined}
                         data-ems-main-nav-id={item.id === QUOTE_TAB_B2B ? 'Quote' : item.id}
+                        onPointerEnter={() => preloadAppModule(item.id)}
+                        onFocus={() => preloadAppModule(item.id)}
                       >
                         <i className={`bi ${item.icon} me-2 ems-top-nav-link__icon`}></i>
                         {item.label}

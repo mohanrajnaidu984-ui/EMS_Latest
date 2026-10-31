@@ -525,6 +525,56 @@ function withSlicedRowHeightsAttr(tableAttrs, fragmentHeightPx) {
  * @param {HTMLTableElement} table
  * @returns {string[]}
  */
+/** Borderless numbered prose tables are paragraph layout, not BOQ item rows.
+ * Slice only their long body cell; preserve columns, labels and inline markup.
+ * Fragments rejoin into the original row within each page. */
+function splitNumberedProseRow(row, table) {
+    const cells = [...row.cells];
+    if (cells.length < 2 || cells.length > 3 ||
+        cells.some(cell => cell.rowSpan > 1 || cell.colSpan > 1) ||
+        table.getAttribute('data-ems-table-border') !== 'none' ||
+        !/^\d+\.\s*\d+\s*$/.test(cells[0].textContent.trim())) return null;
+    const body = cells[cells.length - 1];
+    if (body.textContent.trim().length < 450 || body.querySelector('table,img,svg,ul,ol')) return null;
+    if (cells.slice(0, -1).some(cell => cell.textContent.trim().length > 50)) return null;
+
+    const doc = body.ownerDocument;
+    const boundaries = [];
+    let cursor = 0;
+    const visit = node => {
+        if (node.nodeType === 3) { cursor += node.textContent.length; return; }
+        if (node.nodeType !== 1) return;
+        if (node.tagName === 'P') boundaries.push(cursor);
+        [...node.childNodes].forEach(visit);
+        if (node.tagName === 'P' || node.tagName === 'BR') boundaries.push(cursor);
+    };
+    [...body.childNodes].forEach(visit);
+    const ends = [...new Set(boundaries)].filter(end => end > 0 && end < cursor);
+    const chunks = sliceRichTextAtEnds(body, [...ends, cursor]);
+    // A long unbroken paragraph still needs word-boundary continuation.
+    const parts = chunks.flatMap(html => {
+        const holder = doc.createElement('div');
+        holder.innerHTML = html;
+        return holder.textContent.length > 450 ? splitRichParagraphAtWords(holder, 360) : [html];
+    });
+    if (parts.length < 2) return null;
+    const rowId = `prose-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    return parts.map((html, index) => {
+        const clone = row.cloneNode(true);
+        clone.setAttribute('data-ems-prose-row', rowId);
+        [...clone.cells].forEach((cell, col) => {
+            cell.removeAttribute('height');
+            for (const prop of ['height', 'min-height', 'max-height']) cell.style.removeProperty(prop);
+            cell.style.setProperty('overflow', 'visible', 'important');
+            if (col === cells.length - 1) cell.innerHTML = html;
+            else if (index > 0) cell.innerHTML = '';
+        });
+        clone.removeAttribute('height');
+        for (const prop of ['height', 'min-height', 'max-height']) clone.style.removeProperty(prop);
+        return clone;
+    });
+}
+
 function splitTableToRowSegmentHtml(table) {
     const { rows: gridRows, grid } = getOfficePasteTablePaginationGrid(table);
 
@@ -565,7 +615,7 @@ function splitTableToRowSegmentHtml(table) {
 
     const isPriceSummary = isEmsAutoPriceSummaryTableId(table);
     /* Always split pricing summary by row so Discount/VAT/Grand can move to the next page. */
-    if (!isPriceSummary && allRows.length < 2) {
+    if (!isPriceSummary && allRows.length < 2 && !splitNumberedProseRow(allRows[0], table)) {
         return [table.outerHTML];
     }
 
@@ -692,6 +742,22 @@ function splitTableToRowSegmentHtml(table) {
     let noteMode = false;
     for (let bodyIdx = 0; bodyIdx < allRows.length; bodyIdx += 1) {
         const row = allRows[bodyIdx];
+        const proseRows = !isPriceSummary && splitNumberedProseRow(row, table);
+        if (proseRows) {
+            const template = table.cloneNode(false);
+            template.removeAttribute('data-ems-row-heights');
+            template.removeAttribute('data-ems-row-heights-custom');
+            template.removeAttribute('height');
+            for (const prop of ['height', 'min-height', 'max-height']) template.style.removeProperty(prop);
+            template.setAttribute('data-ems-table-split', '1');
+            // Keep prose fragments separate from neighboring fixed-height rows.
+            template.setAttribute('data-ems-split-id', proseRows[0].getAttribute('data-ems-prose-row'));
+            proseRows.forEach(fragment => {
+                template.innerHTML = `${colgroupHtml}${theadHtml}<tbody>${fragment.outerHTML}</tbody>`;
+                out.push(template.outerHTML);
+            });
+            continue;
+        }
         if (!isPriceSummary && rowLooksLikeBoqNote(row)) {
             noteMode = true;
             /* Extract Note as prose OUTSIDE the table — prevents thead repeating above it. */
@@ -838,6 +904,17 @@ export function splitClauseHtmlToSegments(html, options = {}) {
 
     const processElement = (el) => {
         const tag = el.tagName;
+        if (tag === 'P' &&
+            !String(el.textContent || '').replace(/[\s\u200b\ufeff]/g, '') &&
+            !/[\u00a0]|&nbsp;|&#160;/i.test(el.innerHTML) &&
+            !el.querySelector('br,img,svg,canvas,video,audio,iframe,object,embed,table,hr,input') &&
+            !/(?:page-break|break)-(?:before|after)\s*:\s*(?:always|page)|data-ems-manual-break/i.test(el.outerHTML)) {
+            // Word HTML contains whitespace-only P nodes used for source
+            // indentation. Jodit paints them as caret lines. They are not an
+            // intentional blank line (<br>/NBSP) or a dimensioned spacer.
+            const dimensions = ['height','min-height','margin-top','margin-bottom','padding-top','padding-bottom'];
+            if (!dimensions.some(property => parseFloat(el.style.getPropertyValue(property)) > 0)) return;
+        }
         if (tag === 'TABLE') {
             const table = /** @type {HTMLTableElement} */ (el);
             /* Pricing summary: always one segment per footer row so it can continue on the next page. */
@@ -1173,6 +1250,58 @@ function cloneOpenTag(el, extraAttrs = '') {
     return `<${tag}${attrs}${extraAttrs}>`;
 }
 
+/* DOM slicing keeps inline styles, links, entities and whitespace intact.
+ * textContent-based chunks used to flatten markup and reinterpret '<' as HTML. */
+function splitRichParagraphAtWords(pEl, maxChars) {
+    const text = pEl.textContent || '';
+    const ends = [];
+    let start = 0;
+    for (const match of text.matchAll(/\S+\s*/g)) {
+        const end = match.index + match[0].length;
+        if (end - start >= maxChars && end < text.length) {
+            ends.push(end);
+            start = end;
+        }
+    }
+    if (!ends.length) return [pEl.innerHTML];
+    return sliceRichTextAtEnds(pEl, [...ends, text.length]);
+}
+
+function sliceRichTextAtEnds(pEl, ends) {
+    const text = pEl.textContent || '';
+    const doc = pEl.ownerDocument;
+    let previous = 0;
+    return ends.map(end => {
+        let cursor = 0;
+        const slice = node => {
+            if (node.nodeType === 3) {
+                const at = cursor;
+                cursor += node.textContent.length;
+                const value = node.textContent.slice(Math.max(0, previous - at), Math.max(0, end - at));
+                return value ? doc.createTextNode(value) : null;
+            }
+            if (node.nodeType !== 1) return null;
+            if (!node.childNodes.length) {
+                return cursor >= previous && (cursor < end || end === text.length)
+                    ? node.cloneNode(true) : null;
+            }
+            const clone = node.cloneNode(false);
+            for (const child of node.childNodes) {
+                const part = slice(child);
+                if (part) clone.appendChild(part);
+            }
+            return clone.childNodes.length ? clone : null;
+        };
+        const holder = doc.createElement('div');
+        for (const child of pEl.childNodes) {
+            const part = slice(child);
+            if (part) holder.appendChild(part);
+        }
+        previous = end;
+        return holder.innerHTML;
+    });
+}
+
 /**
  * Split a long paragraph into line-sized chunks (≥2 lines each side) so sheets fill.
  * Prefers <br> boundaries; otherwise word-boundary character chunks.
@@ -1214,9 +1343,9 @@ function splitLongParagraphElement(pEl) {
     if (estLines < PACK_MIN_LINES_EACH_SIDE * 2 + 1) return [pEl.outerHTML];
     /* Prefer 2-line fragments so leftover sheet space (e.g. ~95mm) can take the next piece. */
     const chunkLines = PACK_MIN_LINES_EACH_SIDE;
-    const texts = splitPlainAtWordBoundary(plain, chunkLines * PACK_CHARS_PER_LINE);
+    const texts = splitRichParagraphAtWords(pEl, chunkLines * PACK_CHARS_PER_LINE);
     if (texts.length <= 1) return [pEl.outerHTML];
-    return texts.map((t, i) => stamp(t, i > 0));
+    return texts.map((t, i) => stamp(t, i > 0).replace('<p', '<p data-ems-para-exact="1"'));
 }
 
 /**
@@ -1231,7 +1360,6 @@ function splitLongParagraphElement(pEl) {
 export function softSplitOversizedUnitHtml(html, options = {}) {
     const raw = String(html || '').trim();
     if (!raw || typeof DOMParser === 'undefined') return raw ? [raw] : [];
-    const maxParts = Math.max(2, Number(options.maxParts) || 8);
 
     /* Already a multi-row table fragment → re-run row split aggressively. */
     if (/<table\b/i.test(raw)) {
@@ -1241,7 +1369,7 @@ export function softSplitOversizedUnitHtml(html, options = {}) {
             splitParagraphs: true,
             splitListMinItems: 1,
         });
-        if (parts.length >= 2) return parts.slice(0, maxParts);
+        if (parts.length >= 2) return parts;
     }
 
     const doc = new DOMParser().parseFromString(`<div id="ems-soft-split">${raw}</div>`, 'text/html');
@@ -1251,19 +1379,19 @@ export function softSplitOversizedUnitHtml(html, options = {}) {
     const children = [...root.children].filter((c) => c.nodeType === Node.ELEMENT_NODE);
     if (children.length >= 2) {
         const out = children.map((c) => String(c.outerHTML || '').trim()).filter(Boolean);
-        if (out.length >= 2) return out.slice(0, maxParts);
+        if (out.length >= 2) return out;
     }
 
     const only = children[0] || null;
     if (only && /^P$/i.test(only.tagName)) {
         const parts = splitLongParagraphElement(/** @type {HTMLElement} */ (only));
-        if (parts.length >= 2) return parts.slice(0, maxParts);
+        if (parts.length >= 2) return parts;
         /* Force word-boundary chop even for shorter paras when caller says oversized. */
         const plain = String(only.textContent || '')
             .replace(/\s+/g, ' ')
             .trim();
         if (plain.length > 40) {
-            const texts = splitPlainAtWordBoundary(plain, Math.max(40, Math.ceil(plain.length / 2)));
+            const texts = splitRichParagraphAtWords(only, Math.max(40, Math.ceil(plain.length / 2)));
             if (texts.length >= 2) {
                 const paraId = `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
                 const open0 = cloneOpenTag(only, ` data-ems-para-split="${paraId}"`);
@@ -1272,7 +1400,7 @@ export function softSplitOversizedUnitHtml(html, options = {}) {
                     ` data-ems-para-split="${paraId}" data-ems-para-continue="1"`
                 );
                 const close = `</${only.tagName.toLowerCase()}>`;
-                return texts.slice(0, maxParts).map((t, i) => `${i > 0 ? openCont : open0}${t}${close}`);
+                return texts.map((t, i) => `${i > 0 ? openCont : open0}${t}${close}`.replace('<p', '<p data-ems-para-exact="1"'));
             }
         }
     }
@@ -1281,7 +1409,6 @@ export function softSplitOversizedUnitHtml(html, options = {}) {
         const items = [...only.children].filter((c) => /^LI$/i.test(c.tagName));
         if (items.length >= 2) {
             return items
-                .slice(0, maxParts)
                 .map((li, idx) => wrapSingleListItem(/** @type {HTMLElement} */ (only), li, getListBaseStartIndex(only) + idx));
         }
     }
@@ -1293,7 +1420,6 @@ export function softSplitOversizedUnitHtml(html, options = {}) {
         );
         if (blocks.length >= 2) {
             return blocks
-                .slice(0, maxParts)
                 .map((b) => String(b.outerHTML || '').trim())
                 .filter(Boolean);
         }
@@ -1359,12 +1485,13 @@ function expandParagraphListSegments(htmlParts) {
                     ) {
                         run += 1;
                     }
-                    /* Keep 2+ consecutive blank lines as packable segments; skip lone editor noise. */
-                    if (run >= 2) {
-                        for (let j = 0; j < run; j += 1) {
-                            const bh = String(children[i + j].outerHTML || '').trim();
-                            if (bh) out.push(bh);
-                        }
+                    /*
+                     * Keep every blank the user inserted (including a single mid-clause gap).
+                     * Lone trailing editor noise is dropped later by trimTrailingBlankParts.
+                     */
+                    for (let j = 0; j < run; j += 1) {
+                        const bh = String(children[i + j].outerHTML || '').trim();
+                        if (bh) out.push(bh);
                     }
                     i += run - 1;
                     continue;
@@ -1457,7 +1584,14 @@ function buildRejoinedTableOuterHtml(doc, template, rows) {
     table.removeAttribute('data-ems-split-id');
     table.querySelectorAll('tbody').forEach((tb) => tb.remove());
     const tbody = doc.createElement('tbody');
-    rows.forEach((tr) => tbody.appendChild(tr.cloneNode(true)));
+    rows.forEach((tr) => {
+        const previous = tbody.lastElementChild;
+        const rowId = tr.getAttribute('data-ems-prose-row');
+        if (rowId && previous?.getAttribute('data-ems-prose-row') === rowId) {
+            const target = previous.cells[previous.cells.length - 1];
+            target.insertAdjacentHTML('beforeend', tr.cells[tr.cells.length - 1].innerHTML);
+        } else tbody.appendChild(tr.cloneNode(true));
+    });
     const thead = table.querySelector('thead');
     if (thead) thead.after(tbody);
     else table.appendChild(tbody);
@@ -1547,16 +1681,51 @@ export function rejoinSplitTableHtml(html) {
 function isBlankPackHtml(html) {
     const raw = String(html || '').trim();
     if (!raw) return true;
+    if (/<(?:img|svg|canvas|video|audio|iframe|object|embed|table|hr|input)\b/i.test(raw) ||
+        /(?:page-break|break)-(?:before|after)\s*:\s*(?:always|page)|data-ems-manual-break/i.test(raw)) return false;
+    if (typeof DOMParser !== 'undefined') {
+        const doc = new DOMParser().parseFromString(raw, 'text/html');
+        return !String(doc.body.textContent || '').replace(/[\s\u200b\ufeff\u00a0]/g, '');
+    }
     const plain = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').replace(/\u00a0/g, ' ').trim();
     return !plain;
 }
 
-/** Drop trailing blank-only parts so the next clause does not sit under a system gap. */
-function trimTrailingBlankParts(parts) {
+/**
+ * Drop a lone trailing blank-only part (Jodit caret / editor noise).
+ * Keep 2+ trailing blanks — those are intentional vertical space the user created
+ * and must remain in normal-mode preview / PDF packing.
+ */
+export function trimTrailingBlankParts(parts) {
     if (!parts?.length) return parts || [];
-    let end = parts.length;
-    while (end > 0 && isBlankPackHtml(parts[end - 1])) end -= 1;
-    return end < parts.length ? parts.slice(0, Math.max(end, 1)) : parts;
+    let blankRun = 0;
+    for (let i = parts.length - 1; i >= 0; i -= 1) {
+        if (!isBlankPackHtml(parts[i])) break;
+        blankRun += 1;
+    }
+    if (blankRun === 0) return parts;
+    /* Intentional gap: retain all trailing blank parts. */
+    if (blankRun >= 2) return parts;
+    /* Single trailing blank only — strip as incidental editor noise. */
+    const end = parts.length - 1;
+    return parts.slice(0, Math.max(end, 1));
+}
+
+/** End-of-document caret/spacer paragraphs must never create continuation pages.
+ * Keep spacing between clauses and leave saved/editor HTML untouched. */
+export function trimDocumentTrailingBlankSegments(segments) {
+    let end = segments.length;
+    while (end > 0) {
+        const segment = segments[end - 1];
+        if (segment.showHeading) break;
+        const html = String(segment.html || '');
+        if (/<(?:img|svg|canvas|video|audio|iframe|object|embed|table|hr|input)\b|url\s*\(/i.test(html)) break;
+        const plain = html.replace(/<[^>]*>/g, '').replace(/&nbsp;|&#160;/gi, '')
+            .replace(/[\s\u00a0\u200b\ufeff]/g, '');
+        if (plain) break;
+        end--;
+    }
+    return end === segments.length ? segments : segments.slice(0, end);
 }
 
 export function buildClauseSegmentsForPagination(activeClausesList, formatBodyHtml, options = {}) {
@@ -1578,7 +1747,7 @@ export function buildClauseSegmentsForPagination(activeClausesList, formatBodyHt
             });
         });
     });
-    return out;
+    return trimDocumentTrailingBlankSegments(out);
 }
 
 const SINGLE_ITEM_LIST_RE = /^<(ul|ol)(\s[^>]*)?>\s*(<li[\s\S]*?<\/li>)\s*<\/\1>$/i;
@@ -1603,7 +1772,8 @@ function appendSegmentHtmlToAcc(acc, html) {
         const contInner = cont[2];
         const prevPara = prev.match(PARA_SPLIT_CONT_RE);
         if (prevPara && prevPara[3] === splitId) {
-            return `${prevPara[1]}${prevPara[2]}${prevPara[4]} ${contInner}</p>`;
+            const separator = /data-ems-para-exact=["']1["']/i.test(next) ? '' : ' ';
+            return `${prevPara[1]}${prevPara[2]}${prevPara[4]}${separator}${contInner}</p>`;
         }
     }
 
@@ -1645,7 +1815,23 @@ function stampPackSegmentHtml(html, segIndex) {
     const raw = String(html || '').trim();
     if (!raw) return raw;
     const attr = ` data-ems-pack-seg="${segIndex}"`;
+    /* Paragraph fragments rejoin on a sheet. Stamp their inline contents so
+     * merging the P tags cannot discard all but the first fragment's identity. */
+    if (/^<p\b[^>]*data-ems-para-split=/i.test(raw)) {
+        return raw.replace(/^(<p\b[^>]*>)([\s\S]*)<\/p>$/i,
+            (_, open, body) => `${open}<span${attr}>${body}</span></p>`);
+    }
     const splitId = readEmsSplitIdFromHtml(raw);
+    if (splitId && /data-ems-prose-row=/.test(raw) && typeof DOMParser !== 'undefined') {
+        const doc = new DOMParser().parseFromString(raw, 'text/html');
+        const table = doc.querySelector('table');
+        const row = table?.querySelector('tr[data-ems-prose-row]');
+        const body = row?.cells[row.cells.length - 1];
+        if (body) {
+            body.innerHTML = `<span${attr}>${body.innerHTML}</span>`;
+            return table.outerHTML;
+        }
+    }
     const tableAttr = splitId ? ` data-ems-pack-table="${splitId}"` : '';
     const trAttr = ` data-ems-pack-seg="${segIndex}"${tableAttr}`;
     const tbodyCount = (raw.match(/<tbody\b/gi) || []).length;
@@ -1706,7 +1892,16 @@ export function mergeSegmentsIntoSheetBlocks(segmentIndices, segments) {
         head = null;
     };
 
-    for (const si of segmentIndices) {
+    // Preserve blank lines within a page, but do not carry editor spacers into
+    // an empty band at the top of a continuation page. Indices remain in the
+    // pack for coverage; blank units do not require painted stamps.
+    let firstVisible = 0;
+    while (firstVisible < segmentIndices.length) {
+        const seg = segments[segmentIndices[firstVisible]];
+        if (!seg || seg.showHeading || !isBlankPackHtml(seg.html)) break;
+        firstVisible++;
+    }
+    for (const si of segmentIndices.slice(firstVisible)) {
         const seg = segments[si];
         if (!seg) continue;
         const stamped = stampPackSegmentHtml(seg.html, si);
@@ -2586,10 +2781,9 @@ export function measureLiveContentFit(contentEl, options = {}) {
         try {
             restoreClip = {
                 overflow: contentEl.style.overflow || '',
-                maxHeight: contentEl.style.maxHeight || '',
             };
-            contentEl.style.overflow = 'visible';
-            contentEl.style.maxHeight = 'none';
+            /* Beat preview `overflow: hidden !important` — keep height so the box does not collapse. */
+            contentEl.style.setProperty('overflow', 'visible', 'important');
         } catch {
             restoreClip = null;
         }
@@ -2687,8 +2881,8 @@ export function measureLiveContentFit(contentEl, options = {}) {
     } finally {
         if (restoreClip) {
             try {
-                contentEl.style.overflow = restoreClip.overflow;
-                contentEl.style.maxHeight = restoreClip.maxHeight;
+                contentEl.style.removeProperty('overflow');
+                if (restoreClip.overflow) contentEl.style.overflow = restoreClip.overflow;
             } catch {
                 /* ignore */
             }
@@ -2780,12 +2974,7 @@ export function assertSegmentVisibilityOnSheets(
         expected.forEach((idx) => {
             if (paintedSegs.has(idx)) return;
             if (segments) {
-                const plain = String(segments[idx]?.html || '')
-                    .replace(/<[^>]+>/g, ' ')
-                    .replace(/\s+/g, ' ')
-                    .replace(/\u00a0/g, ' ')
-                    .trim();
-                if (!plain) return;
+                if (isBlankPackHtml(segments[idx]?.html)) return;
             }
             missingFromDom.push(idx);
         });

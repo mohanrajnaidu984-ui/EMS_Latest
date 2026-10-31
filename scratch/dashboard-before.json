@@ -1,0 +1,3412 @@
+[
+  {
+    "path": "calendar?month=10&year=2026&",
+    "status": 200,
+    "ms": 6282.4671,
+    "body": {
+      "daily": [
+        {
+          "Date": "2026-10-01",
+          "Enquiries": 30,
+          "Due": 0,
+          "Lapsed": 1,
+          "SiteVisits": 6,
+          "NewQuote": 33,
+          "RevQuote": 9,
+          "Quoted": 42
+        },
+        {
+          "Date": "2026-10-02",
+          "Enquiries": 1,
+          "Due": 0,
+          "Lapsed": 0,
+          "SiteVisits": 0,
+          "NewQuote": 1,
+          "RevQuote": 0,
+          "Quoted": 1
+        },
+        {
+          "Date": "2026-10-03",
+          "Enquiries": 11,
+          "Due": 0,
+          "Lapsed": 0,
+          "SiteVisits": 5,
+          "NewQuote": 8,
+          "RevQuote": 1,
+          "Quoted": 9
+        },
+        {
+          "Date": "2026-10-04",
+          "Enquiries": 30,
+          "Due": 0,
+          "Lapsed": 2,
+          "SiteVisits": 9,
+          "NewQuote": 26,
+          "RevQuote": 9,
+          "Quoted": 35
+        },
+        {
+          "Date": "2026-10-05",
+          "Enquiries": 27,
+          "Due": 0,
+          "Lapsed": 0,
+          "SiteVisits": 4,
+          "NewQuote": 30,
+          "RevQuote": 12,
+          "Quoted": 42
+        },
+        {
+          "Date": "2026-10-06",
+          "Enquiries": 39,
+          "Due": 0,
+          "Lapsed": 2,
+          "SiteVisits": 6,
+          "NewQuote": 38,
+          "RevQuote": 4,
+          "Quoted": 42
+        },
+        {
+          "Date": "2026-10-07",
+          "Enquiries": 31,
+          "Due": 0,
+          "Lapsed": 4,
+          "SiteVisits": 4,
+          "NewQuote": 38,
+          "RevQuote": 12,
+          "Quoted": 50
+        },
+        {
+          "Date": "2026-10-08",
+          "Enquiries": 26,
+          "Due": 0,
+          "Lapsed": 1,
+          "SiteVisits": 11,
+          "NewQuote": 24,
+          "RevQuote": 7,
+          "Quoted": 31
+        },
+        {
+          "Date": "2026-10-09",
+          "Enquiries": 2,
+          "Due": 0,
+          "Lapsed": 0,
+          "SiteVisits": 1,
+          "NewQuote": 2,
+          "RevQuote": 0,
+          "Quoted": 2
+        },
+        {
+          "Date": "2026-10-10",
+          "Enquiries": 12,
+          "Due": 0,
+          "Lapsed": 0,
+          "SiteVisits": 3,
+          "NewQuote": 3,
+          "RevQuote": 0,
+          "Quoted": 3
+        },
+        {
+          "Date": "2026-10-11",
+          "Enquiries": 58,
+          "Due": 0,
+          "Lapsed": 4,
+          "SiteVisits": 10,
+          "NewQuote": 43,
+          "RevQuote": 13,
+          "Quoted": 56
+        },
+        {
+          "Date": "2026-10-12",
+          "Enquiries": 40,
+          "Due": 0,
+          "Lapsed": 2,
+          "SiteVisits": 14,
+          "NewQuote": 41,
+          "RevQuote": 15,
+          "Quoted": 56
+        },
+        {
+          "Date": "2026-10-13",
+          "Enquiries": 42,
+          "Due": 0,
+          "Lapsed": 3,
+          "SiteVisits": 11,
+          "NewQuote": 39,
+          "RevQuote": 11,
+          "Quoted": 50
+        },
+        {
+          "Date": "2026-10-14",
+          "Enquiries": 33,
+          "Due": 0,
+          "Lapsed": 1,
+          "SiteVisits": 4,
+          "NewQuote": 40,
+          "RevQuote": 9,
+          "Quoted": 49
+        },
+        {
+          "Date": "2026-10-15",
+          "Enquiries": 25,
+          "Due": 0,
+          "Lapsed": 5,
+          "SiteVisits": 9,
+          "NewQuote": 29,
+          "RevQuote": 4,
+          "Quoted": 33
+        },
+        {
+          "Date": "2026-10-16",
+          "Enquiries": 2,
+          "Due": 0,
+          "Lapsed": 2,
+          "SiteVisits": 0,
+          "NewQuote": 1,
+          "RevQuote": 0,
+          "Quoted": 1
+        },
+        {
+          "Date": "2026-10-17",
+          "Enquiries": 7,
+          "Due": 0,
+          "Lapsed": 1,
+          "SiteVisits": 3,
+          "NewQuote": 4,
+          "RevQuote": 0,
+          "Quoted": 4
+        },
+        {
+          "Date": "2026-10-18",
+          "Enquiries": 48,
+          "Due": 0,
+          "Lapsed": 2,
+          "SiteVisits": 10,
+          "NewQuote": 44,
+          "RevQuote": 8,
+          "Quoted": 52
+        },
+        {
+          "Date": "2026-10-19",
+          "Enquiries": 41,
+          "Due": 0,
+          "Lapsed": 3,
+          "SiteVisits": 9,
+          "NewQuote": 46,
+          "RevQuote": 4,
+          "Quoted": 50
+        },
+        {
+          "Date": "2026-10-20",
+          "Enquiries": 52,
+          "Due": 0,
+          "Lapsed": 2,
+          "SiteVisits": 7,
+          "NewQuote": 49,
+          "RevQuote": 9,
+          "Quoted": 58
+        },
+        {
+          "Date": "2026-10-21",
+          "Enquiries": 28,
+          "Due": 0,
+          "Lapsed": 3,
+          "SiteVisits": 10,
+          "NewQuote": 27,
+          "RevQuote": 7,
+          "Quoted": 34
+        },
+        {
+          "Date": "2026-10-22",
+          "Enquiries": 30,
+          "Due": 0,
+          "Lapsed": 2,
+          "SiteVisits": 13,
+          "NewQuote": 30,
+          "RevQuote": 4,
+          "Quoted": 34
+        },
+        {
+          "Date": "2026-10-23",
+          "Enquiries": 0,
+          "Due": 0,
+          "Lapsed": 1,
+          "SiteVisits": 0,
+          "NewQuote": 0,
+          "RevQuote": 0,
+          "Quoted": 0
+        },
+        {
+          "Date": "2026-10-24",
+          "Enquiries": 8,
+          "Due": 0,
+          "Lapsed": 1,
+          "SiteVisits": 0,
+          "NewQuote": 8,
+          "RevQuote": 0,
+          "Quoted": 8
+        },
+        {
+          "Date": "2026-10-25",
+          "Enquiries": 43,
+          "Due": 0,
+          "Lapsed": 5,
+          "SiteVisits": 7,
+          "NewQuote": 47,
+          "RevQuote": 19,
+          "Quoted": 66
+        },
+        {
+          "Date": "2026-10-26",
+          "Enquiries": 40,
+          "Due": 0,
+          "Lapsed": 3,
+          "SiteVisits": 5,
+          "NewQuote": 49,
+          "RevQuote": 8,
+          "Quoted": 57
+        },
+        {
+          "Date": "2026-10-27",
+          "Enquiries": 24,
+          "Due": 0,
+          "Lapsed": 3,
+          "SiteVisits": 10,
+          "NewQuote": 37,
+          "RevQuote": 9,
+          "Quoted": 46
+        },
+        {
+          "Date": "2026-10-28",
+          "Enquiries": 30,
+          "Due": 0,
+          "Lapsed": 4,
+          "SiteVisits": 4,
+          "NewQuote": 29,
+          "RevQuote": 5,
+          "Quoted": 34
+        },
+        {
+          "Date": "2026-10-29",
+          "Enquiries": 16,
+          "Due": 0,
+          "Lapsed": 9,
+          "SiteVisits": 4,
+          "NewQuote": 21,
+          "RevQuote": 1,
+          "Quoted": 22
+        },
+        {
+          "Date": "2026-10-31",
+          "Enquiries": 0,
+          "Due": 1,
+          "Lapsed": 0,
+          "SiteVisits": 0,
+          "NewQuote": 0,
+          "RevQuote": 0,
+          "Quoted": 0
+        }
+      ],
+      "totals": {
+        "enquiries": 776,
+        "due": 1,
+        "lapsed": 66,
+        "newQuote": 787,
+        "revQuote": 180,
+        "quoted": 967,
+        "siteVisits": 179,
+        "_sqlTotals": {
+          "enquiries": 776,
+          "due": 1,
+          "lapsed": 66,
+          "newQuoted": 787,
+          "revQuoted": 180,
+          "quoted": 967
+        }
+      }
+    }
+  },
+  {
+    "path": "calendars-history?anchorMonth=10&anchorYear=2026&",
+    "status": 200,
+    "ms": 10285.8298,
+    "body": {
+      "anchorMonth": 10,
+      "anchorYear": 2026,
+      "yearTotals": {
+        "enquiries": 2996,
+        "due": 17,
+        "lapsed": 319,
+        "newQuote": 2848,
+        "revQuote": 779
+      },
+      "months": [
+        {
+          "month": 11,
+          "year": 2025,
+          "daily": [
+            {
+              "Date": "2025-11-11",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2025-11-12",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2025-11-19",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2025-11-24",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2025-11-25",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2025-11-26",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2025-11-30",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            }
+          ],
+          "totals": {
+            "enquiries": 5,
+            "due": 0,
+            "lapsed": 0,
+            "newQuote": 6,
+            "revQuote": 0,
+            "quoted": 6,
+            "siteVisits": 0,
+            "_sqlTotals": {
+              "enquiries": 5,
+              "due": 0,
+              "lapsed": 0,
+              "newQuoted": 6,
+              "revQuoted": 0,
+              "quoted": 6
+            }
+          }
+        },
+        {
+          "month": 12,
+          "year": 2025,
+          "daily": [
+            {
+              "Date": "2025-12-04",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2025-12-09",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2025-12-12",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2025-12-15",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2025-12-18",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2025-12-21",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2025-12-22",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2025-12-24",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2025-12-25",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2025-12-28",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2025-12-30",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2025-12-31",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            }
+          ],
+          "totals": {
+            "enquiries": 19,
+            "due": 0,
+            "lapsed": 1,
+            "newQuote": 5,
+            "revQuote": 0,
+            "quoted": 5,
+            "siteVisits": 1,
+            "_sqlTotals": {
+              "enquiries": 19,
+              "due": 0,
+              "lapsed": 1,
+              "newQuoted": 5,
+              "revQuoted": 0,
+              "quoted": 5
+            }
+          }
+        },
+        {
+          "month": 1,
+          "year": 2026,
+          "daily": [
+            {
+              "Date": "2026-01-01",
+              "Enquiries": 26,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 18,
+              "RevQuote": 0,
+              "Quoted": 18
+            },
+            {
+              "Date": "2026-01-02",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-01-03",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-01-04",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 1,
+              "NewQuote": 5,
+              "RevQuote": 0,
+              "Quoted": 5
+            },
+            {
+              "Date": "2026-01-05",
+              "Enquiries": 11,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 2,
+              "NewQuote": 7,
+              "RevQuote": 0,
+              "Quoted": 7
+            },
+            {
+              "Date": "2026-01-06",
+              "Enquiries": 6,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 3,
+              "NewQuote": 3,
+              "RevQuote": 0,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-01-07",
+              "Enquiries": 8,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 2,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-01-08",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 1,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-01-09",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-01-10",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-01-11",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-01-12",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-01-13",
+              "Enquiries": 10,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-01-14",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-01-15",
+              "Enquiries": 11,
+              "Due": 0,
+              "Lapsed": 6,
+              "SiteVisits": 1,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-01-16",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-01-18",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-01-19",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 0,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-01-20",
+              "Enquiries": 8,
+              "Due": 0,
+              "Lapsed": 6,
+              "SiteVisits": 0,
+              "NewQuote": 4,
+              "RevQuote": 0,
+              "Quoted": 4
+            },
+            {
+              "Date": "2026-01-21",
+              "Enquiries": 6,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 2,
+              "RevQuote": 1,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-01-22",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-01-25",
+              "Enquiries": 5,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-01-26",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-01-27",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-01-28",
+              "Enquiries": 5,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-01-29",
+              "Enquiries": 5,
+              "Due": 0,
+              "Lapsed": 5,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-01-30",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            }
+          ],
+          "totals": {
+            "enquiries": 129,
+            "due": 0,
+            "lapsed": 29,
+            "newQuote": 52,
+            "revQuote": 1,
+            "quoted": 53,
+            "siteVisits": 14,
+            "_sqlTotals": {
+              "enquiries": 129,
+              "due": 0,
+              "lapsed": 29,
+              "newQuoted": 52,
+              "revQuoted": 1,
+              "quoted": 53
+            }
+          }
+        },
+        {
+          "month": 2,
+          "year": 2026,
+          "daily": [
+            {
+              "Date": "2026-02-01",
+              "Enquiries": 12,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 2,
+              "NewQuote": 3,
+              "RevQuote": 0,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-02-02",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-02-03",
+              "Enquiries": 5,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-02-04",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 2,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-02-05",
+              "Enquiries": 8,
+              "Due": 0,
+              "Lapsed": 6,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 1,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-02-08",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 0,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-02-09",
+              "Enquiries": 7,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 0,
+              "NewQuote": 3,
+              "RevQuote": 0,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-02-10",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 0,
+              "NewQuote": 3,
+              "RevQuote": 0,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-02-11",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 1,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-02-12",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-02-14",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-02-15",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 1,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-02-16",
+              "Enquiries": 10,
+              "Due": 0,
+              "Lapsed": 6,
+              "SiteVisits": 1,
+              "NewQuote": 3,
+              "RevQuote": 0,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-02-17",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-02-18",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 5,
+              "RevQuote": 0,
+              "Quoted": 5
+            },
+            {
+              "Date": "2026-02-19",
+              "Enquiries": 6,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 4,
+              "RevQuote": 0,
+              "Quoted": 4
+            },
+            {
+              "Date": "2026-02-22",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 3,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-02-23",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-02-24",
+              "Enquiries": 6,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 1,
+              "NewQuote": 3,
+              "RevQuote": 0,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-02-25",
+              "Enquiries": 7,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-02-26",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 1,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            }
+          ],
+          "totals": {
+            "enquiries": 94,
+            "due": 0,
+            "lapsed": 30,
+            "newQuote": 44,
+            "revQuote": 2,
+            "quoted": 46,
+            "siteVisits": 15,
+            "_sqlTotals": {
+              "enquiries": 94,
+              "due": 0,
+              "lapsed": 30,
+              "newQuoted": 44,
+              "revQuoted": 2,
+              "quoted": 46
+            }
+          }
+        },
+        {
+          "month": 3,
+          "year": 2026,
+          "daily": [
+            {
+              "Date": "2026-03-01",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-03-02",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-03-03",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-03-04",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-03-05",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 2,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-03-08",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-03-09",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 1,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-03-10",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-03-11",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-03-12",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-03-15",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-03-16",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-03-17",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-03-19",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-03-20",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-03-25",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-03-26",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-03-29",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 3,
+              "Quoted": 4
+            },
+            {
+              "Date": "2026-03-30",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 1,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-03-31",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 1,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            }
+          ],
+          "totals": {
+            "enquiries": 39,
+            "due": 0,
+            "lapsed": 8,
+            "newQuote": 9,
+            "revQuote": 7,
+            "quoted": 16,
+            "siteVisits": 8,
+            "_sqlTotals": {
+              "enquiries": 39,
+              "due": 0,
+              "lapsed": 8,
+              "newQuoted": 9,
+              "revQuoted": 7,
+              "quoted": 16
+            }
+          }
+        },
+        {
+          "month": 4,
+          "year": 2026,
+          "daily": [
+            {
+              "Date": "2026-04-01",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-04-02",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-04-05",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-04-06",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-04-07",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 1,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-04-08",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-04-09",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 2,
+              "RevQuote": 1,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-04-12",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-04-13",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 2,
+              "NewQuote": 0,
+              "RevQuote": 1,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-04-14",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-04-15",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-04-16",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-04-19",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 2,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-04-20",
+              "Enquiries": 10,
+              "Due": 0,
+              "Lapsed": 4,
+              "SiteVisits": 2,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-04-21",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 3,
+              "RevQuote": 0,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-04-22",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 3,
+              "RevQuote": 0,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-04-23",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-04-27",
+              "Enquiries": 5,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 1,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-04-28",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 0,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-04-29",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 1,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-04-30",
+              "Enquiries": 6,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            }
+          ],
+          "totals": {
+            "enquiries": 68,
+            "due": 0,
+            "lapsed": 18,
+            "newQuote": 21,
+            "revQuote": 4,
+            "quoted": 25,
+            "siteVisits": 14,
+            "_sqlTotals": {
+              "enquiries": 68,
+              "due": 0,
+              "lapsed": 18,
+              "newQuoted": 21,
+              "revQuoted": 4,
+              "quoted": 25
+            }
+          }
+        },
+        {
+          "month": 5,
+          "year": 2026,
+          "daily": [
+            {
+              "Date": "2026-05-01",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-05-03",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-05-04",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-05-05",
+              "Enquiries": 6,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 3,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-05-06",
+              "Enquiries": 5,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 3,
+              "RevQuote": 0,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-05-07",
+              "Enquiries": 6,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 1,
+              "RevQuote": 1,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-05-10",
+              "Enquiries": 5,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-05-11",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 2,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-05-12",
+              "Enquiries": 5,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 7,
+              "RevQuote": 0,
+              "Quoted": 7
+            },
+            {
+              "Date": "2026-05-13",
+              "Enquiries": 6,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-05-14",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 2,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-05-15",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-05-16",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-05-17",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 4,
+              "RevQuote": 0,
+              "Quoted": 4
+            },
+            {
+              "Date": "2026-05-18",
+              "Enquiries": 5,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-05-19",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 2,
+              "NewQuote": 5,
+              "RevQuote": 0,
+              "Quoted": 5
+            },
+            {
+              "Date": "2026-05-20",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-05-21",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 1,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-05-24",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-05-25",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 4,
+              "RevQuote": 0,
+              "Quoted": 4
+            },
+            {
+              "Date": "2026-05-26",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 4,
+              "RevQuote": 0,
+              "Quoted": 4
+            },
+            {
+              "Date": "2026-05-28",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-05-31",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            }
+          ],
+          "totals": {
+            "enquiries": 66,
+            "due": 0,
+            "lapsed": 9,
+            "newQuote": 39,
+            "revQuote": 2,
+            "quoted": 41,
+            "siteVisits": 16,
+            "_sqlTotals": {
+              "enquiries": 66,
+              "due": 0,
+              "lapsed": 9,
+              "newQuoted": 39,
+              "revQuoted": 2,
+              "quoted": 41
+            }
+          }
+        },
+        {
+          "month": 6,
+          "year": 2026,
+          "daily": [
+            {
+              "Date": "2026-06-01",
+              "Enquiries": 10,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 1,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-06-02",
+              "Enquiries": 9,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 4,
+              "NewQuote": 7,
+              "RevQuote": 0,
+              "Quoted": 7
+            },
+            {
+              "Date": "2026-06-03",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 4,
+              "NewQuote": 1,
+              "RevQuote": 1,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-06-04",
+              "Enquiries": 12,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 9,
+              "NewQuote": 5,
+              "RevQuote": 0,
+              "Quoted": 5
+            },
+            {
+              "Date": "2026-06-06",
+              "Enquiries": 6,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 2,
+              "RevQuote": 1,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-06-07",
+              "Enquiries": 6,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 5,
+              "NewQuote": 7,
+              "RevQuote": 2,
+              "Quoted": 9
+            },
+            {
+              "Date": "2026-06-08",
+              "Enquiries": 12,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 7,
+              "RevQuote": 2,
+              "Quoted": 9
+            },
+            {
+              "Date": "2026-06-09",
+              "Enquiries": 7,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 11,
+              "RevQuote": 0,
+              "Quoted": 11
+            },
+            {
+              "Date": "2026-06-10",
+              "Enquiries": 7,
+              "Due": 0,
+              "Lapsed": 4,
+              "SiteVisits": 5,
+              "NewQuote": 7,
+              "RevQuote": 0,
+              "Quoted": 7
+            },
+            {
+              "Date": "2026-06-11",
+              "Enquiries": 8,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 6,
+              "NewQuote": 4,
+              "RevQuote": 2,
+              "Quoted": 6
+            },
+            {
+              "Date": "2026-06-12",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-06-13",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-06-14",
+              "Enquiries": 13,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 2,
+              "NewQuote": 14,
+              "RevQuote": 1,
+              "Quoted": 15
+            },
+            {
+              "Date": "2026-06-15",
+              "Enquiries": 11,
+              "Due": 0,
+              "Lapsed": 4,
+              "SiteVisits": 2,
+              "NewQuote": 7,
+              "RevQuote": 2,
+              "Quoted": 9
+            },
+            {
+              "Date": "2026-06-16",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-06-17",
+              "Enquiries": 19,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 11,
+              "NewQuote": 5,
+              "RevQuote": 2,
+              "Quoted": 7
+            },
+            {
+              "Date": "2026-06-18",
+              "Enquiries": 13,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 8,
+              "NewQuote": 9,
+              "RevQuote": 4,
+              "Quoted": 13
+            },
+            {
+              "Date": "2026-06-19",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-06-20",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-06-21",
+              "Enquiries": 23,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 7,
+              "NewQuote": 13,
+              "RevQuote": 14,
+              "Quoted": 27
+            },
+            {
+              "Date": "2026-06-22",
+              "Enquiries": 17,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 10,
+              "NewQuote": 15,
+              "RevQuote": 2,
+              "Quoted": 17
+            },
+            {
+              "Date": "2026-06-23",
+              "Enquiries": 18,
+              "Due": 0,
+              "Lapsed": 5,
+              "SiteVisits": 5,
+              "NewQuote": 9,
+              "RevQuote": 6,
+              "Quoted": 15
+            },
+            {
+              "Date": "2026-06-24",
+              "Enquiries": 15,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 3,
+              "NewQuote": 15,
+              "RevQuote": 14,
+              "Quoted": 29
+            },
+            {
+              "Date": "2026-06-25",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 5,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-06-26",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-06-27",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 2,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-06-28",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 3,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-06-29",
+              "Enquiries": 12,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 5,
+              "NewQuote": 12,
+              "RevQuote": 3,
+              "Quoted": 15
+            },
+            {
+              "Date": "2026-06-30",
+              "Enquiries": 8,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 11,
+              "RevQuote": 3,
+              "Quoted": 14
+            }
+          ],
+          "totals": {
+            "enquiries": 243,
+            "due": 0,
+            "lapsed": 29,
+            "newQuote": 165,
+            "revQuote": 59,
+            "quoted": 224,
+            "siteVisits": 104,
+            "_sqlTotals": {
+              "enquiries": 243,
+              "due": 0,
+              "lapsed": 29,
+              "newQuoted": 165,
+              "revQuoted": 59,
+              "quoted": 224
+            }
+          }
+        },
+        {
+          "month": 7,
+          "year": 2026,
+          "daily": [
+            {
+              "Date": "2026-07-01",
+              "Enquiries": 30,
+              "Due": 0,
+              "Lapsed": 4,
+              "SiteVisits": 7,
+              "NewQuote": 9,
+              "RevQuote": 5,
+              "Quoted": 14
+            },
+            {
+              "Date": "2026-07-02",
+              "Enquiries": 21,
+              "Due": 0,
+              "Lapsed": 5,
+              "SiteVisits": 11,
+              "NewQuote": 19,
+              "RevQuote": 3,
+              "Quoted": 22
+            },
+            {
+              "Date": "2026-07-03",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 2,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-07-04",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-07-05",
+              "Enquiries": 11,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 7,
+              "NewQuote": 9,
+              "RevQuote": 9,
+              "Quoted": 18
+            },
+            {
+              "Date": "2026-07-06",
+              "Enquiries": 15,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 7,
+              "NewQuote": 16,
+              "RevQuote": 3,
+              "Quoted": 19
+            },
+            {
+              "Date": "2026-07-07",
+              "Enquiries": 24,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 10,
+              "NewQuote": 7,
+              "RevQuote": 1,
+              "Quoted": 8
+            },
+            {
+              "Date": "2026-07-08",
+              "Enquiries": 16,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 10,
+              "NewQuote": 20,
+              "RevQuote": 1,
+              "Quoted": 21
+            },
+            {
+              "Date": "2026-07-09",
+              "Enquiries": 7,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 9,
+              "NewQuote": 5,
+              "RevQuote": 2,
+              "Quoted": 7
+            },
+            {
+              "Date": "2026-07-10",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 1,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-07-11",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-07-12",
+              "Enquiries": 16,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 10,
+              "NewQuote": 15,
+              "RevQuote": 9,
+              "Quoted": 24
+            },
+            {
+              "Date": "2026-07-13",
+              "Enquiries": 12,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 10,
+              "NewQuote": 7,
+              "RevQuote": 4,
+              "Quoted": 11
+            },
+            {
+              "Date": "2026-07-14",
+              "Enquiries": 16,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 8,
+              "NewQuote": 23,
+              "RevQuote": 4,
+              "Quoted": 27
+            },
+            {
+              "Date": "2026-07-15",
+              "Enquiries": 15,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 4,
+              "NewQuote": 19,
+              "RevQuote": 3,
+              "Quoted": 22
+            },
+            {
+              "Date": "2026-07-16",
+              "Enquiries": 14,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 7,
+              "NewQuote": 12,
+              "RevQuote": 6,
+              "Quoted": 18
+            },
+            {
+              "Date": "2026-07-17",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-07-18",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 5,
+              "NewQuote": 2,
+              "RevQuote": 3,
+              "Quoted": 5
+            },
+            {
+              "Date": "2026-07-19",
+              "Enquiries": 11,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 4,
+              "NewQuote": 15,
+              "RevQuote": 0,
+              "Quoted": 15
+            },
+            {
+              "Date": "2026-07-20",
+              "Enquiries": 26,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 10,
+              "NewQuote": 17,
+              "RevQuote": 4,
+              "Quoted": 21
+            },
+            {
+              "Date": "2026-07-21",
+              "Enquiries": 14,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 11,
+              "NewQuote": 17,
+              "RevQuote": 1,
+              "Quoted": 18
+            },
+            {
+              "Date": "2026-07-22",
+              "Enquiries": 13,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 9,
+              "NewQuote": 16,
+              "RevQuote": 2,
+              "Quoted": 18
+            },
+            {
+              "Date": "2026-07-23",
+              "Enquiries": 19,
+              "Due": 0,
+              "Lapsed": 8,
+              "SiteVisits": 4,
+              "NewQuote": 25,
+              "RevQuote": 8,
+              "Quoted": 33
+            },
+            {
+              "Date": "2026-07-25",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-07-26",
+              "Enquiries": 19,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 3,
+              "NewQuote": 26,
+              "RevQuote": 7,
+              "Quoted": 33
+            },
+            {
+              "Date": "2026-07-27",
+              "Enquiries": 19,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 3,
+              "NewQuote": 17,
+              "RevQuote": 4,
+              "Quoted": 21
+            },
+            {
+              "Date": "2026-07-28",
+              "Enquiries": 13,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 10,
+              "NewQuote": 12,
+              "RevQuote": 12,
+              "Quoted": 24
+            },
+            {
+              "Date": "2026-07-29",
+              "Enquiries": 14,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 3,
+              "NewQuote": 10,
+              "RevQuote": 2,
+              "Quoted": 12
+            },
+            {
+              "Date": "2026-07-30",
+              "Enquiries": 11,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 7,
+              "NewQuote": 16,
+              "RevQuote": 7,
+              "Quoted": 23
+            },
+            {
+              "Date": "2026-07-31",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            }
+          ],
+          "totals": {
+            "enquiries": 365,
+            "due": 0,
+            "lapsed": 44,
+            "newQuote": 336,
+            "revQuote": 100,
+            "quoted": 436,
+            "siteVisits": 175,
+            "_sqlTotals": {
+              "enquiries": 365,
+              "due": 0,
+              "lapsed": 44,
+              "newQuoted": 336,
+              "revQuoted": 100,
+              "quoted": 436
+            }
+          }
+        },
+        {
+          "month": 8,
+          "year": 2026,
+          "daily": [
+            {
+              "Date": "2026-08-01",
+              "Enquiries": 16,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 2,
+              "NewQuote": 6,
+              "RevQuote": 3,
+              "Quoted": 9
+            },
+            {
+              "Date": "2026-08-02",
+              "Enquiries": 28,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 5,
+              "NewQuote": 37,
+              "RevQuote": 9,
+              "Quoted": 46
+            },
+            {
+              "Date": "2026-08-03",
+              "Enquiries": 17,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 4,
+              "NewQuote": 19,
+              "RevQuote": 4,
+              "Quoted": 23
+            },
+            {
+              "Date": "2026-08-04",
+              "Enquiries": 22,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 6,
+              "NewQuote": 15,
+              "RevQuote": 5,
+              "Quoted": 20
+            },
+            {
+              "Date": "2026-08-05",
+              "Enquiries": 19,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 5,
+              "NewQuote": 16,
+              "RevQuote": 7,
+              "Quoted": 23
+            },
+            {
+              "Date": "2026-08-06",
+              "Enquiries": 17,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 4,
+              "NewQuote": 9,
+              "RevQuote": 0,
+              "Quoted": 9
+            },
+            {
+              "Date": "2026-08-08",
+              "Enquiries": 9,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-08-09",
+              "Enquiries": 30,
+              "Due": 0,
+              "Lapsed": 5,
+              "SiteVisits": 6,
+              "NewQuote": 25,
+              "RevQuote": 6,
+              "Quoted": 31
+            },
+            {
+              "Date": "2026-08-10",
+              "Enquiries": 23,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 5,
+              "NewQuote": 22,
+              "RevQuote": 16,
+              "Quoted": 38
+            },
+            {
+              "Date": "2026-08-11",
+              "Enquiries": 19,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 3,
+              "NewQuote": 23,
+              "RevQuote": 11,
+              "Quoted": 34
+            },
+            {
+              "Date": "2026-08-12",
+              "Enquiries": 17,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 6,
+              "NewQuote": 13,
+              "RevQuote": 4,
+              "Quoted": 17
+            },
+            {
+              "Date": "2026-08-13",
+              "Enquiries": 20,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 5,
+              "NewQuote": 20,
+              "RevQuote": 17,
+              "Quoted": 37
+            },
+            {
+              "Date": "2026-08-15",
+              "Enquiries": 4,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 2,
+              "NewQuote": 3,
+              "RevQuote": 1,
+              "Quoted": 4
+            },
+            {
+              "Date": "2026-08-16",
+              "Enquiries": 24,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 7,
+              "NewQuote": 20,
+              "RevQuote": 9,
+              "Quoted": 29
+            },
+            {
+              "Date": "2026-08-17",
+              "Enquiries": 27,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 14,
+              "NewQuote": 20,
+              "RevQuote": 4,
+              "Quoted": 24
+            },
+            {
+              "Date": "2026-08-18",
+              "Enquiries": 15,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 8,
+              "NewQuote": 22,
+              "RevQuote": 6,
+              "Quoted": 28
+            },
+            {
+              "Date": "2026-08-19",
+              "Enquiries": 20,
+              "Due": 0,
+              "Lapsed": 4,
+              "SiteVisits": 8,
+              "NewQuote": 21,
+              "RevQuote": 15,
+              "Quoted": 36
+            },
+            {
+              "Date": "2026-08-20",
+              "Enquiries": 23,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 3,
+              "NewQuote": 28,
+              "RevQuote": 11,
+              "Quoted": 39
+            },
+            {
+              "Date": "2026-08-21",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 3,
+              "RevQuote": 0,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-08-22",
+              "Enquiries": 7,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 6,
+              "RevQuote": 2,
+              "Quoted": 8
+            },
+            {
+              "Date": "2026-08-23",
+              "Enquiries": 13,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 4,
+              "NewQuote": 30,
+              "RevQuote": 13,
+              "Quoted": 43
+            },
+            {
+              "Date": "2026-08-24",
+              "Enquiries": 13,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 1,
+              "NewQuote": 14,
+              "RevQuote": 0,
+              "Quoted": 14
+            },
+            {
+              "Date": "2026-08-25",
+              "Enquiries": 7,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 3,
+              "RevQuote": 0,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-08-26",
+              "Enquiries": 22,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 4,
+              "NewQuote": 14,
+              "RevQuote": 5,
+              "Quoted": 19
+            },
+            {
+              "Date": "2026-08-27",
+              "Enquiries": 18,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 9,
+              "NewQuote": 12,
+              "RevQuote": 4,
+              "Quoted": 16
+            },
+            {
+              "Date": "2026-08-28",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 1,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-08-29",
+              "Enquiries": 11,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 3,
+              "NewQuote": 8,
+              "RevQuote": 1,
+              "Quoted": 9
+            },
+            {
+              "Date": "2026-08-30",
+              "Enquiries": 26,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 7,
+              "NewQuote": 42,
+              "RevQuote": 4,
+              "Quoted": 46
+            },
+            {
+              "Date": "2026-08-31",
+              "Enquiries": 21,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 2,
+              "NewQuote": 28,
+              "RevQuote": 6,
+              "Quoted": 34
+            }
+          ],
+          "totals": {
+            "enquiries": 490,
+            "due": 0,
+            "lapsed": 28,
+            "newQuote": 480,
+            "revQuote": 164,
+            "quoted": 644,
+            "siteVisits": 124,
+            "_sqlTotals": {
+              "enquiries": 490,
+              "due": 0,
+              "lapsed": 28,
+              "newQuoted": 480,
+              "revQuoted": 164,
+              "quoted": 644
+            }
+          }
+        },
+        {
+          "month": 9,
+          "year": 2026,
+          "daily": [
+            {
+              "Date": "2026-09-01",
+              "Enquiries": 27,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 6,
+              "NewQuote": 21,
+              "RevQuote": 4,
+              "Quoted": 25
+            },
+            {
+              "Date": "2026-09-02",
+              "Enquiries": 22,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 6,
+              "NewQuote": 27,
+              "RevQuote": 9,
+              "Quoted": 36
+            },
+            {
+              "Date": "2026-09-03",
+              "Enquiries": 22,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 11,
+              "NewQuote": 23,
+              "RevQuote": 12,
+              "Quoted": 35
+            },
+            {
+              "Date": "2026-09-04",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-09-05",
+              "Enquiries": 9,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 13,
+              "RevQuote": 5,
+              "Quoted": 18
+            },
+            {
+              "Date": "2026-09-06",
+              "Enquiries": 24,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 6,
+              "NewQuote": 42,
+              "RevQuote": 8,
+              "Quoted": 50
+            },
+            {
+              "Date": "2026-09-07",
+              "Enquiries": 33,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 5,
+              "NewQuote": 70,
+              "RevQuote": 11,
+              "Quoted": 81
+            },
+            {
+              "Date": "2026-09-08",
+              "Enquiries": 28,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 5,
+              "NewQuote": 32,
+              "RevQuote": 14,
+              "Quoted": 46
+            },
+            {
+              "Date": "2026-09-09",
+              "Enquiries": 35,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 5,
+              "NewQuote": 28,
+              "RevQuote": 16,
+              "Quoted": 44
+            },
+            {
+              "Date": "2026-09-10",
+              "Enquiries": 34,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 10,
+              "NewQuote": 47,
+              "RevQuote": 20,
+              "Quoted": 67
+            },
+            {
+              "Date": "2026-09-11",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-09-12",
+              "Enquiries": 9,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 3,
+              "NewQuote": 45,
+              "RevQuote": 0,
+              "Quoted": 45
+            },
+            {
+              "Date": "2026-09-13",
+              "Enquiries": 39,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 5,
+              "NewQuote": 39,
+              "RevQuote": 16,
+              "Quoted": 55
+            },
+            {
+              "Date": "2026-09-14",
+              "Enquiries": 34,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 7,
+              "NewQuote": 47,
+              "RevQuote": 18,
+              "Quoted": 65
+            },
+            {
+              "Date": "2026-09-15",
+              "Enquiries": 26,
+              "Due": 0,
+              "Lapsed": 4,
+              "SiteVisits": 2,
+              "NewQuote": 48,
+              "RevQuote": 14,
+              "Quoted": 62
+            },
+            {
+              "Date": "2026-09-16",
+              "Enquiries": 39,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 7,
+              "NewQuote": 30,
+              "RevQuote": 14,
+              "Quoted": 44
+            },
+            {
+              "Date": "2026-09-17",
+              "Enquiries": 42,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 6,
+              "NewQuote": 31,
+              "RevQuote": 16,
+              "Quoted": 47
+            },
+            {
+              "Date": "2026-09-18",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-09-19",
+              "Enquiries": 3,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 2,
+              "NewQuote": 62,
+              "RevQuote": 2,
+              "Quoted": 64
+            },
+            {
+              "Date": "2026-09-20",
+              "Enquiries": 35,
+              "Due": 0,
+              "Lapsed": 4,
+              "SiteVisits": 5,
+              "NewQuote": 43,
+              "RevQuote": 15,
+              "Quoted": 58
+            },
+            {
+              "Date": "2026-09-21",
+              "Enquiries": 38,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 5,
+              "NewQuote": 33,
+              "RevQuote": 10,
+              "Quoted": 43
+            },
+            {
+              "Date": "2026-09-22",
+              "Enquiries": 29,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 7,
+              "NewQuote": 32,
+              "RevQuote": 3,
+              "Quoted": 35
+            },
+            {
+              "Date": "2026-09-23",
+              "Enquiries": 27,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 5,
+              "NewQuote": 25,
+              "RevQuote": 8,
+              "Quoted": 33
+            },
+            {
+              "Date": "2026-09-24",
+              "Enquiries": 27,
+              "Due": 0,
+              "Lapsed": 5,
+              "SiteVisits": 4,
+              "NewQuote": 38,
+              "RevQuote": 8,
+              "Quoted": 46
+            },
+            {
+              "Date": "2026-09-25",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 3,
+              "RevQuote": 0,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-09-26",
+              "Enquiries": 19,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 18,
+              "RevQuote": 2,
+              "Quoted": 20
+            },
+            {
+              "Date": "2026-09-27",
+              "Enquiries": 36,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 7,
+              "NewQuote": 28,
+              "RevQuote": 7,
+              "Quoted": 35
+            },
+            {
+              "Date": "2026-09-28",
+              "Enquiries": 29,
+              "Due": 0,
+              "Lapsed": 5,
+              "SiteVisits": 7,
+              "NewQuote": 31,
+              "RevQuote": 7,
+              "Quoted": 38
+            },
+            {
+              "Date": "2026-09-29",
+              "Enquiries": 23,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 6,
+              "NewQuote": 22,
+              "RevQuote": 14,
+              "Quoted": 36
+            },
+            {
+              "Date": "2026-09-30",
+              "Enquiries": 33,
+              "Due": 0,
+              "Lapsed": 6,
+              "SiteVisits": 8,
+              "NewQuote": 36,
+              "RevQuote": 7,
+              "Quoted": 43
+            }
+          ],
+          "totals": {
+            "enquiries": 726,
+            "due": 0,
+            "lapsed": 58,
+            "newQuote": 915,
+            "revQuote": 260,
+            "quoted": 1175,
+            "siteVisits": 143,
+            "_sqlTotals": {
+              "enquiries": 726,
+              "due": 0,
+              "lapsed": 58,
+              "newQuoted": 915,
+              "revQuoted": 260,
+              "quoted": 1175
+            }
+          }
+        },
+        {
+          "month": 10,
+          "year": 2026,
+          "daily": [
+            {
+              "Date": "2026-10-01",
+              "Enquiries": 30,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 6,
+              "NewQuote": 33,
+              "RevQuote": 9,
+              "Quoted": 42
+            },
+            {
+              "Date": "2026-10-02",
+              "Enquiries": 1,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-10-03",
+              "Enquiries": 11,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 5,
+              "NewQuote": 8,
+              "RevQuote": 1,
+              "Quoted": 9
+            },
+            {
+              "Date": "2026-10-04",
+              "Enquiries": 30,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 9,
+              "NewQuote": 26,
+              "RevQuote": 9,
+              "Quoted": 35
+            },
+            {
+              "Date": "2026-10-05",
+              "Enquiries": 27,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 4,
+              "NewQuote": 30,
+              "RevQuote": 12,
+              "Quoted": 42
+            },
+            {
+              "Date": "2026-10-06",
+              "Enquiries": 39,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 6,
+              "NewQuote": 38,
+              "RevQuote": 4,
+              "Quoted": 42
+            },
+            {
+              "Date": "2026-10-07",
+              "Enquiries": 31,
+              "Due": 0,
+              "Lapsed": 4,
+              "SiteVisits": 4,
+              "NewQuote": 38,
+              "RevQuote": 12,
+              "Quoted": 50
+            },
+            {
+              "Date": "2026-10-08",
+              "Enquiries": 26,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 11,
+              "NewQuote": 24,
+              "RevQuote": 7,
+              "Quoted": 31
+            },
+            {
+              "Date": "2026-10-09",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 1,
+              "NewQuote": 2,
+              "RevQuote": 0,
+              "Quoted": 2
+            },
+            {
+              "Date": "2026-10-10",
+              "Enquiries": 12,
+              "Due": 0,
+              "Lapsed": 0,
+              "SiteVisits": 3,
+              "NewQuote": 3,
+              "RevQuote": 0,
+              "Quoted": 3
+            },
+            {
+              "Date": "2026-10-11",
+              "Enquiries": 58,
+              "Due": 0,
+              "Lapsed": 4,
+              "SiteVisits": 10,
+              "NewQuote": 43,
+              "RevQuote": 13,
+              "Quoted": 56
+            },
+            {
+              "Date": "2026-10-12",
+              "Enquiries": 40,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 14,
+              "NewQuote": 41,
+              "RevQuote": 15,
+              "Quoted": 56
+            },
+            {
+              "Date": "2026-10-13",
+              "Enquiries": 42,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 11,
+              "NewQuote": 39,
+              "RevQuote": 11,
+              "Quoted": 50
+            },
+            {
+              "Date": "2026-10-14",
+              "Enquiries": 33,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 4,
+              "NewQuote": 40,
+              "RevQuote": 9,
+              "Quoted": 49
+            },
+            {
+              "Date": "2026-10-15",
+              "Enquiries": 25,
+              "Due": 0,
+              "Lapsed": 5,
+              "SiteVisits": 9,
+              "NewQuote": 29,
+              "RevQuote": 4,
+              "Quoted": 33
+            },
+            {
+              "Date": "2026-10-16",
+              "Enquiries": 2,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 0,
+              "NewQuote": 1,
+              "RevQuote": 0,
+              "Quoted": 1
+            },
+            {
+              "Date": "2026-10-17",
+              "Enquiries": 7,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 3,
+              "NewQuote": 4,
+              "RevQuote": 0,
+              "Quoted": 4
+            },
+            {
+              "Date": "2026-10-18",
+              "Enquiries": 48,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 10,
+              "NewQuote": 44,
+              "RevQuote": 8,
+              "Quoted": 52
+            },
+            {
+              "Date": "2026-10-19",
+              "Enquiries": 41,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 9,
+              "NewQuote": 46,
+              "RevQuote": 4,
+              "Quoted": 50
+            },
+            {
+              "Date": "2026-10-20",
+              "Enquiries": 52,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 7,
+              "NewQuote": 49,
+              "RevQuote": 9,
+              "Quoted": 58
+            },
+            {
+              "Date": "2026-10-21",
+              "Enquiries": 28,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 10,
+              "NewQuote": 27,
+              "RevQuote": 7,
+              "Quoted": 34
+            },
+            {
+              "Date": "2026-10-22",
+              "Enquiries": 30,
+              "Due": 0,
+              "Lapsed": 2,
+              "SiteVisits": 13,
+              "NewQuote": 30,
+              "RevQuote": 4,
+              "Quoted": 34
+            },
+            {
+              "Date": "2026-10-23",
+              "Enquiries": 0,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            },
+            {
+              "Date": "2026-10-24",
+              "Enquiries": 8,
+              "Due": 0,
+              "Lapsed": 1,
+              "SiteVisits": 0,
+              "NewQuote": 8,
+              "RevQuote": 0,
+              "Quoted": 8
+            },
+            {
+              "Date": "2026-10-25",
+              "Enquiries": 43,
+              "Due": 0,
+              "Lapsed": 5,
+              "SiteVisits": 7,
+              "NewQuote": 47,
+              "RevQuote": 19,
+              "Quoted": 66
+            },
+            {
+              "Date": "2026-10-26",
+              "Enquiries": 40,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 5,
+              "NewQuote": 49,
+              "RevQuote": 8,
+              "Quoted": 57
+            },
+            {
+              "Date": "2026-10-27",
+              "Enquiries": 24,
+              "Due": 0,
+              "Lapsed": 3,
+              "SiteVisits": 10,
+              "NewQuote": 37,
+              "RevQuote": 9,
+              "Quoted": 46
+            },
+            {
+              "Date": "2026-10-28",
+              "Enquiries": 30,
+              "Due": 0,
+              "Lapsed": 4,
+              "SiteVisits": 4,
+              "NewQuote": 29,
+              "RevQuote": 5,
+              "Quoted": 34
+            },
+            {
+              "Date": "2026-10-29",
+              "Enquiries": 16,
+              "Due": 0,
+              "Lapsed": 9,
+              "SiteVisits": 4,
+              "NewQuote": 21,
+              "RevQuote": 1,
+              "Quoted": 22
+            },
+            {
+              "Date": "2026-10-31",
+              "Enquiries": 0,
+              "Due": 1,
+              "Lapsed": 0,
+              "SiteVisits": 0,
+              "NewQuote": 0,
+              "RevQuote": 0,
+              "Quoted": 0
+            }
+          ],
+          "totals": {
+            "enquiries": 776,
+            "due": 1,
+            "lapsed": 66,
+            "newQuote": 787,
+            "revQuote": 180,
+            "quoted": 967,
+            "siteVisits": 179,
+            "_sqlTotals": {
+              "enquiries": 776,
+              "due": 1,
+              "lapsed": 66,
+              "newQuoted": 787,
+              "revQuoted": 180,
+              "quoted": 967
+            }
+          }
+        }
+      ]
+    }
+  }
+]

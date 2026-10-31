@@ -89,11 +89,11 @@ export const DataProvider = ({ children }) => {
                     return Array.isArray(d) ? d : [];
                 };
 
-                const [enqRes, custRes, contRes, userRes, itemRes] = await Promise.all([
-                    fetch(`${API_URL}/enquiries?listScope=all`, { cache: 'no-store' }).catch((err) => {
-                        console.error('[DataContext] Enquiries fetch failed:', err);
-                        return null;
-                    }),
+                // The large enquiry cache must not hold up customer/user selectors.
+                void fetchEnquiriesFromApi({ listScope: 'all' })
+                    .then(setEnquiries)
+                    .catch(err => console.error('[DataContext] Enquiries fetch failed:', err));
+                const [custRes, contRes, userRes, itemRes] = await Promise.all([
                     fetch(`${API_URL}/customers`).catch((err) => {
                         console.error('[DataContext] Customers fetch failed:', err);
                         return null;
@@ -102,7 +102,7 @@ export const DataProvider = ({ children }) => {
                         console.error('[DataContext] Contacts fetch failed:', err);
                         return null;
                     }),
-                    fetch(`${API_URL}/users`).catch((err) => {
+                    fetch(`${API_URL}/users?summary=1`).catch((err) => {
                         console.error('[DataContext] Users fetch failed:', err);
                         return null;
                     }),
@@ -113,19 +113,16 @@ export const DataProvider = ({ children }) => {
                 ]);
 
                 const emptyParsed = { ok: false, status: 0, data: {} };
-                const enqParsed = enqRes ? await readApiJson(enqRes) : emptyParsed;
                 const custParsed = custRes ? await readApiJson(custRes) : emptyParsed;
                 const contParsed = contRes ? await readApiJson(contRes) : emptyParsed;
                 const userParsed = userRes ? await readApiJson(userRes) : emptyParsed;
                 const itemParsed = itemRes ? await readApiJson(itemRes) : emptyParsed;
 
-                const enqData = asArray(enqParsed, 'enquiries');
                 const custData = asArray(custParsed, 'customers');
                 const contData = asArray(contParsed, 'contacts');
                 const userData = asArray(userParsed, 'users');
                 const itemData = asArray(itemParsed, 'enquiry-items');
 
-                setEnquiries(mapEnquiriesResponse(enqData));
 
                 const contractors = custData.filter(c => c.Category === 'Contractor').map(c => c.CompanyName);
                 const clients = custData.filter(c => c.Category === 'Client').map(c => c.CompanyName);

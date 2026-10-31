@@ -1,0 +1,24 @@
+const fs = require('node:fs');
+const path = 'src/components/Quote/QuoteForm.jsx';
+let s = fs.readFileSync(path, 'utf8');
+const removeBetween = (start, end) => {
+    const a = s.indexOf(start), b = s.indexOf(end, a);
+    if (a < 0 || b < a) throw new Error(`Missing boundary: ${start}`);
+    s = s.slice(0, a) + s.slice(b);
+};
+removeBetween('        const measureHeights = () => {', '        const applyPack = () => {');
+const a = s.indexOf('            const heights = measureHeights();');
+const b = s.indexOf('            previewRoot\n', a);
+if (a < 0 || b < a) throw new Error('Missing per-segment height measurement');
+s = s.slice(0, a) + '            const heights = compactPackHeightsPx(clauseSegmentsForPagination, null);\n' + s.slice(b);
+s = s.replace('        const host = clauseMeasureHostRef.current;\n        if (!preview || !host) {', '        if (!preview) {');
+s = s.replace('        host.style.width = `${Math.max(280, defaultInnerW)}px`;\n', '');
+removeBetween('    /** Off-screen measure nodes — always on', '    useEffect(() => {\n        if (!isQuotePreviewVisible) return undefined;\n        const onWheel');
+removeBetween('                                    <div\n                                        ref={clauseMeasureHostRef}', '                                    {sheets.map((sheet, sheetIdx) => {');
+s = s.replace('    const clauseMeasureHostRef = useRef(null);\n', '');
+s = s.replace("const contentSig = `${content.length}:${content.slice(0, 64)}:${content.slice(-96)}`;", 'const contentSig = content;');
+const late = s.indexOf('            /*\n             * Late reflow (fonts/tables)');
+const lateEnd = s.indexOf('        };\n\n        /* Instant estimate', late);
+if (late < 0 || lateEnd < late) throw new Error('Missing fixed settle timers');
+s = s.slice(0, late) + s.slice(lateEnd);
+fs.writeFileSync(path, s);

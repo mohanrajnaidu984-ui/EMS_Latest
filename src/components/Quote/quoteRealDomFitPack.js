@@ -61,12 +61,24 @@ function isNoteLabelOnlyHtml(html) {
 
 function segmentIsHeadingOnly(seg) {
     if (!seg?.showHeading) return false;
-    const plain = String(seg.html || '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .replace(/\u00a0/g, ' ')
-        .trim();
-    return plain.length < 8;
+    return !segmentHasBody(seg);
+}
+
+function segmentHasBody(seg) {
+    const html = String(seg?.html || '');
+    return /<(?:table|img|svg|hr)\b/i.test(html) || Boolean(html
+        .replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/gi, ' ')
+        .replace(/[\s\u00a0\u200b\ufeff]/g, ''));
+}
+
+// A run of editor spacer units is not the first paragraph of a heading.
+function endsWithOrphanHeading(group, segments) {
+    for (let i = group.length - 1; i >= 0; i--) {
+        const seg = segments[group[i]];
+        if (seg?.showHeading) return !segmentHasBody(seg);
+        if (segmentHasBody(seg)) return false;
+    }
+    return false;
 }
 
 /**
@@ -85,12 +97,12 @@ function segmentNeedsCappedKeepWith(seg) {
  * How many following units to glue (capped).
  * - Note label → 1 (first bullet)
  * - General → 1 (first data row)
- * - Heading-only → up to 2 (first ~2 lines / units)
+ * - Heading-only → first real body unit (already paragraph/row sized)
  */
 function keepWithFollowCount(seg) {
     if (isNoteLabelOnlyHtml(seg?.html)) return 1;
     if (isTableSectionHeaderHtml(seg?.html)) return 1;
-    if (segmentIsHeadingOnly(seg)) return 2;
+    if (segmentIsHeadingOnly(seg)) return 1;
     return 0;
 }
 
@@ -129,7 +141,6 @@ export function packSegmentsByRealDomFit(indices, options = {}) {
     /** @type {number[][]} */
     const pages = [];
     /** @type {number[]} */
-    let cur = [];
 
     const fitOf = (group, pageIdx) => {
         if (!group.length) {
@@ -172,7 +183,7 @@ export function packSegmentsByRealDomFit(indices, options = {}) {
             return { chain, nextIi };
         }
         const want = keepWithFollowCount(seg);
-        for (let k = 0; k < want && nextIi < indices.length; k += 1) {
+        for (let k = 0; k < want && nextIi < indices.length;) {
             const follow = indices[nextIi];
             const followSeg = segments[follow];
             if (followSeg?.clauseIdx !== seg.clauseIdx && seg.clauseIdx != null) break;
@@ -180,75 +191,60 @@ export function packSegmentsByRealDomFit(indices, options = {}) {
             if (k > 0 && isBoqNoteBlockHtml(followSeg?.html)) break;
             chain.push(follow);
             nextIi += 1;
+            if (segmentHasBody(followSeg) && !segmentNeedsCappedKeepWith(followSeg)) k += 1;
         }
         return { chain, nextIi };
     };
 
+    // Search whole candidate pages instead of rebuilding the DOM for every
+    // additional row. Existing fit, keep-with, verification and fill rules remain
+    // authoritative; exponential bounds avoid measuring an entire long BOQ first.
     let ii = 0;
     while (ii < indices.length) {
         const pageIdx = pages.length;
-        const { chain, nextIi } = buildChain(ii);
-        const sheetEmpty = cur.length === 0;
-        const trial = [...cur, ...chain];
-        const fit = fitOf(trial, pageIdx);
-
-        if (fit.ok) {
-            cur = trial;
-            ii = nextIi;
-            continue;
-        }
-
-        /* Does not fit. */
-        if (sheetEmpty) {
-            /*
-             * Forced progress ONLY on an empty sheet when a single unit (or minimal
-             * keep-with chain) is taller than the limit.
-             */
-            if (chain.length === 1 || segmentNeedsCappedKeepWith(segments[chain[0]])) {
-                /* Try shrinking keep-with to just the head unit if chain > 1. */
-                if (chain.length > 1) {
-                    const headOnly = [chain[0]];
-                    const headFit = fitOf(headOnly, pageIdx);
-                    if (headFit.ok) {
-                        /* Minimal chain does not fit as a whole → start new sheet with head… wait, sheet is empty.
-                         * Head alone fits: place head only, leave follow for later (do not force full chain). */
-                        cur = headOnly;
-                        ii = ii + 1;
-                        continue;
-                    }
-                    /* Head alone overflows empty sheet — forced progress. */
-                    cur = headOnly;
-                    pages.push(cur);
-                    cur = [];
-                    ii = ii + 1;
-                    continue;
-                }
-                /* Single oversized unit on empty sheet. */
-                cur = chain;
-                pages.push(cur);
-                cur = [];
-                ii = nextIi;
+        const first = buildChain(ii);
+        let firstEnd = first.nextIi;
+        if (!fitOf(first.chain, pageIdx).ok) {
+            firstEnd = ii + 1;
+            if (!fitOf([indices[ii]], pageIdx).ok) {
+                // Preserve the oversized atomic unit. The live integrity gate
+                // blocks export until it can fit; never discard its content.
+                pages.push([indices[ii++]]);
                 continue;
             }
         }
-
-        /* Non-empty sheet: never force. Close sheet and retry chain on a new sheet. */
-        if (cur.length) {
-            pages.push(cur);
-            cur = [];
-            /* retry same ii on fresh sheet */
-            continue;
+        const ends = [ii, firstEnd];
+        for (let cursor = firstEnd; cursor < indices.length;) {
+            cursor = buildChain(cursor).nextIi;
+            ends.push(cursor);
         }
-
-        /* Empty sheet but chain still fails after shrink — force head only. */
-        cur = [chain[0]];
-        pages.push(cur);
-        cur = [];
-        ii = ii + 1;
-    }
-
-    if (cur.length) {
-        pages.push(cur);
+        const count = ends.length - 1;
+        let best = 1;
+        let failed = count + 1;
+        let probe = Math.min(2, count);
+        while (probe > best) {
+            if (fitOf(indices.slice(ii, ends[probe]), pageIdx).ok) {
+                best = probe;
+                if (probe === count) break;
+                probe = Math.min(count, probe * 2);
+            } else {
+                failed = probe;
+                break;
+            }
+        }
+        let lo = best + 1;
+        let hi = Math.min(count, failed - 1);
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (fitOf(indices.slice(ii, ends[mid]), pageIdx).ok) {
+                best = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        pages.push(indices.slice(ii, ends[best]));
+        ii = ends[best];
     }
 
     let groups = ensureSegmentPageGroupsCoverAll(
@@ -256,27 +252,36 @@ export function packSegmentsByRealDomFit(indices, options = {}) {
         segments.length
     );
 
-    /* Verify-down until each page's measureFit says ok (cap 48). Prevents BOQ/matrix
-     * rows being handed to the live preview already past CONTENT END. */
-    for (let sweep = 0; sweep < 48; sweep += 1) {
+    /*
+     * Verify-down with binary search: find the longest prefix that still fits.
+     * Heuristic "peel N by overshoot/16" left BOQ pages overpacked (enquiry 1515).
+     * Cap sweeps generously — sole tall units are left alone for soft-split.
+     */
+    for (let sweep = 0; sweep < 128; sweep += 1) {
         let changed = false;
         for (let si = 0; si < groups.length; si += 1) {
             const g = groups[si];
             if (!g || g.length <= 1) continue;
             const fit = fitOf(g, si);
             if (fit.ok) continue;
-            const overshootPx = Math.max(0, (fit.bottomPx || 0) - (fit.limitPx || 0));
-            const batch = Math.min(
-                g.length - 1,
-                Math.max(1, Math.ceil(overshootPx / 16) || 1)
-            );
-            /** @type {number[]} */
-            const movedBatch = [];
-            for (let k = 0; k < batch && g.length > 1; k += 1) {
-                const moved = g.pop();
-                if (moved == null) break;
-                movedBatch.unshift(moved);
+
+            /* Binary search longest fitting prefix (at least 1 unit stays). */
+            let lo = 1;
+            let hi = g.length - 1;
+            let best = 1;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                const prefix = g.slice(0, mid);
+                const prefFit = fitOf(prefix, si);
+                if (prefFit.ok) {
+                    best = mid;
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
             }
+            if (best >= g.length) continue;
+            const movedBatch = g.splice(best);
             if (!movedBatch.length) continue;
             if (si + 1 < groups.length) {
                 groups[si + 1] = [...movedBatch, ...groups[si + 1]];
@@ -291,6 +296,41 @@ export function packSegmentsByRealDomFit(indices, options = {}) {
             groups.filter((g) => g.length > 0),
             segments.length
         );
+    }
+
+    /*
+     * Fill-up: binary-search how many leading units from the next page still fit.
+     * One-at-a-time left nearly-empty trailing sheets after coarse verify-down peels.
+     */
+    for (let sweep = 0; sweep < 64; sweep += 1) {
+        let changed = false;
+        for (let si = 0; si < groups.length - 1; si += 1) {
+            const curG = groups[si];
+            const next = groups[si + 1];
+            if (!curG?.length || !next?.length) continue;
+            let lo = 1;
+            let hi = next.length;
+            let best = 0;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                const trial = [...curG, ...next.slice(0, mid)];
+                const fit = fitOf(trial, si);
+                if (fit.ok) {
+                    best = mid;
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            while (best > 0 && endsWithOrphanHeading([...curG, ...next.slice(0, best)], segments)) best--;
+            if (best < 1) continue;
+            const moved = next.splice(0, best);
+            curG.push(...moved);
+            if (!next.length) groups.splice(si + 1, 1);
+            changed = true;
+            break;
+        }
+        if (!changed) break;
     }
 
     const integrity = assertSegmentPageGroupsIntegrity(groups, segments.length);

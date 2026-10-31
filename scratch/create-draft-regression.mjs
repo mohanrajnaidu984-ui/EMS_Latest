@@ -1,0 +1,12 @@
+import fs from 'node:fs';
+let s=fs.readFileSync('e2e/quote-pagination-investigation.spec.js','utf8');
+s=s.replace("1515 independent preview investigation","1515 current draft regression").replace("const dir = 'e2e/artifacts/independent-investigation'","const dir = 'e2e/artifacts/current-draft-1515'");
+const a=s.indexOf("        await page.getByLabel('Previous Quotes / Revisions (Updated)'");
+const b=s.indexOf('        const results = [];',a);
+s=s.slice(0,a)+`        await page.screenshot({path: dir + '/draft-start.png'});
+        console.log('DRAFT_MODE', await page.getByLabel('Previous Quotes / Revisions (Updated)', {exact:true}).isChecked());
+        fs.writeFileSync(dir + '/draft-before.txt', await page.locator('#quote-print-root #quote-preview').evaluate(root => root.outerHTML));
+`+s.slice(b);
+s=s.replace("await page.addInitScript(seedEmsAuthInBrowser, EMS_E2E_ADMIN);",`await page.route('**/api/quotes/**', route => ['GET','HEAD'].includes(route.request().method()) ? route.continue() : route.abort());
+    await page.addInitScript(seedEmsAuthInBrowser, EMS_E2E_ADMIN);`);
+fs.writeFileSync('e2e/quote-current-draft-regression.spec.js',s);

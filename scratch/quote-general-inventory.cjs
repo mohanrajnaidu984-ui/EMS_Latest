@@ -1,0 +1,7 @@
+const fs=require('fs'),path=require('path');const root=path.resolve(__dirname,'..');require(path.join(root,'server/node_modules/dotenv')).config({path:path.join(root,'server/.env'),quiet:true});const db=require(path.join(root,'server/dbConfig.js'));
+(async()=>{await db.connectDB();try{const r=await db.sql.query(`WITH latest AS (
+ SELECT ID,RequestNo,QuoteNumber,OwnJob,LeadJob,ToName,RevisionNo,UpdatedAt,PageOrientationsJson,
+ LEN(ISNULL(CustomClauses,''))+LEN(ISNULL(ScopeOfWork,''))+LEN(ISNULL(BasisOfOffer,''))+LEN(ISNULL(BillOfQuantity,''))+LEN(ISNULL(PricingTerms,''))+LEN(ISNULL(TermsConditions,''))+LEN(ISNULL(ResponsibilityMatrix,'')) AS HtmlChars,
+ ROW_NUMBER() OVER(PARTITION BY RequestNo,LeadJob,OwnJob,ToName ORDER BY ISNULL(RevisionNo,0) DESC,ID DESC) AS rn FROM EnquiryQuotes WHERE QuoteNumber IS NOT NULL AND LEN(QuoteNumber)>0)
+ SELECT TOP 100 ID,RequestNo,QuoteNumber,OwnJob,LeadJob,ToName,RevisionNo,HtmlChars,PageOrientationsJson FROM latest WHERE rn=1 AND RequestNo<>'1515' ORDER BY UpdatedAt DESC,ID DESC`);
+ fs.mkdirSync(path.join(root,'e2e/artifacts/general-pagination'),{recursive:true});fs.writeFileSync(path.join(root,'e2e/artifacts/general-pagination/inventory.json'),JSON.stringify(r.recordset,null,2));console.log(r.recordset.slice(0,32).map(({ToName,PageOrientationsJson,...x})=>({...x,landscape:/landscape/i.test(PageOrientationsJson||'')})));}finally{await db.disconnectDB();}})().catch(e=>{console.error(e.message);process.exitCode=1;});

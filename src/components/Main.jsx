@@ -1,21 +1,21 @@
 import React, { Suspense, lazy, useEffect } from 'react';
-import EnquiryForm from './Enquiry/EnquiryForm';
-import SearchEnquiry from './Enquiry/SearchEnquiry';
-import Dashboard from './Dashboard/Dashboard';
-import PricingForm from './Pricing/PricingForm';
-import QuoteForm from './Quote/QuoteForm';
-import QuoteB2CPlaceholder from './Quote/QuoteB2CPlaceholder';
-import QuoteApprovalPage from './Quote/QuoteApprovalPage';
 import { QUOTE_TAB_B2B, QUOTE_TAB_B2C, isQuoteModuleTab } from '../utils/quoteNav';
-import ProbabilityForm from './Probability/ProbabilityForm';
-import ChatBox from './ChatBox/ChatBox';
 import { isChatboxEnabled, disconnectChatboxSocket } from '../utils/chatboxSocket';
 
-const SalesReport = lazy(() => import('./SalesReport/SalesReport'));
-import SalesTarget from './SalesTarget/SalesTarget';
-import About from './About/About';
-import Help from './Help/Help';
-import Usage from './Usage/Usage';
+import { loadAppModule } from '../utils/modulePreload';
+const EnquiryForm = lazy(() => loadAppModule('Enquiry'));
+const Dashboard = lazy(() => loadAppModule('Dashboard'));
+const PricingForm = lazy(() => loadAppModule('Pricing'));
+const QuoteForm = lazy(() => loadAppModule('Quote B2B'));
+const QuoteB2CPlaceholder = lazy(() => loadAppModule('Quote B2C'));
+const QuoteApprovalPage = lazy(() => loadAppModule('Approvals'));
+const ProbabilityForm = lazy(() => loadAppModule('Probability'));
+const ChatBox = lazy(() => loadAppModule('ChatBox'));
+const SalesReport = lazy(() => loadAppModule('Sales Report'));
+const SalesTarget = lazy(() => loadAppModule('Reports'));
+const About = lazy(() => loadAppModule('About'));
+const Help = lazy(() => loadAppModule('Help'));
+const Usage = lazy(() => loadAppModule('Usage'));
 import { useAuth } from '../context/AuthContext';
 
 const Main = ({ activeTab, onNavigate, enquiryToOpen, openContext, onOpenEnquiry }) => {
@@ -56,6 +56,7 @@ const Main = ({ activeTab, onNavigate, enquiryToOpen, openContext, onOpenEnquiry
     return (
         <div style={fullHeightShellStyle}>
             {/* Tab Content */}
+            <Suspense fallback={<div className="p-3 text-muted" role="status" data-ems-module-loading="1">Loading…</div>}>
             <div className="tab-content" style={fullHeightShellStyle}>
                 {chatboxOn && activeTab === 'ChatBox' && (
                     <ChatBox
@@ -93,7 +94,7 @@ const Main = ({ activeTab, onNavigate, enquiryToOpen, openContext, onOpenEnquiry
                 {activeTab === 'Sales Report' && (
                     <Suspense
                         fallback={
-                            <div className="d-flex justify-content-center align-items-center py-5">
+                            <div className="d-flex justify-content-center align-items-center py-5" data-ems-module-loading="1">
                                 <div className="spinner-border text-primary" role="status">
                                     <span className="visually-hidden">Loading report…</span>
                                 </div>
@@ -113,6 +114,7 @@ const Main = ({ activeTab, onNavigate, enquiryToOpen, openContext, onOpenEnquiry
                     <SalesTarget />
                 )}
             </div>
+            </Suspense>
         </div>
     );
 };

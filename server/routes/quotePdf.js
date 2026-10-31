@@ -659,6 +659,34 @@ async function waitForImagesLoaded(page) {
  * Single Chromium round-trip: fonts + style clean + empty-sheet prune + A4 layout pin.
  * Replaces three serial page.evaluate calls.
  */
+// Validate the document after Chromium applies export CSS. Preview validation
+// alone cannot catch a print-only wrapping change; never emit a cropped PDF.
+async function assertQuotePdfContentFits(page) {
+    const violations = await page.evaluate(() => {
+        const failures = [];
+        document.querySelectorAll('#quote-preview .quote-a4-sheet--continuation').forEach((sheet, index) => {
+            const content = sheet.querySelector('.content-section');
+            if (!content) return;
+            const bounds = content.getBoundingClientRect();
+            content.querySelectorAll('[data-ems-pack-seg]').forEach(unit => {
+                const rect = unit.getBoundingClientRect();
+                const range = document.createRange();
+                range.selectNodeContents(unit);
+                const textRect = range.getBoundingClientRect();
+                const bottom = Math.max(rect.bottom, textRect.bottom);
+                if (bottom > bounds.bottom + 1.5 || rect.top < bounds.top - 1.5) {
+                    failures.push({ page: index + 2, unit: unit.getAttribute('data-ems-pack-seg'),
+                        overflowPx: Math.round(bottom - bounds.bottom) });
+                }
+            });
+        });
+        return failures.slice(0, 12);
+    });
+    if (violations.length) {
+        throw new Error(`Quote PDF layout validation failed: content exceeds its page boundary (${JSON.stringify(violations)}). Re-align the quotation before downloading.`);
+    }
+}
+
 async function prepareLoadedHtmlForPdf(page) {
     const prep = await page.evaluate(async () => {
         if (document.fonts && document.fonts.ready) {
@@ -785,6 +813,9 @@ async function prepareLoadedHtmlForPdf(page) {
         }
 
         const pinSheetGrid = (sheetEl, isCover) => {
+            // Modern clients already pin the exact logo/body/footer bands. Keep
+            // those dimensions instead of replacing them with auto-sized rows.
+            const pinnedRows = sheetEl.style.getPropertyValue('grid-template-rows');
             const isLandscape =
                 sheetEl.classList.contains('quote-a4-sheet--landscape') ||
                 sheetEl.getAttribute('data-page-orientation') === 'landscape';
@@ -799,18 +830,18 @@ async function prepareLoadedHtmlForPdf(page) {
             sheetEl.style.setProperty('min-width', sheetW, 'important');
             sheetEl.style.setProperty('max-width', sheetW, 'important');
             sheetEl.style.setProperty('padding', '15mm', 'important');
-            if (!isCover && !isLandscape) {
-                sheetEl.style.setProperty('padding-bottom', 'calc(15mm - 48px)', 'important');
-            }
             sheetEl.style.setProperty('margin', '0', 'important');
             sheetEl.style.setProperty('height', sheetH, 'important');
             sheetEl.style.setProperty('min-height', sheetH, 'important');
             sheetEl.style.setProperty('max-height', sheetH, 'important');
             sheetEl.style.setProperty('display', 'grid', 'important');
             sheetEl.style.setProperty('grid-template-columns', 'minmax(0, 1fr)', 'important');
-            sheetEl.style.setProperty('grid-template-rows', 'auto minmax(0, 1fr) auto', 'important');
+            sheetEl.style.setProperty('grid-template-rows',
+                isCover ? 'auto minmax(0, 1fr) auto' : pinnedRows || '21mm minmax(0, 1fr) 26mm', 'important');
             sheetEl.style.setProperty('align-content', 'stretch', 'important');
-            sheetEl.style.setProperty('overflow', 'hidden', 'important');
+            // The body has its own fixed content box. Clipping the outer grid
+            // suppresses logo image paint on some later Chromium PDF fragments.
+            sheetEl.style.setProperty('overflow', 'visible', 'important');
             const logo = sheetEl.querySelector(':scope > .quote-sheet-logo-row');
             if (logo) {
                 logo.style.setProperty('grid-row', '1', 'important');
@@ -955,10 +986,10 @@ async function prepareLoadedHtmlForPdf(page) {
         });
 
         document.querySelectorAll('.quote-sheet-logo-row img, .quote-continuation-header img').forEach((img) => {
-            img.style.setProperty('max-height', '68px', 'important');
+            img.style.setProperty('max-height', '12.6mm', 'important');
             img.style.setProperty('height', 'auto', 'important');
             img.style.setProperty('width', 'auto', 'important');
-            img.style.setProperty('max-width', '212px', 'important');
+            img.style.setProperty('max-width', '100%', 'important');
             img.style.setProperty('object-fit', 'contain', 'important');
             img.style.setProperty('display', 'inline-block', 'important');
             img.style.setProperty('margin-left', 'auto', 'important');
@@ -1507,6 +1538,7 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
             } catch (pagLogErr) {
                 console.warn('[quote-pdf] pagination diagnostics warning:', pagLogErr && pagLogErr.message);
             }
+            await assertQuotePdfContentFits(page);
         }
         perf.layoutPrepMs = msSince(tLayout);
         logStage('generate', 'Stage 2 Layout prep', perf.layoutPrepMs);

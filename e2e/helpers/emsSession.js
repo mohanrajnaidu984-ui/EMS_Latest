@@ -37,7 +37,7 @@ export async function waitForQuoteModule(page, timeout = 60_000) {
         timeout,
     });
     await page.locator('[data-ems-main-nav-id="Quote"]').click();
-    await page.waitForTimeout(1000);
+    await page.getByRole('combobox', { name: /Division Name/i }).first().waitFor({ state: 'visible', timeout });
 }
 
 /**
@@ -53,6 +53,7 @@ export async function openEnquiryQuotePreview(
     /* Division Name (right toolbar) */
     const divisionSelect = page.getByRole('combobox', { name: /Division Name/i }).first();
     if ((await divisionSelect.count()) > 0) {
+        await divisionSelect.locator('option').filter({ hasText: division }).first().waitFor({ state: 'attached', timeout: 60000 });
         await divisionSelect.selectOption({ label: division }).catch(async () => {
             await divisionSelect.selectOption({ value: division }).catch(() => {});
         });
@@ -146,13 +147,13 @@ export async function openEnquiryQuotePreview(
      */
     await page.waitForFunction(
         () => {
-            const labels = [...document.querySelectorAll('span, label')];
-            const leadLabel = labels.find((el) => /Lead Job Name/i.test(el.textContent || ''));
-            const wrap = leadLabel?.parentElement;
-            const sel = wrap?.querySelector?.('select');
+            const sel = [...document.querySelectorAll('select')].find(select =>
+                [...select.options].some(option => /Select Lead/i.test(option.textContent || ''))
+            );
             return Boolean(sel && !sel.disabled && sel.options && sel.options.length > 1);
         },
-        { timeout: 90_000 }
+        undefined,
+        { timeout: 15_000 }
     ).catch(() => {});
 
     const leadSelect = page.locator('select').filter({ has: page.locator('option', { hasText: /Simplex|Select Lead/i }) }).first();
@@ -232,29 +233,50 @@ export async function openEnquiryQuotePreview(
 export async function clickAlignPage(page) {
     const btn = page.getByRole('button', { name: /Align Page|Aligning/i }).first();
     await btn.waitFor({ state: 'visible', timeout: 60_000 });
-    if (!(await btn.isDisabled().catch(() => false))) {
-        await btn.click();
-    }
+    // Do not silently skip the requested click while an automatic pass is busy.
+    // In particular the first click after adding a clause must commit its editor.
+    await page.waitForFunction(() => [...document.querySelectorAll('button')]
+        .some(button => /Align Page/i.test(button.textContent || '') && !button.disabled),
+        undefined, { timeout: 180_000 });
+    await btn.click();
     await page.waitForFunction(
         () =>
             ![...document.querySelectorAll('button')].some((b) =>
                 /Aligning/i.test(b.textContent || '')
             ),
-        { timeout: 180_000 }
+        undefined, { timeout: 180_000 }
     );
-    /* Peel/verify runs after Align button clears — allow layout effects to settle. */
-    await page.waitForTimeout(5000);
+    await page.waitForFunction(() => {
+        const root = document.querySelector('#quote-preview');
+        if (!root || root.querySelector('.quote-clause-inline-editor')) return false;
+        const signature = [...root.querySelectorAll('.quote-a4-sheet')].map(sheet =>
+            [...sheet.querySelectorAll('[data-ems-pack-seg]')].map(n => n.dataset.emsPackSeg).join(',')).join('|');
+        const state = window.__emsAlignTestSettled;
+        if (!state || state.signature !== signature) {
+            window.__emsAlignTestSettled = { signature, at: performance.now() };
+            return false;
+        }
+        return document.fonts.status !== 'loading' && performance.now() - state.at > 250;
+    }, undefined, { timeout: 180_000 });
 }
 
-/** Align up to `attempts` times until overflows clear or integrity banner appears. */
+/** Align up to `attempts` times until overflows clear. Allows peel/fill-up to settle. */
 export async function alignUntilStable(page, attempts = 3) {
     /** @type {object|null} */
     let last = null;
     for (let i = 0; i < attempts; i += 1) {
         await clickAlignPage(page);
-        last = await measurePaginationHealth(page);
-        if (last.overflows.length === 0) return { ...last, alignAttempts: i + 1 };
-        await page.waitForTimeout(1500);
+        /* Peel is one overflowing sheet per frame — wait for cascade + fill-up. */
+        for (let settle = 0; settle < 12; settle += 1) {
+            await page.waitForTimeout(800);
+            last = await measurePaginationHealth(page);
+            if (last.overflows.length === 0 && !last.integrityBanner) {
+                return { ...last, alignAttempts: i + 1, settlePasses: settle + 1 };
+            }
+        }
+        if (last?.overflows?.length === 0) {
+            return { ...last, alignAttempts: i + 1 };
+        }
     }
     return { ...last, alignAttempts: attempts };
 }
@@ -275,39 +297,110 @@ export async function measurePaginationHealth(page) {
         const overflows = [];
         /** @type {Array<object>} */
         const sheetMeta = [];
+        /** Nearly-empty: ≤2 stamps and lastBottom < 35% of limit. */
+        /** @type {number[]} */
+        const sparseSheets = [];
+        /** @type {Set<string>} */
+        const seenSegs = new Set();
+        /** @type {string[]} */
+        const duplicateSegs = [];
+
         sheets.forEach((sheet, si) => {
             const content = sheet.querySelector('.content-section');
             const logo = sheet.querySelector('.quote-sheet-logo-row');
             const footer = sheet.querySelector('.footer-section');
             if (!content) return;
+
             const cRect = content.getBoundingClientRect();
-            const limit = cRect.height - 12;
+            const endMark = sheet.querySelector('.quote-content-area-mark--end');
+            /*
+             * Only correct for zoom when a CSS transform scale is actually on an ancestor.
+             * Using --quote-preview-zoom alone falsely inflated bottoms when transform was absent.
+             */
+            let zoom = 1;
+            try {
+                let el = content;
+                while (el && el !== document.body) {
+                    const t = getComputedStyle(el).transform;
+                    if (t && t !== 'none') {
+                        const m = t.match(/matrix\(([^,]+)/);
+                        if (m) {
+                            const a = Math.abs(parseFloat(m[1]));
+                            if (a > 0.05 && Math.abs(a - 1) > 0.01) {
+                                zoom = a;
+                                break;
+                            }
+                        }
+                    }
+                    el = el.parentElement;
+                }
+            } catch {
+                zoom = 1;
+            }
+            zoom = Math.max(zoom, 0.05);
+
+            /* Fixed content box height (do not collapse via height:auto). */
+            const contentH = cRect.height / zoom;
+            let limitPx;
+            /* Match PACK_HEIGHT_SAFETY_PX (20) used by pack + live peel. */
+            if (endMark) {
+                limitPx = (endMark.getBoundingClientRect().top - cRect.top) / zoom - 20;
+            } else {
+                limitPx = contentH - 20;
+            }
+
+            content.style.setProperty('overflow', 'visible', 'important');
+            sheet.style.setProperty('overflow', 'visible', 'important');
+            const mainFlex = sheet.querySelector('.quote-sheet-main-flex');
+            if (mainFlex) mainFlex.style.setProperty('overflow', 'visible', 'important');
+            void content.offsetHeight;
+
             let stamped = 0;
+            let lastBottomPx = 0;
             content.querySelectorAll('[data-ems-pack-seg]').forEach((el) => {
                 stamped += 1;
+                const seg = el.getAttribute('data-ems-pack-seg') || '';
+                if (seg) {
+                    if (seenSegs.has(seg)) duplicateSegs.push(seg);
+                    else seenSegs.add(seg);
+                }
                 const r = el.getBoundingClientRect();
-                const topPx = r.top - cRect.top;
-                const bottomPx = r.bottom - cRect.top;
-                if (bottomPx > limit + 1.5 || topPx >= limit - 1.5) {
+                // Empty split wrappers have no painted box. A zero rect at the
+                // viewport origin becomes a false overflow after scrolling/zoom.
+                if (r.width / zoom < 1 && r.height / zoom < 1) return;
+                const topPx = (r.top - cRect.top) / zoom;
+                const bottomPx = (r.bottom - cRect.top) / zoom;
+                if (bottomPx > lastBottomPx) lastBottomPx = bottomPx;
+                if (bottomPx > limitPx + 1.5 || topPx >= limitPx - 1.5) {
                     overflows.push({
                         sheet: si + 1,
-                        seg: el.getAttribute('data-ems-pack-seg'),
+                        seg,
                         topPx: Math.round(topPx * 10) / 10,
                         bottomPx: Math.round(bottomPx * 10) / 10,
-                        limit: Math.round(limit * 10) / 10,
+                        limit: Math.round(limitPx * 10) / 10,
                     });
                 }
             });
+
+            content.style.removeProperty('overflow');
+            sheet.style.removeProperty('overflow');
+            if (mainFlex) mainFlex.style.removeProperty('overflow');
+
+            if (stamped > 0 && stamped <= 2 && lastBottomPx < limitPx * 0.35) {
+                sparseSheets.push(si + 1);
+            }
+
             sheetMeta.push({
                 sheet: si + 1,
                 stamped,
-                contentH: Math.round(cRect.height),
+                contentH: Math.round(contentH),
+                lastBottomPx: Math.round(lastBottomPx),
+                limitPx: Math.round(limitPx),
                 hasLogo: Boolean(logo),
                 hasFooter: Boolean(footer),
                 landscape: sheet.classList.contains('quote-a4-sheet--landscape'),
             });
         });
-
         const banner = /pagination (integrity|error)|clipped or missing/i.test(
             document.body.innerText || ''
         );
@@ -321,7 +414,10 @@ export async function measurePaginationHealth(page) {
             coverCount: coverSheets.length,
             totalSheets: sheets.length + coverSheets.length,
             stampedTotal: sheetMeta.reduce((s, m) => s + m.stamped, 0),
+            uniqueSegs: seenSegs.size,
+            duplicateSegs: [...new Set(duplicateSegs)],
             overflows,
+            sparseSheets,
             sheetMeta,
             integrityBanner: banner,
             textSample,

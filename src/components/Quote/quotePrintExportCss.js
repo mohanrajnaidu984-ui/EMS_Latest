@@ -289,6 +289,9 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation .quote-s
 }
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation .content-section,
 [data-ems-pdf-export="1"] .quote-a4-sheet--continuation .content-section {
+    /* Preview continuation content uses block flow. A flex column prevents
+     * heading margins collapsing and added ~10px per clause only in the PDF. */
+    display: block !important;
     flex: 0 0 auto !important;
     min-height: 0 !important;
     height: ${QUOTE_PAGE_GEOMETRY.contentHeightMm}mm !important;
@@ -308,27 +311,8 @@ html[data-preview-pdf="1"] #quote-preview .clause-content > table[data-ems-claus
 [data-ems-pdf-export="1"] .clause-content > table[data-ems-clause-row-continue="1"] {
     margin-top: 0 !important;
 }
-/* Match packer row cost: Excel height locks left half-empty pages in the PDF. */
-html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation table tr,
-html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation table td,
-html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation table th,
-[data-ems-pdf-export="1"] .quote-a4-sheet--continuation table tr,
-[data-ems-pdf-export="1"] .quote-a4-sheet--continuation table td,
-[data-ems-pdf-export="1"] .quote-a4-sheet--continuation table th {
-    height: auto !important;
-    min-height: 0 !important;
-    max-height: none !important;
-}
-html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation table td,
-html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation table th,
-[data-ems-pdf-export="1"] .quote-a4-sheet--continuation table td,
-[data-ems-pdf-export="1"] .quote-a4-sheet--continuation table th {
-    padding-top: 1px !important;
-    padding-bottom: 1px !important;
-    font-size: 13px !important;
-    line-height: 1.4 !important;
-    overflow: visible !important;
-}
+/* Keep the measured preview's table typography and row sizes. Export-only
+ * line-height/padding/height resets changed wrapping after pagination (5.01). */
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation .clause-content,
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation .clause-content p,
 html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation .clause-content li,

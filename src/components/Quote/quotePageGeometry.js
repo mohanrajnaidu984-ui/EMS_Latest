@@ -19,7 +19,7 @@ export const QUOTE_A4_FOOTER_BAND_MM = 26;
 export const QUOTE_PACK_DPI = 96;
 
 /** Reserve above CONTENT END so a wrapped line is not cropped. */
-export const PACK_HEIGHT_SAFETY_PX = 12;
+export const PACK_HEIGHT_SAFETY_PX = 20;
 
 export function mmToCssPx(mm, dpi = QUOTE_PACK_DPI) {
     return (Number(mm) / 25.4) * dpi;
@@ -61,20 +61,46 @@ export const EMS_QUOTE_CONT_USABLE_PX_FALLBACK = quoteContinuationContentPx(fals
 export const EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK = quoteContinuationContentPx(true);
 
 /**
- * Pack measure host must match live continuation `.clause-content` metrics
- * (understated fonts caused overpack → overflow:hidden clipping).
+ * Pack measure host MUST match live continuation paint
+ * (`#quote-preview .quote-a4-sheet--continuation` table/body rules).
+ * Mismatch under/over-packs → live peel oscillation / clipped units.
  */
 export const QUOTE_PACK_MEASURE_BODY_CSS = `
   font-size: 13px !important;
   line-height: 1.4 !important;
 `;
 
+/**
+ * Pack tables slightly taller than live (12.5px/15px) so fill-pack stays
+ * conservative and does not overpack into the footer reserve.
+ */
 export const QUOTE_PACK_MEASURE_TABLE_CELL_CSS = `
   padding-top: 1px !important;
   padding-bottom: 1px !important;
   font-size: 13px !important;
-  line-height: 1.4 !important;
+  line-height: 1.35 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
   overflow: visible !important;
+`;
+
+/** Extra rules injected into the off-DOM pack measure shell (parity with live preview). */
+export const QUOTE_PACK_MEASURE_SHELL_EXTRA_CSS = `
+  [data-pack-measure-content] {
+    padding-top: 1px !important;
+    box-sizing: border-box !important;
+  }
+  [data-pack-measure-content] .quote-clause-heading-panel {
+    margin-top: 8px !important;
+  }
+  [data-pack-measure-content] .quote-clause-block:first-child .quote-clause-heading-panel {
+    margin-top: 0 !important;
+  }
+  [data-pack-measure-content] .clause-content > p[data-ems-para-continue="1"],
+  [data-pack-measure-content] .clause-content > table[data-ems-clause-row-continue="1"] {
+    margin-top: 0 !important;
+  }
 `;
 
 /** Frozen snapshot for CSS templates / tests. */

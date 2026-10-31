@@ -1,0 +1,23 @@
+[
+  {
+    "month": 12,
+    "year": 2025,
+    "division": "All",
+    "identical": true,
+    "days": 12
+  },
+  {
+    "month": 1,
+    "year": 2026,
+    "division": "Simplex Project",
+    "identical": true,
+    "days": 3
+  },
+  {
+    "month": 10,
+    "year": 2026,
+    "division": "Simplex Project",
+    "identical": true,
+    "days": 12
+  }
+]

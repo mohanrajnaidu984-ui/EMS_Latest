@@ -1,0 +1,1 @@
+import fs from 'node:fs';import {Window} from 'happy-dom';const w=new Window();w.document.body.innerHTML=fs.readFileSync('e2e/artifacts/clause-mutations-1515-stress/additional-preceding-paragraphs-live.txt','utf8');const s=w.document.querySelectorAll('.quote-a4-sheet')[5];console.log(s.querySelector('.content-section').innerHTML.slice(0,2500));

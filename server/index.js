@@ -2793,7 +2793,11 @@ app.put('/api/contacts/:id', async (req, res) => {
 // 3. Users (Concerned SE)
 app.get('/api/users', async (req, res) => {
     try {
-        const result = await sql.query`SELECT * FROM Master_ConcernedSE ORDER BY ID DESC`;
+        // Master selectors need metadata, not multi-megabyte photos/signatures.
+        // Keep the full response available for existing administrative callers.
+        const result = req.query.summary === '1'
+            ? await sql.query`SELECT ID, FullName, Designation, EmailId, MobileNumber, Status, Department, Roles, RequestNo, Prefix FROM Master_ConcernedSE ORDER BY ID DESC`
+            : await sql.query`SELECT * FROM Master_ConcernedSE ORDER BY ID DESC`;
         res.json(result.recordset);
     } catch (err) {
         console.error(err);
