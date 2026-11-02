@@ -16,7 +16,7 @@ const skipUploads = process.argv.includes('--skip-uploads');
 const withNodeModules = process.argv.includes('--with-node-modules');
 /** Optional: pin puppeteer@19.4.0 for Windows Server 2012 R2 (regenerates package-lock). Default: keep lock in sync. */
 const pinPuppeteer2012R2 = process.argv.includes('--ws2012');
-const BASELINE_VERSION = '2026-10-28-v1';
+const BASELINE_VERSION = '2026-11-02-v1';
 /** Must match server/routes/quotePdf.js quotePdfCssVersion */
 const PDF_CSS_VERSION = '2026-09-13-v7';
 const FRONTEND_BUNDLE_MARKERS = [
@@ -104,19 +104,22 @@ function verifyFrontendBundle() {
         console.error('âŒ frontend/assets missing after build copy.');
         process.exit(1);
     }
-    const mainJs = fs.readdirSync(assetsDir).find((f) => /^index-.*\.js$/.test(f));
-    if (!mainJs) {
-        console.error('âŒ No index-*.js in frontend/assets');
+    /* Code-split builds put quote/PDF markers in QuoteForm-*.js (and related chunks), not only index-*.js. */
+    const jsFiles = fs.readdirSync(assetsDir).filter((f) => f.endsWith('.js'));
+    if (!jsFiles.length) {
+        console.error('âŒ No *.js in frontend/assets');
         process.exit(1);
     }
-    const bundle = fs.readFileSync(path.join(assetsDir, mainJs), 'utf8');
+    const bundle = jsFiles
+        .map((f) => fs.readFileSync(path.join(assetsDir, f), 'utf8'))
+        .join('\n');
     const missing = FRONTEND_BUNDLE_MARKERS.filter((m) => !bundle.includes(m));
     if (missing.length) {
         console.error('âŒ Frontend bundle missing PDF fix markers:', missing.join(', '));
         console.error('   Rebuild with .env.production (VITE_SERVER_ORIGIN=http://151.50.1.38)');
         process.exit(1);
     }
-    console.log(`âœ… Verified frontend PDF fix in assets/${mainJs}`);
+    console.log(`âœ… Verified frontend PDF fix across ${jsFiles.length} assets/*.js chunks`);
 }
 
 /**

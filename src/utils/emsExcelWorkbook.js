@@ -9,7 +9,7 @@ export const HEADER_FILL = {
     fgColor: { argb: 'FF20396D' }
 };
 export const HEADER_FONT = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10, name: 'Calibri' };
-export const TITLE_FONT = { bold: true, size: 13, name: 'Calibri', color: { argb: 'FF20396D' } };
+export const TITLE_FONT = { bold: true, size: 16, name: 'Calibri', color: { argb: 'FF20396D' } };
 export const META_FONT = { size: 9, name: 'Calibri', color: { argb: 'FF4B5563' } };
 export const CELL_FONT = { size: 10, name: 'Calibri' };
 export const THIN_BORDER = {
@@ -82,14 +82,8 @@ async function embedEmsLogo(workbook, sheet) {
     }
 }
 
-function titleColumnForLogo(logoWidthPx, lastCol) {
-    const pxPerCol = 58;
-    const startCol = Math.max(2, Math.ceil(logoWidthPx / pxPerCol) + 1);
-    return Math.min(startCol, Math.max(2, lastCol));
-}
-
 /**
- * Top banner: EMS Logo Final.png (top-left), module title + meta beside it, column headers on row 3.
+ * Top banner: EMS Logo Final.png (top-left), centred module title + meta across the sheet, column headers on row 3.
  * Returns { headerRowIndex: 3, dataStartRow: 4 }.
  */
 export async function setupEmsExcelReportHeader(workbook, sheet, {
@@ -103,26 +97,25 @@ export async function setupEmsExcelReportHeader(workbook, sheet, {
         wrapText: true
     })
 }) {
-    const { width: logoWidth, height: logoHeight } = await embedEmsLogo(workbook, sheet);
+    const { height: logoHeight } = await embedEmsLogo(workbook, sheet);
 
-    sheet.getRow(1).height = Math.max(44, logoHeight + 4);
-    const titleColStart = titleColumnForLogo(logoWidth, lastCol);
-    if (lastCol >= titleColStart) {
-        sheet.mergeCells(1, titleColStart, 1, lastCol);
+    sheet.getRow(1).height = Math.max(48, logoHeight + 8);
+    if (lastCol > 1) {
+        sheet.mergeCells(1, 1, 1, lastCol);
     }
-    const titleCell = sheet.getCell(1, titleColStart);
+    const titleCell = sheet.getCell(1, 1);
     titleCell.value = title;
     titleCell.font = TITLE_FONT;
-    titleCell.alignment = { vertical: 'middle', horizontal: 'left' };
+    titleCell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
 
-    sheet.getRow(2).height = 18;
-    if (lastCol >= titleColStart) {
-        sheet.mergeCells(2, titleColStart, 2, lastCol);
+    sheet.getRow(2).height = metaText && String(metaText).length > 80 ? 28 : 20;
+    if (lastCol > 1) {
+        sheet.mergeCells(2, 1, 2, lastCol);
     }
-    const metaCell = sheet.getCell(2, titleColStart);
+    const metaCell = sheet.getCell(2, 1);
     metaCell.value = metaText;
     metaCell.font = META_FONT;
-    metaCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+    metaCell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
 
     const headerRowIndex = 3;
     const headerRow = sheet.getRow(headerRowIndex);

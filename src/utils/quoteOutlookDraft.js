@@ -1,6 +1,7 @@
 /**
  * Open an Outlook draft with the quote PDF attached (Windows + classic Outlook COM).
- * Tries: local helper → API on same PC → Downloads VBS fallback.
+ * Tries: workstation helper → same-PC development API → embedded .eml draft.
+ * Remote IIS processes cannot open the user's Outlook desktop.
  */
 
 import { quotePerfStart, isQuoteExportPerfEnabled } from '../components/Quote/quoteExportPerf.js';
@@ -178,6 +179,37 @@ export async function tryOpenOutlookDraftViaLocalHelper(payload) {
     return { ok: false };
 }
 
+export function isLoopbackHost(hostname) {
+    return /^(localhost|127\.0\.0\.1|\[?::1\]?)$/i.test(hostname || '');
+}
+
+export function canUseServerOutlook(apiBase, location = window.location) {
+    try {
+        return isLoopbackHost(location.hostname) &&
+            isLoopbackHost(new URL(apiBase || location.origin, location.origin).hostname);
+    } catch { return false; }
+}
+
+export async function downloadQuoteEmlDraft(apiBase, payload, triggerBlobDownload) {
+    const response = await fetch(`${apiBase}/api/quotes/email-draft`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+        const details = await response.json().catch(() => ({}));
+        throw new Error(details.details || details.error || 'Could not prepare the Outlook email draft.');
+    }
+    if (!response.headers.get('content-type')?.includes('message/rfc822')) {
+        throw new Error('EMS returned an unexpected email draft response. Check the IIS API proxy.');
+    }
+    const draft = await response.blob();
+    if (!draft.size) throw new Error('The Outlook email draft is empty.');
+    const fileName = String(payload.attachmentName || DRAFT_PDF_NAME)
+        .replace(/\.pdf$/i, '').replace(/[/\\?%*:|"<>]/g, '_') + '.eml';
+    triggerBlobDownload(draft, fileName);
+    return { ok: true, method: 'eml-download', fileName };
+}
+
 export async function fetchQuoteOutlookEmailFields(apiBase, { userEmail, toName, toAttention, requestNo, isInternal }) {
     try {
         const qs = new URLSearchParams({
@@ -219,9 +251,7 @@ export async function tryOpenOutlookDraftViaServer(apiBase, payload) {
  * @param {Blob} params.pdfBlob
  * @param {string} [params.displayFileName] - Original PDF filename for server temp
  * @param {object} params.emailFields - { to, cc, bcc, subject, body }
- * @param {string[]} [params.extraAttachmentFileNames] - Filenames saved to Downloads before VBS
  * @param {function} params.triggerBlobDownload
- * @param {function} params.sleep
  * @param {function} params.blobToBase64
  */
 export async function openQuoteOutlookDraft({
@@ -229,9 +259,7 @@ export async function openQuoteOutlookDraft({
     pdfBlob,
     displayFileName,
     emailFields,
-    extraAttachmentFileNames = [],
     triggerBlobDownload,
-    sleep,
     blobToBase64,
 }) {
     if (pdfBlob && (!(pdfBlob instanceof Blob) || pdfBlob.size < 200)) {
@@ -256,10 +284,14 @@ export async function openQuoteOutlookDraft({
         attachmentName: displayFileName || DRAFT_PDF_NAME,
         pdfBase64,
         extraAttachments: emailFields.extraAttachments || [],
+        userEmail: emailFields.userEmail || '',
+        userDisplayName: emailFields.userDisplayName || '',
     };
 
     const tLocal = quotePerfStart('Email — Outlook local helper');
-    const localTry = await tryOpenOutlookDraftViaLocalHelper(payload);
+    const insecureRemote = typeof window !== 'undefined' &&
+        !window.isSecureContext && !isLoopbackHost(window.location.hostname);
+    const localTry = insecureRemote ? { ok: false } : await tryOpenOutlookDraftViaLocalHelper(payload);
     stages.localMs = tLocal.end();
     if (localTry.ok) {
         if (isQuoteExportPerfEnabled()) console.log('[QuotePerf] Email Outlook', stages);
@@ -267,52 +299,19 @@ export async function openQuoteOutlookDraft({
     }
 
     const tServer = quotePerfStart('Email — Outlook server COM');
-    const serverTry = await tryOpenOutlookDraftViaServer(apiBase, payload);
+    // A remote API can only open Outlook on the server, never the user's PC.
+    const serverTry = canUseServerOutlook(apiBase)
+        ? await tryOpenOutlookDraftViaServer(apiBase, payload) : { ok: false };
     stages.serverMs = tServer.end();
     if (serverTry.ok) {
         if (isQuoteExportPerfEnabled()) console.log('[QuotePerf] Email Outlook', stages);
         return { ok: true, method: 'server' };
     }
 
-    if (pdfBlob) {
-        const attachName = String(displayFileName || DRAFT_PDF_NAME).replace(/[/\\?%*:|"<>]/g, '_');
-        triggerBlobDownload(pdfBlob, attachName);
-        await sleep(Math.min(3000, 900 + Math.floor((pdfBlob.size || 0) / 80000)));
-    }
-
-    const vbsAttachName = String(displayFileName || DRAFT_PDF_NAME).replace(/[/\\?%*:|"<>]/g, '_');
-    const vbs = buildOutlookDraftVbsForDownloads({
-        pdfFileName: vbsAttachName,
-        extraAttachmentFileNames,
-        to: emailFields.to,
-        cc: emailFields.cc,
-        bcc: emailFields.bcc,
-        subject: emailFields.subject,
-        body: emailFields.body,
-    });
-    const vbsBlob = new Blob([vbs], { type: 'text/plain;charset=utf-8' });
-    triggerBlobDownload(vbsBlob, DRAFT_VBS_NAME);
-    await sleep(250);
-
-    if (typeof navigator !== 'undefined' && typeof navigator.msSaveOrOpenBlob === 'function') {
-        try {
-            navigator.msSaveOrOpenBlob(vbsBlob, DRAFT_VBS_NAME);
-            return {
-                ok: true,
-                method: 'vbs-prompt',
-                serverError: serverTry.error,
-            };
-        } catch {
-            /* fall through */
-        }
-    }
-
-    if (isQuoteExportPerfEnabled()) console.log('[QuotePerf] Email Outlook (VBS fallback)', stages);
-    return {
-        ok: true,
-        method: 'vbs-manual',
-        serverError: serverTry.error,
-    };
+    // The existing IIS endpoint builds an unsent RFC822 file with every
+    // attachment embedded. It does not automate Office or send a message.
+    const draft = await downloadQuoteEmlDraft(apiBase, payload, triggerBlobDownload);
+    return { ...draft, reason: insecureRemote ? 'https-required' : 'helper-unavailable' };
 }
 
 export { DRAFT_PDF_NAME, DRAFT_VBS_NAME };

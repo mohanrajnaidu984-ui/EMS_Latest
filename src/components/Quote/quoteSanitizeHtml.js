@@ -21,7 +21,12 @@ const ALLOWED_ATTRS = new Set([
 ]);
 
 function stripDisallowed(root) {
-    root.querySelectorAll('style, script, meta, link, noscript, iframe, object, embed').forEach((el) => {
+    /* TITLE must be removed (not unwrapped): Excel clipboard <title>…xlsx</title> is
+     * text-only, so spell-mark spans inside it re-serialize as &lt;span…&gt; and would
+     * dump workbook-name / tag soup into the quote body if unwrapped. */
+    root.querySelectorAll(
+        'style, script, meta, link, title, head, noscript, iframe, object, embed'
+    ).forEach((el) => {
         el.remove();
     });
     root.querySelectorAll('*').forEach((el) => {
@@ -190,6 +195,53 @@ function extractNoteRowsFromTables(root) {
 }
 
 /**
+ * Drop Excel/Word clipboard chrome that must never become quote body text.
+ * Done at string level so <title>…&lt;span…&gt;…</title> cannot survive DOMParser
+ * foster-parenting / unwrap paths.
+ */
+function stripOfficeClipboardChrome(html) {
+    return String(html || '')
+        .replace(/<title\b[^>]*>[\s\S]*?<\/title>/gi, '')
+        .replace(/<head\b[^>]*>[\s\S]*?<\/head>/gi, '')
+        .replace(/<meta\b[^>]*\/?>/gi, '')
+        .replace(/<link\b[^>]*\/?>/gi, '');
+}
+
+/**
+ * Drop entity-escaped spell-mark debris that leaked into text (usually from Excel
+ * <title> re-serialization). Avoid a global &lt;/&gt; decode — that would break
+ * legitimate &quot; inside style attributes before DOMParser runs.
+ */
+function stripEscapedSpellMarkDebris(html) {
+    let s = String(html || '');
+    if (!/&lt;span/i.test(s) || !/ems-spell-mark/i.test(s)) return s;
+    for (let i = 0; i < 40; i++) {
+        const next = s.replace(
+            /&lt;span\b[^&]*?ems-spell-mark[\s\S]*?&lt;\/span&gt;/gi,
+            ''
+        );
+        if (next === s) break;
+        s = next;
+    }
+    /* Orphan escaped opening tags / attribute tails */
+    s = s.replace(/&lt;span\b[^&]*?ems-spell-mark[^&]*?&gt;/gi, '');
+    s = s.replace(/&lt;\/span&gt;/gi, '');
+    return s;
+}
+
+function unwrapSpellMarkSpans(root) {
+    let guard = 0;
+    while (root.querySelector?.('.ems-spell-mark, [data-spell-id]') && guard++ < 40) {
+        root.querySelectorAll('.ems-spell-mark, [data-spell-id]').forEach((span) => {
+            const parent = span.parentNode;
+            if (!parent) return;
+            while (span.firstChild) parent.insertBefore(span.firstChild, span);
+            parent.removeChild(span);
+        });
+    }
+}
+
+/**
  * @param {string} html
  * @returns {string}
  */
@@ -197,12 +249,14 @@ export function sanitizeQuoteRichHtml(html) {
     const raw = String(html || '').trim();
     if (!raw) return '';
     if (typeof DOMParser === 'undefined') {
-        return raw
+        return stripOfficeClipboardChrome(raw)
             .replace(/<style[\s\S]*?<\/style>/gi, '')
             .replace(/<script[\s\S]*?<\/script>/gi, '')
             .replace(/<!--[\s\S]*?-->/g, '');
     }
     let body = remapSymbolFontGreekInHtml(raw);
+    body = stripOfficeClipboardChrome(body);
+    body = stripEscapedSpellMarkDebris(body);
     body = body
         .replace(/<style[\s\S]*?<\/style>/gi, '')
         .replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -211,6 +265,7 @@ export function sanitizeQuoteRichHtml(html) {
     const root = doc.getElementById('ems-san');
     if (!root) return body;
     stripDisallowed(root);
+    unwrapSpellMarkSpans(root);
     stripLeakedCssTextNodes(root);
     normalizeNbspAndSpacerRuns(root);
     extractNoteRowsFromTables(root);

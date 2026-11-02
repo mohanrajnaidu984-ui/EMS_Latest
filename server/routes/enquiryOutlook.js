@@ -23,6 +23,7 @@ const {
 const { loadEnquiryEmailRow } = require('../lib/loadEnquiryEmailRow');
 const { runOutlookHtmlDraftVbs } = require('../lib/runOutlookHtmlDraftVbs');
 const { sendEnquiryNotificationViaSmtp } = require('../lib/enquiryNotifySmtp');
+const { isInactiveEnquiryStatus } = require('../lib/enquiryStatus');
 
 const router = express.Router();
 
@@ -112,6 +113,16 @@ router.post('/outlook-draft', express.json({ limit: '5mb' }), async (req, res) =
         const row = await loadEnquiryEmailRow(reqNo);
         if (!row) {
             return res.status(404).json({ error: 'Enquiry not found' });
+        }
+        if (isInactiveEnquiryStatus(row.EnquiryStatus)) {
+            console.log(`[enquiry-outlook] Skipping internal notify for inactive enquiry ${reqNo}`);
+            return res.json({
+                success: true,
+                sent: false,
+                skipped: true,
+                reason: 'inactive',
+                message: 'Skipped — enquiry is Inactive',
+            });
         }
 
         const seNamesFromBody = Array.isArray(concernedSEs)
@@ -210,6 +221,16 @@ const customerAckHandler = async (req, res) => {
         const row = await loadEnquiryEmailRow(reqNo);
         if (!row) {
             return res.status(404).json({ error: 'Enquiry not found' });
+        }
+        if (isInactiveEnquiryStatus(row.EnquiryStatus)) {
+            console.log(`[enquiry-outlook] Skipping customer ack for inactive enquiry ${reqNo}`);
+            return res.json({
+                success: true,
+                draftCount: 0,
+                skipped: true,
+                reason: 'inactive',
+                message: 'Skipped — enquiry is Inactive',
+            });
         }
 
         const targets = await loadCustomerAckTargets(reqNo, customerAckTargets);

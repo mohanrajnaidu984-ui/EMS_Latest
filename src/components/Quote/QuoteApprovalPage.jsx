@@ -807,8 +807,10 @@ export default function QuoteApprovalPage({ openContext = null }) {
             /** Approvals Division toolbar selection — CSV multi-select; empty = All. */
             listDivision: approvalDivisionQueryValue(division),
             customerName: selectedPreview.customerName ? String(selectedPreview.customerName) : '',
+            /** pending | approved | correction — With Acceptance only when approved. */
+            approvalListTab: listTab,
         };
-    }, [selectedPreview, division]);
+    }, [selectedPreview, division, listTab]);
 
     const previewKey = previewOpenContext
         ? [

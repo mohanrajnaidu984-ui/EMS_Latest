@@ -1416,6 +1416,138 @@ app.get('/api/enquiries', async (req, res) => {
 const enquiryOutlookRoutes = require('./routes/enquiryOutlook');
 app.use('/api/enquiries', enquiryOutlookRoutes);
 
+/**
+ * Fast typeahead for Quote/Pricing Enquiry No box.
+ * Lean TOP-N SQL only — never use GET /api/enquiries (full dump) for suggestions.
+ * Must be registered before `/api/enquiries/:id`.
+ */
+app.get('/api/enquiries/suggest', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+        const q = String(req.query.q || req.query.search || '').trim();
+        if (!q) return res.json([]);
+
+        const limitRaw = parseInt(String(req.query.limit || '10'), 10);
+        const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 25) : 10;
+
+        const userEmail = req.query.userEmail || '';
+        const userName = req.query.userName || '';
+        const userRole = req.query.userRole || '';
+        const vis = await resolveEnquiryVisibilityContext({ userEmail, userName, userRole });
+
+        const sessionDivision = String(req.query.division || '').trim();
+        const enforceDivision =
+            req.query.enforceDivision === '1' ||
+            String(req.query.enforceDivision || '').toLowerCase() === 'true';
+
+        const request = new sql.Request();
+        request.input('q', sql.NVarChar, q);
+        request.input('qLike', sql.NVarChar, `%${q}%`);
+        request.input('qPrefix', sql.NVarChar, `${q}%`);
+        request.input('limit', sql.Int, limit);
+
+        let visibilitySql = '';
+        if (!vis.isAdmin && vis.email) {
+            const normEmail = normalizeEmail(vis.email);
+            request.input('userEmail', sql.NVarChar, normEmail);
+            const assignedExists = `
+                EXISTS (
+                    SELECT 1
+                    FROM ConcernedSE cs
+                    INNER JOIN Master_ConcernedSE m
+                      ON UPPER(LTRIM(RTRIM(ISNULL(m.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(cs.SEName, N''))))
+                    WHERE cs.RequestNo = em.RequestNo
+                      AND LTRIM(RTRIM(ISNULL(cs.RequestNo, N''))) <> N''
+                      AND LOWER(REPLACE(REPLACE(LTRIM(RTRIM(ISNULL(m.EmailId, N''))), N'@almcg.com', N'@almoayyedcg.com'), N'@ALMCG.COM', N'@almoayyedcg.com')) = @userEmail
+                )`;
+            if (vis.accessMode === 'department') {
+                visibilitySql = ` AND (
+                    ${assignedExists}
+                    OR EXISTS (
+                        SELECT 1
+                        FROM EnquiryFor ef
+                        INNER JOIN Master_EnquiryFor mef ON (
+                            ef.ItemName = mef.ItemName
+                            OR ef.ItemName LIKE N'% - ' + mef.ItemName
+                            OR ef.ItemName LIKE N'%- ' + mef.ItemName
+                            OR ef.ItemName LIKE mef.ItemName + N' %'
+                        )
+                        WHERE ef.RequestNo = em.RequestNo
+                          AND ',' + REPLACE(REPLACE(LOWER(ISNULL(mef.CCMailIds, N'')), N' ', N''), N';', N',') + N','
+                              LIKE N'%,' + @userEmail + N',%'
+                    )
+                ) `;
+            } else {
+                visibilitySql = ` AND ${assignedExists} `;
+            }
+        }
+
+        let divisionSql = '';
+        if (enforceDivision && sessionDivision) {
+            request.input('division', sql.NVarChar, sessionDivision);
+            divisionSql = `
+                AND EXISTS (
+                    SELECT 1
+                    FROM EnquiryFor ef
+                    LEFT JOIN Master_EnquiryFor mef ON (
+                        ef.ItemName = mef.ItemName
+                        OR ef.ItemName LIKE N'% - ' + mef.ItemName
+                        OR ef.ItemName LIKE N'%- ' + mef.ItemName
+                        OR ef.ItemName LIKE mef.ItemName + N' %'
+                    )
+                    WHERE ef.RequestNo = em.RequestNo
+                      AND (
+                        LTRIM(RTRIM(ISNULL(mef.DepartmentName, N''))) = LTRIM(RTRIM(@division))
+                        OR LTRIM(RTRIM(ISNULL(ef.ItemName, N''))) = LTRIM(RTRIM(@division))
+                        OR LTRIM(RTRIM(ISNULL(mef.ItemName, N''))) = LTRIM(RTRIM(@division))
+                      )
+                ) `;
+        }
+
+        const result = await request.query(`
+            SELECT TOP (@limit)
+                em.RequestNo,
+                em.ProjectName,
+                em.CustomerName
+            FROM EnquiryMaster em
+            WHERE 1=1
+              AND (em.EnquiryStatus IS NULL OR LTRIM(RTRIM(em.EnquiryStatus)) = N'' OR LTRIM(RTRIM(em.EnquiryStatus)) <> N'Inactive')
+              ${visibilitySql}
+              ${divisionSql}
+              AND (
+                CAST(em.RequestNo AS NVARCHAR(50)) LIKE @qLike
+                OR em.ProjectName LIKE @qLike
+                OR em.CustomerName LIKE @qLike
+                OR EXISTS (
+                    SELECT 1
+                    FROM EnquiryCustomer ec
+                    WHERE ec.RequestNo = em.RequestNo
+                      AND ec.CustomerName LIKE @qLike
+                )
+              )
+            ORDER BY
+                CASE
+                    WHEN CAST(em.RequestNo AS NVARCHAR(50)) = @q THEN 0
+                    WHEN CAST(em.RequestNo AS NVARCHAR(50)) LIKE @qPrefix THEN 1
+                    WHEN em.ProjectName LIKE @qPrefix THEN 2
+                    WHEN em.CustomerName LIKE @qPrefix THEN 3
+                    ELSE 4
+                END,
+                em.CreatedAt DESC
+        `);
+
+        const rows = (result.recordset || []).map((r) => ({
+            RequestNo: r.RequestNo,
+            ProjectName: r.ProjectName || '',
+            CustomerName: r.CustomerName || '',
+        }));
+        return res.json(rows);
+    } catch (err) {
+        console.error('[GET /api/enquiries/suggest]', err);
+        return res.status(500).json({ message: 'Server Error' });
+    }
+});
+
 /** Must be registered before `/api/enquiries/:id` so `check-project-name` is not captured as an id. */
 app.get('/api/enquiries/check-project-name', async (req, res) => {
     try {
@@ -1764,6 +1896,11 @@ app.post('/api/enquiries', async (req, res) => {
         setImmediate(async () => {
             // Enquiry notification is opened as a local Outlook draft from the client (VBScript), not sent via SMTP.
             try {
+                const { isInactiveEnquiryStatus } = require('./lib/enquiryStatus');
+                if (isInactiveEnquiryStatus(req.body.EnquiryStatus)) {
+                    console.log(`[create] Skipping in-app notifications for inactive enquiry ${RequestNo}`);
+                    return;
+                }
                 const currentUserEmailRes = await sql.query`SELECT EmailId FROM Master_ConcernedSE WHERE FullName = ${req.body.CreatedBy}`;
                 const currentUserEmail = currentUserEmailRes.recordset.length > 0 ? currentUserEmailRes.recordset[0].EmailId : null;
                 queueCreateNotifications(
@@ -3611,6 +3748,16 @@ app.post('/api/enquiries/notify', async (req, res) => {
         ]);
         if (enqResult.recordset.length === 0) return res.status(404).json({ success: false, message: 'Enquiry not found' });
         const enquiryData = enqResult.recordset[0];
+        const { isInactiveEnquiryStatus } = require('./lib/enquiryStatus');
+        if (isInactiveEnquiryStatus(enquiryData.EnquiryStatus)) {
+            console.log(`[notify] Skipping email for inactive enquiry ${requestNo}`);
+            return res.json({
+                success: true,
+                message: 'Skipped — enquiry is Inactive',
+                skipped: true,
+                reason: 'inactive',
+            });
+        }
         const attachments = attResult.recordset || [];
         console.log(`Found ${attachments.length} attachments for RequestNo ${requestNo}`);
 

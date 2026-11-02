@@ -411,7 +411,7 @@ const pasteRootHasNonTableContent = (root) => {
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
         const el = /** @type {Element} */ (node);
         if (/^TABLE$/i.test(el.tagName)) continue;
-        if (/^(STYLE|META|LINK|COL|O:P)$/i.test(el.tagName)) continue;
+        if (/^(STYLE|META|LINK|TITLE|HEAD|COL|O:P)$/i.test(el.tagName)) continue;
         const text = String(el.textContent || '').replace(/\u00a0/g, ' ').trim();
         if (text) return true;
     }

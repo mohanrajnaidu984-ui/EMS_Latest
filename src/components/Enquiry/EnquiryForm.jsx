@@ -1354,8 +1354,9 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                     resetForm();
                     alert(`Enquiry Added: ${savedRequestNo}${attachmentNote}`);
 
-                    if (savedRequestNo) {
-                        // Run email triggers in the background so they don't block the UI and enquiry number generation
+                    if (savedRequestNo && formData.EnquiryStatus === 'Active') {
+                        // Run email triggers in the background so they don't block the UI and enquiry number generation.
+                        // Inactive enquiries must not trigger internal notify or customer acknowledgement.
                         (async () => {
                             try {
                                 const internalResult = await sendEnquiryInternalNotification({

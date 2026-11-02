@@ -1,6 +1,8 @@
 /**
  * Apply PDF security so quote downloads cannot be edited or copied into Word easily.
  * Opens without a password; owner password is required to change restrictions.
+ * Allowed for the customer: print + fill existing form/signature fields (acceptance page).
+ * Denied: modify content, copy text, assemble pages.
  *
  * muhammara is a native addon — must be built on the same Node major as production (22 LTS).
  * If unavailable, restriction is skipped when QUOTE_PDF_RESTRICT=0 or module fails to load.
@@ -29,9 +31,20 @@ function loadMuhammara() {
     }
 }
 
-/** PDF user access: allow printing only (deny modify, copy, annotate, extract, etc.). */
+/**
+ * PDF user access permissions (PDF 32000 / muhammara hummus flags):
+ * - print + printbest: allow printing
+ * - edit (annotate): needed so Acrobat can place a signature appearance in the Sig field
+ * - fillform: fill existing form fields and sign existing signature fields
+ * Deny modify / copy / assemble so quote body text/layout cannot be changed.
+ */
 function buildQuotePdfUserProtectionFlag() {
-    return 1 << 2; // print
+    const print = 1 << 2;
+    const editAnnotate = 1 << 5; // place signature appearance / annotations only (not content edit)
+    const fillform = 1 << 8;
+    const extract = 1 << 9; // accessibility extract only
+    const printbest = 1 << 11;
+    return print | editAnnotate | fillform | extract | printbest;
 }
 
 function isQuotePdfRestrictEnabled() {
@@ -90,10 +103,22 @@ function restrictQuotePdfBuffer(pdfBuffer) {
 
 /**
  * @param {Buffer} pdfBuffer
+ * @param {{ allowInPlaceDigitalSignature?: boolean }} [options]
  * @returns {Promise<Buffer>}
+ *
+ * allowInPlaceDigitalSignature: skip owner-password encryption. Acrobat cannot
+ * append a digital signature into an encrypted PDF in place — it forces Save As
+ * a new file. Customer-acceptance downloads stay fillable/signable and Save works
+ * on the same file after signing.
  */
-async function applyQuotePdfRestrictions(pdfBuffer) {
+async function applyQuotePdfRestrictions(pdfBuffer, options = {}) {
     if (!isQuotePdfRestrictEnabled()) {
+        return pdfBuffer;
+    }
+    if (options.allowInPlaceDigitalSignature === true) {
+        console.info(
+            '[quote-pdf] PDF encrypt/restrict skipped — in-place digital signature save (customer acceptance)'
+        );
         return pdfBuffer;
     }
     if (!loadMuhammara()) {

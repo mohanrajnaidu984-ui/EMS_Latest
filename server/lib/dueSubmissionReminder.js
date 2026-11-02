@@ -5,6 +5,7 @@ const { loadEnquiryEmailRow } = require('./loadEnquiryEmailRow');
 const { resolveEnquiryOutlookEmailFields } = require('./enquiryOutlookEmailFields');
 const { isExcludedNotificationEmail } = require('./notificationEmailExclusions');
 const { sendEnquiryNotificationViaSmtp } = require('./enquiryNotifySmtp');
+const { isInactiveEnquiryStatus } = require('./enquiryStatus');
 const { formatEnquiryDate, formatShortDate, FONT_FAMILY } = require('./enquiryNotifyEmailHtml');
 const { escapeHtml } = require('./htmlEscape');
 const { tomorrowYmdInSchedulerTz } = require('./schedulerTime');
@@ -155,6 +156,7 @@ async function fetchDueEnquiriesOn(dueYmd) {
         WHERE em.DueDate IS NOT NULL
           AND CONVERT(VARCHAR(10), em.DueDate, 23) = ${dueYmd}
           AND NOT EXISTS (SELECT 1 FROM EnquiryQuotes eq WHERE eq.RequestNo = em.RequestNo)
+          AND (em.EnquiryStatus IS NULL OR LTRIM(RTRIM(em.EnquiryStatus)) = N'' OR LTRIM(RTRIM(em.EnquiryStatus)) <> N'Inactive')
         ORDER BY em.RequestNo
     `;
     return (res.recordset || []).map((r) => String(r.RequestNo || '').trim()).filter(Boolean);
@@ -200,6 +202,7 @@ async function buildRecipientBundles(dueYmd) {
     for (const requestNo of requestNos) {
         const row = await loadEnquiryEmailRow(requestNo);
         if (!row) continue;
+        if (isInactiveEnquiryStatus(row.EnquiryStatus)) continue;
 
         const { toList, ccList } = await resolveEnquiryOutlookEmailFields(requestNo);
         if (!toList?.length && !ccList?.length) {

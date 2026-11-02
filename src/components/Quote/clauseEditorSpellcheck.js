@@ -458,7 +458,8 @@ function shouldScanNode(node) {
     if (!parent) return false;
     if (parent.closest('table')) return false;
     if (parent.closest(`.${SPELL_MARK_CLASS}`)) return false;
-    if (parent.closest('script, style')) return false;
+    /* Excel clipboard <title> is text-only — wrapping it creates &lt;span&gt; soup on serialize. */
+    if (parent.closest('script, style, title, head')) return false;
     return true;
 }
 

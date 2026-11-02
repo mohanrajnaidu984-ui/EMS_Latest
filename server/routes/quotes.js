@@ -1394,14 +1394,16 @@ router.get('/lists/metadata', async (req, res) => {
             WHERE ISNULL(Status, 'Active') = 'Active'
         `;
 
-        // Merge sources by CompanyName with priority order for address:
-        // Master_CustomerName -> Master_ConsultantName -> Master_clientname.
+        // Merge sources by CompanyName. Priority: Master_CustomerName → Consultant → Client.
+        // First source wins completely — do not backfill blank phone/fax/email/address from
+        // later tables (Quote To must show that customer’s own contacts, blanks stay blank).
         const byName = new Map();
         const upsertCustomer = (r) => {
             const name = (r?.CompanyName || '').toString().trim();
             if (!name) return;
             const normalized = name.toLowerCase();
-            const incoming = {
+            if (byName.has(normalized)) return;
+            byName.set(normalized, {
                 CompanyName: name,
                 Address1: r?.Address1 || '',
                 Address2: r?.Address2 || '',
@@ -1409,23 +1411,6 @@ router.get('/lists/metadata', async (req, res) => {
                 Phone2: r?.Phone2 || '',
                 FaxNo: r?.FaxNo || '',
                 EmailId: r?.EmailId || r?.Emailld || ''
-            };
-            const hasAddress = (obj) => !!([obj?.Address1, obj?.Address2].filter(Boolean).join(' ').trim());
-            const existing = byName.get(normalized);
-            if (!existing) {
-                byName.set(normalized, incoming);
-                return;
-            }
-            const existingHasAddress = hasAddress(existing);
-            const incomingHasAddress = hasAddress(incoming);
-            byName.set(normalized, {
-                CompanyName: existing.CompanyName || incoming.CompanyName,
-                Address1: existingHasAddress ? existing.Address1 : (incoming.Address1 || existing.Address1),
-                Address2: existingHasAddress ? existing.Address2 : (incoming.Address2 || existing.Address2),
-                Phone1: existing.Phone1 || incoming.Phone1,
-                Phone2: existing.Phone2 || incoming.Phone2,
-                FaxNo: existing.FaxNo || incoming.FaxNo,
-                EmailId: existing.EmailId || incoming.EmailId
             });
         };
 

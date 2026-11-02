@@ -4,6 +4,7 @@ const { sql } = require('../dbConfig');
 const { loadEnquiryEmailRow } = require('./loadEnquiryEmailRow');
 const { resolveEnquiryReminderRecipients } = require('./enquiryOutlookEmailFields');
 const { sendEnquiryNotificationViaSmtp } = require('./enquiryNotifySmtp');
+const { isInactiveEnquiryStatus } = require('./enquiryStatus');
 const {
     buildEnquiryDetailsTableHtml,
     formatShortDate,
@@ -110,6 +111,7 @@ async function fetchEnquiriesWithSiteVisitOn(visitYmd) {
         FROM EnquiryMaster
         WHERE SiteVisitDate IS NOT NULL
           AND CONVERT(VARCHAR(10), SiteVisitDate, 23) = ${visitYmd}
+          AND (EnquiryStatus IS NULL OR LTRIM(RTRIM(EnquiryStatus)) = N'' OR LTRIM(RTRIM(EnquiryStatus)) <> N'Inactive')
         ORDER BY RequestNo
     `;
     return (res.recordset || []).map((r) => String(r.RequestNo || '').trim()).filter(Boolean);
@@ -120,6 +122,10 @@ async function sendSiteVisitReminderForEnquiry(requestNo, visitYmd, apiBase) {
     if (!row) {
         console.warn(`[site-visit-reminder] Enquiry ${requestNo} not found — skipped.`);
         return { sent: false, reason: 'not_found' };
+    }
+    if (isInactiveEnquiryStatus(row.EnquiryStatus)) {
+        console.log(`[site-visit-reminder] Enquiry ${requestNo} is Inactive — skipped.`);
+        return { sent: false, reason: 'inactive' };
     }
 
     const { to, toList } = await resolveEnquiryReminderRecipients(requestNo);

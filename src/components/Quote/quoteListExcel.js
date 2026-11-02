@@ -6,9 +6,37 @@ import {
     downloadExcelBlob,
     safeExcelFilePart,
 } from '../../utils/emsExcelWorkbook';
-import { formatRuntimeCurrencyAmount } from '../../utils/currency';
+import {
+    getCurrencyMeta,
+    getRuntimeCurrency,
+    getRuntimeCurrencyCode,
+} from '../../utils/currency';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** Excel number format like `"BHD "#,##0.000` so the cell stays numeric for sums/filters. */
+function quotedValueExcelNumFmt(currencyCode) {
+    const meta = getCurrencyMeta(currencyCode || getRuntimeCurrency());
+    const decimals = Math.max(0, Math.min(6, Number(meta.decimals) || 3));
+    const frac = decimals > 0 ? `.${'0'.repeat(decimals)}` : '';
+    const code = String(meta.code || getRuntimeCurrencyCode() || 'BHD').replace(/"/g, '');
+    return `"${code} "#,##0${frac}`;
+}
+
+/** Parse a quoted amount to a finite number, or null when empty/not quoted. */
+function toQuotedAmount(n) {
+    if (n == null || n === '') return null;
+    if (typeof n === 'number') {
+        return Number.isFinite(n) && n > 0 ? n : null;
+    }
+    const cleaned = String(n)
+        .replace(/,/g, '')
+        .replace(/[A-Za-z]+\s*/g, '')
+        .trim();
+    const num = Number(cleaned);
+    if (!Number.isFinite(num) || num <= 0) return null;
+    return num;
+}
 
 function normalizeListQuoteRollupKey(raw) {
     let s = String(raw || '').trim();
@@ -30,10 +58,12 @@ function formatListQuoteRollupStatusTwoLines(raw) {
     return { line1: 'None Quoted', line2: tail };
 }
 
-function dash(v) {
-    if (v == null) return '—';
+/** Empty cells stay blank (not "—") so Excel keeps number/date types usable. */
+function textOrBlank(v) {
+    if (v == null) return '';
     const s = String(v).trim();
-    return s === '' || s === '-' ? '—' : s;
+    if (s === '' || s === '-' || s === '—') return '';
+    return s;
 }
 
 function toExcelDate(v) {
@@ -52,66 +82,95 @@ function formatQuoteDateShort(v) {
     return `${day}-${mon}-${yyyy}`;
 }
 
-function formatBd(n) {
-    const num = Number(n);
-    if (!Number.isFinite(num) || num <= 0) return '';
-    return formatRuntimeCurrencyAmount(num);
-}
-
 function enquiryNoText(row) {
-    const no = dash(row.RequestNo);
+    const no = textOrBlank(row.RequestNo);
     const st = formatListQuoteRollupStatusTwoLines(row.ListQuoteRollupStatus);
+    if (!no && !st) return '';
     if (!st) return no;
-    return `${no}\n${st.line1}${st.line2 ? `\n${st.line2}` : ''}`;
+    return `${no}\n${st.line1}${st.line2 ? `\n${st.line2}` : ''}`.trim();
 }
 
-function quoteDetailsText(row) {
-    if (Array.isArray(row.ListQuoteDetailLines) && row.ListQuoteDetailLines.length > 0) {
-        return row.ListQuoteDetailLines.map((ln) => {
-            const parts = [String(ln.textLine || '').trim()].filter(Boolean);
-            const bd = formatBd(ln.bdTotal);
-            if (bd) parts.push(bd);
-            const prep = String(ln.preparedBy ?? ln.PreparedBy ?? '').trim();
-            if (prep) parts.push(prep);
-            return parts.join('  ');
-        }).join('\n');
+/**
+ * Expand one list enquiry into one Excel row per customer/quote line.
+ * Quoted Value and Concern SE are separate columns (not embedded in quote details).
+ */
+function expandEnquiryRowsForExcel(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    const out = [];
+
+    for (const row of list) {
+        const base = {
+            RequestNo: row.RequestNo,
+            ListQuoteRollupStatus: row.ListQuoteRollupStatus,
+            ProjectName: row.ProjectName,
+            DueDate: row.DueDate,
+            ConsultantName: row.ConsultantName || row.consultantName,
+        };
+
+        if (Array.isArray(row.ListQuoteDetailLines) && row.ListQuoteDetailLines.length > 0) {
+            for (const ln of row.ListQuoteDetailLines) {
+                out.push({
+                    ...base,
+                    excelQuoteDetails: textOrBlank(ln.textLine),
+                    excelQuotedValue: toQuotedAmount(ln.bdTotal),
+                    excelConcernSe: textOrBlank(ln.preparedBy ?? ln.PreparedBy),
+                });
+            }
+            continue;
+        }
+
+        const toName = textOrBlank(row.ListQuoteDetailToName);
+
+        if (Array.isArray(row.ListMultiLeadQuoteRefs) && row.ListMultiLeadQuoteRefs.length > 0) {
+            const refs = row.ListMultiLeadQuoteRefs;
+            refs.forEach((line, idx) => {
+                const qn = String(line.quoteNumber || '').trim();
+                const dt = formatQuoteDateShort(line.quoteDate);
+                const paren = [qn, dt].filter(Boolean).join(' - ');
+                const details = paren
+                    ? `${toName || ''}${toName ? ' ' : ''}(${paren})`.trim()
+                    : toName;
+                const linePrep = textOrBlank(line.preparedBy ?? line.PreparedBy);
+                const rowPrep = textOrBlank(row.ListPreparedBy);
+                /* Quoted value lives once on the enquiry rollup — put it on the first expanded line only. */
+                out.push({
+                    ...base,
+                    excelQuoteDetails: details,
+                    excelQuotedValue:
+                        idx === 0 ? toQuotedAmount(row.ListQuoteUnderRefTotal) : null,
+                    excelConcernSe: linePrep || rowPrep,
+                });
+            });
+            continue;
+        }
+
+        const ref = String(row.ListQuoteRef || '').trim();
+        const dt = formatQuoteDateShort(row.ListQuoteDate);
+        let details = toName;
+        if (ref || dt) {
+            const paren = [ref, dt].filter(Boolean).join(' - ');
+            details = `${toName || ''}${toName ? ' ' : ''}(${paren})`.trim();
+        }
+
+        out.push({
+            ...base,
+            excelQuoteDetails: details,
+            excelQuotedValue: toQuotedAmount(row.ListQuoteUnderRefTotal),
+            excelConcernSe: textOrBlank(row.ListPreparedBy),
+        });
     }
 
-    const toName = String(row.ListQuoteDetailToName ?? '').trim() || '—';
-    if (Array.isArray(row.ListMultiLeadQuoteRefs) && row.ListMultiLeadQuoteRefs.length > 0) {
-        const joined = row.ListMultiLeadQuoteRefs.map(
-            (line) => `${toName} (${line.quoteNumber} - ${formatQuoteDateShort(line.quoteDate)})`
-        ).join('\n');
-        const parts = [joined];
-        const bd = formatBd(row.ListQuoteUnderRefTotal);
-        if (bd) parts.push(bd);
-        const prep = String(
-            row.ListPreparedBy ||
-                row.ListMultiLeadQuoteRefs.map((r) => r.preparedBy).filter(Boolean).join(', ') ||
-                ''
-        ).trim();
-        if (prep) parts.push(prep);
-        return parts.join('\n');
-    }
-
-    const ref = String(row.ListQuoteRef || '').trim();
-    const dt = formatQuoteDateShort(row.ListQuoteDate);
-    let line = toName;
-    if (ref || dt) line += ` (${[ref, dt].filter(Boolean).join(' - ')})`;
-    const parts = [line];
-    const bd = formatBd(row.ListQuoteUnderRefTotal);
-    if (bd) parts.push(bd);
-    const prep = String(row.ListPreparedBy || '').trim();
-    if (prep) parts.push(prep);
-    return parts.join('\n');
+    return out;
 }
 
 const COLUMNS = [
     { key: 'requestNo', header: 'Enquiry No.', width: 18, type: 'text' },
     { key: 'projectName', header: 'Project Name', width: 40, type: 'text' },
-    { key: 'quoteDetails', header: 'To Customer and Quote details', width: 52, type: 'text' },
+    { key: 'quoteDetails', header: 'To Customer and Quote details', width: 48, type: 'text' },
+    { key: 'quotedValue', header: 'Quoted Value', width: 18, type: 'number' },
+    { key: 'concernSe', header: 'Concern SE', width: 22, type: 'text' },
     { key: 'dueDate', header: 'Due Date', width: 13, type: 'date' },
-    { key: 'consultantName', header: 'Consultant Name', width: 28, type: 'text' }
+    { key: 'consultantName', header: 'Consultant Name', width: 28, type: 'text' },
 ];
 
 function cellValue(col, row) {
@@ -119,13 +178,17 @@ function cellValue(col, row) {
         case 'requestNo':
             return enquiryNoText(row);
         case 'projectName':
-            return dash(row.ProjectName);
+            return textOrBlank(row.ProjectName);
         case 'quoteDetails':
-            return quoteDetailsText(row) || '—';
+            return textOrBlank(row.excelQuoteDetails);
+        case 'quotedValue':
+            return toQuotedAmount(row.excelQuotedValue);
+        case 'concernSe':
+            return textOrBlank(row.excelConcernSe);
         case 'dueDate':
             return toExcelDate(row.DueDate);
         case 'consultantName':
-            return dash(row.ConsultantName || row.consultantName);
+            return textOrBlank(row.ConsultantName || row.consultantName);
         default:
             return '';
     }
@@ -137,12 +200,15 @@ function safeFilePart(s) {
 
 /**
  * Download Quote list (Pending Updates / Search Quote) as formatted .xlsx.
+ * Multi-customer enquiries are expanded to one Excel row per customer/quote line.
  */
 export async function downloadQuoteListXlsx({ rows, mode = 'pending', meta = {} }) {
-    const list = Array.isArray(rows) ? rows : [];
-    if (list.length === 0) {
+    const source = Array.isArray(rows) ? rows : [];
+    if (source.length === 0) {
         throw new Error('No data to export');
     }
+
+    const list = expandEnquiryRowsForExcel(source);
 
     const isSearch = mode === 'search';
     const sectionLabel = isSearch ? 'Search Quote' : 'Pending Updates';
@@ -161,15 +227,18 @@ export async function downloadQuoteListXlsx({ rows, mode = 'pending', meta = {} 
         meta.searchQuery ? `Criteria: ${meta.searchQuery}` : null,
         meta.dateFrom && meta.dateTo ? `From: ${meta.dateFrom}  To: ${meta.dateTo}` : null,
         `Rows: ${list.length}`,
-        `Exported: ${new Date().toLocaleString('en-GB')}`
+        `Exported: ${new Date().toLocaleString('en-GB')}`,
     ].filter(Boolean);
     const { dataStartRow } = await setupEmsExcelReportHeader(workbook, sheet, {
         lastCol,
         title,
         metaText: metaParts.join('  |  '),
         columns: COLUMNS,
-        getHeaderAlignment: () => ({ vertical: 'middle', horizontal: 'left', wrapText: true })
+        getHeaderAlignment: () => ({ vertical: 'middle', horizontal: 'left', wrapText: true }),
     });
+
+    const currencyCode = meta.currency || getRuntimeCurrency();
+    const quotedValueFmt = quotedValueExcelNumFmt(currencyCode);
 
     list.forEach((row, idx) => {
         const excelRow = sheet.getRow(dataStartRow + idx);
@@ -178,20 +247,31 @@ export async function downloadQuoteListXlsx({ rows, mode = 'pending', meta = {} 
             const raw = cellValue(col, row);
             cell.font = CELL_FONT;
             cell.border = THIN_BORDER;
-            cell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
+            cell.alignment = {
+                vertical: 'top',
+                horizontal: col.type === 'number' ? 'right' : 'left',
+                wrapText: true,
+            };
             if (col.type === 'date') {
                 if (raw instanceof Date) {
                     cell.value = raw;
                     cell.numFmt = 'dd-mmm-yy';
                 } else {
-                    cell.value = '—';
+                    cell.value = null;
+                }
+            } else if (col.key === 'quotedValue') {
+                if (typeof raw === 'number' && Number.isFinite(raw)) {
+                    cell.value = raw;
+                    cell.numFmt = quotedValueFmt;
+                } else {
+                    cell.value = null;
                 }
             } else {
-                cell.value = raw;
+                cell.value = raw === '' || raw == null ? null : raw;
             }
         });
-        const detailLines = String(cellValue(COLUMNS[2], row) || '').split('\n').length;
-        excelRow.height = Math.min(100, Math.max(18, 14 + detailLines * 12));
+        const enquiryLines = String(cellValue(COLUMNS[0], row) || '').split('\n').length;
+        excelRow.height = Math.min(60, Math.max(18, 14 + enquiryLines * 12));
     });
 
     COLUMNS.forEach((col, i) => {

@@ -2915,14 +2915,8 @@ const PricingForm = ({ openContext = null }) => {
         }
 
         const nameNorm = (optToDelete.name || '').trim().toLowerCase();
-        const siblingsSameItem = (pricingData.options || []).filter(
-            (o) =>
-                String(o.id) !== String(optionId) &&
-                sameEnquiryItemName(o.itemName, optToDelete.itemName)
-        );
-        // Allow deleting a leftover empty "Base Price" row after rename; otherwise keep the old rule.
-        if (nameNorm === 'base price' && siblingsSameItem.length === 0) {
-            alert('Use the trash icon on the Base Price row to delete Base Price values.');
+        if (nameNorm === 'base price') {
+            alert('Base Price cannot be deleted.');
             return;
         }
 
@@ -3017,71 +3011,6 @@ const PricingForm = ({ openContext = null }) => {
         }
     };
 
-    // Delete Base Price value(s) for a single cell (job + active tab).
-    const deleteBasePriceForCell = async ({ enquiryForId }) => {
-        if (!pricingData?.enquiry?.requestNo) return;
-        if (enquiryForId == null) return;
-        if (!window.confirm('Delete Base Price for this job on the current tab?')) return;
-        try {
-            const jobRow = (pricingData.jobs || []).find((j) => String(j.id) === String(enquiryForId));
-            const jobItemName = String(jobRow?.itemName || '').trim();
-
-            const res = await fetch(`${API_BASE}/api/pricing/value/base-price`, {
-                method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    requestNo: pricingData.enquiry.requestNo,
-                    enquiryForId,
-                    customerName: selectedCustomer,
-                }),
-            });
-            if (!res.ok) {
-                const body = await res.text().catch(() => '');
-                throw new Error(`HTTP ${res.status} ${res.statusText}. ${body}`);
-            }
-
-            // Clear any cached/in-memory Base Price values for this job so UI immediately reflects deletion.
-            const keySuffix = `_${String(enquiryForId)}`;
-            const baseOptIds = new Set(
-                (pricingData.options || [])
-                    .filter((o) => String(o?.name || '').trim().toLowerCase() === 'base price')
-                    .filter((o) => !jobItemName || sameEnquiryItemName(o.itemName, jobItemName))
-                    .map((o) => String(o.id))
-            );
-
-            const zeroBaseKeys = (prev) => {
-                const next = { ...(prev || {}) };
-                // Force Base Price keys for this job to "0" so the textbox clears immediately and can't snap back.
-                Object.keys(next).forEach((k) => {
-                    if (!String(k).endsWith(keySuffix)) return;
-                    const optId = String(k).split('_')[0];
-                    if (baseOptIds.has(optId) || String(optId).startsWith('simulated_base_')) {
-                        next[k] = '0';
-                    }
-                });
-                // Also ensure keys exist for base price option ids (even if user never typed in this cell).
-                baseOptIds.forEach((oid) => {
-                    next[`${oid}_${String(enquiryForId)}`] = '0';
-                });
-                return next;
-            };
-
-            setValues((prev) => zeroBaseKeys(prev));
-            valuesRef.current = zeroBaseKeys(valuesRef.current || {});
-
-            // Reload, preserving the forced-zero keys so the UI reflects deletion immediately.
-            const forcedKeys = Array.from(baseOptIds).map((oid) => `${String(oid)}_${String(enquiryForId)}`);
-            loadPricing(pricingData.enquiry.requestNo, selectedCustomer, valuesRef.current, {
-                forcePreserveZeroKeys: forcedKeys,
-                preserveSourceCustomerKey: selectedCustomer,
-                silentRefresh: true,
-            });
-            refreshPendingRequests();
-        } catch (err) {
-            console.error('Error deleting base price:', err);
-            alert('Failed to delete Base Price: ' + (err?.message || err));
-        }
-    };
 
     // Preserve only values that belong to a specific customer tab (prevents BEMCO edits showing on TEMCO before save).
     const filterPreserveValuesForCustomer = React.useCallback((preserved, targetCustomer) => {
@@ -7227,22 +7156,12 @@ const PricingForm = ({ openContext = null }) => {
                                                                                         justifyContent: 'center',
                                                                                     }}
                                                                                 >
-                                                                                    {canEditRow ? (
+                                                                                    {canEditRow &&
+                                                                                    String(option.name || '').trim().toLowerCase() !== 'base price' ? (
                                                                                         <button
                                                                                             type="button"
-                                                                                            onClick={() => {
-                                                                                                const n = String(option.name || '').trim().toLowerCase();
-                                                                                                if (n === 'base price') {
-                                                                                                    deleteBasePriceForCell({ enquiryForId: job.id });
-                                                                                                } else {
-                                                                                                    deleteOption(option.id, job.id);
-                                                                                                }
-                                                                                            }}
-                                                                                            title={
-                                                                                                String(option.name || '').trim().toLowerCase() === 'base price'
-                                                                                                    ? 'Delete Base Price'
-                                                                                                    : 'Delete this option'
-                                                                                            }
+                                                                                            onClick={() => deleteOption(option.id, job.id)}
+                                                                                            title="Delete this option"
                                                                                             style={{
                                                                                                 background: 'none',
                                                                                                 border: 'none',

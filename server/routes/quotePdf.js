@@ -7,6 +7,10 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const express = require('express');
 const { applyQuotePdfRestrictions, isQuotePdfRestrictEnabled } = require('../lib/restrictQuotePdf');
+const {
+    appendCustomerAcceptancePage,
+    isCustomerAcceptanceEnabled,
+} = require('../lib/quotePdfCustomerAcceptance');
 const { resolvePuppeteerChromeExecutable } = require('../lib/resolvePuppeteerChrome');
 const {
     newPage: newPooledPdfPage,
@@ -661,24 +665,64 @@ async function waitForImagesLoaded(page) {
  */
 // Validate the document after Chromium applies export CSS. Preview validation
 // alone cannot catch a print-only wrapping change; never emit a cropped PDF.
+// Only bottom overflow is a real crop risk. A top check after flex/zoom pin often
+// false-fails (e.g. overflowPx ≈ -2000) and blocked Approvals PDF downloads.
 async function assertQuotePdfContentFits(page) {
     const violations = await page.evaluate(() => {
         const failures = [];
+        const EPS = 2;
         document.querySelectorAll('#quote-preview .quote-a4-sheet--continuation').forEach((sheet, index) => {
             const content = sheet.querySelector('.content-section');
             if (!content) return;
-            const bounds = content.getBoundingClientRect();
-            content.querySelectorAll('[data-ems-pack-seg]').forEach(unit => {
-                const rect = unit.getBoundingClientRect();
-                const range = document.createRange();
-                range.selectNodeContents(unit);
-                const textRect = range.getBoundingClientRect();
-                const bottom = Math.max(rect.bottom, textRect.bottom);
-                if (bottom > bounds.bottom + 1.5 || rect.top < bounds.top - 1.5) {
-                    failures.push({ page: index + 2, unit: unit.getAttribute('data-ems-pack-seg'),
-                        overflowPx: Math.round(bottom - bounds.bottom) });
-                }
-            });
+            const main = sheet.querySelector('.quote-sheet-main-flex');
+            const restore = [];
+            const unclip = (el) => {
+                if (!el || !el.style) return;
+                restore.push({
+                    el,
+                    overflow: el.style.getPropertyValue('overflow'),
+                    overflowPri: el.style.getPropertyPriority('overflow'),
+                });
+                el.style.setProperty('overflow', 'visible', 'important');
+            };
+            unclip(main);
+            unclip(content);
+            try {
+                const bounds = content.getBoundingClientRect();
+                if (bounds.width < 1 || bounds.height < 1) return;
+                content.querySelectorAll('[data-ems-pack-seg]').forEach((unit) => {
+                    const rect = unit.getBoundingClientRect();
+                    if (rect.width < 0.5 && rect.height < 0.5) return;
+                    let bottom = rect.bottom;
+                    try {
+                        const range = document.createRange();
+                        range.selectNodeContents(unit);
+                        const textRect = range.getBoundingClientRect();
+                        if (textRect && Number.isFinite(textRect.bottom) && textRect.height > 0) {
+                            bottom = Math.max(bottom, textRect.bottom);
+                        }
+                    } catch (_e) {
+                        /* ignore range measure failures */
+                    }
+                    const overflowPx = bottom - bounds.bottom;
+                    if (overflowPx > EPS) {
+                        failures.push({
+                            page: index + 2,
+                            unit: unit.getAttribute('data-ems-pack-seg'),
+                            overflowPx: Math.round(overflowPx),
+                        });
+                    }
+                });
+            } finally {
+                restore.forEach(({ el, overflow, overflowPri }) => {
+                    try {
+                        if (overflow) el.style.setProperty('overflow', overflow, overflowPri || undefined);
+                        else el.style.removeProperty('overflow');
+                    } catch (_e2) {
+                        /* ignore */
+                    }
+                });
+            }
         });
         return failures.slice(0, 12);
     });
@@ -1322,8 +1366,24 @@ async function renderPdfBuffer(page, { hasLandscapeSheets = false } = {}) {
 }
 
 router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
-    const { html, filename, emulateScreen, delivery, pagedMode } = req.body || {};
+    const {
+        html,
+        filename,
+        emulateScreen,
+        delivery,
+        pagedMode,
+        quoteRef,
+        quoteNumber,
+        quoteDate,
+        includeCustomerAcceptance,
+    } = req.body || {};
     const isPagedMode = pagedMode === true || pagedMode === 1 || pagedMode === '1';
+    // Only append Customer Acceptance for generated quotes (Previous Quotes). Drafts skip it.
+    const wantCustomerAcceptance =
+        includeCustomerAcceptance === true ||
+        includeCustomerAcceptance === 1 ||
+        includeCustomerAcceptance === '1' ||
+        includeCustomerAcceptance === 'true';
     /** When true (default), @media print is ignored — layout matches Quote tab on-screen CSS (grid/flex A4 sheets). */
     const useScreenMedia = isPagedMode ? false : emulateScreen !== false;
     /**
@@ -1558,10 +1618,45 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
         perf.renderMs = msSince(tRender);
         logStage('generate', 'Stage 2 PDF render', perf.renderMs);
 
+        const tAccept = Date.now();
+        const acceptanceEnabled = isCustomerAcceptanceEnabled() && wantCustomerAcceptance;
+        if (acceptanceEnabled) {
+            try {
+                buf = await appendCustomerAcceptancePage(buf, {
+                    quoteRef: quoteRef || quoteNumber || '',
+                    quoteNumber: quoteNumber || quoteRef || '',
+                    quoteDate: quoteDate || '',
+                });
+                pdfStepLog('customer acceptance page appended', {
+                    quoteRef: String(quoteRef || quoteNumber || '').slice(0, 80),
+                });
+            } catch (acceptErr) {
+                console.warn(
+                    '[quote-pdf] customer acceptance page skipped:',
+                    acceptErr && acceptErr.message ? acceptErr.message : acceptErr
+                );
+            }
+        } else {
+            pdfStepLog('customer acceptance page omitted', {
+                envEnabled: isCustomerAcceptanceEnabled(),
+                wantCustomerAcceptance,
+            });
+        }
+        perf.acceptanceMs = msSince(tAccept);
+        logStage('generate', 'Stage 2 Customer acceptance', perf.acceptanceMs, {
+            appended: acceptanceEnabled,
+        });
+
         const tRestrict = Date.now();
-        buf = await applyQuotePdfRestrictions(buf);
+        // Encrypted PDFs force Acrobat "Save As" after signing. Skip encrypt when
+        // customer acceptance is on so the signature can be saved into the same file.
+        buf = await applyQuotePdfRestrictions(buf, {
+            allowInPlaceDigitalSignature: acceptanceEnabled,
+        });
         perf.restrictMs = msSince(tRestrict);
-        logStage('generate', 'Stage 2 Restrict', perf.restrictMs);
+        logStage('generate', 'Stage 2 Restrict', perf.restrictMs, {
+            inPlaceSign: acceptanceEnabled,
+        });
 
         const tResponse = Date.now();
         const safeName = String(filename || 'quote.pdf').replace(/[^\w.\-]+/g, '_');
@@ -1569,8 +1664,11 @@ router.post('/generate', express.json({ limit: '50mb' }), async (req, res) => {
         perf.totalMs = msSince(perfT0);
         const perfHeader = headerJson(perf);
         const extraHeaders = {};
-        if (isQuotePdfRestrictEnabled()) {
+        if (isQuotePdfRestrictEnabled() && !acceptanceEnabled) {
             extraHeaders['X-EMS-PDF-Restricted'] = '1';
+        }
+        if (acceptanceEnabled) {
+            extraHeaders['X-EMS-PDF-InPlace-Sign'] = '1';
         }
         if (perfHeader) {
             extraHeaders['X-EMS-PDF-Timing'] = perfHeader;

@@ -101,6 +101,52 @@ function sumPricingLineAmountsForSplitStamp(rows) {
     return Math.round(sum * 1000) / 1000;
 }
 
+/**
+ * Read Discount magnitude (+ optional %) from the full pricing table before row-split,
+ * so continuation fragments (Final Discounted / VAT / Grand) still apply the discount
+ * when the Discount row itself stayed on the previous page.
+ * @param {HTMLTableRowElement[]} rows
+ * @returns {{ amount: number, pct: number | null } | null}
+ */
+function readPricingDiscountForSplitStamp(rows) {
+    if (!rows?.length) return null;
+    for (const row of rows) {
+        const cells = row?.cells || [];
+        if (cells.length < 2) continue;
+        const label = String(cells[0].textContent || '')
+            .replace(/[\u200b\u200c\u200d\ufeff]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const rowKind = String(row.getAttribute?.('data-ems-row') || '')
+            .trim()
+            .toLowerCase();
+        const isDiscount =
+            rowKind === 'discount' ||
+            /^discount(\s*\(\s*[\d.]*\s*%?\s*\)?)?$/i.test(label) ||
+            /^discount(\s+[\d.]*\s*%?)?$/i.test(label);
+        if (!isDiscount) continue;
+
+        const amtText = String(cells[cells.length - 1].textContent || '')
+            .replace(/,/g, '')
+            .replace(/[^\d.\-]/g, ' ')
+            .trim();
+        const m = amtText.match(/-?\d+(?:\.\d+)?/);
+        const amount = m ? Math.abs(parseFloat(m[0])) : 0;
+        const pctMatch =
+            label.match(/^Discount\s*\(\s*([\d.]+)\s*%?\s*\)?\s*$/i) ||
+            label.match(/^Discount\s+([\d.]+)\s*%?\s*$/i);
+        const pct = pctMatch ? parseFloat(pctMatch[1]) : null;
+        if ((!Number.isFinite(amount) || amount <= 0) && !(Number.isFinite(pct) && pct > 0)) {
+            return null;
+        }
+        return {
+            amount: Number.isFinite(amount) ? Math.round(amount * 1000) / 1000 : 0,
+            pct: Number.isFinite(pct) && pct >= 0 ? Math.round(pct * 100) / 100 : null,
+        };
+    }
+    return null;
+}
+
 function pricingSummaryColgroupHtml(table) {
     const existing = table?.querySelector?.('colgroup');
     const colN = existing?.querySelectorAll?.('col')?.length || 0;
@@ -645,13 +691,27 @@ function splitTableToRowSegmentHtml(table) {
             .replace(/\s*data-ems-pricing-cols=["']fixed["']/gi, '');
     }
     /*
-     * Pricing summary: stamp full pre-VAT base onto every row fragment so normal-mode
-     * VAT/Total reconcile cannot rebuild Total from only the rows on the current page.
+     * Pricing summary: stamp full pre-VAT base + discount onto every row fragment so
+     * continuation pages (Final Discounted / VAT / Grand) still apply Discount when
+     * that row remained on the previous page.
      */
     if (isPriceSummary && !/data-ems-pricing-base-total=/i.test(attrsForSplit)) {
         const stampedBase = sumPricingLineAmountsForSplitStamp(allRows);
         if (stampedBase != null) {
             attrsForSplit = `${attrsForSplit} data-ems-pricing-base-total="${stampedBase}"`.trim();
+        }
+    }
+    if (isPriceSummary && !/data-ems-pricing-discount-total=/i.test(attrsForSplit)) {
+        const disc = readPricingDiscountForSplitStamp(allRows);
+        if (disc) {
+            if (disc.amount > 0) {
+                attrsForSplit =
+                    `${attrsForSplit} data-ems-pricing-discount-total="${disc.amount}"`.trim();
+            }
+            if (disc.pct != null && disc.pct >= 0) {
+                attrsForSplit =
+                    `${attrsForSplit} data-ems-discount-pct="${disc.pct}"`.trim();
+            }
         }
     }
     const colgroupHtml = isPriceSummary

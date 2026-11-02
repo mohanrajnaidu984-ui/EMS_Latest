@@ -3016,13 +3016,25 @@ function stampPricingBaseTotalAttrsInHtml(html) {
         if (!tables.length) return raw;
         let changed = false;
         tables.forEach((table) => {
-            if (readStampedPricingBaseTotal(table) != null) return;
-            const base =
-                sumPricingLineRowsFromTableElement(table) ??
-                parseBaseTotalFromPricingTableElement(table);
-            if (base == null || !Number.isFinite(base) || base < 0) return;
-            stampPricingBaseTotalOnTable(table, base);
-            changed = true;
+            if (readStampedPricingBaseTotal(table) == null) {
+                const base =
+                    sumPricingLineRowsFromTableElement(table) ??
+                    parseBaseTotalFromPricingTableElement(table);
+                if (base != null && Number.isFinite(base) && base >= 0) {
+                    stampPricingBaseTotalOnTable(table, base);
+                    changed = true;
+                }
+            }
+            if (readStampedPricingDiscountTotal(table) == null) {
+                const disc = parseDiscountAmountFromPricingTable(
+                    table,
+                    readStampedPricingBaseTotal(table)
+                );
+                if (disc > 0) {
+                    stampPricingDiscountTotalOnTable(table, disc);
+                    changed = true;
+                }
+            }
         });
         return changed ? root.innerHTML : raw;
     } catch (_e) {
@@ -3032,7 +3044,7 @@ function stampPricingBaseTotalAttrsInHtml(html) {
 
 /**
  * Across sheet blocks, sum line rows that share data-ems-split-id and stamp the
- * full base onto every fragment (covers already-saved HTML without the attr).
+ * full base (+ discount) onto every fragment (covers already-saved HTML without the attr).
  */
 function stampSplitPricingBasesAcrossSheetBlocks(blocks) {
     if (!Array.isArray(blocks) || !blocks.length || typeof DOMParser === 'undefined') {
@@ -3042,6 +3054,10 @@ function stampSplitPricingBasesAcrossSheetBlocks(blocks) {
     const stampedBases = new Map();
     /** @type {Map<string, number>} */
     const lineSums = new Map();
+    /** @type {Map<string, number>} */
+    const stampedDiscounts = new Map();
+    /** @type {Map<string, number>} */
+    const stampedDiscountPcts = new Map();
     const parsed = blocks.map((block) => {
         const html = String(block?.bodyHtml || '');
         if (!html || !/data-ems-table-split=/i.test(html)) {
@@ -3071,11 +3087,28 @@ function stampSplitPricingBasesAcrossSheetBlocks(blocks) {
                 const stamped = readStampedPricingBaseTotal(table);
                 if (stamped != null) {
                     stampedBases.set(sid, stamped);
-                    return;
+                } else {
+                    const part = sumPricingLineRowsFromTableElement(table);
+                    if (part != null && Number.isFinite(part)) {
+                        lineSums.set(sid, roundBhdAmount((lineSums.get(sid) || 0) + part));
+                    }
                 }
-                const part = sumPricingLineRowsFromTableElement(table);
-                if (part == null || !Number.isFinite(part)) return;
-                lineSums.set(sid, roundBhdAmount((lineSums.get(sid) || 0) + part));
+
+                const discStamp = readStampedPricingDiscountTotal(table);
+                if (discStamp != null && discStamp > 0) {
+                    stampedDiscounts.set(sid, discStamp);
+                } else {
+                    const fromRow = readDiscountAmountFromDiscountRow(table);
+                    if (fromRow != null && fromRow > 0) {
+                        stampedDiscounts.set(sid, fromRow);
+                    }
+                }
+                const pctRaw = table.getAttribute('data-ems-discount-pct');
+                const pct =
+                    pctRaw != null && String(pctRaw).trim() !== '' ? parseFloat(pctRaw) : NaN;
+                if (Number.isFinite(pct) && pct > 0) {
+                    stampedDiscountPcts.set(sid, pct);
+                }
             });
     });
 
@@ -3088,7 +3121,7 @@ function stampSplitPricingBasesAcrossSheetBlocks(blocks) {
         bases.set(sid, sum);
     });
 
-    if (!bases.size) return blocks;
+    if (!bases.size && !stampedDiscounts.size && !stampedDiscountPcts.size) return blocks;
 
     return parsed.map(({ block, root }) => {
         if (!root) return block;
@@ -3100,11 +3133,46 @@ function stampSplitPricingBasesAcrossSheetBlocks(blocks) {
             .forEach((table) => {
                 const sid = String(table.getAttribute('data-ems-split-id') || '').trim();
                 const base = bases.get(sid);
-                if (base == null || !Number.isFinite(base)) return;
-                const prev = readStampedPricingBaseTotal(table);
-                if (prev != null && Math.abs(prev - base) < 0.0005) return;
-                stampPricingBaseTotalOnTable(table, base);
-                changed = true;
+                if (base != null && Number.isFinite(base)) {
+                    const prev = readStampedPricingBaseTotal(table);
+                    if (prev == null || Math.abs(prev - base) >= 0.0005) {
+                        stampPricingBaseTotalOnTable(table, base);
+                        changed = true;
+                    }
+                }
+                const disc = stampedDiscounts.get(sid);
+                if (disc != null && Number.isFinite(disc) && disc > 0) {
+                    const prevDisc = readStampedPricingDiscountTotal(table);
+                    if (prevDisc == null || Math.abs(prevDisc - disc) >= 0.0005) {
+                        stampPricingDiscountTotalOnTable(table, disc);
+                        changed = true;
+                    }
+                } else if (
+                    base != null &&
+                    Number.isFinite(base) &&
+                    stampedDiscountPcts.has(sid)
+                ) {
+                    const pct = stampedDiscountPcts.get(sid);
+                    const fromPct = roundBhdAmount((base * pct) / 100);
+                    if (fromPct > 0) {
+                        const prevDisc = readStampedPricingDiscountTotal(table);
+                        if (prevDisc == null || Math.abs(prevDisc - fromPct) >= 0.0005) {
+                            stampPricingDiscountTotalOnTable(table, fromPct);
+                            changed = true;
+                        }
+                    }
+                }
+                if (stampedDiscountPcts.has(sid)) {
+                    const pct = stampedDiscountPcts.get(sid);
+                    const prevPct = parseFloat(table.getAttribute('data-ems-discount-pct') || '');
+                    if (!Number.isFinite(prevPct) || Math.abs(prevPct - pct) >= 0.0005) {
+                        table.setAttribute(
+                            'data-ems-discount-pct',
+                            formatDiscountPercentNumber(pct)
+                        );
+                        changed = true;
+                    }
+                }
             });
         if (!changed) return block;
         return { ...block, bodyHtml: root.innerHTML };
@@ -3286,7 +3354,7 @@ function findPricingTableRowByKindOrLabel(table, { rowKind, labelTest }) {
 
 function pricingTableHasDiscountBlock(table) {
     if (!table) return false;
-    return Boolean(
+    if (
         findPricingTableRowByKindOrLabel(table, {
             rowKind: 'discount',
             labelTest: isDiscountPricingLabel,
@@ -3295,28 +3363,138 @@ function pricingTableHasDiscountBlock(table) {
             rowKind: 'final-discounted',
             labelTest: isFinalDiscountedPricingLabel,
         })
-    );
+    ) {
+        return true;
+    }
+    /* Split continuation fragment: Discount row may be on another page. */
+    if (readStampedPricingDiscountTotal(table) != null) return true;
+    const pct = parseFloat(table.getAttribute('data-ems-discount-pct') || '');
+    if (Number.isFinite(pct) && pct > 0) return true;
+    const lockedAmt = parseFloat(table.getAttribute('data-ems-discount-amount') || '');
+    return Number.isFinite(lockedAmt) && lockedAmt > 0;
 }
 
-/** Absolute discount magnitude from the Discount footer row (blank → 0). */
-function parseDiscountAmountFromPricingTable(table) {
+function readStampedPricingDiscountTotal(table) {
+    if (!table?.getAttribute) return null;
+    const stamped = parseFloat(table.getAttribute('data-ems-pricing-discount-total') || '');
+    return Number.isFinite(stamped) && stamped >= 0 ? stamped : null;
+}
+
+function stampPricingDiscountTotalOnTable(table, discountTotal) {
+    if (!table?.setAttribute) return;
+    const n = Number(discountTotal);
+    if (!Number.isFinite(n) || n < 0) return;
+    table.setAttribute('data-ems-pricing-discount-total', String(roundBhdAmount(n)));
+}
+
+function readDiscountAmountFromDiscountRow(table) {
     const row = findPricingTableRowByKindOrLabel(table, {
         rowKind: 'discount',
         labelTest: isDiscountPricingLabel,
     });
-    if (!row) return 0;
+    if (!row?.cells?.length) return null;
     const amtCell = row.cells[row.cells.length - 1];
     const amtText = amtCell?.textContent;
-    if (!String(amtText || '').trim() || isIncompleteBhdAmountText(amtText)) return 0;
+    if (!String(amtText || '').trim() || isIncompleteBhdAmountText(amtText)) return null;
     const parsed = parseBhdAmountText(amtText);
-    if (parsed == null || !Number.isFinite(parsed)) return 0;
+    if (parsed == null || !Number.isFinite(parsed)) return null;
     return Math.abs(parsed);
+}
+
+function readDiscountAmountFromPctAttr(table, lineBaseTotal) {
+    const pctRaw = table?.getAttribute?.('data-ems-discount-pct');
+    const pct = pctRaw != null && String(pctRaw).trim() !== '' ? parseFloat(pctRaw) : NaN;
+    const base =
+        lineBaseTotal != null && Number.isFinite(lineBaseTotal)
+            ? Number(lineBaseTotal)
+            : readStampedPricingBaseTotal(table);
+    if (!Number.isFinite(pct) || pct <= 0 || base == null || !Number.isFinite(base) || base <= 0) {
+        return null;
+    }
+    return roundBhdAmount((base * pct) / 100);
+}
+
+function escapeCssAttrSelector(value) {
+    const raw = String(value || '');
+    try {
+        return typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+            ? CSS.escape(raw)
+            : raw.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    } catch (_e) {
+        return raw.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    }
+}
+
+/**
+ * Absolute discount magnitude for Final Discounted / VAT / Grand.
+ * Full table: Discount row. Page-split fragment without that row: stamped
+ * data-ems-pricing-discount-total / % / sibling fragments that still hold Discount.
+ */
+function parseDiscountAmountFromPricingTable(table, lineBaseTotal = null) {
+    if (!table) return 0;
+
+    const fromRow = readDiscountAmountFromDiscountRow(table);
+    if (fromRow != null && fromRow > 0) {
+        stampPricingDiscountTotalOnTable(table, fromRow);
+        return fromRow;
+    }
+
+    const stamped = readStampedPricingDiscountTotal(table);
+    if (stamped != null && stamped > 0) return stamped;
+
+    const lockedAmt = parseFloat(table.getAttribute('data-ems-discount-amount') || '');
+    if (Number.isFinite(lockedAmt) && lockedAmt > 0) {
+        stampPricingDiscountTotalOnTable(table, lockedAmt);
+        return roundBhdAmount(lockedAmt);
+    }
+
+    const fromPct = readDiscountAmountFromPctAttr(table, lineBaseTotal);
+    if (fromPct != null && fromPct > 0) {
+        stampPricingDiscountTotalOnTable(table, fromPct);
+        return fromPct;
+    }
+
+    const isSplit = table.getAttribute('data-ems-table-split') === '1';
+    const splitId = String(table.getAttribute('data-ems-split-id') || '').trim();
+    const doc = table.ownerDocument;
+    if (isSplit && splitId && doc?.querySelectorAll) {
+        const escaped = escapeCssAttrSelector(splitId);
+        const siblings = [
+            ...doc.querySelectorAll(`table[data-ems-split-id="${escaped}"]`),
+        ];
+        for (const sib of siblings) {
+            if (sib === table) continue;
+            const sibStamp = readStampedPricingDiscountTotal(sib);
+            if (sibStamp != null && sibStamp > 0) {
+                stampPricingDiscountTotalOnTable(table, sibStamp);
+                return sibStamp;
+            }
+            const sibRow = readDiscountAmountFromDiscountRow(sib);
+            if (sibRow != null && sibRow > 0) {
+                stampPricingDiscountTotalOnTable(table, sibRow);
+                stampPricingDiscountTotalOnTable(sib, sibRow);
+                return sibRow;
+            }
+            const sibPct = readDiscountAmountFromPctAttr(sib, lineBaseTotal);
+            if (sibPct != null && sibPct > 0) {
+                stampPricingDiscountTotalOnTable(table, sibPct);
+                return sibPct;
+            }
+        }
+    }
+
+    return fromRow != null ? fromRow : 0;
 }
 
 function calcTaxedBaseFromPricingTable(table, lineBaseTotal) {
     const base = roundBhdAmount(lineBaseTotal);
-    if (!pricingTableHasDiscountBlock(table)) return base;
-    return roundBhdAmount(base - parseDiscountAmountFromPricingTable(table));
+    const hasDiscount =
+        pricingTableHasDiscountBlock(table) ||
+        readStampedPricingDiscountTotal(table) != null ||
+        (parseFloat(table?.getAttribute?.('data-ems-discount-pct') || '') || 0) > 0 ||
+        (parseFloat(table?.getAttribute?.('data-ems-discount-amount') || '') || 0) > 0;
+    if (!hasDiscount) return base;
+    return roundBhdAmount(base - parseDiscountAmountFromPricingTable(table, base));
 }
 
 function isPricingDiscountAmountLocked(table) {
@@ -5244,32 +5422,19 @@ function formatMasterCustomerPhone(row) {
 }
 
 /**
- * Address from the best-matching master row; phone/fax/email fall back to other master
- * rows with the same core company name when the preferred row has blanks
- * (e.g. "M/s Almoayyed Solar…" has PO Box but empty phones; sibling "Almoayyed Solar CO…" has contacts).
+ * Address / phone / fax / email from the best-matching master row only.
+ * Do not borrow contacts from similarly named sibling rows (M/s vs non-M/s, etc.) —
+ * blank fields stay blank for that particular customer.
  */
 function resolveMasterCustomerRecipient(customersList, selectedName) {
     const primary = findMasterCustomerRow(customersList, selectedName);
     if (!primary) return null;
-    const t = customerMatchKeys(selectedName);
-    const siblings = (Array.isArray(customersList) ? customersList : []).filter((c) => {
-        const k = customerMatchKeys(c?.CompanyName);
-        return !!(k.strippedKey && t.strippedKey && k.strippedKey === t.strippedKey);
-    });
-    const ordered = [primary, ...siblings.filter((c) => c !== primary)];
-    const pick = (getter) => {
-        for (const row of ordered) {
-            const v = getter(row);
-            if (v) return v;
-        }
-        return '';
-    };
     return {
         row: primary,
         address: composeCustomerToAddress(primary, selectedName),
-        phone: pick(formatMasterCustomerPhone),
-        email: pick((r) => String(r?.EmailId || '').trim()),
-        fax: pick((r) => String(r?.FaxNo || '').trim()),
+        phone: formatMasterCustomerPhone(primary),
+        email: String(primary?.EmailId || '').trim(),
+        fax: String(primary?.FaxNo || '').trim(),
     };
 }
 
@@ -8041,6 +8206,20 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     // Print Settings
     const [printWithHeader, setPrintWithHeader] = useState(true);
+    /**
+     * When checked, PDF download/email append the Customer Acceptance page.
+     * Allowed only for: Quote Previous mode, or Approvals "Approved by Me".
+     */
+    const [printWithAcceptance, setPrintWithAcceptance] = useState(false);
+    const canSelectWithAcceptance = React.useMemo(() => {
+        if (embeddedApprovalReview) {
+            return String(openContext?.approvalListTab || '').trim().toLowerCase() === 'approved';
+        }
+        return Boolean(browsePreviousQuotesRevisions);
+    }, [embeddedApprovalReview, openContext?.approvalListTab, browsePreviousQuotesRevisions]);
+    React.useEffect(() => {
+        if (!canSelectWithAcceptance) setPrintWithAcceptance(false);
+    }, [canSelectWithAcceptance]);
 
     /** Per-enquiry draggable digital signatures on quote sheets (persisted in localStorage). */
     const [signatureVaultOpen, setSignatureVaultOpen] = useState(false);
@@ -9724,6 +9903,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 pricingSummary: pricingSummary?.length ? JSON.parse(JSON.stringify(pricingSummary)) : [],
                 hasUserPricing: Boolean(hasUserPricing),
                 printWithHeader: Boolean(printWithHeader),
+                printWithAcceptance: Boolean(printWithAcceptance),
                 browsePreviousQuotesRevisions: Boolean(browsePreviousQuotesRevisions),
                 quoteDraftId: quoteDraftId != null ? quoteDraftId : null,
                 quoteListDivision: String(quoteListDivision || '').trim(),
@@ -9770,6 +9950,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         pricingSummary,
         hasUserPricing,
         printWithHeader,
+        printWithAcceptance,
         browsePreviousQuotesRevisions,
         quoteDraftId,
         quoteListDivision,
@@ -9834,6 +10015,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 pricingSummary: pricingSummary?.length ? JSON.parse(JSON.stringify(pricingSummary)) : [],
                 hasUserPricing: Boolean(hasUserPricing),
                 printWithHeader: Boolean(printWithHeader),
+                printWithAcceptance: Boolean(printWithAcceptance),
                 quotePageOrientations: normalizeQuotePageOrientationsMap(quotePageOrientations),
             };
         } catch (e) {
@@ -9843,6 +10025,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 grandTotal: Number(grandTotal) || 0,
                 hasUserPricing: Boolean(hasUserPricing),
                 printWithHeader: Boolean(printWithHeader),
+                printWithAcceptance: Boolean(printWithAcceptance),
             };
         }
 
@@ -10078,6 +10261,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (Array.isArray(snap.pricingSummary)) setPricingSummary(snap.pricingSummary);
             if (typeof snap.hasUserPricing === 'boolean') setHasUserPricing(snap.hasUserPricing);
             if (typeof snap.printWithHeader === 'boolean') setPrintWithHeader(snap.printWithHeader);
+            if (typeof snap.printWithAcceptance === 'boolean') {
+                setPrintWithAcceptance(snap.printWithAcceptance);
+            }
             if (typeof snap.browsePreviousQuotesRevisions === 'boolean') {
                 setBrowsePreviousQuotesRevisions(snap.browsePreviousQuotesRevisions);
             }
@@ -14753,8 +14939,18 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     }, [toName]);
 
     /**
-     * Recipient To Address/Phone/Fax/Email — fill blank fields only, once per To + master readiness.
-     * Functional setState avoids depending on toAddress (which fought draft load and re-rendered forever).
+     * Saved EnquiryQuotes (quoteId / Previous Quotes) → keep To* from EnquiryQuotes.
+     * Draft or new (no saved quote) → To* from master by company name.
+     */
+    const shouldUseMasterForToContact = useCallback(() => {
+        if (browsePreviousQuotesRevisionsRef.current) return false;
+        if (quoteId != null && String(quoteId).trim() !== '') return false;
+        return true;
+    }, [quoteId]);
+
+    /**
+     * Recipient To Address/Phone/Fax/Email for draft/new only — master by company name.
+     * Saved EnquiryQuotes contacts must not be overwritten here.
      */
     const recipientHydrateAttemptRef = useRef('');
     useEffect(() => {
@@ -14764,138 +14960,104 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             return;
         }
         if (recipientOverrideTouchedRef.current) return;
+        if (!shouldUseMasterForToContact()) return;
 
         const reqNo = String(enquiryData?.enquiry?.RequestNo || '');
         const profiles = enquiryData?.availableProfiles || [];
-        const details = enquiryData?.customerDetails;
         const custLen = Array.isArray(customersList) ? customersList.length : 0;
-        /* Retry only when master list / profiles / details become available — not on every field paint. */
-        const attemptKey = `${tn}|${reqNo}|c${custLen}|p${profiles.length}|d${details ? 1 : 0}`;
+        const attemptKey = `${tn}|${reqNo}|c${custLen}|p${profiles.length}|qid${quoteId ?? ''}`;
         if (recipientHydrateAttemptRef.current === attemptKey) return;
         recipientHydrateAttemptRef.current = attemptKey;
 
-        const fillBlank = (contact) => {
-            if (!contact || recipientOverrideTouchedRef.current) return;
-            const addr = String(contact.address || '').trim();
-            const ph = String(contact.phone || '').trim();
-            const em = String(contact.email || '').trim();
-            const fx = String(contact.fax || '').trim();
-            if (addr) setToAddress((prev) => (String(prev || '').trim() ? prev : addr));
-            if (ph) setToPhone((prev) => (String(prev || '').trim() ? prev : ph));
-            if (em) setToEmail((prev) => (String(prev || '').trim() ? prev : em));
-            if (fx) setToFax((prev) => (String(prev || '').trim() ? prev : fx));
-        };
-
-        const matchedCustomer = resolveMasterCustomerRecipient(customersList, tn);
-        if (matchedCustomer) {
-            fillBlank({
-                address: matchedCustomer.address,
-                phone: matchedCustomer.phone,
-                email: matchedCustomer.email,
-                fax: matchedCustomer.fax,
-            });
-            return;
-        }
-
-        const cleanTarget = collapseSpacesLower(stripQuoteJobPrefix(tn));
-        if (cleanTarget.length >= 2) {
-            /* Exact match only — includes() mis-filled from short internal names. */
+        if (isQuoteInternalCustomer(enquiryData, pricingData?.jobs, tn)) {
+            const cleanTarget = collapseSpacesLower(stripQuoteJobPrefix(tn));
             const profileMatch = profiles.find((p) => {
                 const a = collapseSpacesLower(stripQuoteJobPrefix(p?.itemName || ''));
                 const b = collapseSpacesLower(stripQuoteJobPrefix(p?.name || ''));
                 return (a && a === cleanTarget) || (b && b === cleanTarget);
             });
-            if (profileMatch) {
-                fillBlank({
-                    address: profileMatch.address || profileMatch.Address,
-                    phone: profileMatch.phone || profileMatch.Phone,
-                    email: String(profileMatch.email || profileMatch.Email || '')
-                        .split(',')[0]
-                        .trim(),
-                    fax: profileMatch.fax || profileMatch.Fax,
-                });
-                return;
-            }
-
-            const jobs = pricingData?.jobs || [];
-            const pricingJobMatch = jobs.find((j) => {
-                const name = collapseSpacesLower(
-                    stripQuoteJobPrefix(j?.itemName || j?.ItemName || j?.DivisionName || '')
-                );
-                return name && name === cleanTarget;
-            });
-            if (pricingJobMatch) {
-                fillBlank({
-                    address: pricingJobMatch.address || pricingJobMatch.Address,
-                    phone: pricingJobMatch.phone || pricingJobMatch.Phone,
-                    email: String(pricingJobMatch.email || pricingJobMatch.Email || '')
-                        .split(',')[0]
-                        .trim(),
-                    fax: pricingJobMatch.fax || pricingJobMatch.Fax,
-                });
-                return;
-            }
+            setToAddress(String(profileMatch?.address || profileMatch?.Address || '').trim());
+            setToPhone(String(profileMatch?.phone || profileMatch?.Phone || '').trim());
+            setToEmail(
+                String(profileMatch?.email || profileMatch?.Email || '')
+                    .split(',')[0]
+                    .trim()
+            );
+            setToFax(String(profileMatch?.fax || profileMatch?.Fax || '').trim());
+            return;
         }
 
-        if (details) {
-            fillBlank({
-                address: composeCustomerToAddress(details, tn) || String(details.Address || '').trim(),
-                phone: `${details.Phone1 || ''} ${details.Phone2 ? '/ ' + details.Phone2 : ''}`.trim(),
-                email: details.EmailId,
-                fax: details.FaxNo,
-            });
+        const matchedCustomer = resolveMasterCustomerRecipient(customersList, tn);
+        if (matchedCustomer) {
+            setToAddress(String(matchedCustomer.address || '').trim());
+            setToPhone(String(matchedCustomer.phone || '').trim());
+            setToEmail(String(matchedCustomer.email || '').trim());
+            setToFax(String(matchedCustomer.fax || '').trim());
         }
     }, [
         toName,
         customersList,
         enquiryData?.enquiry?.RequestNo,
         enquiryData?.availableProfiles?.length,
-        enquiryData?.customerDetails,
-        pricingData?.jobs?.length,
+        enquiryData,
+        pricingData?.jobs,
+        quoteId,
+        shouldUseMasterForToContact,
     ]);
 
     /**
-     * Internal "To" customers ALWAYS take their address/phone/fax/email from
-     * `Master_EnquiryFor` (joined into `availableProfiles` on the server). When a
-     * saved quote with an internal recipient is loaded, the stored ToAddress can be
-     * stale (from a pre-fix save). This effect refreshes those fields from the
-     * master profile ONCE per (enquiry, toName), so the preview reflects the
-     * authoritative master record without fighting later manual edits.
+     * Draft/new only: sync To* from Master_EnquiryFor (internal) or Master_CustomerName (external).
+     * Saved EnquiryQuotes rows keep their stored To* and are skipped.
      */
-    const internalToAddressSyncedRef = useRef('');
+    const masterToContactSyncedRef = useRef('');
     useEffect(() => {
         const tn = String(toName || '').trim();
-        if (!tn) return;
+        if (!tn) {
+            masterToContactSyncedRef.current = '';
+            return;
+        }
+        if (recipientOverrideTouchedRef.current) return;
+        if (!shouldUseMasterForToContact()) return;
         const reqNo = String(enquiryData?.enquiry?.RequestNo || '');
         if (!reqNo) return;
-        const profiles = enquiryData?.availableProfiles || [];
-        if (!profiles.length) return;
 
-        const cleanTarget = collapseSpacesLower(stripQuoteJobPrefix(tn));
-        if (!cleanTarget) return;
-        const profile = profiles.find((p) => {
-            const a = collapseSpacesLower(stripQuoteJobPrefix(p?.itemName || ''));
-            const b = collapseSpacesLower(stripQuoteJobPrefix(p?.name || ''));
-            return (a && a === cleanTarget) || (b && b === cleanTarget);
-        });
-        if (!profile) return; // external customer — skip
+        const key = `${reqNo}::${tn}::c${(customersList || []).length}::p${(enquiryData?.availableProfiles || []).length}`;
+        if (masterToContactSyncedRef.current === key) return;
 
-        const key = `${reqNo}::${tn}`;
-        if (internalToAddressSyncedRef.current === key) return;
-        internalToAddressSyncedRef.current = key;
+        if (isQuoteInternalCustomer(enquiryData, pricingData?.jobs, tn)) {
+            const profiles = enquiryData?.availableProfiles || [];
+            if (!profiles.length) return;
+            const cleanTarget = collapseSpacesLower(stripQuoteJobPrefix(tn));
+            const profile = profiles.find((p) => {
+                const a = collapseSpacesLower(stripQuoteJobPrefix(p?.itemName || ''));
+                const b = collapseSpacesLower(stripQuoteJobPrefix(p?.name || ''));
+                return (a && a === cleanTarget) || (b && b === cleanTarget);
+            });
+            masterToContactSyncedRef.current = key;
+            setToAddress(String(profile?.address || '').trim());
+            setToPhone(String(profile?.phone || '').trim());
+            setToEmail(String(profile?.email || '').split(',')[0].trim());
+            setToFax(String(profile?.fax || '').trim());
+            return;
+        }
 
-        // For internal recipients the Master_EnquiryFor row is authoritative — overwrite
-        // unconditionally so any stale external address/phone/fax/email (e.g. from a
-        // previous external selection or pre-fix saved quote row) is cleared.
-        const addr = String(profile.address || '').trim();
-        const ph = String(profile.phone || '').trim();
-        const em = String(profile.email || '').split(',')[0].trim();
-        const fx = String(profile.fax || '').trim();
-        setToAddress(addr);
-        setToPhone(ph);
-        setToEmail(em);
-        setToFax(fx);
-    }, [toName, enquiryData?.enquiry?.RequestNo, enquiryData?.availableProfiles]);
+        if (!Array.isArray(customersList) || customersList.length === 0) return;
+        const cust = resolveMasterCustomerRecipient(customersList, tn);
+        if (!cust) return;
+        masterToContactSyncedRef.current = key;
+        setToAddress(String(cust.address || '').trim());
+        setToPhone(String(cust.phone || '').trim());
+        setToEmail(String(cust.email || '').trim());
+        setToFax(String(cust.fax || '').trim());
+    }, [
+        toName,
+        enquiryData?.enquiry?.RequestNo,
+        customersList,
+        enquiryData,
+        pricingData?.jobs,
+        quoteId,
+        shouldUseMasterForToContact,
+    ]);
 
     // Pick pricing root for lead dropdown after list-row enquiry load (searchTerm / pending click).
     useEffect(() => {
@@ -15319,10 +15481,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             return;
         }
 
-        // Name unchanged: fill any still-blank Recipient Info fields from Master (do not wipe saved values).
+        // Name unchanged: draft/new only — fill blank Recipient Info from Master (never overwrite EnquiryQuotes).
         // After a lead-job change we may re-apply the same customer label; tuple changed so we must not no-op.
         if (!leadJobAutoReselect && normalize(selectedName) === normalize(toName)) {
-            if (!recipientOverrideTouchedRef.current) {
+            if (
+                !recipientOverrideTouchedRef.current &&
+                shouldUseMasterForToContact()
+            ) {
                 const custSame = resolveMasterCustomerRecipient(customersList, selectedName);
                 if (custSame) {
                     console.log('[handleCustomerChange] Customer name unchanged — filling blank recipient fields from Master.');
@@ -15559,36 +15724,39 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     });
 
                     if (enqMatch && enquiryData.customerDetails) {
-                        console.log('[handleCustomerChange] Using Enquiry Customer Details fallback (possibly inactive)');
                         const details = enquiryData.customerDetails;
-                        const addr =
-                            composeCustomerToAddress(details, selectedName) ||
-                            String(details.Address || '').trim();
-                        setToAddress(addr);
-                        setToPhone(`${details.Phone1 || ''} ${details.Phone2 ? '/ ' + details.Phone2 : ''} `.trim());
-                        setToEmail(details.EmailId || '');
-                        setToFax(details.FaxNo || '');
-                        foundInEnquiry = true;
+                        const detailKeys = customerMatchKeys(details.CompanyName || details.companyName || '');
+                        const detailsMatchSelected =
+                            (detailKeys.strippedKey &&
+                                selectedKeys.strippedKey &&
+                                detailKeys.strippedKey === selectedKeys.strippedKey) ||
+                            (detailKeys.norm && selectedKeys.norm && detailKeys.norm === selectedKeys.norm);
+                        if (detailsMatchSelected) {
+                            console.log('[handleCustomerChange] Using Enquiry Customer Details fallback (same customer)');
+                            const addr =
+                                composeCustomerToAddress(details, selectedName) ||
+                                String(details.Address || '').trim();
+                            setToAddress(addr);
+                            setToPhone(
+                                `${details.Phone1 || ''} ${details.Phone2 ? '/ ' + details.Phone2 : ''}`.trim()
+                            );
+                            setToEmail(details.EmailId || '');
+                            setToFax(details.FaxNo || '');
+                            foundInEnquiry = true;
+                        } else {
+                            console.log(
+                                '[handleCustomerChange] Enquiry customerDetails belong to a different customer — leave blanks'
+                            );
+                        }
                     }
                 }
 
-                // External fallback to jobsPool address (if any) — only if still empty.
-                if (!foundInEnquiry && enquiryData) {
-                    const jobMatch = jobsPool.find(j =>
-                        normalize(j.itemName || j.DivisionName) === targetNorm ||
-                        normalize(j.ItemName) === targetNorm
-                    );
-                    if (jobMatch) {
-                        console.log('[handleCustomerChange] External fallback: jobsPool match:', jobMatch.itemName);
-                        const addr = jobMatch.Address || jobMatch.address || '';
-                        const ph = jobMatch.Phone || jobMatch.phone || jobMatch.PhoneNo || '';
-                        const fx = jobMatch.FaxNo || jobMatch.fax || jobMatch.Fax || '';
-                        const em = jobMatch.Email || jobMatch.email || jobMatch.CommonMailIds || '';
-                        if (addr && !toAddress) setToAddress(addr);
-                        if (ph && !toPhone) setToPhone(ph);
-                        if (fx && !toFax) setToFax(fx);
-                        if (em && !toEmail) setToEmail(em.split(',')[0].trim());
-                    }
+                // Do not fill To contact from jobsPool (division) — that is not this customer.
+                if (!foundInEnquiry) {
+                    setToAddress('');
+                    setToPhone('');
+                    setToEmail('');
+                    setToFax('');
                 }
             }
         }
@@ -17612,7 +17780,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             quoteEffectiveDivisions(quoteListDivision, quoteListDivisions).length > 0
                 ? '&enforceDivision=1'
                 : '';
-        return `${API_BASE}/api/enquiries?search=${encodeURIComponent(q)}&userEmail=${userEmail}&userRole=${userRole}&userName=${userName}${divQ}${enforce}`;
+        return `${API_BASE}/api/enquiries/suggest?q=${encodeURIComponent(q)}&limit=10&userEmail=${userEmail}&userRole=${userRole}&userName=${userName}${divQ}${enforce}`;
     };
 
     const buildEnquiryDataFetchUrl = (requestNo, { scope } = {}) => {
@@ -17633,8 +17801,24 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         return `${API_BASE}/api/quotes/enquiry-data/${encodeURIComponent(requestNo)}?userEmail=${encodeURIComponent(userEmail)}${divQ}${quoteIdQ}${scopeQ}`;
     };
 
+    const enquirySuggestAbortRef = useRef(null);
+
     const fetchEnquirySuggestions = async (q) => {
-        const res = await fetch(buildEnquirySuggestUrl(q.trim()), { cache: 'no-store' });
+        const term = String(q || '').trim();
+        if (!term) return [];
+        if (enquirySuggestAbortRef.current) {
+            try {
+                enquirySuggestAbortRef.current.abort();
+            } catch {
+                /* ignore */
+            }
+        }
+        const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        enquirySuggestAbortRef.current = ctrl;
+        const res = await fetch(buildEnquirySuggestUrl(term), {
+            cache: 'no-store',
+            signal: ctrl?.signal,
+        });
         if (!res.ok) return [];
         const data = await res.json();
         return Array.isArray(data) ? data.slice(0, 10) : [];
@@ -17665,7 +17849,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         setSearchTerm(value);
         if (debounceRef.current) clearTimeout(debounceRef.current);
 
-        if (value.trim().length >= 1) {
+        const term = value.trim();
+        /* Digits (enquiry no): suggest from 1 char. Text: wait for 2+ to avoid broad LIKE scans. */
+        const minLen = /^\d+$/.test(term) ? 1 : 2;
+        if (term.length >= minLen) {
             const seq = ++enquirySuggestSeqRef.current;
             debounceRef.current = setTimeout(async () => {
                 try {
@@ -17673,9 +17860,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     if (seq !== enquirySuggestSeqRef.current || suppressEnquirySuggestionsRef.current) return;
                     applyEnquirySuggestions(data);
                 } catch (err) {
+                    if (err?.name === 'AbortError') return;
                     console.error('Search error:', err);
                 }
-            }, 300);
+            }, 220);
         } else {
             setSuggestions([]);
             setShowSuggestions(false);
@@ -17684,25 +17872,28 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     useEffect(() => {
         const term = searchTerm.trim();
-        if (!term) {
+        const minLen = /^\d+$/.test(term) ? 1 : 2;
+        if (!term || term.length < minLen) {
             setSuggestions([]);
             setShowSuggestions(false);
             return;
         }
         let cancelled = false;
         const seq = ++enquirySuggestSeqRef.current;
-        (async () => {
+        const t = setTimeout(async () => {
             try {
                 const data = await fetchEnquirySuggestions(term);
                 if (!cancelled && seq === enquirySuggestSeqRef.current && !suppressEnquirySuggestionsRef.current) {
                     applyEnquirySuggestions(data);
                 }
             } catch (err) {
+                if (err?.name === 'AbortError') return;
                 console.error('Search error (division change):', err);
             }
-        })();
+        }, 220);
         return () => {
             cancelled = true;
+            clearTimeout(t);
         };
     }, [quoteListDivision]);
 
@@ -18107,53 +18298,74 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         // Subjob tab OR preserveRecipient: do not overwrite the **dropdown** (e.g. external lead customer). A4 "To" for
         // subjobs still comes from EnquiryQuotes (`loadedEnquiryQuoteRowForPreview` + `quotePreviewToBlockDisplay`).
         const recipientToName = String(quote.ToName ?? quote.toname ?? toName ?? '').trim();
-        /* Saved draft / EnquiryQuotes row is authoritative — never overwrite with Master here. */
         const rowAddress = String(quote.ToAddress ?? quote.toaddress ?? '').trim();
         const rowPhone = String(quote.ToPhone ?? quote.tophone ?? '').trim();
         const rowEmail = String(quote.ToEmail ?? quote.toemail ?? '').trim();
         const rowFax = String(quote.ToFax ?? quote.tofax ?? '').trim();
 
-        if (!skipRecipientFromRow) {
+        /**
+         * To contact source rules:
+         * - Saved quote (EnquiryQuotes): use row ToAddress/ToPhone/ToEmail/ToFax
+         * - Draft quote / new (no saved): master tables by company name (blanks stay blank)
+         */
+        const applyMasterToContactForName = (companyName) => {
+            const nm = String(companyName || '').trim();
+            if (!nm) {
+                setToAddress('');
+                setToPhone('');
+                setToEmail('');
+                setToFax('');
+                return;
+            }
+            if (isQuoteInternalCustomer(enquiryData, pricingData?.jobs, nm)) {
+                const profiles = enquiryData?.availableProfiles || [];
+                const cleanTarget = collapseSpacesLower(stripQuoteJobPrefix(nm));
+                const profile = profiles.find((p) => {
+                    const a = collapseSpacesLower(stripQuoteJobPrefix(p?.itemName || ''));
+                    const b = collapseSpacesLower(stripQuoteJobPrefix(p?.name || ''));
+                    return (a && a === cleanTarget) || (b && b === cleanTarget);
+                });
+                setToAddress(String(profile?.address || '').trim());
+                setToPhone(String(profile?.phone || '').trim());
+                setToEmail(String(profile?.email || '').split(',')[0].trim());
+                setToFax(String(profile?.fax || '').trim());
+                return;
+            }
+            const cust = resolveMasterCustomerRecipient(customersList, nm);
+            if (cust) {
+                setToAddress(String(cust.address || '').trim());
+                setToPhone(String(cust.phone || '').trim());
+                setToEmail(String(cust.email || '').trim());
+                setToFax(String(cust.fax || '').trim());
+                return;
+            }
+            setToAddress('');
+            setToPhone('');
+            setToEmail('');
+            setToFax('');
+        };
+
+        if (opts.isDraftRow === true) {
+            if (!skipRecipientFromRow) {
+                setToName(recipientToName);
+                applyMasterToContactForName(recipientToName);
+            } else if (preserveRecipient) {
+                /* Keep selected ToName; refresh contact from master for draft/new. */
+                applyMasterToContactForName(String(toName || recipientToName || '').trim());
+            }
+        } else if (!skipRecipientFromRow) {
             setToName(recipientToName);
             setToAddress(rowAddress);
             setToPhone(rowPhone);
             setToEmail(rowEmail);
             setToFax(rowFax);
         } else if (preserveRecipient) {
-            // Pending-list / context opens preserve the dropdown customer, but still need address/contact hydration.
-            // Fill only missing fields so manual edits are not overridden.
+            // Pending-list / context opens preserve the dropdown customer, but still need address/contact hydration
+            // from the saved EnquiryQuotes row when those fields are empty.
             if (rowAddress && !String(toAddress || '').trim()) setToAddress(rowAddress);
             if (rowPhone && !String(toPhone || '').trim()) setToPhone(rowPhone);
             if (rowEmail && !String(toEmail || '').trim()) setToEmail(rowEmail);
             if (rowFax && !String(toFax || '').trim()) setToFax(rowFax);
-        }
-
-        /**
-         * Draft row: apply contact only when the draft actually stored values.
-         * Empty draft fields must not wipe Master / pending-list Recipient Info
-         * (that fight re-triggered hydrate and contributed to tab freezes).
-         */
-        if (opts.isDraftRow === true) {
-            if (rowAddress) setToAddress(rowAddress);
-            if (rowPhone) setToPhone(rowPhone);
-            if (rowEmail) setToEmail(rowEmail);
-            if (rowFax) setToFax(rowFax);
-        }
-
-        // Do not merge profiles onto a persisted EnquiryQuotes row — that replaced subjob "To" block with parent HVAC profile.
-        const isPersistedEnquiryQuoteRow = quoteRowId(quote) !== undefined;
-        if (!skipRecipientFromRow && !isPersistedEnquiryQuoteRow && !quote.ToAddress && enquiryData?.availableProfiles) {
-            const profile = enquiryData.availableProfiles.find(p =>
-                p.itemName.replace(/^(L\d+|Sub Job)\s*-\s*/i, '').trim() === (quote.ToName || '').trim() ||
-                (p.name && p.name.trim() === (quote.ToName || '').trim())
-            );
-            if (profile) {
-                console.log('[loadQuote] Healing missing address from internal profile:', profile.itemName);
-                if (!quote.ToAddress) setToAddress(profile.address || '');
-                if (!quote.ToPhone) setToPhone(profile.phone || '');
-                if (!quote.ToFax) setToFax(profile.fax || '');
-                if (!quote.ToEmail) setToEmail(profile.email || '');
-            }
         }
 
         // Attention: always honour DB when non-empty (subjob quotes often use names outside the dropdown list).
@@ -20178,13 +20390,31 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             setToFax(matchedCustomer.fax);
                         } else if (data?.customerDetails) {
                             const details = data.customerDetails;
-                            const addr =
-                                composeCustomerToAddress(details, toNameForLoad) ||
-                                String(details.Address || '').trim();
-                            setToAddress(addr);
-                            setToPhone(`${details.Phone1 || ''} ${details.Phone2 ? '/ ' + details.Phone2 : ''} `.trim());
-                            setToEmail(details.EmailId || '');
-                            setToFax(details.FaxNo || '');
+                            const selKeys = customerMatchKeys(toNameForLoad);
+                            const detailKeys = customerMatchKeys(
+                                details.CompanyName || details.companyName || ''
+                            );
+                            const detailsMatchSelected =
+                                (detailKeys.strippedKey &&
+                                    selKeys.strippedKey &&
+                                    detailKeys.strippedKey === selKeys.strippedKey) ||
+                                (detailKeys.norm && selKeys.norm && detailKeys.norm === selKeys.norm);
+                            if (detailsMatchSelected) {
+                                const addr =
+                                    composeCustomerToAddress(details, toNameForLoad) ||
+                                    String(details.Address || '').trim();
+                                setToAddress(addr);
+                                setToPhone(
+                                    `${details.Phone1 || ''} ${details.Phone2 ? '/ ' + details.Phone2 : ''}`.trim()
+                                );
+                                setToEmail(details.EmailId || '');
+                                setToFax(details.FaxNo || '');
+                            } else {
+                                setToAddress('');
+                                setToPhone('');
+                                setToEmail('');
+                                setToFax('');
+                            }
                         }
                     }
                     quoteRowSyncDropdownCustomerRef.current = false;
@@ -26424,6 +26654,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             clauseBlocks,
             Math.round(Number(grandTotal) || 0),
             printWithHeader ? '1' : '0',
+            canSelectWithAcceptance && printWithAcceptance ? 'accept1' : 'accept0',
             (pricingData?.jobs?.length ?? 0),
             orderedClauses?.join(',') ?? '',
             orientationKey,
@@ -26521,6 +26752,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
             const safeRef = String(quoteNumber || quoteId || 'Draft').replace(/\//g, '_');
             const fname = `Quote_${safeRef}.pdf`;
+            // Customer Acceptance when allowed (Previous Quotes / Approvals Approved) and checked.
+            const includeCustomerAcceptance =
+                Boolean(canSelectWithAcceptance) && Boolean(printWithAcceptance);
 
             const tRender = quotePerfStart('PDF — server rendering');
             const pdfCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -26537,6 +26771,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         html,
                         filename: fname,
                         emulateScreen: true,
+                        quoteRef: String(quoteNumber || '').trim(),
+                        quoteNumber: String(quoteNumber || '').trim(),
+                        quoteDate: String(quoteDate || '').trim(),
+                        includeCustomerAcceptance,
                         ...(wantLink ? { delivery: 'link' } : {}),
                     }),
                     cache: 'no-store',
@@ -26705,6 +26943,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         quoteId,
         grandTotal,
         printWithHeader,
+        printWithAcceptance,
+        canSelectWithAcceptance,
         orderedClauses,
         pricingData,
         quotePackIntegrityFailed,
@@ -27279,6 +27519,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 pdfBlob: blob,
                 displayFileName: attachFileName,
                 emailFields: {
+                    userEmail: currentUser?.email || currentUser?.EmailId || '',
+                    userDisplayName: currentUser?.displayName || currentUser?.FullName || '',
                     to: toAddr,
                     cc: (outlookFields.cc || '').trim(),
                     bcc: '',
@@ -27306,11 +27548,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 );
             }
 
-            if (outlookResult.method === 'vbs-manual' || outlookResult.method === 'vbs-prompt') {
+            if (outlookResult.method === 'eml-download') {
                 alert(
-                    'Outlook could not be opened automatically.\n\n' +
-                        'EMS saved EMS_QuoteDraft.pdf and EMS_OpenQuoteDraft.vbs to your Downloads folder. ' +
-                        'Double-click the .vbs file (or wait a few seconds if your PC runs it automatically).'
+                    `Email draft downloaded: ${outlookResult.fileName}\n\n` +
+                        'Open the .eml file in Outlook to review and send. ' +
+                        (blob ? 'The quote PDF and selected attachments are embedded in this file.' :
+                            'The selected attachments are embedded. Quote PDF generation is disabled; attach the PDF manually.') +
+                        (outlookResult.reason === 'https-required' ?
+                            '\n\nAutomatic Outlook opening requires a trusted HTTPS EMS address and the workstation helper.' :
+                            '\n\nFor automatic opening, start the EMS helper on this PC and allow loopback access for EMS in browser site settings.')
                 );
             } else if (pdfSkippedReason && !blob) {
                 alert('Outlook draft opened. Attach the quote PDF manually (Download PDF on the Quote tab).');
@@ -27677,14 +27923,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     /**
      * A4 cover "To," block:
-     * - Browse mode ON: strict backend values from selected EnquiryQuotes row only (no left-panel fallback).
-     * - Browse mode OFF: left form values.
-     *
-     * INTERNAL CUSTOMER OVERRIDE: Older `EnquiryQuotes` rows may have a stale `ToAddress`
-     * stored against an internal division. The address/phone/fax/email for ANY internal
-     * recipient must always reflect `Master_EnquiryFor` (which the server returns via
-     * `enquiryData.availableProfiles`), so we look up the matching profile by `toName`
-     * and override those four fields regardless of what is stored on the row.
+     * - Saved EnquiryQuotes (browse / approval): row To* only — never master override.
+     * - Draft / new: left-panel values (already hydrated from master by company name).
      */
     const quotePreviewToBlockDisplay = React.useMemo(() => {
         const baseForm = {
@@ -27695,73 +27935,26 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             toEmail: String(toEmail || '').trim(),
         };
 
-        // Helper: if `name` matches an internal `availableProfiles` row, return its
-        // Master_EnquiryFor-sourced contact fields. Otherwise null.
-        const overrideFromInternalProfile = (name) => {
-            const tn = String(name || '').trim();
-            if (!tn) return null;
-            const profiles = enquiryData?.availableProfiles || [];
-            if (!profiles.length) return null;
-            const target = collapseSpacesLower(stripQuoteJobPrefix(tn));
-            if (!target) return null;
-            const profile = profiles.find((p) => {
-                const a = collapseSpacesLower(stripQuoteJobPrefix(p?.itemName || ''));
-                const b = collapseSpacesLower(stripQuoteJobPrefix(p?.name || ''));
-                return (a && a === target) || (b && b === target);
-            });
-            if (!profile) return null; // external customer — no override
-            return {
-                toAddress: String(profile.address || '').trim(),
-                toPhone: String(profile.phone || '').trim(),
-                toFax: String(profile.fax || '').trim(),
-                toEmail: String(profile.email || '').split(',')[0].trim(),
-            };
-        };
-
-        /**
-         * Draft preview (Previous Quotes / Revisions OFF): mirror the left-panel recipient
-         * fields verbatim — cleared override fields must hide the matching preview rows/icons.
-         */
         if (!browsePreviousQuotesRevisions && !embeddedApprovalReview) {
             return baseForm;
         }
 
         const sj = subjobQuoteA4HeaderDisplay;
         const row = loadedEnquiryQuoteRowForPreview;
-        if (!sj || !row) {
-            const intOverride = overrideFromInternalProfile(baseForm.toName);
-            if (!intOverride) return baseForm;
-            return {
-                ...baseForm,
-                toAddress: intOverride.toAddress || baseForm.toAddress,
-                toPhone: intOverride.toPhone || baseForm.toPhone,
-                toFax: intOverride.toFax || baseForm.toFax,
-                toEmail: intOverride.toEmail || baseForm.toEmail,
-            };
-        }
+        if (!sj || !row) return baseForm;
 
-        const fromRow = {
+        return {
             toName: String(sj.toName || '').trim(),
             toAddress: String(sj.toAddress || '').trim(),
             toPhone: String(sj.toPhone || '').trim(),
             toFax: String(sj.toFax || '').trim(),
             toEmail: String(sj.toEmail || '').trim(),
         };
-        const intOverride = overrideFromInternalProfile(fromRow.toName);
-        if (!intOverride) return fromRow;
-        return {
-            ...fromRow,
-            toAddress: intOverride.toAddress || fromRow.toAddress,
-            toPhone: intOverride.toPhone || fromRow.toPhone,
-            toFax: intOverride.toFax || fromRow.toFax,
-            toEmail: intOverride.toEmail || fromRow.toEmail,
-        };
     }, [
         embeddedApprovalReview,
         browsePreviousQuotesRevisions,
         subjobQuoteA4HeaderDisplay,
         loadedEnquiryQuoteRowForPreview,
-        enquiryData?.availableProfiles,
         toName,
         toAddress,
         toPhone,
@@ -28294,41 +28487,99 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         <Mail size={toolbarIconPx} />
                     )}
                 </button>
-                <label
+                <div
                     className="no-print"
-                    title="Checked: include logo and company footer in print/PDF. Unchecked: hide them when printing on pre-printed letterhead (layout space kept)."
                     style={{
                         display: 'inline-flex',
+                        flexDirection: 'row',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        gap: embeddedApprovalReview ? '4px' : '3px',
-                        fontSize: toolbarLabelFontPx,
-                        color: '#64748b',
-                        cursor: 'pointer',
-                        whiteSpace: 'nowrap',
-                        lineHeight: 1,
+                        gap: embeddedApprovalReview ? '8px' : '6px',
                         height: `${toolbarBtnPx}px`,
                         minHeight: `${toolbarBtnPx}px`,
+                        maxHeight: `${toolbarBtnPx}px`,
                         flexShrink: 0,
                         margin: 0,
                         boxSizing: 'border-box',
                     }}
                 >
-                    <input
-                        type="checkbox"
-                        checked={printWithHeader}
-                        onChange={(e) => setPrintWithHeader(e.target.checked)}
+                    <label
+                        title={
+                            canSelectWithAcceptance
+                                ? 'Checked: append Customer Acceptance page to PDF download and email attachment.'
+                                : embeddedApprovalReview
+                                  ? 'With Acceptance is available only for Approved by Me quotes.'
+                                  : 'With Acceptance is available only in Previous Quote mode.'
+                        }
                         style={{
-                            width: embeddedApprovalReview ? '15px' : '13px',
-                            height: embeddedApprovalReview ? '15px' : '13px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: embeddedApprovalReview ? '4px' : '3px',
+                            fontSize: toolbarLabelFontPx,
+                            color: canSelectWithAcceptance ? '#64748b' : '#94a3b8',
+                            cursor: canSelectWithAcceptance ? 'pointer' : 'not-allowed',
+                            whiteSpace: 'nowrap',
+                            lineHeight: 1,
+                            height: `${toolbarBtnPx}px`,
                             margin: 0,
-                            padding: 0,
-                            flexShrink: 0,
-                            verticalAlign: 'middle',
+                            opacity: canSelectWithAcceptance ? 1 : 0.55,
+                            boxSizing: 'border-box',
                         }}
-                    />
-                    With Header
-                </label>
+                    >
+                        <input
+                            type="checkbox"
+                            checked={canSelectWithAcceptance && printWithAcceptance}
+                            disabled={!canSelectWithAcceptance}
+                            onChange={(e) => {
+                                if (!canSelectWithAcceptance) return;
+                                setPrintWithAcceptance(e.target.checked);
+                            }}
+                            style={{
+                                width: embeddedApprovalReview ? '15px' : '13px',
+                                height: embeddedApprovalReview ? '15px' : '13px',
+                                margin: 0,
+                                padding: 0,
+                                flexShrink: 0,
+                                verticalAlign: 'middle',
+                                cursor: canSelectWithAcceptance ? 'pointer' : 'not-allowed',
+                            }}
+                        />
+                        With Acceptance
+                    </label>
+                    <label
+                        title="Checked: include logo and company footer in print/PDF. Unchecked: hide them when printing on pre-printed letterhead (layout space kept)."
+                        style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: embeddedApprovalReview ? '4px' : '3px',
+                            fontSize: toolbarLabelFontPx,
+                            color: '#64748b',
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                            lineHeight: 1,
+                            height: `${toolbarBtnPx}px`,
+                            margin: 0,
+                            boxSizing: 'border-box',
+                        }}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={printWithHeader}
+                            onChange={(e) => setPrintWithHeader(e.target.checked)}
+                            style={{
+                                width: embeddedApprovalReview ? '15px' : '13px',
+                                height: embeddedApprovalReview ? '15px' : '13px',
+                                margin: 0,
+                                padding: 0,
+                                flexShrink: 0,
+                                verticalAlign: 'middle',
+                            }}
+                        />
+                        With Header
+                    </label>
+                </div>
                 <button
                     type="button"
                     onClick={printQuote}
@@ -28423,6 +28674,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             quotePdfExportBusy,
             quoteEmailExportBusy,
             printWithHeader,
+            printWithAcceptance,
+            canSelectWithAcceptance,
             printQuote,
             canUseQuoteDigitalSignature,
             handleSignaturesToolbarControlClick,

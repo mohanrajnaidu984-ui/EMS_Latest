@@ -8,6 +8,11 @@ const mapQuoteListingRows = require('../lib/mapQuoteListingRows');
 const DASHBOARD_ACCESS_CACHE_MS = 90_000;
 const dashboardAccessCache = new Map();
 
+/** Exclude Inactive enquiries (NULL/blank EnquiryStatus treated as Active). Alias must be EnquiryMaster. */
+function sqlExcludeInactiveEnquiry(alias = 'em') {
+    return ` AND (${alias}.EnquiryStatus IS NULL OR LTRIM(RTRIM(${alias}.EnquiryStatus)) = N'' OR LTRIM(RTRIM(${alias}.EnquiryStatus)) <> N'Inactive') `;
+}
+
 // Helper to construct filter clauses (kept for reference or future use if needed, though active logic is inline below)
 // --- Helper: Apply Access Control Logic ---
 const applyAccessControl = (request, params) => {
@@ -354,6 +359,7 @@ function bindDashboardCalendarFilters(request, query, resolved) {
         accessMode: resolved.accessMode,
     });
     baseFilter += accessFilter;
+    baseFilter += sqlExcludeInactiveEnquiry('em');
 
     let quoteScopeFilter = buildDashboardQuoteScopeFilter(isDeptMode, salesEngineer);
     if (division && division !== 'All') {
@@ -488,6 +494,8 @@ async function buildDashboardEnquiryListWhere(req, options = {}) {
         accessMode: resolved.accessMode,
     });
     whereClause += accessSql;
+    const inactiveSql = sqlExcludeInactiveEnquiry('em');
+    whereClause += inactiveSql;
 
     const isSearchActive = search && search.trim().length > 0;
     const enforceDivisionOnSearch =
@@ -525,8 +533,10 @@ async function buildDashboardEnquiryListWhere(req, options = {}) {
         request.input('salesEngineer', sql.NVarChar, salesEngineer);
     }
 
-    /** Same enquiry visibility as GET /calendar quoted totals (division + SE + access on `em`). Omit when search bypasses those filters. */
-    const calendarEmBaseFilterSql = isSearchActive ? null : `${divisionSql}${seSql}${accessSql}`;
+    /** Same enquiry visibility as GET /calendar quoted totals (division + SE + access + active on `em`). Omit when search bypasses those filters. */
+    const calendarEmBaseFilterSql = isSearchActive
+        ? null
+        : `${divisionSql}${seSql}${accessSql}${inactiveSql}`;
 
     const seForQuoteScope = isSearchActive ? 'All' : salesEngineer;
     let quoteScopeFilter = buildDashboardQuoteScopeFilter(isDeptMode, seForQuoteScope);
@@ -866,6 +876,7 @@ router.get('/summary', async (req, res) => {
 
         // Apply Access Control
         baseFilter += applyAccessControl(request, { userRole, userName: effectiveUserName, userEmail, accessMode: resolved.accessMode });
+        baseFilter += sqlExcludeInactiveEnquiry('em');
         let quoteScopeFilter = buildDashboardQuoteScopeFilter(isDeptMode, salesEngineer);
         if (division && division !== 'All') {
             quoteScopeFilter += `
