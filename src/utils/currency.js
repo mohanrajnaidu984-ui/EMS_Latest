@@ -8,6 +8,10 @@ export const DEFAULT_CURRENCY = 'BHD';
 
 /** @typedef {{ code: string, symbol: string, words: string, decimals: number, subunitName: string, subunitDivisor: number }} CurrencyMeta */
 
+/**
+ * Quote/Pricing display uses 3 decimal places for every Master_EnquiryFor currency
+ * (including SAR/AED/USD), matching BHD-style tables.
+ */
 /** @type {Record<string, CurrencyMeta>} */
 const CURRENCY_META = {
     BHD: {
@@ -22,41 +26,41 @@ const CURRENCY_META = {
         code: 'AED',
         symbol: 'AED',
         words: 'UAE Dirhams',
-        decimals: 2,
+        decimals: 3,
         subunitName: 'fils',
-        subunitDivisor: 100,
+        subunitDivisor: 1000,
     },
     SAR: {
         code: 'SAR',
         symbol: 'SAR',
         words: 'Saudi Riyals',
-        decimals: 2,
+        decimals: 3,
         subunitName: 'halalas',
-        subunitDivisor: 100,
+        subunitDivisor: 1000,
     },
     USD: {
         code: 'USD',
         symbol: 'USD',
         words: 'US Dollars',
-        decimals: 2,
+        decimals: 3,
         subunitName: 'cents',
-        subunitDivisor: 100,
+        subunitDivisor: 1000,
     },
     EUR: {
         code: 'EUR',
         symbol: 'EUR',
         words: 'Euros',
-        decimals: 2,
+        decimals: 3,
         subunitName: 'cents',
-        subunitDivisor: 100,
+        subunitDivisor: 1000,
     },
     GBP: {
         code: 'GBP',
         symbol: 'GBP',
         words: 'Pounds Sterling',
-        decimals: 2,
+        decimals: 3,
         subunitName: 'pence',
-        subunitDivisor: 100,
+        subunitDivisor: 1000,
     },
     KWD: {
         code: 'KWD',
@@ -78,9 +82,9 @@ const CURRENCY_META = {
         code: 'QAR',
         symbol: 'QAR',
         words: 'Qatari Riyals',
-        decimals: 2,
+        decimals: 3,
         subunitName: 'dirhams',
-        subunitDivisor: 100,
+        subunitDivisor: 1000,
     },
 };
 
@@ -111,9 +115,9 @@ export function getCurrencyMeta(currencyCode) {
         code,
         symbol: code,
         words: code,
-        decimals: 2,
+        decimals: 3,
         subunitName: 'cents',
-        subunitDivisor: 100,
+        subunitDivisor: 1000,
     };
 }
 

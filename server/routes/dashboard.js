@@ -8,6 +8,26 @@ const mapQuoteListingRows = require('../lib/mapQuoteListingRows');
 const DASHBOARD_ACCESS_CACHE_MS = 90_000;
 const dashboardAccessCache = new Map();
 
+/** Short TTL for calendars-history (heavy); filter/month revisits skip a full SQL rebuild. */
+const DASHBOARD_HISTORY_CACHE_MS = 90_000;
+const dashboardHistoryCache = new Map();
+const DASHBOARD_HISTORY_CACHE_MAX = 40;
+
+function dashboardHistoryCacheKey(query) {
+    const q = query || {};
+    return [
+        String(q.userEmail || '').toLowerCase().trim(),
+        String(q.userRole || '').toLowerCase().trim(),
+        String(q.division || ''),
+        String(q.salesEngineer || ''),
+        String(q.anchorMonth || ''),
+        String(q.anchorYear || ''),
+        String(q.count || '12'),
+        String(q.futureCount || '0'),
+        String(q.today || ''),
+    ].join('|');
+}
+
 /** Exclude Inactive enquiries (NULL/blank EnquiryStatus treated as Active). Alias must be EnquiryMaster. */
 function sqlExcludeInactiveEnquiry(alias = 'em') {
     return ` AND (${alias}.EnquiryStatus IS NULL OR LTRIM(RTRIM(${alias}.EnquiryStatus)) = N'' OR LTRIM(RTRIM(${alias}.EnquiryStatus)) <> N'Inactive') `;
@@ -79,7 +99,7 @@ function dashboardRoleIsAdmin(userRole) {
 
 async function resolveDashboardAccessMode(userEmail, userRole) {
     const email = (userEmail || '').toString().trim().toLowerCase().replace(/@almcg\.com/g, '@almoayyedcg.com');
-    if (!email) return { accessMode: 'assigned', fullName: '' };
+    if (!email) return { accessMode: 'assigned', fullName: '', isManagementDept: false };
 
     if (dashboardRoleIsAdmin(userRole)) {
         const userRes = await sql.query`
@@ -88,13 +108,19 @@ async function resolveDashboardAccessMode(userEmail, userRole) {
             WHERE LOWER(LTRIM(RTRIM(ISNULL(EmailId, '')))) = ${email}
         `;
         const fullName = (userRes.recordset?.[0]?.FullName || '').toString().trim();
-        return { accessMode: 'department', fullName };
+        // Admin/System: full quote visibility (same as selecting All Divisions with all departments).
+        return { accessMode: 'department', fullName, isManagementDept: false, isAdmin: true };
     }
 
-    const cacheKey = `${email}|${String(userRole || '').toLowerCase()}`;
+    const cacheKey = `v2|${email}|${String(userRole || '').toLowerCase()}`;
     const now = Date.now();
     const cached = dashboardAccessCache.get(cacheKey);
-    if (cached && now - cached.t < DASHBOARD_ACCESS_CACHE_MS) {
+    if (
+        cached &&
+        now - cached.t < DASHBOARD_ACCESS_CACHE_MS &&
+        cached.v &&
+        typeof cached.v.isManagementDept === 'boolean'
+    ) {
         return cached.v;
     }
 
@@ -125,18 +151,28 @@ async function resolveDashboardAccessMode(userEmail, userRole) {
     const fullName = (userRes.recordset?.[0]?.FullName || '').toString().trim();
     const isManagementDept = (mgmtRes.recordset?.length || 0) > 0;
     const isCcUser = (ccRes.recordset?.length || 0) > 0 || isManagementDept;
-    const v = { accessMode: isCcUser ? 'department' : 'assigned', fullName };
+    const v = {
+        accessMode: isCcUser ? 'department' : 'assigned',
+        fullName,
+        isManagementDept,
+        isAdmin: false,
+    };
     dashboardAccessCache.set(cacheKey, { t: now, v });
     return v;
 }
 
 /**
- * SQL fragment for EnquiryQuotes `eq` in FilteredQuotes / NOT EXISTS "has quote" checks.
- * - **Assigned (non–CC):** quote must be prepared by the logged-in user; if an SE is selected, also match that SE.
- * - **Department (CC):** do not require the CC user's name on the quote; filter by selected SE when not "All",
- *   otherwise include any quote that passes the division-code-on-QuoteNumber clause (added separately).
+ * SQL fragment for EnquiryQuotes `eq` in FilteredQuotes / calendar quote chips / day popups.
+ * - **Admin/System / Management:** no preparer/dept restriction (optional SE filter only).
+ *   They may choose All Divisions and see every division they are entitled to manage.
+ * - **Assigned (non–CC):** quote must be prepared by the logged-in user; optional SE filter.
+ * - **Department (CC) + All Divisions:** only quotes for divisions the user can access
+ *   (CCMailIds on Master_EnquiryFor via OwnJob / DivisionCode, or Master_ConcernedSE.Department,
+ *   or prepared by the user) — never other divisions on a shared enquiry.
+ *   When a single Division is selected, the caller also ANDs the division-code clause.
  */
-function buildDashboardQuoteScopeFilter(isDeptMode, salesEngineer) {
+function buildDashboardQuoteScopeFilter(isDeptMode, salesEngineer, options = {}) {
+    const unrestricted = options.isAdmin === true || options.isManagementDept === true;
     const se = salesEngineer && String(salesEngineer).trim() !== '' && String(salesEngineer).trim().toLowerCase() !== 'all';
     const seFrag = `
                 AND (
@@ -149,18 +185,76 @@ function buildDashboardQuoteScopeFilter(isDeptMode, salesEngineer) {
                     )
                 )`;
 
-    if (isDeptMode) {
+    if (unrestricted) {
         return se ? seFrag : '';
+    }
+
+    const preparedBySelf = `
+                LOWER(LTRIM(RTRIM(ISNULL(eq.PreparedByEmail, '')))) = LOWER(LTRIM(RTRIM(ISNULL(@currentUserEmail, ''))))
+                OR UPPER(LTRIM(RTRIM(ISNULL(eq.PreparedBy, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@currentUserName, ''))))`;
+
+    if (isDeptMode) {
+        // All Divisions (and any division view): keep quotes inside the user's accessible divisions only.
+        let q = `
+            AND (
+                ${preparedBySelf}
+                OR EXISTS (
+                    SELECT 1
+                    FROM Master_EnquiryFor mefScope
+                    WHERE ',' + REPLACE(REPLACE(LOWER(ISNULL(mefScope.CCMailIds, '')), ' ', ''), ';', ',') + ','
+                          LIKE '%,' + LOWER(LTRIM(RTRIM(ISNULL(@currentUserEmail, '')))) + ',%'
+                      AND (
+                        (
+                            NULLIF(LTRIM(RTRIM(ISNULL(eq.OwnJob, ''))), '') IS NOT NULL
+                            AND (
+                                UPPER(LTRIM(RTRIM(ISNULL(mefScope.ItemName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(eq.OwnJob, ''))))
+                                OR UPPER(LTRIM(RTRIM(ISNULL(mefScope.DepartmentName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(eq.OwnJob, ''))))
+                                OR UPPER(LTRIM(RTRIM(ISNULL(eq.OwnJob, '')))) LIKE UPPER(LTRIM(RTRIM(ISNULL(mefScope.ItemName, '')))) + N'%'
+                                OR UPPER(LTRIM(RTRIM(ISNULL(mefScope.ItemName, '')))) LIKE UPPER(LTRIM(RTRIM(ISNULL(eq.OwnJob, '')))) + N'%'
+                            )
+                        )
+                        OR (
+                            LTRIM(RTRIM(ISNULL(mefScope.DivisionCode, ''))) <> ''
+                            AND (
+                                CHARINDEX('/' + UPPER(LTRIM(RTRIM(ISNULL(mefScope.DivisionCode, '')))) + '/', UPPER(ISNULL(eq.QuoteNumber, ''))) > 0
+                                OR CHARINDEX('-' + UPPER(LTRIM(RTRIM(ISNULL(mefScope.DivisionCode, '')))) + '/', UPPER(ISNULL(eq.QuoteNumber, ''))) > 0
+                                OR CHARINDEX('/' + UPPER(LTRIM(RTRIM(ISNULL(mefScope.DivisionCode, '')))) + '-', UPPER(ISNULL(eq.QuoteNumber, ''))) > 0
+                            )
+                        )
+                      )
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM Master_ConcernedSE mcsScope
+                    WHERE LOWER(LTRIM(RTRIM(ISNULL(mcsScope.EmailId, '')))) = LOWER(LTRIM(RTRIM(ISNULL(@currentUserEmail, ''))))
+                      AND NULLIF(LTRIM(RTRIM(ISNULL(eq.OwnJob, ''))), '') IS NOT NULL
+                      AND (
+                        LOWER(LTRIM(RTRIM(ISNULL(mcsScope.Department, '')))) = LOWER(LTRIM(RTRIM(ISNULL(eq.OwnJob, ''))))
+                        OR N',' + REPLACE(LOWER(LTRIM(RTRIM(ISNULL(mcsScope.Department, '')))), N' ', N'') + N','
+                           LIKE N'%,' + REPLACE(LOWER(LTRIM(RTRIM(ISNULL(eq.OwnJob, '')))), N' ', N'') + N',%'
+                        OR LOWER(LTRIM(RTRIM(ISNULL(eq.OwnJob, '')))) LIKE LOWER(LTRIM(RTRIM(ISNULL(mcsScope.Department, '')))) + N'%'
+                      )
+                )
+            )`;
+        if (se) q += seFrag;
+        return q;
     }
 
     let q = `
             AND (
                 NULLIF(LTRIM(RTRIM(ISNULL(@currentUserEmail, ''))), '') IS NULL
-                OR LOWER(LTRIM(RTRIM(ISNULL(eq.PreparedByEmail, '')))) = LOWER(LTRIM(RTRIM(ISNULL(@currentUserEmail, ''))))
-                OR UPPER(LTRIM(RTRIM(ISNULL(eq.PreparedBy, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@currentUserName, ''))))
+                OR ${preparedBySelf}
             )`;
     if (se) q += seFrag;
     return q;
+}
+
+/** Options for {@link buildDashboardQuoteScopeFilter} from resolveDashboardAccessMode + role. */
+function quoteScopeOptionsFromResolved(resolved, userRole) {
+    return {
+        isAdmin: resolved?.isAdmin === true || dashboardRoleIsAdmin(userRole),
+        isManagementDept: resolved?.isManagementDept === true,
+    };
 }
 
 /** True when the enquiry has no row in EnquiryQuotes (any preparer — hides Due/Lapsed once any quote exists). */
@@ -361,7 +455,11 @@ function bindDashboardCalendarFilters(request, query, resolved) {
     baseFilter += accessFilter;
     baseFilter += sqlExcludeInactiveEnquiry('em');
 
-    let quoteScopeFilter = buildDashboardQuoteScopeFilter(isDeptMode, salesEngineer);
+    let quoteScopeFilter = buildDashboardQuoteScopeFilter(
+        isDeptMode,
+        salesEngineer,
+        quoteScopeOptionsFromResolved(resolved, userRole)
+    );
     if (division && division !== 'All') {
         quoteScopeFilter += `
                 AND EXISTS (
@@ -387,20 +485,15 @@ function bindDashboardCalendarFilters(request, query, resolved) {
     return { baseFilter, quoteScopeFilter, todayStr };
 }
 
-/** Daily grid + monthly totals in one DB round-trip (two result sets). */
+/** Daily grid + monthly totals in one DB round-trip. */
 function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, division = '') {
     const dueNoQuoteSql = buildDashboardNoQuoteSql('fe', division);
+    /* FilteredQuotes CTE removed (was unused). Date bounds stay on the Dates branches. */
     const dailyPart = `
             WITH FilteredEnquiries AS (
-                SELECT RequestNo, EnquiryDate, DueDate, SiteVisitDate, Status 
+                SELECT RequestNo, EnquiryDate, DueDate, SiteVisitDate, Status
                 FROM EnquiryMaster em
                 WHERE 1=1 ${baseFilter}
-            ),
-            FilteredQuotes AS (
-                SELECT eq.CreatedAt, eq.UpdatedAt, eq.QuoteDate, eq.RequestNo
-                FROM EnquiryQuotes eq
-                JOIN EnquiryMaster em ON eq.RequestNo = em.RequestNo
-                WHERE 1=1 ${baseFilter} ${quoteScopeFilter}
             ),
             Dates AS (
                 SELECT EnquiryDate as DateVal, 'Enquiry' as Type FROM FilteredEnquiries WHERE EnquiryDate >= @rangeStart AND EnquiryDate < @rangeEnd
@@ -411,7 +504,7 @@ function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, divi
                   AND CAST(fe.DueDate AS DATE) >= CAST(@today AS DATE)
                   AND ${dueNoQuoteSql}
                 UNION ALL
-                SELECT fe.DueDate as DateVal, 'Lapsed' as Type 
+                SELECT fe.DueDate as DateVal, 'Lapsed' as Type
                 FROM FilteredEnquiries fe
                 WHERE fe.DueDate >= @rangeStart AND fe.DueDate < @rangeEnd
                 AND CAST(fe.DueDate AS DATE) < CAST(@today AS DATE)
@@ -427,7 +520,7 @@ function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, divi
                   AND eq.QuoteDate IS NOT NULL
                   AND eq.QuoteDate >= @rangeStart AND eq.QuoteDate < @rangeEnd
             )
-            SELECT 
+            SELECT
                 CONVERT(VARCHAR(10), DateVal, 23) as Date,
                 SUM(CASE WHEN Type = 'Enquiry' THEN 1 ELSE 0 END) as Enquiries,
                 SUM(CASE WHEN Type = 'Due' THEN 1 ELSE 0 END) as Due,
@@ -539,7 +632,11 @@ async function buildDashboardEnquiryListWhere(req, options = {}) {
         : `${divisionSql}${seSql}${accessSql}${inactiveSql}`;
 
     const seForQuoteScope = isSearchActive ? 'All' : salesEngineer;
-    let quoteScopeFilter = buildDashboardQuoteScopeFilter(isDeptMode, seForQuoteScope);
+    let quoteScopeFilter = buildDashboardQuoteScopeFilter(
+        isDeptMode,
+        seForQuoteScope,
+        quoteScopeOptionsFromResolved(resolved, userRole)
+    );
     if (division && division !== 'All' && !isSearchActive) {
         quoteScopeFilter += `
                 AND EXISTS (
@@ -765,11 +862,22 @@ function sumDashboardYearTotals(monthPayloadByKey, year) {
 /** Monthly overview history for dashboard right panel (default: 12 past + 2 future from anchor). */
 router.get('/calendars-history', async (req, res) => {
     res.set('Cache-Control', 'no-store');
+    const t0 = Date.now();
     try {
         const { anchorMonth, anchorYear, count, futureCount } = req.query;
         if (!anchorMonth || !anchorYear) {
             return res.status(400).json({ error: 'anchorMonth and anchorYear are required' });
         }
+
+        const cacheKey = dashboardHistoryCacheKey(req.query);
+        const cached = dashboardHistoryCache.get(cacheKey);
+        if (cached && Date.now() - cached.t < DASHBOARD_HISTORY_CACHE_MS) {
+            console.log(
+                `[dashboard/calendars-history] cacheHit totalMs=${Date.now() - t0} div=${String(req.query.division || '-').slice(0, 24)}`,
+            );
+            return res.json(cached.payload);
+        }
+
         const monthList = dashboardMonthsHistoryRange(
             anchorMonth,
             anchorYear,
@@ -777,38 +885,82 @@ router.get('/calendars-history', async (req, res) => {
             futureCount,
         );
         const resolved = await resolveDashboardAccessMode(req.query.userEmail, req.query.userRole);
+        const tAccess = Date.now();
 
         const anchorY = parseInt(anchorYear, 10);
-        const allMonths = [...monthList, ...Array.from({length: 12}, (_, i) => ({month: i + 1, year: anchorY}))];
-        const ordered = allMonths.slice().sort((a, b) => a.year - b.year || a.month - b.month);
+        /*
+         * Query only the history panel window (12 past + 2 future).
+         * Avoid expanding to a full calendar year — that nearly doubled the SQL range
+         * when the anchor was early in the year. Year totals are summed from months
+         * present in this window (UI already falls back the same way).
+         */
+        const ordered = monthList
+            .slice()
+            .sort((a, b) => a.year - b.year || a.month - b.month);
         const request = new sql.Request();
-        const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(request, req.query, resolved);
-        bindCalendarRange(request, ordered[0].year, ordered[0].month, ordered.at(-1).year, ordered.at(-1).month);
-        const result = await request.query(buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, req.query.division));
+        const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(
+            request,
+            req.query,
+            resolved,
+        );
+        bindCalendarRange(
+            request,
+            ordered[0].year,
+            ordered[0].month,
+            ordered.at(-1).year,
+            ordered.at(-1).month,
+        );
+        const result = await request.query(
+            buildDashboardCalendarMergedBatchSql(
+                baseFilter,
+                quoteScopeFilter,
+                req.query.division,
+            ),
+        );
+        const tSql = Date.now();
         const daily = result.recordset || [];
         const monthPayloadByKey = new Map();
-        for (const meta of allMonths) {
+        for (const meta of monthList) {
             const key = dashboardMonthPayloadKey(meta.year, meta.month);
             if (monthPayloadByKey.has(key)) continue;
-            const prefix = String(meta.year) + '-' + String(meta.month).padStart(2, '0');
-            const rows = daily.filter(row => String(row.Date).startsWith(prefix));
-            monthPayloadByKey.set(key, { daily: rows, totals: reconcileCalendarTotalsFromDaily(rows, null) });
+            const prefix = `${meta.year}-${String(meta.month).padStart(2, '0')}`;
+            const rows = daily.filter((row) => String(row.Date).startsWith(prefix));
+            monthPayloadByKey.set(key, {
+                daily: rows,
+                totals: reconcileCalendarTotalsFromDaily(rows, null),
+            });
         }
-        const payloads = monthList.map(meta => monthPayloadByKey.get(dashboardMonthPayloadKey(meta.year, meta.month)));
 
         const yearTotals = sumDashboardYearTotals(monthPayloadByKey, anchorY);
-
-        res.json({
+        const payload = {
             anchorMonth: parseInt(anchorMonth, 10),
             anchorYear: anchorY,
             yearTotals,
-            months: monthList.map((meta, idx) => ({
-                month: meta.month,
-                year: meta.year,
-                daily: payloads[idx].daily,
-                totals: payloads[idx].totals,
-            })),
-        });
+            months: monthList.map((meta) => {
+                const row =
+                    monthPayloadByKey.get(dashboardMonthPayloadKey(meta.year, meta.month)) || {
+                        daily: [],
+                        totals: reconcileCalendarTotalsFromDaily([], null),
+                    };
+                return {
+                    month: meta.month,
+                    year: meta.year,
+                    daily: row.daily,
+                    totals: row.totals,
+                };
+            }),
+        };
+
+        dashboardHistoryCache.set(cacheKey, { t: Date.now(), payload });
+        if (dashboardHistoryCache.size > DASHBOARD_HISTORY_CACHE_MAX) {
+            const oldest = dashboardHistoryCache.keys().next().value;
+            if (oldest != null) dashboardHistoryCache.delete(oldest);
+        }
+
+        console.log(
+            `[dashboard/calendars-history] accessMs=${tAccess - t0} sqlMs=${tSql - tAccess} totalMs=${Date.now() - t0} days=${daily.length} div=${String(req.query.division || '-').slice(0, 24)}`,
+        );
+        res.json(payload);
     } catch (err) {
         console.error('Calendar history API Error:', err);
         res.status(500).json({ error: err.message });
@@ -877,7 +1029,11 @@ router.get('/summary', async (req, res) => {
         // Apply Access Control
         baseFilter += applyAccessControl(request, { userRole, userName: effectiveUserName, userEmail, accessMode: resolved.accessMode });
         baseFilter += sqlExcludeInactiveEnquiry('em');
-        let quoteScopeFilter = buildDashboardQuoteScopeFilter(isDeptMode, salesEngineer);
+        let quoteScopeFilter = buildDashboardQuoteScopeFilter(
+            isDeptMode,
+            salesEngineer,
+            quoteScopeOptionsFromResolved(resolved, userRole)
+        );
         if (division && division !== 'All') {
             quoteScopeFilter += `
                 AND EXISTS (
@@ -898,27 +1054,37 @@ router.get('/summary', async (req, res) => {
         }
         const noQuoteSql = buildDashboardNoQuoteSql('em', division);
 
-        const today = new Date();
+        /* Sargable day bounds (no CONVERT on columns). Separate COUNTs — NOT EXISTS cannot sit inside SUM(CASE). */
+        const todayStr = getDashboardTodayYmd(req.query);
+        const todayNextStr = (() => {
+            const d = new Date(`${todayStr}T00:00:00Z`);
+            d.setUTCDate(d.getUTCDate() + 1);
+            return d.toISOString().slice(0, 10);
+        })();
         const query = `
             SELECT
-                (SELECT COUNT(*) FROM EnquiryMaster em WHERE CONVERT(VARCHAR(10), EnquiryDate, 23) = CONVERT(VARCHAR(10), @today, 23) ${baseFilter}) as EnquiriesToday,
                 (SELECT COUNT(*) FROM EnquiryMaster em
-                 WHERE CONVERT(VARCHAR(10), DueDate, 23) = CONVERT(VARCHAR(10), @today, 23)
-                   AND ${noQuoteSql}
-                   ${baseFilter}) as DueToday,
+                  WHERE em.EnquiryDate >= @todayDate AND em.EnquiryDate < @todayNext
+                  ${baseFilter}) AS EnquiriesToday,
                 (SELECT COUNT(*) FROM EnquiryMaster em
-                 WHERE CONVERT(VARCHAR(10), DueDate, 23) > CONVERT(VARCHAR(10), @today, 23)
-                   AND ${noQuoteSql}
-                   ${baseFilter}) as UpcomingDues,
-                (SELECT COUNT(*) FROM EnquiryMaster em WHERE Status IN ('Quoted', 'Quote', 'Submitted') ${baseFilter}) as QuotedCount,
+                  WHERE em.DueDate >= @todayDate AND em.DueDate < @todayNext
+                    AND ${noQuoteSql}
+                  ${baseFilter}) AS DueToday,
                 (SELECT COUNT(*) FROM EnquiryMaster em
-                 WHERE CONVERT(VARCHAR(10), DueDate, 23) < CONVERT(VARCHAR(10), @today, 23)
-                   AND ${noQuoteSql}
-                   ${baseFilter}) as LapsedCount
+                  WHERE em.DueDate >= @todayNext
+                    AND ${noQuoteSql}
+                  ${baseFilter}) AS UpcomingDues,
+                (SELECT COUNT(*) FROM EnquiryMaster em
+                  WHERE em.Status IN (N'Quoted', N'Quote', N'Submitted')
+                  ${baseFilter}) AS QuotedCount,
+                (SELECT COUNT(*) FROM EnquiryMaster em
+                  WHERE em.DueDate < @todayDate
+                    AND ${noQuoteSql}
+                  ${baseFilter}) AS LapsedCount
         `;
 
-        const todayStr = getDashboardTodayYmd(req.query);
-        request.input('today', sql.VarChar(10), todayStr);
+        request.input('todayDate', sql.Date, todayStr);
+        request.input('todayNext', sql.Date, todayNextStr);
         const result = await request.query(query);
         res.json(result.recordset[0]);
 

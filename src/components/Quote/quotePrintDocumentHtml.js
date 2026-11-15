@@ -18,12 +18,15 @@ import {
     EMS_QUOTE_ACCENT_HEADER_FONT_SIZE,
     EMS_QUOTE_ACCENT_HEADER_LINE_HEIGHT,
     EMS_QUOTE_COVER_META_MID_BG,
+    EMS_QUOTE_META_ROW_SEPARATOR_COLOR,
+    EMS_QUOTE_META_SEPARATOR_LAYOUT_CSS,
     EMS_QUOTE_CLAUSE_HEADING_BG,
     EMS_QUOTE_CLAUSE_HEADING_TEXT_COLOR,
     EMS_QUOTE_CLAUSE_HEADING_BORDER_RADIUS,
     EMS_QUOTE_CLAUSE_HEADING_PADDING_Y,
     EMS_QUOTE_CLAUSE_HEADING_PADDING_X,
     EMS_QUOTE_CLAUSE_HEADING_MARGIN_TOP,
+    EMS_QUOTE_CLAUSE_SECTION_MARGIN_BOTTOM,
     EMS_QUOTE_CLAUSE_HEADING_MARGIN_BOTTOM,
     EMS_QUOTE_CLAUSE_HEADING_FONT_SIZE,
     EMS_QUOTE_CLAUSE_HEADING_FONT_WEIGHT,
@@ -46,6 +49,8 @@ import {
     EMS_QUOTE_PRINT_FOOTER_RULE_WIDTH_PDF,
     EMS_QUOTE_PDF_TABLE_BORDER_WIDTH,
     EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM,
+    EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT,
+    EMS_QUOTE_HEADER_LOGO_MAX_WIDTH,
     EMS_QUOTE_PDF_PREVIEW_GAP_PX,
     EMS_QUOTE_PDF_FOOTER_GAP_EXTRA_PX,
     EMS_QUOTE_PRICING_TABLE_CELL_BORDER,
@@ -551,8 +556,8 @@ function pinQuoteA4SheetGridInline(sheetEl, { isCover = false } = {}) {
         logo.querySelectorAll('img').forEach((img) => {
             img.style.setProperty('height', 'auto', 'important');
             img.style.setProperty('width', 'auto', 'important');
-            img.style.setProperty('max-height', '12.6mm', 'important');
-            img.style.setProperty('max-width', '100%', 'important');
+            img.style.setProperty('max-height', EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT, 'important');
+            img.style.setProperty('max-width', EMS_QUOTE_HEADER_LOGO_MAX_WIDTH, 'important');
             img.style.setProperty('object-fit', 'contain', 'important');
             img.style.setProperty('object-position', 'right top', 'important');
             img.style.setProperty('display', 'block', 'important');
@@ -892,10 +897,37 @@ export async function syncCoverLetterGapBeforePdfCaptureAsync(letterEl) {
 const QUOTE_LOGO_IMG_SELECTOR =
     '.quote-sheet-logo-row img, .quote-continuation-header img, .quote-print-repeat-strip img';
 
+/** Freeze visible rules before PDF-only styles can replace the preview borders. */
+export function preserveQuotePreviewBorders(root, clone) {
+    const sources = [root, ...root.querySelectorAll('*')];
+    const targets = [clone, ...clone.querySelectorAll('*')];
+    sources.forEach((source, index) => {
+        const target = targets[index];
+        if (!target?.style) return;
+        const computed = source.ownerDocument.defaultView.getComputedStyle(source);
+        for (const side of ['top', 'right', 'bottom', 'left']) {
+            for (const part of ['width', 'style', 'color']) {
+                const property = `border-${side}-${part}`;
+                const value = computed.getPropertyValue(property);
+                // Chromium snaps subpixel borders to 1 CSS px. The server renders
+                // at 2x zoom with 0.5 PDF scale so hairlines stay genuinely thin.
+                const width = part === 'width' ? parseFloat(value) : NaN;
+                target.style.setProperty(property, width > 0 && width <= 1 ? '0.5px' : value, 'important');
+            }
+        }
+        if (source.tagName === 'TABLE') {
+            for (const property of ['border-collapse', 'border-spacing']) {
+                target.style.setProperty(property, computed.getPropertyValue(property), 'important');
+            }
+        }
+    });
+}
+
 function cloneQuotePrintRootForExport(rootEl) {
     const root = rootEl || (typeof document !== 'undefined' ? document.getElementById('quote-print-root') : null);
     if (!root) return null;
     const clone = root.cloneNode(true);
+    preserveQuotePreviewBorders(root, clone);
     // The export stylesheet contains legacy typography defaults. Freeze the
     // typography/spacing that was actually paginated, before mounting the clone
     // under print CSS. In particular a saved 1.1 table line-height must not become
@@ -988,12 +1020,12 @@ async function resolveQuoteLogoDataUrl(liveImg, src) {
     const raw = String(src || '').trim();
     if (!raw) return null;
     if (/^data:/i.test(raw)) return raw;
-    const fromCanvas = liveImg ? imgElementToDataUrl(liveImg) : null;
-    if (fromCanvas) return fromCanvas;
+    // Keep original bytes: SVG stays vector and bitmap dimensions are retained.
+    // Canvas is only a fallback for sources the browser cannot fetch.
     try {
         return await fetchImageAsDataUrl(raw);
     } catch {
-        return null;
+        return liveImg ? imgElementToDataUrl(liveImg) : null;
     }
 }
 
@@ -1039,14 +1071,14 @@ function waitForQuoteSignatureStampImages(root, timeoutMs = 4000) {
     );
 }
 
-/** Embed header logos as data URLs so print/PDF match on-screen preview (no broken /uploads across hosts). */
+/** Embed original image bytes for logos and clause images, retaining SVG/vector quality. */
 export async function embedQuoteLogoImagesInClone(cloneRoot, liveRoot) {
     if (!cloneRoot) return;
-    const liveImgs = liveRoot ? [...liveRoot.querySelectorAll(QUOTE_LOGO_IMG_SELECTOR)] : [];
-    const cloneImgs = [...cloneRoot.querySelectorAll(QUOTE_LOGO_IMG_SELECTOR)];
+    const liveImgs = liveRoot ? [...liveRoot.querySelectorAll('img')] : [];
+    const cloneImgs = [...cloneRoot.querySelectorAll('img')];
     await Promise.all(
-        cloneImgs.map(async (cloneImg, index) => {
-            const liveImg = liveImgs[index];
+        cloneImgs.map(async (cloneImg) => {
+            const liveImg = liveImgs.find(img => img.getAttribute('src') === cloneImg.getAttribute('src'));
             const src = String(
                 liveImg?.currentSrc || liveImg?.src || cloneImg.getAttribute('src') || ''
             ).trim();
@@ -1340,8 +1372,8 @@ ${HTML2PDF_PAGE_BREAK_OVERRIDES}
     display: block !important;
     height: auto !important;
     width: auto !important;
-    max-height: 12.6mm !important;
-    max-width: 100% !important;
+    max-height: ${EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT} !important;
+    max-width: ${EMS_QUOTE_HEADER_LOGO_MAX_WIDTH} !important;
     object-fit: contain !important;
     object-position: right top !important;
     margin-left: auto !important;
@@ -1791,8 +1823,8 @@ html[data-preview-pdf="1"] .quote-sheet-logo-row img {
     display: block !important;
     height: auto !important;
     width: auto !important;
-    max-height: 12.6mm !important;
-    max-width: 100% !important;
+    max-height: ${EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT} !important;
+    max-width: ${EMS_QUOTE_HEADER_LOGO_MAX_WIDTH} !important;
     object-fit: contain !important;
     object-position: right top !important;
     margin-left: auto !important;
@@ -2084,7 +2116,7 @@ html[data-preview-pdf="1"]
     .quote-header-quote-panel-row
     + .quote-header-quote-panel-row
     .quote-header-quote-panel-value {
-    border-top: 1px solid #e2e8f0 !important;
+    border-top: 1px solid ${EMS_QUOTE_META_ROW_SEPARATOR_COLOR} !important;
 }
 html[data-preview-pdf="1"] .quote-header-quote-panel-mid .quote-header-quote-panel-label {
     display: flex !important;
@@ -2208,7 +2240,7 @@ html[data-preview-pdf="1"] .quote-cover-body-panel:not(.quote-cover-letter):not(
     padding: calc(12px * 1.69) calc(14px * 1.69) calc(12px * 1.69) var(--quote-cover-text-inset) !important;
 }
 html[data-preview-pdf="1"] .quote-clause-block--continuation {
-    margin-bottom: 12px !important;
+    margin-bottom: ${EMS_QUOTE_CLAUSE_SECTION_MARGIN_BOTTOM} !important;
 }
 html[data-preview-pdf="1"] .quote-clause-heading-panel.quote-preview-panel-shell {
     margin-top: ${EMS_QUOTE_CLAUSE_HEADING_MARGIN_TOP} !important;
@@ -2249,7 +2281,7 @@ html[data-preview-pdf="1"] .quote-clause-heading-panel.quote-preview-panel-shell
     display: block !important;
     width: 100% !important;
     margin-top: ${EMS_QUOTE_CLAUSE_HEADING_RULE_MARGIN_TOP} !important;
-    border-top: 1px solid ${EMS_QUOTE_CLAUSE_HEADING_RULE_COLOR} !important;
+    border-top: 0.5px solid ${EMS_QUOTE_CLAUSE_HEADING_RULE_COLOR} !important;
     box-sizing: border-box !important;
 }
 html[data-preview-pdf="1"] .quote-clause-block--continuation .clause-content {
@@ -2326,7 +2358,7 @@ html[data-preview-pdf="1"] .quote-cover-meta-table tbody tr.quote-cover-meta-row
     border-top: none !important;
 }
 html[data-preview-pdf="1"] .quote-cover-meta-table tbody tr.quote-cover-meta-row-mid + tr.quote-cover-meta-row-mid td:last-child {
-    border-top: 1px solid #e2e8f0 !important;
+    border-top: 1px solid ${EMS_QUOTE_META_ROW_SEPARATOR_COLOR} !important;
     border-bottom: none !important;
     border-left: none !important;
     border-right: none !important;
@@ -2557,10 +2589,10 @@ html[data-preview-pdf="1"] .quote-continuation-header > div {
 }
 html[data-preview-pdf="1"] .quote-sheet-logo-row img,
 html[data-preview-pdf="1"] .quote-continuation-header img {
-    max-height: 12.6mm !important;
+    max-height: ${EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT} !important;
     height: auto !important;
     width: auto !important;
-    max-width: 100% !important;
+    max-width: ${EMS_QUOTE_HEADER_LOGO_MAX_WIDTH} !important;
     display: block !important;
     margin-left: auto !important;
     margin-right: 0 !important;
@@ -2689,10 +2721,10 @@ html[data-preview-pdf="1"] .quote-continuation-header > div {
 }
 html[data-preview-pdf="1"] .quote-sheet-logo-row img,
 html[data-preview-pdf="1"] .quote-continuation-header img {
-    max-height: 12.6mm !important;
+    max-height: ${EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT} !important;
     height: auto !important;
     width: auto !important;
-    max-width: 100% !important;
+    max-width: ${EMS_QUOTE_HEADER_LOGO_MAX_WIDTH} !important;
     display: block !important;
     margin-left: auto !important;
     margin-right: 0 !important;
@@ -3187,8 +3219,8 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote
     position: static !important;
     height: auto !important;
     width: auto !important;
-    max-height: 12.6mm !important;
-    max-width: 100% !important;
+    max-height: ${EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT} !important;
+    max-width: ${EMS_QUOTE_HEADER_LOGO_MAX_WIDTH} !important;
     object-fit: contain !important;
     object-position: right top !important;
     display: block !important;
@@ -3253,6 +3285,7 @@ export function buildQuotePrintDocumentHtml(printWithHeader, fragmentHtml, table
         ${pdfMode === true ? SERVER_PDF_STYLES : ''}
         ${String(tableStyles || '').trim()}
         ${usePreviewMatchedPdf ? PDF_FINAL_OVERRIDES : ''}
+        ${EMS_QUOTE_META_SEPARATOR_LAYOUT_CSS}
         ${getServerPdfHeaderModeCss(printWithHeader)}
     </style></head><body>${browserSavePdfHint}<div id="quote-print-root" class="print-wrapper" data-print-with-header="${printWithHeader ? '1' : '0'}">${fragmentForBody}</div></body></html>`.trim().replace(/>\s*>/g, '>');
 }

@@ -12,6 +12,11 @@ import {
     EMS_QUOTE_PRICING_TABLE_HEADER_COLOR,
     EMS_QUOTE_PRICING_TABLE_HEAD_CELL_BORDER,
 } from '../../constants/emsTheme';
+import {
+    captureDocumentHistoryBeforeMutation,
+    commitDocumentHistoryAfterMutation,
+    withDocumentHistoryMutation,
+} from './clauseEditorDocHistory';
 
 /** Same commands Jodit `selectCells` handles when cell selection is enabled. */
 const TABLE_STRUCTURE_CMD_RE =
@@ -161,22 +166,68 @@ function clearAllTableCellSelection(jodit) {
     });
 }
 
+/**
+ * Rectangular cell bound from EMS grid (no Jodit Table module required).
+ * Production builds sometimes fail getInstance('Table') while selectCells is disabled —
+ * copy/paste must not depend on that module.
+ */
+function computeCellsBoundFromGrid(table, cells) {
+    if (!table || !cells?.length) return null;
+    const { grid } = buildTableCellGrid(table);
+    if (!grid.length) return null;
+    let r0 = Infinity;
+    let c0 = Infinity;
+    let r1 = -Infinity;
+    let c1 = -Infinity;
+    let hit = false;
+    cells.forEach((cell) => {
+        const pos = findCellGridPosition(grid, cell);
+        if (!pos) return;
+        hit = true;
+        const rowSpan = Math.max(1, Number(cell.rowSpan) || 1);
+        const colSpan = Math.max(1, Number(cell.colSpan) || 1);
+        r0 = Math.min(r0, pos.row);
+        c0 = Math.min(c0, pos.col);
+        r1 = Math.max(r1, pos.row + rowSpan - 1);
+        c1 = Math.max(c1, pos.col + colSpan - 1);
+    });
+    if (!hit) return null;
+    return {
+        grid,
+        bound: [
+            [r0, c0],
+            [r1, c1],
+        ],
+    };
+}
+
 /** EMS drag-select (replaces disabled Jodit selectCells plugin). */
 function selectTableCellRange(jodit, table, cellA, cellB) {
-    const tableModule = getJoditTableModule(jodit);
-    if (!tableModule || !table || !cellA || !cellB) return [];
+    if (!table || !cellA || !cellB) return [];
     clearAllTableCellSelection(jodit);
-    const bound = tableModule.getSelectedBound(table, [cellA, cellB]);
-    const box = tableModule.formalMatrix(table);
+
+    const computed = computeCellsBoundFromGrid(table, [cellA, cellB]);
+    if (!computed) return [];
+    const { grid, bound } = computed;
+    const tableModule = getJoditTableModule(jodit);
     const picked = [];
+    const seen = new Set();
     for (let i = bound[0][0]; i <= bound[1][0]; i += 1) {
         for (let j = bound[0][1]; j <= bound[1][1]; j += 1) {
-            const cell = box[i]?.[j];
-            if (cell) {
-                tableModule.addSelection(cell);
+            const cell = grid[i]?.[j];
+            if (!cell || seen.has(cell)) continue;
+            seen.add(cell);
+            try {
+                tableModule?.addSelection?.(cell);
+            } catch {
+                /* Table module optional */
+            }
                 picked.push(cell);
             }
         }
+    if (picked.length) {
+        jodit.__emsFormatTableCells = picked.length >= 2 ? picked : null;
+        jodit.__emsSplitTableCells = picked.length >= 2 ? picked : null;
     }
     syncEmsTableCellSelectionClasses(jodit);
     return picked;
@@ -283,10 +334,12 @@ function hasCollapsedCaretInTableCell(jodit, getEditorBody) {
 
 function snapshotTableEditorHistory(jodit) {
     try {
+        commitDocumentHistoryAfterMutation(jodit);
         if (jodit?.history?.updateStack) {
             jodit.history.updateStack();
         }
         jodit?.e?.fire?.('change');
+        jodit?.e?.fire?.('updateToolbar');
     } catch {
         /* ignore */
     }
@@ -664,7 +717,9 @@ function reinforceCellDescendantStyle(cell, prop, value) {
     if (!cell || !prop || value == null || value === '') return;
     try {
         cell.style.setProperty(prop, value, 'important');
-        const nodes = cell.querySelectorAll('span, p, div, font, li');
+        const nodes = cell.querySelectorAll(prop === 'font-family'
+            ? 'span, p, div, font, li, [style*="font-family"]'
+            : 'span, p, div, font, li');
         for (let i = 0; i < nodes.length; i += 1) {
             nodes[i].style.setProperty(prop, value, 'important');
         }
@@ -678,6 +733,8 @@ function reinforceCellDescendantStyle(cell, prop, value) {
             }
         }
         if (prop === 'font-family') {
+            cell.setAttribute('data-ems-user-font', '1');
+            nodes.forEach(el => el.setAttribute('data-ems-user-font', '1'));
             cell.querySelectorAll('font[face]').forEach((el) => {
                 el.removeAttribute('face');
                 el.style.setProperty('font-family', value, 'important');
@@ -692,7 +749,9 @@ function clearCellDescendantStyle(cell, prop) {
     if (!cell || !prop) return;
     try {
         cell.style.removeProperty(prop);
-        const nodes = cell.querySelectorAll('span, p, div, font, li');
+        const nodes = cell.querySelectorAll(prop === 'font-family'
+            ? 'span, p, div, font, li, [data-ems-user-font]'
+            : 'span, p, div, font, li');
         for (let i = 0; i < nodes.length; i += 1) {
             nodes[i].style.removeProperty(prop);
         }
@@ -703,6 +762,8 @@ function clearCellDescendantStyle(cell, prop) {
             }
         }
         if (prop === 'font-family') {
+            cell.removeAttribute('data-ems-user-font');
+            nodes.forEach(el => el.removeAttribute('data-ems-user-font'));
             cell.querySelectorAll('font[face]').forEach((el) => el.removeAttribute('face'));
         }
     } catch {
@@ -1388,8 +1449,77 @@ function finishInlineTableTextFormat(jodit, cmd) {
     }
 }
 
+function tableFontSize(jodit, value) {
+    const size = String(value ?? '').trim();
+    const unit = jodit.o?.defaultFontSizePoints || 'pt';
+    return /^\d+(?:\.\d+)?$/.test(size) ? `${size}${unit}` : normalizeSize(size, unit);
+}
+
+/** Apply font choices to the selected text runs, preserving neighboring text and the table grid. */
+function applyTypographyToTextRange(jodit, getEditorBody, command, value) {
+    const root = getEditorBody() || jodit.editor;
+    const selection = root?.ownerDocument.getSelection();
+    if (!selection?.rangeCount || selection.isCollapsed) return false;
+    const range = selection.getRangeAt(0);
+    const ancestor = range.commonAncestorContainer;
+    if (!root.contains(ancestor)) return false;
+    const container = ancestor.nodeType === 3 ? ancestor.parentElement : ancestor;
+    const isFont = command === 'fontname';
+    if (!isFont && !container.closest('table') &&
+        ![...container.querySelectorAll('table')].some(table => range.intersectsNode(table))) {
+        return false;
+    }
+
+    const property = isFont ? 'font-family' : 'font-size';
+    const style = isFont ? value : tableFontSize(jodit, value);
+    const doc = root.ownerDocument;
+    const walker = doc.createTreeWalker(ancestor, NodeFilter.SHOW_TEXT);
+    const runs = [];
+    for (let node = ancestor.nodeType === 3 ? ancestor : walker.nextNode(); node; node = walker.nextNode()) {
+        const locked = node.parentElement?.closest('[contenteditable="false"]');
+        if (!range.intersectsNode(node) || (locked && root.contains(locked))) continue;
+        const start = node === range.startContainer ? range.startOffset : 0;
+        const end = node === range.endContainer ? range.endOffset : node.length;
+        if (end > start) runs.push({ node, start, end });
+    }
+    const spans = [];
+    for (const { node, start, end } of runs) {
+        const parent = node.parentElement;
+        if (isFont && start === 0 && end === node.length && parent.childNodes.length === 1 &&
+            parent.matches('span[data-ems-user-font="1"]')) {
+            parent.style.setProperty(property, style, 'important');
+            spans.push(parent);
+            continue;
+        }
+        if (end < node.length) node.splitText(end);
+        const text = start ? node.splitText(start) : node;
+        const span = doc.createElement('span');
+        span.style.setProperty(property, style, 'important');
+        if (isFont) span.setAttribute('data-ems-user-font', '1');
+        text.replaceWith(span);
+        span.appendChild(text);
+        spans.push(span);
+    }
+    if (spans.length) {
+        const next = doc.createRange();
+        next.setStart(spans[0], 0);
+        next.setEnd(spans.at(-1), 1);
+        jodit.s.selectRange(next);
+        finishInlineTableTextFormat(jodit, command);
+    }
+    return true;
+}
+
 function tryApplyFormatToMultiSelectedCells(jodit, getEditorBody, command, value) {
+    return withDocumentHistoryMutation(jodit, () =>
+        applyFormatToTableCells(jodit, getEditorBody, command, value)
+    );
+}
+
+function applyFormatToTableCells(jodit, getEditorBody, command, value) {
     const cmd = String(command || '').toLowerCase();
+    if (value && (cmd === 'fontname' || cmd === 'fontsize') &&
+        applyTypographyToTextRange(jodit, getEditorBody, cmd, value)) return true;
     const textRange = singleCellTextRange(jodit);
     if (textRange && /^(bold|italic|underline|strikethrough)$/.test(cmd)) {
         if (applyInlineFormatToTableCellRange(textRange, cmd, jodit)) {
@@ -1423,6 +1553,25 @@ function tryApplyFormatToMultiSelectedCells(jodit, getEditorBody, command, value
                 jodit
             )
         ) {
+            finishInlineTableTextFormat(jodit, cmd);
+            return true;
+        }
+    }
+    /*
+     * Text selected inside one cell + Align Left/Center/Right: still persist on the
+     * cell (data-ems-align-custom). Otherwise Jodit native justify is lost after exit-edit.
+     */
+    if (
+        textRange &&
+        /^(justifyleft|justifycenter|justifyright|justifyfull)$/.test(cmd)
+    ) {
+        const startEl =
+            textRange.startContainer?.nodeType === 1
+                ? textRange.startContainer
+                : textRange.startContainer?.parentElement;
+        const cell = startEl?.closest?.('td, th');
+        if (cell) {
+            applyTextAlignToCells([cell], cmd);
             finishInlineTableTextFormat(jodit, cmd);
             return true;
         }
@@ -1467,15 +1616,7 @@ function tryApplyFormatToMultiSelectedCells(jodit, getEditorBody, command, value
                 restoreTableCellSelection(jodit, cells);
                 break;
             case 'fontsize': {
-                let size = value != null ? String(value) : '';
-                if (size && !/px|pt|em|rem|%$/i.test(size)) {
-                    size = normalizeSize(size, jodit.o?.defaultFontSizePoints || 'pt');
-                }
-                /* Jodit leaves decimals unitless ("10.5") — invalid CSS; force pt/px. */
-                if (size && !/px|pt|em|rem|%$/i.test(size) && /^-?[\d.]+$/i.test(size)) {
-                    const unit = String(jodit.o?.defaultFontSizePoints || 'pt').replace(/[^a-z%]/gi, '') || 'pt';
-                    size = `${size}${unit}`;
-                }
+                const size = tableFontSize(jodit, value);
                 applyFastStyleToTableCells(cells, 'font-size', size);
                 clearEditorTextSelection(jodit);
                 restoreTableCellSelection(jodit, cells);
@@ -3133,6 +3274,7 @@ function executeTableStructureCommand(jodit, getEditorBody, command) {
         null;
     if (root && !root.contains(table)) return false;
 
+    captureDocumentHistoryBeforeMutation(jodit);
     workCells = resolveTableStructureWorkCells(jodit, getEditorBody, table);
     if (!workCells.length) {
         workCells = [cell];
@@ -3267,6 +3409,7 @@ function executeTableStructureCommand(jodit, getEditorBody, command) {
             break;
         }
         default:
+            jodit.__emsDocHistPending = null;
             return false;
     }
 
@@ -3352,6 +3495,8 @@ function isCellEffectivelyEmpty(cell) {
 
 const MIN_TABLE_COLUMN_WIDTH = 24;
 const MIN_TABLE_ROW_HEIGHT = 18;
+/** Marks a table copied inside the clause editor — paste must keep baked col/row px. */
+const EMS_INTERNAL_TABLE_CLIP_ATTR = 'data-ems-internal-table-clip';
 
 /**
  * Min px when resizing / fitting columns.
@@ -3379,14 +3524,15 @@ export const EMS_TABLE_ROW_HEIGHT_LOCKED_SELECTOR =
 
 export function buildEmsOfficePasteTablePresentationCss(scope) {
     const s = scope || '.clause-content';
-    const officeTableRaw = `${s} ${EMS_OFFICE_PASTE_TABLE_SELECTOR.split(', ').join(`, ${s} `)}`;
     // Pricing option tables must stay at EMS_QUOTE_PRICING_TABLE_WIDTH — never treat as office fluid.
-    const officeTable = `${officeTableRaw}:not([id^="${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}"]):not([data-ems-pricing-cols="fixed"])`;
+    // Group alternatives before appending descendants. A comma-separated prefix
+    // accidentally applied cell padding and prose styles to the tables themselves.
+    const officeTable = `${s} :is(${EMS_OFFICE_PASTE_TABLE_SELECTOR}):not([id^="${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}"]):not([data-ems-pricing-cols="fixed"])`;
     const officeTableFluidRows = `${officeTable}:not([data-ems-row-heights]):not([data-ems-row-heights-custom])`;
     const officeCell = `${officeTable} th:not([data-ems-valign]), ${officeTable} td:not([data-ems-valign])`;
     const officeInner = `${officeTable} td *, ${officeTable} th *`;
     const officeP = `${officeTable} td p, ${officeTable} th p`;
-    const officeBlock = `${officeTable} td p, ${officeTable} th p, ${officeTable} td div, ${officeTable} th div, ${officeTable} td li, ${officeTable} th li`;
+    const officeBlock = `${s} :is(${EMS_OFFICE_PASTE_TABLE_SELECTOR}):not([id^="${EMS_AUTO_PRICE_SUMMARY_TABLE_ID}"]):not([data-ems-pricing-cols="fixed"]) :is(td, th)`;
 
     return `
     ${officeTable} {
@@ -3431,6 +3577,30 @@ export function buildEmsOfficePasteTablePresentationCss(scope) {
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
     }
+    /*
+     * White-on-dark Excel headers: inheritance from .clause-content { color:#0f172a !important }
+     * beat missing inline color after paste. Stamp data-ems-header-fg=light on copy and force white.
+     */
+    ${officeBlock}[data-ems-header-fg="light"] {
+        color: #ffffff !important;
+    }
+    /* User/toolbar align must beat Office default center and browse prose color inheritance. */
+    ${officeTable} td[data-ems-align-custom="1"][data-ems-align="left"],
+    ${officeTable} th[data-ems-align-custom="1"][data-ems-align="left"] {
+        text-align: left !important;
+    }
+    ${officeTable} td[data-ems-align-custom="1"][data-ems-align="center"],
+    ${officeTable} th[data-ems-align-custom="1"][data-ems-align="center"] {
+        text-align: center !important;
+    }
+    ${officeTable} td[data-ems-align-custom="1"][data-ems-align="right"],
+    ${officeTable} th[data-ems-align-custom="1"][data-ems-align="right"] {
+        text-align: right !important;
+    }
+    ${officeTable} td[data-ems-align-custom="1"][data-ems-align="justify"],
+    ${officeTable} th[data-ems-align-custom="1"][data-ems-align="justify"] {
+        text-align: justify !important;
+    }
     ${officeTableFluidRows} tr {
         height: auto !important;
         min-height: 0 !important;
@@ -3456,11 +3626,13 @@ export function buildEmsOfficePasteTablePresentationCss(scope) {
         margin-left: 0 !important;
         text-indent: 0 !important;
     }
-    ${officeBlock} {
+    ${officeBlock} :is(p, div, li) {
         margin: 0 !important;
-        padding: 0 !important;
         line-height: 15px !important;
         overflow: visible !important;
+    }
+    ${officeBlock} :is(p, div) {
+        padding: 0 !important;
     }
     ${officeTable} td p + p,
     ${officeTable} th p + p,
@@ -4164,7 +4336,7 @@ function parseStoredOfficeTableColumnWidths(table) {
     if (!stored) return [];
     return stored.split(',').map((part) => {
         const n = parseFloat(String(part).trim());
-        return n > 0 ? Math.max(MIN_TABLE_COLUMN_WIDTH, Math.round(n)) : 0;
+        return n > 0 ? Math.max(table.hasAttribute(EMS_INTERNAL_TABLE_CLIP_ATTR) ? 1 : MIN_TABLE_COLUMN_WIDTH, Math.round(n)) : 0;
     });
 }
 
@@ -4203,7 +4375,7 @@ export function syncOfficePasteTableColumnLayout(table) {
             widths.push(widths[widths.length - 1] || DEFAULT_TABLE_COLUMN_WIDTH);
         }
         if (widths.length > colCount) widths = widths.slice(0, colCount);
-        fitColumnWidthsToMaxPx(widths, a4W);
+        if (sum > a4W) fitColumnWidthsToMaxPx(widths, a4W);
     } else if (tooNarrow) {
         /* Drop collapsed col/cell px so read/bootstrap cannot echo the scramble. */
         clearTableColumnWidthArtifacts(table);
@@ -4211,7 +4383,7 @@ export function syncOfficePasteTableColumnLayout(table) {
     }
     if (!widths.length) return;
     while (widths.length < colCount) widths.push(DEFAULT_TABLE_COLUMN_WIDTH);
-    applyColumnWidths(table, rows, widths.slice(0, colCount));
+    applyColumnWidths(table, rows, widths.slice(0, colCount), { preserveDimensions: userResized });
     if (userResized) {
         table.setAttribute('data-ems-col-widths-custom', '1');
         table.setAttribute('data-ems-edit-cols-locked', '1');
@@ -4358,6 +4530,39 @@ export function syncOfficePasteTableColumnsInHtmlString(html) {
     }
 }
 
+/** EMS editor copy → paste: restore baked column/row model without unscrambling. */
+export function restoreInternalClipboardTableLayout(table) {
+    if (!table?.getAttribute?.(EMS_INTERNAL_TABLE_CLIP_ATTR)) return false;
+    const rows = getTableRows(table);
+    if (!rows.length) return false;
+    const widths = parseStoredOfficeTableColumnWidths(table).filter((w) => w > 0);
+    if (widths.length) {
+        applyColumnWidths(table, rows, widths.slice(), { flexibleMin: false, preserveDimensions: true });
+        table.setAttribute('data-ems-col-widths-custom', '1');
+        table.setAttribute('data-ems-edit-cols-locked', '1');
+    }
+    if (table.hasAttribute('data-ems-row-heights')) {
+        table.setAttribute('data-ems-row-heights-custom', '1');
+        reapplyStoredTableRowHeights(table);
+    }
+    table.style.setProperty('table-layout', 'fixed', 'important');
+    const outerRaw = parseFloat(table.getAttribute('data-ems-table-outer-width') || '0');
+    if (outerRaw > 0) {
+        const w = Math.round(outerRaw);
+        table.style.setProperty('width', `${w}px`, 'important');
+        table.style.setProperty('max-width', '100%', 'important');
+        table.setAttribute('width', String(w));
+    }
+    return true;
+}
+
+export function restoreInternalClipboardTablesInRoot(root) {
+    if (!root?.querySelectorAll) return;
+    root.querySelectorAll(`table[${EMS_INTERNAL_TABLE_CLIP_ATTR}]`).forEach((table) => {
+        restoreInternalClipboardTableLayout(table);
+    });
+}
+
 /** Enable EMS column drag-resize on Excel/Word pasted tables without stripping their colors. */
 export function initializeOfficePastedTableColumns(table) {
     if (!table || !isOfficePasteTableEl(table)) return;
@@ -4365,6 +4570,9 @@ export function initializeOfficePastedTableColumns(table) {
 
     const rows = getTableRows(table);
     if (!rows.length) return;
+
+    /* Copied inside EMS — keep source column widths / row heights exactly. */
+    if (restoreInternalClipboardTableLayout(table)) return;
 
     const colCount = getLogicalColumnCount(rows) || getColumnCount(rows);
     const userResizedCols =
@@ -4380,8 +4588,29 @@ export function initializeOfficePastedTableColumns(table) {
         syncOfficePasteTableColumnLayout(table);
         return;
     }
-    /* Multi-col BOQ in editor: never sync a scrambled stored model — that locked enter-edit. */
+    /*
+     * First Excel/Word paste: keep measured Office column widths.
+     * Only unscramble/bootstrap when the model is missing or percent-like/scrambled —
+     * always bootstrapping 4+ col schedules to A4 ratios caused paste size drift.
+     */
+    if (!colCount) return;
     if (colCount >= 4 && table.closest?.('.jodit-wysiwyg')) {
+        const officeWidths = readOfficeTableColumnWidthsPx(table, rows, colCount);
+        const a4W = getA4InnerContentWidthPx(table.ownerDocument) || 680;
+        const looksUsable =
+            Array.isArray(officeWidths) &&
+            officeWidths.length >= colCount &&
+            officeWidths.every((w) => w > 0) &&
+            !storedColumnWidthsLookPercentLike(officeWidths.slice(0, colCount), a4W);
+        if (looksUsable) {
+            applyColumnWidths(table, rows, officeWidths.slice(0, colCount), {
+                flexibleMin: true,
+                fitToPage: false,
+            });
+            table.setAttribute('data-ems-col-widths-custom', '1');
+            table.setAttribute('data-ems-edit-cols-locked', '1');
+            return;
+        }
         unscrambleOfficeScheduleTableLikeColumnDrag(table);
         return;
     }
@@ -4391,7 +4620,6 @@ export function initializeOfficePastedTableColumns(table) {
         return;
     }
 
-    if (!colCount) return;
     const widths = readOfficeTableColumnWidthsPx(table, rows, colCount);
     applyColumnWidths(table, rows, widths);
 }
@@ -4858,9 +5086,9 @@ function readRowHeightsPx(table, rows) {
     return heights;
 }
 
-function lockRowHeight(tr, px) {
+function lockRowHeight(tr, px, minimum = MIN_TABLE_ROW_HEIGHT) {
     if (!tr) return;
-    const rounded = Math.max(MIN_TABLE_ROW_HEIGHT, Math.round(px));
+    const rounded = Math.max(minimum, Math.round(px));
     const h = `${rounded}px`;
     tr.style.setProperty('box-sizing', 'border-box');
     tr.style.setProperty('height', h, 'important');
@@ -4892,10 +5120,11 @@ export function applyTableRowHeightModel(table) {
 }
 
 function applyRowHeights(table, rows, heights) {
+    const minimum = table.hasAttribute(EMS_INTERNAL_TABLE_CLIP_ATTR) ? 1 : MIN_TABLE_ROW_HEIGHT;
     rows.forEach((row, i) => {
-        const px = Math.max(MIN_TABLE_ROW_HEIGHT, Math.round(heights[i] || DEFAULT_TABLE_ROW_HEIGHT));
+        const px = Math.max(minimum, Math.round(heights[i] || DEFAULT_TABLE_ROW_HEIGHT));
         heights[i] = px;
-        lockRowHeight(row, px);
+        lockRowHeight(row, px, minimum);
     });
     table.setAttribute('data-ems-row-heights', heights.join(','));
 }
@@ -4918,12 +5147,7 @@ export function reapplyStoredTableRowHeights(table) {
         applyPricingLockedRowHeights(table, rows, next);
         return;
     }
-    rows.forEach((row, i) => {
-        const px = Math.max(MIN_TABLE_ROW_HEIGHT, Math.round(heights[i] || DEFAULT_TABLE_ROW_HEIGHT));
-        heights[i] = px;
-        lockRowHeight(row, px);
-    });
-    table.setAttribute('data-ems-row-heights', heights.join(','));
+    applyRowHeights(table, rows, heights);
 }
 
 /**
@@ -4954,7 +5178,7 @@ export function expandClippedOfficeTableRowHeights(root, { includePackMeasure = 
             return parseCssPx(row.style.maxHeight) || parseCssPx(row.style.height) || 0;
         });
         let changed = false;
-        rows.forEach((row, i) => {
+    rows.forEach((row, i) => {
             const locked = Math.round(heights[i] || 0);
             if (!(locked > 0)) return;
             // Most saved rows already fit. Avoid relayout of every row for each
@@ -5710,7 +5934,7 @@ function applyColumnWidths(table, rows, widths, opts = {}) {
 
     for (let j = 0; j < colCount; j += 1) {
         /* 5+ col schedules: Qty/Unit/Amount ≥48px. Narrower clause tables may go to MIN. */
-        const floor = getColumnWidthFloor(colCount, j);
+        const floor = opts.preserveDimensions ? 1 : getColumnWidthFloor(colCount, j);
         const px = Math.max(floor, Math.round(widths[j] || 0));
         widths[j] = px;
         sum += px;
@@ -5745,8 +5969,8 @@ function applyColumnWidths(table, rows, widths, opts = {}) {
                 cell.style.removeProperty('max-width');
                 continue;
             }
-            const floor = getColumnWidthFloor(colCount, j);
             const px = widths[j];
+            const floor = opts.preserveDimensions ? 1 : getColumnWidthFloor(colCount, j);
             cell.style.setProperty('box-sizing', 'border-box', 'important');
             cell.style.setProperty('width', `${px}px`, 'important');
             cell.style.setProperty('min-width', `${softMin ? floor : px}px`, 'important');
@@ -6385,7 +6609,13 @@ function moveTableCellFocus(root, cell, key, jodit, getEditorBody) {
     else return false;
 
     const targetCell = grid[nextRow]?.[nextCol];
-    if (!targetCell || !root.contains(targetCell)) return false;
+    if (!targetCell || !root.contains(targetCell)) {
+        /* Leave the table onto the next editable line (creates one if needed). */
+        if (key === 'ArrowDown' || key === 'ArrowRight') {
+            return placeCaretAfterTable(jodit, table);
+        }
+        return false;
+    }
 
     const atEnd = key === 'ArrowRight' || key === 'ArrowDown';
     const moved = focusTableCell(targetCell, jodit, atEnd);
@@ -6396,24 +6626,67 @@ function moveTableCellFocus(root, cell, key, jodit, getEditorBody) {
     return moved;
 }
 
+const EMS_TABLE_ARROW_NAV_VER = 3;
+
 function bindTableArrowNavigation(root, jodit, getEditorBody) {
-    if (!root || root.__emsTableArrowBound) return;
+    if (!root) return;
+    if (
+        root.__emsTableArrowBound &&
+        root.__emsTableArrowNavVer === EMS_TABLE_ARROW_NAV_VER
+    ) {
+        return;
+    }
+    if (root.__emsTableArrowCleanup) {
+        try {
+            root.__emsTableArrowCleanup();
+        } catch {
+            /* ignore */
+        }
+        root.__emsTableArrowCleanup = null;
+    }
     root.__emsTableArrowBound = true;
+    root.__emsTableArrowNavVer = EMS_TABLE_ARROW_NAV_VER;
 
     const onKeyDown = (e) => {
         const key = e.key;
-        if (key !== 'ArrowUp' && key !== 'ArrowDown' && key !== 'ArrowLeft' && key !== 'ArrowRight') {
+        if (
+            key !== 'ArrowUp' &&
+            key !== 'ArrowDown' &&
+            key !== 'ArrowLeft' &&
+            key !== 'ArrowRight' &&
+            key !== 'Enter'
+        ) {
             return;
+        }
+
+        const selected = getSelectedTableCells(jodit).filter((c) => c?.isConnected);
+        if (selected.length >= 2 && (key === 'ArrowDown' || key === 'Enter')) {
+            const table = selected[0]?.closest?.('table');
+            if (
+                table &&
+                root.contains(table) &&
+                isEntireTableSelected(jodit, table) &&
+                placeCaretAfterTable(jodit, table)
+            ) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                if (typeof jodit.synchronizeValues === 'function') {
+                    jodit.synchronizeValues();
+                }
+                return;
+            }
         }
 
         const range = getEditorSelectionRange(jodit, root);
         if (range && !range.collapsed) return;
+        if (key === 'Enter') return;
 
+        if (range && root.contains(range.startContainer) && !getTableCellFromNode(range.startContainer)) return;
         let node = range?.startContainer;
         if (!node) {
             node = root.ownerDocument?.getSelection?.()?.anchorNode;
         }
-        const cell = getTableCellFromNode(node);
+        const cell = getTableCellFromNode(node) || getActiveTableCell(jodit, getEditorBody);
         if (!cell || !root.contains(cell)) return;
 
         if (
@@ -6433,12 +6706,17 @@ function bindTableArrowNavigation(root, jodit, getEditorBody) {
     };
 
     root.addEventListener('keydown', onKeyDown, true);
+    root.__emsTableArrowCleanup = () => {
+        root.removeEventListener('keydown', onKeyDown, true);
+        root.__emsTableArrowBound = false;
+    };
 }
 
 /** Ctrl+A inside a table selects every cell in that table (Word-like). */
+const EMS_TABLE_SELECT_ALL_VER = 2;
+
 function registerTableSelectAll(jodit, getEditorBody) {
-    if (!jodit || jodit.__emsTableSelectAll) return;
-    jodit.__emsTableSelectAll = true;
+    if (!jodit) return;
 
     const onKeyDown = (e) => {
         if (!(e.ctrlKey || e.metaKey)) return;
@@ -6470,6 +6748,8 @@ function registerTableSelectAll(jodit, getEditorBody) {
         jodit.__emsFormatTableCells = [...table.querySelectorAll('td, th')];
         jodit.__emsToolbarCellFormat = true;
         clearEditorTextSelection(jodit);
+        /* Keep a blank line after the table so the user can click/caret past the selection. */
+        ensureEditableBlockAfterTable(table);
 
         if (typeof jodit.synchronizeValues === 'function') {
             jodit.synchronizeValues();
@@ -6482,15 +6762,36 @@ function registerTableSelectAll(jodit, getEditorBody) {
             (typeof getEditorBody === 'function' && getEditorBody()) ||
             jodit.editor ||
             null;
-        if (!root || root.__emsTableSelectAllBound) return;
+        if (!root) return;
+        if (
+            root.__emsTableSelectAllBound &&
+            root.__emsTableSelectAllVer === EMS_TABLE_SELECT_ALL_VER
+        ) {
+            return;
+        }
+        if (root.__emsTableSelectAllCleanup) {
+            try {
+                root.__emsTableSelectAllCleanup();
+            } catch {
+                /* ignore */
+            }
+            root.__emsTableSelectAllCleanup = null;
+        }
         root.__emsTableSelectAllBound = true;
+        root.__emsTableSelectAllVer = EMS_TABLE_SELECT_ALL_VER;
         root.addEventListener('keydown', onKeyDown, true);
-        jodit.e.on('beforeDestruct', () => {
+        const cleanup = () => {
             root.removeEventListener('keydown', onKeyDown, true);
-        });
+            root.__emsTableSelectAllBound = false;
+        };
+        root.__emsTableSelectAllCleanup = cleanup;
+        jodit.e.on('beforeDestruct', cleanup);
     };
 
+    if (!jodit.__emsTableSelectAll) {
+        jodit.__emsTableSelectAll = true;
     jodit.e.on('afterInit', attach);
+    }
     attach();
 }
 
@@ -6673,6 +6974,7 @@ function runSplitVerticalFromContextMenu(jodit, table, snapCells) {
     jodit.__emsPreserveMultiTableSelect = true;
     jodit.__emsTableStructureJustRan = true;
 
+    captureDocumentHistoryBeforeMutation(jodit);
     const ok = emsSplitSelectedCellsVertical(
         jodit,
         tableModule,
@@ -6956,9 +7258,7 @@ function registerTablePopupContextMenuOnly(jodit, getEditorBody) {
 }
 
 function registerTableArrowNavigation(jodit, getEditorBody) {
-    if (!jodit || jodit.__emsTableArrowNav) return;
-    jodit.__emsTableArrowNav = true;
-
+    if (!jodit) return;
     const attach = () => {
         const root =
             (typeof getEditorBody === 'function' && getEditorBody()) ||
@@ -6967,7 +7267,10 @@ function registerTableArrowNavigation(jodit, getEditorBody) {
         bindTableArrowNavigation(root, jodit, getEditorBody);
     };
 
+    if (!jodit.__emsTableArrowNav) {
+        jodit.__emsTableArrowNav = true;
     jodit.e.on('afterInit', attach);
+    }
     attach();
 }
 
@@ -6982,7 +7285,7 @@ const TABLE_SPLIT_PANE_EDGE_NEAR = 10;
 /** Pixels from row bottom before the resize handle appears (keep tight for caret placement). */
 const TABLE_ROW_EDGE_NEAR = 3;
 /** Invisible grab area for the row resize handle (visual line stays thin). */
-const TABLE_ROW_RESIZER_HIT_HEIGHT = 14;
+const TABLE_ROW_RESIZER_HIT_HEIGHT = 6;
 
 /**
  * True when a Jodit instance is safe to touch. Destroyed / mid-destruct instances
@@ -7061,13 +7364,13 @@ function getEmsTableResizeHandleParent(jodit) {
 function getEmsTableResizeListenerRoot(jodit, getEditorBody) {
     if (!isJoditInstanceUsable(jodit)) return null;
     try {
-        return (
-            jodit.container ||
-            getEditorWorkplace(jodit) ||
-            (typeof getEditorBody === 'function' && getEditorBody()) ||
-            jodit.editor ||
-            null
-        );
+    return (
+        jodit.container ||
+        getEditorWorkplace(jodit) ||
+        (typeof getEditorBody === 'function' && getEditorBody()) ||
+        jodit.editor ||
+        null
+    );
     } catch {
         return null;
     }
@@ -7096,18 +7399,18 @@ export function hideTableResizeHandles(jodit, { force = false } = {}) {
     if (jodit?.__emsColResizing || jodit?.__emsRowResizing) return;
     if (jodit) {
         try {
-            jodit.__emsColResizeHide?.(force);
+        jodit.__emsColResizeHide?.(force);
         } catch {
             /* ignore stale hideHandle */
         }
         try {
-            jodit.__emsRowResizeHide?.(force);
+        jodit.__emsRowResizeHide?.(force);
         } catch {
             /* ignore */
         }
         try {
-            jodit.__emsColResizeHover = false;
-            jodit.__emsRowResizeHover = false;
+        jodit.__emsColResizeHover = false;
+        jodit.__emsRowResizeHover = false;
             setBodyCursor(jodit, '');
         } catch {
             /* ignore */
@@ -7119,8 +7422,8 @@ export function hideTableResizeHandles(jodit, { force = false } = {}) {
     hideAllEmsTableResizeHandles(doc);
     if (jodit && isJoditInstanceUsable(jodit)) {
         try {
-            const workplace = getEditorWorkplace(jodit);
-            workplace?.querySelector('.jodit-table-resizer')?.remove();
+        const workplace = getEditorWorkplace(jodit);
+        workplace?.querySelector('.jodit-table-resizer')?.remove();
         } catch {
             /* ignore */
         }
@@ -7256,7 +7559,11 @@ function readLiveColumnWidthsFromEdges(table, colCount) {
     if (!table || !colCount) return widths;
     const zoom = getQuotePreviewZoomFactor(table) || 1;
     const tableLeft = table.getBoundingClientRect().left;
-    let prev = tableLeft;
+    const firstCell = findCellAtColumnRightEdge(table, 0);
+    let prev = firstCell && (Number(firstCell.colSpan) || 1) === 1
+        ? firstCell.getBoundingClientRect().left
+        : tableLeft;
+    const minimum = table.hasAttribute(EMS_INTERNAL_TABLE_CLIP_ATTR) ? 1 : MIN_TABLE_COLUMN_WIDTH;
     for (let j = 0; j < colCount; j += 1) {
         const edge = getColumnRightEdgeX(table, j);
         if (edge == null || !Number.isFinite(edge)) {
@@ -7265,7 +7572,7 @@ function readLiveColumnWidthsFromEdges(table, colCount) {
             continue;
         }
         const viewportW = Math.max(1, edge - prev);
-        widths[j] = Math.max(MIN_TABLE_COLUMN_WIDTH, Math.round(viewportW / zoom));
+        widths[j] = Math.max(minimum, Math.round(viewportW / zoom));
         prev = edge;
     }
     return widths;
@@ -7423,6 +7730,21 @@ function ensureEmsGlobalColResizeDocListeners(doc) {
     doc.addEventListener('mousemove', emsGlobalColResizeMoveHover, true);
 }
 
+/** A resize hit area may extend over the first letters of a cell. */
+function pointerHitsTableText(table, x, y) {
+    const doc = table.ownerDocument;
+    const caret = doc.caretPositionFromPoint?.(x, y);
+    const nearest = caret ? null : doc.caretRangeFromPoint?.(x, y);
+    const node = caret?.offsetNode || nearest?.startContainer;
+    if (node?.nodeType !== 3 || !table.contains(node)) return false;
+    const offset = caret?.offset ?? nearest.startOffset;
+    const range = doc.createRange();
+    range.setStart(node, Math.max(0, offset - 1));
+    range.setEnd(node, Math.min(node.length, offset + 1));
+    return [...range.getClientRects()].some(rect =>
+        x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom);
+}
+
 /** Only the dragged column changes width; others stay fixed (colgroup px). */
 function registerEmsTableColumnResize(jodit, getEditorBody) {
     /* Allow HMR / remount rebind — tear down prior listeners. */
@@ -7451,6 +7773,7 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
     let activeUp = null;
     let pendingDelta = null;
     let rafId = 0;
+    let dragCells = [];
 
     const getHandleParent = () => getEmsTableResizeHandleParent(jodit);
 
@@ -7465,7 +7788,7 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
         /* Never destroy the handle while dragging — blur used to force-remove it mid-drag. */
         if (drag) return;
         if (!isJoditInstanceUsable(jodit)) {
-            clearHideTimeout();
+        clearHideTimeout();
             handle?.remove();
             handle = null;
             return;
@@ -7473,9 +7796,9 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
         if (jodit.__emsColResizing) return;
         clearHideTimeout();
         try {
-            jodit.__emsColResizeHover = false;
-            if (!jodit.__emsRowResizeHover) {
-                setBodyCursor(jodit, '');
+        jodit.__emsColResizeHover = false;
+        if (!jodit.__emsRowResizeHover) {
+            setBodyCursor(jodit, '');
             }
         } catch {
             /* ignore */
@@ -7489,8 +7812,8 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
         hideTimeout = window.setTimeout(() => {
             if (drag) return;
             if (!isJoditInstanceUsable(jodit) || jodit.__emsColResizing) {
-                handle?.remove();
-                handle = null;
+            handle?.remove();
+            handle = null;
                 return;
             }
             handle?.remove();
@@ -7522,15 +7845,15 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
         if (!handle) {
             if (!isJoditInstanceUsable(jodit)) return;
             const doc = getJoditOwnerDocument(jodit) || document;
-            handle = doc.createElement('div');
-            handle.className = 'ems-table-col-resizer';
-            handle.setAttribute('title', 'Drag to resize column');
+        handle = doc.createElement('div');
+        handle.className = 'ems-table-col-resizer';
+        handle.setAttribute('title', 'Drag to resize column');
             handle.setAttribute('data-ems-col-resizer', '1');
             handle.style.cssText =
-                'position:fixed;z-index:2147483000;width:8px;margin-left:-4px;cursor:col-resize;' +
+                'position:fixed;z-index:2147483000;width:4px;margin-left:-2px;cursor:col-resize;' +
                 'pointer-events:auto;display:block;touch-action:none;user-select:none;';
             handle.addEventListener('pointerdown', onHandlePointerDown, true);
-            handle.addEventListener('mouseenter', clearHideTimeout);
+        handle.addEventListener('mouseenter', clearHideTimeout);
         }
         const tableRect = table.getBoundingClientRect();
         const edge = edgeX ?? anchorCell?.getBoundingClientRect().right;
@@ -7586,31 +7909,17 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
     };
 
     /**
-     * Middle columns: pair-resize with the next column (table width stays stable).
-     * Last column: solo resize so dragging left shrinks Make and the table width.
-     * If still over A4 after a grow, steal from other columns.
+     * Solo-resize the dragged column (table width follows).
+     * If the sum goes over A4, steal width from other columns — no pair-resize rubber-band.
      */
     const computeNextWidths = (delta) => {
         if (!startWidths || resizeCol < 0) return null;
         const colCount = startWidths.length;
         const next = startWidths.slice();
-        const floor = (j) => getColumnWidthFloor(colCount, j);
+        const floor = (j) => Math.min(getColumnWidthFloor(colCount, j), startWidths[j] || MIN_TABLE_COLUMN_WIDTH);
         const leftFloor = floor(resizeCol);
         const startLeft = Math.max(leftFloor, startWidths[resizeCol] || DEFAULT_TABLE_COLUMN_WIDTH);
-        const isLastCol = resizeCol === colCount - 1;
-        const neighbor = resizeCol + 1 < colCount ? resizeCol + 1 : -1;
-
-        if (!isLastCol && neighbor >= 0) {
-            const nFloor = floor(neighbor);
-            const startN = Math.max(nFloor, startWidths[neighbor] || DEFAULT_TABLE_COLUMN_WIDTH);
-            const pairSum = startLeft + startN;
-            const maxLeft = Math.max(leftFloor, pairSum - nFloor);
-            const desired = Math.max(leftFloor, Math.min(maxLeft, Math.round(startLeft + delta)));
-            next[resizeCol] = desired;
-            next[neighbor] = Math.max(nFloor, pairSum - desired);
-        } else {
-            next[resizeCol] = Math.max(leftFloor, Math.round(startLeft + delta));
-        }
+        next[resizeCol] = Math.max(leftFloor, Math.round(startLeft + delta));
 
         const maxTable =
             workTable && isEmsPricingSummaryTable(workTable)
@@ -7620,8 +7929,9 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
         let sum = next.reduce((s, w, i) => s + Math.max(floor(i), w || 0), 0);
         if (sum > maxTable) {
             let need = sum - maxTable;
-            for (let j = 0; j < colCount && need > 0; j += 1) {
-                if (j === resizeCol) continue;
+            // Only borrow from columns to the right, so earlier boundaries do not
+            // move away from the pointer when the table reaches the page edge.
+            for (let j = resizeCol + 1; j < colCount && need > 0; j += 1) {
                 const f = floor(j);
                 const canGive = Math.max(0, (next[j] || 0) - f);
                 const take = Math.min(canGive, need);
@@ -7642,34 +7952,47 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
         pendingDelta = null;
         const next = computeNextWidths(delta);
         if (!next) return;
-        const rows = getTableRows(workTable);
-        /* No fitToPage mid-drag — it fought shrink and scrambled pair widths. */
-        applyColumnWidths(workTable, rows, next, { flexibleMin: true, fitToPage: false });
-        /* Belt-and-suspenders: force colgroup even if cell grid walk skipped cells. */
+        /* Keep the colgroup, cell locks and table width in sync during the drag. */
         const { cols } = getOrSyncColgroup(workTable, next.length);
         let sum = 0;
         next.forEach((w, j) => {
-            const px = Math.max(MIN_TABLE_COLUMN_WIDTH, Math.round(w || 0));
+            const floorPx = Math.min(getColumnWidthFloor(next.length, j), startWidths[j] || MIN_TABLE_COLUMN_WIDTH);
+            const px = Math.max(floorPx, Math.round(w || 0));
+            next[j] = px;
             sum += px;
             if (cols[j]) {
                 cols[j].style.setProperty('width', `${px}px`, 'important');
-                cols[j].style.setProperty('min-width', '24px', 'important');
+                cols[j].style.setProperty('min-width', `${px}px`, 'important');
                 cols[j].style.removeProperty('max-width');
                 cols[j].setAttribute('width', String(px));
             }
         });
+        // Cells can retain hard pixel locks from paste, preview normalization or a
+        // previous drag. Update those together with the colgroup on every frame.
+        for (const { cell, col } of dragCells) {
+            const px = next[col];
+            if (!(px > 0)) continue;
+            cell.style.setProperty('box-sizing', 'border-box', 'important');
+            cell.style.setProperty('width', `${px}px`, 'important');
+            cell.style.setProperty('min-width', `${px}px`, 'important');
+            cell.style.removeProperty('max-width');
+            cell.setAttribute('width', String(px));
+        }
         if (sum > 0) {
             workTable.style.setProperty('width', `${sum}px`, 'important');
             workTable.style.setProperty('min-width', '0', 'important');
-            workTable.style.setProperty('max-width', '100%', 'important');
+            workTable.style.setProperty('max-width', 'none', 'important');
             workTable.style.setProperty('table-layout', 'fixed', 'important');
         }
         workTable.setAttribute('data-ems-col-widths', next.join(','));
         workTable.setAttribute('data-ems-col-widths-custom', '1');
         workTable.setAttribute('data-ems-edit-cols-locked', '1');
+        if (workTable.hasAttribute(EMS_INTERNAL_TABLE_CLIP_ATTR)) {
+            workTable.setAttribute('data-ems-table-outer-width', String(sum));
+            workTable.setAttribute('width', String(sum));
+        }
         lastWidths = next;
-        const edge = getColumnEdgeXFromWidths(workTable, next, resizeCol, zoom || 1);
-        positionHandle(workTable, resizeCol, edge);
+        positionHandle(workTable, resizeCol);
     };
 
     const applyResize = (delta) => {
@@ -7716,8 +8039,19 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
                     .map((s) => parseFloat(String(s).trim()))
                     .filter((n) => Number.isFinite(n) && n > 0);
             if (finalWidths.length && rows.length) {
-                /* Soft min for BOQ — fit to page only after a real user drag. */
-                applyColumnWidths(finishedTable, rows, finalWidths.slice(), { fitToPage: true });
+                /*
+                 * Only fit-to-page when the drag actually overflowed A4. Always fitting
+                 * caused a visible jump / size drift at mouseup even for small moves.
+                 */
+                const maxW = isEmsPricingSummaryTable(finishedTable)
+                    ? getPricingTableMaxContentWidthPx(finishedTable)
+                    : getBoqTableMaxContentWidthPx(finishedTable);
+                const sum = finalWidths.reduce((s, w) => s + (w || 0), 0);
+                applyColumnWidths(finishedTable, rows, finalWidths.slice(), {
+                    flexibleMin: false,
+                    preserveDimensions: true,
+                    fitToPage: sum > maxW + 1,
+                });
             }
             finishedTable.setAttribute('data-ems-col-widths-custom', '1');
             finishedTable.setAttribute('data-ems-edit-cols-locked', '1');
@@ -7735,20 +8069,31 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
         } catch {
             /* ignore */
         }
-        /* Persist into Jodit value after layout settles — repair must see custom flag. */
-        window.setTimeout(() => {
+        const reapplyLockedWidths = (fitIfOverflow) => {
             if (!finishedTable?.isConnected) return;
             const rows = getTableRows(finishedTable);
             const csv = String(finishedTable.getAttribute('data-ems-col-widths') || '')
                 .split(',')
                 .map((s) => parseFloat(String(s).trim()))
                 .filter((n) => Number.isFinite(n) && n > 0);
-            if (csv.length && rows.length) {
-                applyColumnWidths(finishedTable, rows, csv, { fitToPage: true });
-                finishedTable.setAttribute('data-ems-col-widths-custom', '1');
-                finishedTable.setAttribute('data-ems-edit-cols-locked', '1');
-            }
+            if (!csv.length || !rows.length) return;
+            const maxW = isEmsPricingSummaryTable(finishedTable)
+                ? getPricingTableMaxContentWidthPx(finishedTable)
+                : getBoqTableMaxContentWidthPx(finishedTable);
+            const sum = csv.reduce((s, w) => s + (w || 0), 0);
+            applyColumnWidths(finishedTable, rows, csv, {
+                flexibleMin: false,
+                preserveDimensions: true,
+                fitToPage: Boolean(fitIfOverflow) && sum > maxW + 1,
+            });
+            finishedTable.setAttribute('data-ems-col-widths-custom', '1');
+            finishedTable.setAttribute('data-ems-edit-cols-locked', '1');
+        };
+        /* Persist into Jodit value after layout settles — repair must see custom flag. */
+        window.setTimeout(() => {
+            reapplyLockedWidths(true);
             if (
+                finishedTable?.isConnected &&
                 isEmsPricingSummaryTable(finishedTable) &&
                 !finishedTable.hasAttribute('data-ems-row-heights-custom')
             ) {
@@ -7758,16 +8103,7 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
         }, 0);
         /* Second paint — catches late office/normalize passes that strip cell locks. */
         window.setTimeout(() => {
-            if (!finishedTable?.isConnected) return;
-            const rows = getTableRows(finishedTable);
-            const csv = String(finishedTable.getAttribute('data-ems-col-widths') || '')
-                .split(',')
-                .map((s) => parseFloat(String(s).trim()))
-                .filter((n) => Number.isFinite(n) && n > 0);
-            if (!csv.length || !rows.length) return;
-            applyColumnWidths(finishedTable, rows, csv, { fitToPage: true });
-            finishedTable.setAttribute('data-ems-col-widths-custom', '1');
-            finishedTable.setAttribute('data-ems-edit-cols-locked', '1');
+            reapplyLockedWidths(false);
         }, 120);
     };
 
@@ -7790,6 +8126,8 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
 
         workTable = table;
         resizeCol = colIndex;
+        const paintedWidths = readLiveColumnWidthsFromEdges(workTable,
+            getLogicalColumnCount(getTableRows(workTable)) || getColumnCount(getTableRows(workTable)));
         /* Word/Excel merges leave width= / pt locks that freeze columns — strip before drag. */
         stripOfficeMergeWidthArtifacts(workTable);
         /* Leftover max-width pins make "increase" impossible after a prior shrink. */
@@ -7799,7 +8137,22 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
         workTable.style.setProperty('max-width', 'none', 'important');
         const rows = getTableRows(workTable);
         const colCount = getLogicalColumnCount(rows) || getColumnCount(rows);
+        dragCells = [];
+        const seenCells = new Set();
+        const { grid: dragGrid } = buildTableCellGrid(workTable);
+        for (const row of dragGrid) {
+            row.forEach((cell, col) => {
+                if (!cell || seenCells.has(cell)) return;
+                seenCells.add(cell);
+                if ((Number(cell.colSpan) || 1) === 1) dragCells.push({ cell, col });
+            });
+        }
         const stored = readColumnWidthsPx(workTable, rows, colCount);
+        const lockedModel =
+            (workTable.getAttribute('data-ems-col-widths-custom') === '1' ||
+                workTable.getAttribute('data-ems-edit-cols-locked') === '1') &&
+            stored.length >= colCount &&
+            stored.every((w) => w > 0);
         zoom = getQuotePreviewZoomFactor(workTable) || 1;
         /* Logical-grid measure (merge-aware) — never physical cells[i]. */
         const measured = measureLogicalColumnWidthsLivePx(workTable);
@@ -7807,13 +8160,12 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
         const live = liveViewport.map((w) =>
             Math.max(MIN_TABLE_COLUMN_WIDTH, Math.round((w || 0) / (zoom || 1)))
         );
-        /*
-         * Always start from painted widths. Stale Word/bootstrap models caused the table
-         * to snap on mousedown then "reset" after mouseup when repair re-applied stored.
-         */
+        /* Painted widths avoid a mousedown jump when CSS constrained the stored model. */
         startWidths = new Array(colCount).fill(DEFAULT_TABLE_COLUMN_WIDTH);
         for (let j = 0; j < colCount; j += 1) {
-            if (live[j] > 0) startWidths[j] = live[j];
+            if (paintedWidths[j] > 0) startWidths[j] = paintedWidths[j];
+            else if (lockedModel && stored[j] > 0) startWidths[j] = stored[j];
+            else if (live[j] > 0) startWidths[j] = live[j];
             else if (stored[j] > 0) startWidths[j] = stored[j];
         }
         if (!(startWidths[resizeCol] > 0)) {
@@ -7825,9 +8177,11 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
         jodit.__emsUserColResizeUntil = Date.now() + 8000;
         /* Cancel any in-flight schedule repair that could rewrite columns mid-drag. */
         __emsScheduleColRepairGen += 1;
-        /* Seed colgroup once (not every frame). */
-        applyColumnWidths(workTable, rows, startWidths.slice(), { flexibleMin: true });
-            workTable.setAttribute('data-ems-col-widths-custom', '1');
+        // Start from the painted table without expanding untouched narrow columns.
+        applyColumnWidths(workTable, rows, startWidths.slice(), {
+            flexibleMin: false, preserveDimensions: true,
+        });
+        workTable.setAttribute('data-ems-col-widths-custom', '1');
         workTable.setAttribute('data-ems-edit-cols-locked', '1');
         lastWidths = startWidths.slice();
         startX = clientX;
@@ -7838,8 +8192,7 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
             rafId = 0;
         }
         setColResizingFlag(workTable, true);
-        const startEdge = getColumnEdgeXFromWidths(workTable, startWidths, resizeCol, zoom);
-        positionHandle(workTable, resizeCol, startEdge);
+        positionHandle(workTable, resizeCol);
         handle?.classList.add('ems-table-col-resizer_moved');
         setBodyCursor(jodit, 'col-resize');
         document.body.style.userSelect = 'none';
@@ -7924,7 +8277,7 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
             return;
         }
         const colIndex = detectColumnResizeNearPoint(table, event.clientX, event.clientY);
-        if (colIndex < 0) {
+        if (colIndex < 0 || event.buttons === 1 || pointerHitsTableText(table, event.clientX, event.clientY)) {
             hideHandle();
             return;
         }
@@ -7942,7 +8295,7 @@ function registerEmsTableColumnResize(jodit, getEditorBody) {
         if (!table) return;
         if (detectInCellSplitResize(table, e.clientX, e.clientY)) return;
         const colIndex = detectColumnResizeNearPoint(table, e.clientX, e.clientY);
-        if (colIndex < 0) return;
+        if (colIndex < 0 || pointerHitsTableText(table, e.clientX, e.clientY)) return;
         e.preventDefault();
         e.stopPropagation();
         beginColResizeDrag(table, colIndex, e.clientX);
@@ -8403,6 +8756,9 @@ function applyTableCellRangeSelection(jodit, table, startCell, endCell) {
         storeSplitColumnHint(jodit, table, picked);
         jodit.__emsActiveTableCell = startCell;
         table.setAttribute('data-ems-cell-selecting', '1');
+        // Mouse/drag selection also needs a visible caret landing area. Without
+        // it, a table ending the editor has no clickable position after its grid.
+        if (isEntireTableSelected(jodit, table)) ensureEditableBlockAfterTable(table);
         try {
             jodit.s?.sel?.removeAllRanges?.();
         } catch {
@@ -8532,10 +8888,10 @@ function registerTableRowResize(jodit, getEditorBody) {
             return;
         }
         try {
-            jodit.__emsRowResizeHover = false;
-            if (workTable) clearRowResizeHoverMarkers(workTable);
-            if (!jodit.__emsColResizeHover) {
-                setBodyCursor(jodit, '');
+        jodit.__emsRowResizeHover = false;
+        if (workTable) clearRowResizeHoverMarkers(workTable);
+        if (!jodit.__emsColResizeHover) {
+            setBodyCursor(jodit, '');
             }
         } catch {
             /* ignore */
@@ -8702,7 +9058,7 @@ function registerTableRowResize(jodit, getEditorBody) {
             return;
         }
         const rowIndex = detectRowResizeIndex(cell, event.clientX, event.clientY);
-        if (rowIndex < 0) {
+        if (rowIndex < 0 || event.buttons === 1 || pointerHitsTableText(table, event.clientX, event.clientY)) {
             hideHandle();
             return;
         }
@@ -8774,7 +9130,7 @@ function registerTableRowResize(jodit, getEditorBody) {
         jodit.e.off('beforeDestruct.emsRowResizeBind');
         jodit.e.on('afterInit.emsRowResizeBind', () => {
             if (!isJoditInstanceUsable(jodit)) return;
-            requestAnimationFrame(attachRowResizeListeners);
+    requestAnimationFrame(attachRowResizeListeners);
         });
         jodit.e.on('beforeDestruct.emsRowResizeBind', () => {
             try {
@@ -8816,40 +9172,36 @@ function purgeWorkplaceFloatingChrome(jodit) {
  * - Shift+click → extend block from anchor cell
  * - click inside an existing multi-cell block → edit text (caret), clear blue boxes
  */
-const EMS_CONDITIONAL_TABLE_SEL_VER = 2;
+const EMS_CONDITIONAL_TABLE_SEL_VER = 5;
 
 function registerConditionalTableSelection(jodit, getEditorBody) {
     if (!jodit) return;
-    const existingRoot =
-        (typeof getEditorBody === 'function' && getEditorBody()) ||
-        jodit.editor ||
-        null;
-    if (
-        jodit.__emsConditionalTableSelVer === EMS_CONDITIONAL_TABLE_SEL_VER &&
-        existingRoot?.__emsConditionalTableSelBound
-    ) {
-        return;
-    }
-    if (jodit.__emsConditionalTableSelCleanup) {
-        try {
-            jodit.__emsConditionalTableSelCleanup();
-        } catch {
-            /* ignore */
+
+    const ensure = () => {
+        if (!isJoditInstanceUsable(jodit)) return;
+        // Contain floated Office tables so their last-row side/bottom remains
+        // inside the editable hit area rather than the non-editable workplace.
+        getLiveEditorRoot(jodit, getEditorBody)?.style.setProperty('display', 'flow-root', 'important');
+        const host = getDurableTableEventHost(jodit, getEditorBody);
+        if (!host?.addEventListener) return;
+        if (
+            jodit.__emsConditionalTableSelVer === EMS_CONDITIONAL_TABLE_SEL_VER &&
+            jodit.__emsTableSelHost === host &&
+            host.__emsConditionalTableSelBound
+        ) {
+            return;
         }
-        jodit.__emsConditionalTableSelCleanup = null;
-    }
-    jodit.__emsConditionalTableSel = true;
-    jodit.__emsConditionalTableSelVer = EMS_CONDITIONAL_TABLE_SEL_VER;
 
-    const attach = () => {
-        const root =
-            (typeof getEditorBody === 'function' && getEditorBody()) ||
-            jodit.editor ||
-            null;
-        if (!root || root.__emsConditionalTableSelBound) return;
-        root.__emsConditionalTableSelBound = true;
+        if (typeof jodit.__emsConditionalTableSelCleanup === 'function') {
+            try {
+                jodit.__emsConditionalTableSelCleanup();
+            } catch {
+                /* ignore */
+            }
+            jodit.__emsConditionalTableSelCleanup = null;
+        }
 
-        const doc = root.ownerDocument || document;
+        const doc = host.ownerDocument || document;
 
         const endCellDrag = () => {
             jodit.__emsTableDragTable?.removeAttribute?.('data-ems-cell-selecting');
@@ -8936,20 +9288,24 @@ function registerConditionalTableSelection(jodit, getEditorBody) {
         };
 
         const onMouseDown = (e) => {
+            if (!eventTargetInsideEditor(jodit, getEditorBody, e.target)) return;
+            const root = getLiveEditorRoot(jodit, getEditorBody);
+            if (!root) return;
+
                 if (e.button === 2) {
-                    const multi = getSelectedTableCells(jodit);
-                    const stagedMulti = (jodit.__emsFormatTableCells || []).filter(
-                        (c) => c?.isConnected
-                    );
-                    if (multi.length > 1 || stagedMulti.length > 1) {
+                const multi = getSelectedTableCells(jodit);
+                const stagedMulti = (jodit.__emsFormatTableCells || []).filter(
+                    (c) => c?.isConnected
+                );
+                if (multi.length > 1 || stagedMulti.length > 1) {
                         jodit.__emsPreserveMultiTableSelect = true;
                         jodit.__emsSkipTableSelSync = true;
-                        if (stagedMulti.length > 1) {
-                            jodit.__emsSplitTableCells = stagedMulti;
-                        } else if (multi.length > 1) {
-                            jodit.__emsFormatTableCells = multi;
-                            jodit.__emsSplitTableCells = multi;
-                        }
+                    if (stagedMulti.length > 1) {
+                        jodit.__emsSplitTableCells = stagedMulti;
+                    } else if (multi.length > 1) {
+                        jodit.__emsFormatTableCells = multi;
+                        jodit.__emsSplitTableCells = multi;
+                    }
                         e.stopImmediatePropagation();
                     }
                     return;
@@ -8959,10 +9315,39 @@ function registerConditionalTableSelection(jodit, getEditorBody) {
                 const cell = getTableCellFromNode(e.target);
                 if (!cell || !root.contains(cell)) {
                     endCellDrag();
+                jodit.__emsPreserveMultiTableSelect = false;
+                jodit.__emsSkipTableSelSync = false;
                     jodit.__emsActiveTableCell = null;
                     jodit.__emsFormatTableCells = null;
+                jodit.__emsSplitTableCells = null;
+                jodit.__emsLastMultiCellBlock = null;
                     jodit.__emsTableSelAnchor = null;
                     clearAllTableCellSelection(jodit);
+                /*
+                 * Click just below a table (or on empty editor chrome under it):
+                 * place caret on the next line — needed when the table was fully selected.
+                 */
+                if (e.target !== root) return;
+                const tables = [...root.querySelectorAll('table')];
+                let placedBelow = false;
+                for (let i = tables.length - 1; i >= 0; i -= 1) {
+                    const t = tables[i];
+                    if (!t || !root.contains(t)) continue;
+                    const rect = t.getBoundingClientRect();
+                    const lastRow = t.rows[t.rows.length - 1]?.getBoundingClientRect();
+                    const below = e.clientY >= rect.bottom - 4 && e.clientY <= rect.bottom + 28 &&
+                        e.clientX >= rect.left - 4 && e.clientX <= rect.right + 4;
+                    const besideLastRow = lastRow && e.clientY >= lastRow.top && e.clientY <= rect.bottom + 28 &&
+                        e.clientX >= rect.right && e.clientX <= root.getBoundingClientRect().right;
+                    if (below || besideLastRow) {
+                        if (placeCaretAfterTable(jodit, t)) {
+                            e.preventDefault();
+                            placedBelow = true;
+                        }
+                        break;
+                    }
+                }
+                if (placedBelow) return;
                     return;
                 }
 
@@ -8973,9 +9358,9 @@ function registerConditionalTableSelection(jodit, getEditorBody) {
                 const table = cell.closest('table');
                 if (!table) return;
 
+            endCellDrag();
                 const selected = getSelectedTableCells(jodit);
 
-                // Shift+click: extend rectangular selection from anchor (Word-style).
                 if (e.shiftKey && jodit.__emsTableSelAnchor) {
                     const anchor = jodit.__emsTableSelAnchor;
                     if (anchor.isConnected && anchor.closest('table') === table) {
@@ -8986,8 +9371,6 @@ function registerConditionalTableSelection(jodit, getEditorBody) {
                     }
                 }
 
-                // Click inside highlighted block → place caret and edit text.
-                // Keep __emsSplitColumnHint so Split vertically still hits the full block.
                 if (
                     selected.length >= 2 &&
                     selectionContainsCell(jodit, cell) &&
@@ -8997,17 +9380,18 @@ function registerConditionalTableSelection(jodit, getEditorBody) {
                 ) {
                     clearAllTableCellSelection(jodit);
                     jodit.__emsFormatTableCells = null;
+                jodit.__emsSplitTableCells = null;
                     jodit.__emsTableSelAnchor = cell;
                     setActiveTableCell(jodit, cell);
                     return;
                 }
 
-                if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
-                    /* Drop stale Description selection when clicking Amount (or any other cell). */
+            if (!e.shiftKey && !e.ctrlKey && !e.metaKey) {
                     clearAllTableCellSelection(jodit);
                     jodit.__emsFormatTableCells = null;
-                    jodit.__emsSplitColumnHint = null;
-                    jodit.__emsLastMultiCellBlock = null;
+                jodit.__emsSplitTableCells = null;
+                jodit.__emsSplitColumnHint = null;
+                jodit.__emsLastMultiCellBlock = null;
                 }
 
                 jodit.__emsTableSelAnchor = cell;
@@ -9015,21 +9399,48 @@ function registerConditionalTableSelection(jodit, getEditorBody) {
                 startCellDrag(cell, table, e.clientX, e.clientY);
         };
 
-        root.addEventListener('mousedown', onMouseDown, true);
+        host.addEventListener('mousedown', onMouseDown, true);
+        host.__emsConditionalTableSelBound = true;
+        jodit.__emsTableSelHost = host;
+        jodit.__emsConditionalTableSel = true;
+        jodit.__emsConditionalTableSelVer = EMS_CONDITIONAL_TABLE_SEL_VER;
         jodit.__emsConditionalTableSelCleanup = () => {
-            root.removeEventListener('mousedown', onMouseDown, true);
-            root.__emsConditionalTableSelBound = false;
+            try {
+                host.removeEventListener('mousedown', onMouseDown, true);
+            } catch {
+                /* ignore */
+            }
+            host.__emsConditionalTableSelBound = false;
+            if (jodit.__emsTableSelHost === host) jodit.__emsTableSelHost = null;
             endCellDrag();
         };
     };
 
-    jodit.e.on('afterInit', attach);
+    if (!jodit.__emsConditionalTableSelLifecycleBound) {
+        jodit.__emsConditionalTableSelLifecycleBound = true;
+        jodit.e.on('afterInit.emsTableSel', ensure);
+        jodit.e.on('focus.emsTableSel', ensure);
+        jodit.e.on('afterSetMode.emsTableSel', ensure);
+        jodit.e.on('change.emsTableSel', () => {
+            window.setTimeout(ensure, 0);
+        });
     jodit.e.on('afterCommand.emsTableSelSync', (command) => {
         if (TABLE_STRUCTURE_CMD_RE.test(String(command || ''))) {
             scheduleTableSelectionSync(jodit, getEditorBody);
         }
     });
-    attach();
+        jodit.e.on('beforeDestruct.emsTableSel', () => {
+            try {
+                jodit.__emsConditionalTableSelCleanup?.();
+            } catch {
+                /* ignore */
+            }
+            jodit.__emsConditionalTableSelCleanup = null;
+        });
+    }
+
+    ensure();
+    requestAnimationFrame(ensure);
 }
 
 /** On scroll, hide resize handles so they do not cover the scrollbar (reappear on hover). */
@@ -9219,6 +9630,7 @@ export function stabilizeClauseEditorTablesForExport(root) {
     if (!root?.querySelectorAll) return;
     unwrapClauseEditorTablesForExport(root);
     root.querySelectorAll('table').forEach((table) => {
+        if (restoreInternalClipboardTableLayout(table)) return;
         const keepUserCols =
             table.getAttribute('data-ems-col-widths-custom') === '1' ||
             table.getAttribute('data-ems-edit-cols-locked') === '1';
@@ -9243,7 +9655,7 @@ export function stabilizeClauseEditorTablesForExport(root) {
                     colCount > 0 && stored.length >= colCount
                         ? stored.slice(0, colCount)
                         : stored.slice();
-                applyColumnWidths(table, rows, model);
+                applyColumnWidths(table, rows, model, { preserveDimensions: true });
                 table.setAttribute('data-ems-col-widths-custom', '1');
             }
         } else if (colCount && table.getAttribute('data-ems-col-widths')) {
@@ -9287,42 +9699,262 @@ function readCellTypography(src) {
     }
 }
 
-/** Apply source typography onto dest cell + text runs so paste matches the copied row. */
+/** Apply inherited source typography to the clipboard cell. */
 function applyTypographyToCell(dest, typo) {
     if (!dest || !typo) return;
-    const apply = (el, asCell) => {
-        if (!el?.style) return;
-        if (typo.fontSize) el.style.setProperty('font-size', typo.fontSize);
-        if (typo.fontFamily) el.style.setProperty('font-family', typo.fontFamily);
-        if (typo.color) el.style.setProperty('color', typo.color);
-        if (typo.lineHeight && typo.lineHeight !== 'normal') {
-            el.style.setProperty('line-height', typo.lineHeight);
+    if (typo.fontSize) dest.style.setProperty('font-size', typo.fontSize, 'important');
+    if (typo.fontFamily) dest.style.setProperty('font-family', typo.fontFamily, 'important');
+    if (typo.color) {
+        dest.style.setProperty('color', typo.color, 'important');
+        dest.setAttribute('data-ems-cell-color', typo.color);
+    }
+    if (typo.lineHeight) dest.style.setProperty('line-height', typo.lineHeight, 'important');
+    if (typo.fontWeight) dest.style.setProperty('font-weight', typo.fontWeight, 'important');
+    if (typo.fontStyle) dest.style.setProperty('font-style', typo.fontStyle, 'important');
+    if (typo.textAlign) {
+        dest.style.setProperty('text-align', typo.textAlign, 'important');
+        if (/^(left|center|right|justify)$/.test(typo.textAlign)) {
+            dest.setAttribute('data-ems-align', typo.textAlign);
+            dest.setAttribute('data-ems-align-custom', '1');
+            dest.setAttribute('align', typo.textAlign);
         }
-        if (asCell) {
-            if (typo.fontWeight && typo.fontWeight !== '400' && typo.fontWeight !== 'normal') {
-                el.style.setProperty('font-weight', typo.fontWeight);
-            }
-            if (typo.fontStyle && typo.fontStyle !== 'normal') {
-                el.style.setProperty('font-style', typo.fontStyle);
-            }
-            if (typo.textAlign && typo.textAlign !== 'start') {
-                el.style.setProperty('text-align', typo.textAlign);
-            }
-            if (typo.verticalAlign && typo.verticalAlign !== 'baseline') {
-                el.style.setProperty('vertical-align', typo.verticalAlign);
-            }
-        }
-    };
-    apply(dest, true);
-    dest.querySelectorAll?.('p, div, span, font, li, b, strong, i, em, u, a').forEach((el) => {
-        apply(el, false);
-    });
+    }
+    if (typo.verticalAlign) dest.style.setProperty('vertical-align', typo.verticalAlign, 'important');
 }
 
 /** Bake live computed type into a clipboard clone so OS HTML keeps the source size. */
 function bakeLiveCellTypography(src, clone) {
-    const typo = readCellTypography(src);
-    if (typo) applyTypographyToCell(clone, typo);
+    if (!src || !clone) return;
+    const win = src.ownerDocument?.defaultView;
+    const typography = readCellTypography(src);
+    if (!typography) return;
+    applyTypographyToCell(clone, typography);
+    if (typography.fontFamily) clone.setAttribute('data-ems-user-font', '1');
+    const cellStyle = win.getComputedStyle(src);
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+        const property = `padding-${side}`;
+        clone.style.setProperty(property, cellStyle.getPropertyValue(property), 'important');
+    }
+    const runs = 'p, div, span, font, li, b, strong, i, em, u, a';
+    const copies = clone.querySelectorAll(runs);
+    src.querySelectorAll(runs).forEach((run, i) => {
+        const copy = copies[i];
+        const computed = win.getComputedStyle(run);
+        for (const property of ['font-family', 'font-size', 'line-height', 'color']) {
+            const value = computed.getPropertyValue(property);
+            if (value) copy.style.setProperty(property, value, 'important');
+        }
+        if (copy.style.fontFamily) copy.setAttribute('data-ems-user-font', '1');
+    });
+}
+
+function parseCssRgbChannels(value) {
+    const raw = String(value || '').trim();
+    const m = raw.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+    if (m) return { r: +m[1], g: +m[2], b: +m[3] };
+    const hex = raw.replace(/\s/g, '').toLowerCase();
+    if (/^#([0-9a-f]{3})$/i.test(hex)) {
+        const h = hex.slice(1);
+        return {
+            r: parseInt(h[0] + h[0], 16),
+            g: parseInt(h[1] + h[1], 16),
+            b: parseInt(h[2] + h[2], 16),
+        };
+    }
+    if (/^#([0-9a-f]{6})$/i.test(hex)) {
+        return {
+            r: parseInt(hex.slice(1, 3), 16),
+            g: parseInt(hex.slice(3, 5), 16),
+            b: parseInt(hex.slice(5, 7), 16),
+        };
+    }
+    return null;
+}
+
+function cssColorLuminance(value) {
+    const rgb = parseCssRgbChannels(value);
+    if (!rgb) {
+        const compact = String(value || '').replace(/\s/g, '').toLowerCase();
+        if (compact === 'white' || compact === '#fff' || compact === '#ffffff') return 255;
+        if (compact === 'black' || compact === '#000' || compact === '#000000') return 0;
+        return null;
+    }
+    return (rgb.r + rgb.g + rgb.b) / 3;
+}
+
+function isSelectionOverlayBackground(value) {
+    const v = String(value || '').toLowerCase();
+    return (
+        /rgba?\(\s*30\s*,\s*136\s*,\s*229/i.test(v) ||
+        /#1e88e5|#1565c0/i.test(v) ||
+        /rgba?\(\s*30\s*,\s*136\s*,\s*229\s*,\s*0?\.\d+/i.test(v)
+    );
+}
+
+/** Read the strongest non-default text color from a cell or its runs (incl. <font color>). */
+function readCellTextColorHint(el, win) {
+    if (!el) return '';
+    const stored = el.getAttribute?.('data-ems-cell-color');
+    if (stored && !isBodyDefaultTextColor(stored) && shouldPreserveOfficeComputedStyle('color', stored)) {
+        return stored.trim();
+    }
+    const inline = (el.style?.getPropertyValue('color') || '').trim();
+    if (inline && !isBodyDefaultTextColor(inline) && shouldPreserveOfficeComputedStyle('color', inline)) {
+        return inline;
+    }
+    const fontColor = el.getAttribute?.('color');
+    if (
+        fontColor &&
+        !isBodyDefaultTextColor(fontColor) &&
+        shouldPreserveOfficeComputedStyle('color', fontColor)
+    ) {
+        return fontColor.trim();
+    }
+    let best = '';
+    let bestLum = -1;
+    el.querySelectorAll?.('font[color], [style*="color"], span, p, div, b, strong, font').forEach((child) => {
+        const c =
+            (child.getAttribute?.('color') || '').trim() ||
+            (child.style?.getPropertyValue('color') || '').trim();
+        if (!c || isBodyDefaultTextColor(c) || !shouldPreserveOfficeComputedStyle('color', c)) return;
+        const lum = cssColorLuminance(c);
+        /* Prefer light (header white) over mid tones when multiple runs exist. */
+        if (lum != null && lum > bestLum) {
+            bestLum = lum;
+            best = c;
+        } else if (lum == null && !best) {
+            best = c;
+        }
+    });
+    if (best) return best;
+    if (win?.getComputedStyle) {
+        const computed = win.getComputedStyle(el).getPropertyValue('color').trim();
+        if (
+            computed &&
+            !isBodyDefaultTextColor(computed) &&
+            shouldPreserveOfficeComputedStyle('color', computed)
+        ) {
+            return computed;
+        }
+    }
+    return '';
+}
+
+/** Body / clause-content default text — not intentional header paint. */
+function isBodyDefaultTextColor(value) {
+    const childColor = String(value || '').trim().toLowerCase().replace(/\s/g, '');
+    if (!childColor) return true;
+    if (
+        childColor === 'windowtext' ||
+        childColor === 'black' ||
+        childColor === '#000' ||
+        childColor === '#000000' ||
+        childColor === 'rgb(0,0,0)' ||
+        childColor === 'rgba(0,0,0,0)' ||
+        childColor === '#0f172a' ||
+        childColor === 'rgb(15,23,42)' ||
+        childColor === 'rgba(15,23,42,1)'
+    ) {
+        return true;
+    }
+    const lum = cssColorLuminance(value);
+    /* Near-black / slate prose colors from .clause-content inheritance. */
+    return lum != null && lum <= 40;
+}
+
+function isDefaultOrEmptyTextColor(value) {
+    return isBodyDefaultTextColor(value);
+}
+
+function isLightHeaderTextColor(value) {
+    const lum = cssColorLuminance(value);
+    if (lum != null) return lum >= 200;
+    const compact = String(value || '').replace(/\s/g, '').toLowerCase();
+    return compact === 'white' || compact === '#fff' || compact === '#ffffff';
+}
+
+function isDarkCellFillColor(value) {
+    if (!value || isSelectionOverlayBackground(value)) return false;
+    const lum = cssColorLuminance(value);
+    /* Mid/dark Excel header grays (#595959…#777) must count as dark. */
+    return lum != null && lum <= 180;
+}
+
+/** Only first-row / <th> / already-marked header cells should force white-on-dark. */
+function cellLooksLikeHeaderPaintCell(cell) {
+    if (!cell) return false;
+    if (cell.getAttribute('data-ems-header-fg') === 'light') return true;
+    if (/^TH$/i.test(cell.tagName || '')) return true;
+    const row = cell.parentElement;
+    const table = cell.closest?.('table');
+    if (!row || !table) return false;
+    const firstRow =
+        table.querySelector('thead tr') ||
+        table.querySelector('tr');
+    return firstRow === row;
+}
+
+function markHeaderForeground(el, color) {
+    if (!el) return;
+    if (isLightHeaderTextColor(color) && (cellLooksLikeHeaderPaintCell(el) || isDarkCellFillColor(
+        el.getAttribute('data-ems-cell-bg') ||
+            (el.style?.getPropertyValue('background-color') || '').trim()
+    ))) {
+        el.setAttribute('data-ems-header-fg', 'light');
+    } else {
+        el.removeAttribute('data-ems-header-fg');
+    }
+}
+
+function applyBakedCellTextColor(clone, color) {
+    if (!clone || !color) return;
+    const forceLight =
+        isLightHeaderTextColor(color) &&
+        (cellLooksLikeHeaderPaintCell(clone) ||
+            isDarkCellFillColor(
+                clone.getAttribute('data-ems-cell-bg') ||
+                    (clone.style?.getPropertyValue('background-color') || '').trim()
+            ));
+    const paint = forceLight ? '#ffffff' : color;
+    clone.style.setProperty('color', paint, 'important');
+    clone.setAttribute('data-ems-cell-color', paint);
+    markHeaderForeground(clone, paint);
+    clone.querySelectorAll?.('p, div, span, font, li, b, strong, i, em, u, a').forEach((el) => {
+        const childColor = (el.style.getPropertyValue('color') || '').trim();
+        const fontAttr = (el.getAttribute?.('color') || '').trim();
+        /* Header white must overwrite body slate; body black must overwrite stray white. */
+        if (
+            forceLight ||
+            isDefaultOrEmptyTextColor(childColor) ||
+            isDefaultOrEmptyTextColor(fontAttr) ||
+            (!forceLight && isLightHeaderTextColor(childColor))
+        ) {
+            el.style.setProperty('color', paint, 'important');
+            if (el.hasAttribute?.('color')) el.removeAttribute('color');
+        }
+    });
+}
+
+/** Bake the live cell fill while ignoring the editor's selection overlay. */
+function bakeLiveCellPaint(src, clone) {
+    if (!src || !clone) return;
+    const win = src.ownerDocument?.defaultView;
+    const hadSel = src.classList?.contains?.(EMS_TABLE_CELL_SELECTED_CLASS);
+    if (hadSel) src.classList.remove(EMS_TABLE_CELL_SELECTED_CLASS);
+    try {
+        const bg = win?.getComputedStyle(src).backgroundColor;
+        if (shouldPreserveOfficeComputedStyle('background-color', bg)) {
+            clone.style.setProperty('background-color', bg, 'important');
+            clone.setAttribute('data-ems-cell-fill', '1');
+            clone.setAttribute('data-ems-cell-bg', bg);
+            clone.removeAttribute('data-ems-bg-none');
+        }
+
+    } catch {
+        /* ignore */
+    } finally {
+        if (hadSel) src.classList.add(EMS_TABLE_CELL_SELECTED_CLASS);
+    }
 }
 
 function sanitizeClonedTableCell(cell) {
@@ -9331,18 +9963,22 @@ function sanitizeClonedTableCell(cell) {
         clone.classList.remove('jodit-table__selected-cell', 'jodit_selected_cell', EMS_TABLE_CELL_SELECTED_CLASS);
     }
     clone.removeAttribute?.('data-jodit-selected-cell');
-    /* Drop selection overlay styles so Amount paste does not look like a navy header block. */
-    if (clone.style) {
-        clone.style.removeProperty('outline');
-        clone.style.removeProperty('outline-offset');
-        clone.style.removeProperty('box-shadow');
-        const bg = String(clone.style.backgroundColor || clone.style.background || '').toLowerCase();
-        if (/rgba?\(\s*30\s*,\s*136\s*,\s*229/i.test(bg) || /#1e88e5|#1565c0/i.test(bg)) {
-            clone.style.removeProperty('background');
-            clone.style.removeProperty('background-color');
-        }
-    }
+    /* Keep user alignment + paint attrs across copy/paste. */
+    [
+        'data-ems-align',
+        'data-ems-align-custom',
+        'data-ems-cell-color',
+        'data-ems-cell-fill',
+        'data-ems-cell-bg',
+        'data-ems-header-fg',
+        'align',
+    ].forEach((attr) => {
+        const val = cell.getAttribute?.(attr);
+        if (val != null && val !== '') clone.setAttribute(attr, val);
+    });
     bakeLiveCellTypography(cell, clone);
+    bakeLiveCellPaint(cell, clone);
+    bakeLiveCellBorders(cell, clone);
     return clone;
 }
 
@@ -9374,6 +10010,171 @@ function buildSingleCellClipboardPayload(cell) {
     return { html, plain, inner };
 }
 
+/** True when every cell in `table` is in the current EMS/Jodit multi-cell selection. */
+function isEntireTableSelected(jodit, table) {
+    if (!jodit || !table) return false;
+    const all = [...table.querySelectorAll('td, th')].filter((c) => c?.isConnected);
+    if (!all.length) return false;
+    const selected = getSelectedTableCells(jodit).filter(
+        (c) => c?.isConnected && c.closest('table') === table
+    );
+    return selected.length >= all.length;
+}
+
+/** Ensure a typeable block sits immediately after `table` so the caret can leave the grid. */
+function ensureEditableBlockAfterTable(table) {
+    if (!table?.parentNode) return null;
+    let next = table.nextSibling;
+    while (
+        next &&
+        ((next.nodeType === 3 && !String(next.textContent || '').trim()) ||
+            (next.nodeType === 1 &&
+                String(next.tagName || '').toLowerCase() === 'br'))
+    ) {
+        next = next.nextSibling;
+    }
+    if (
+        next &&
+        next.nodeType === 1 &&
+        /^P$/i.test(next.tagName) &&
+        next.getAttribute('contenteditable') !== 'false' &&
+        !String(next.textContent || '').trim() && !next.querySelector('img,table')
+    ) {
+        next.style.setProperty('clear', 'both');
+        return next;
+    }
+    const doc = table.ownerDocument;
+    if (!doc) return null;
+    const p = doc.createElement('p');
+    // Office HTML can float/align the table. A normal paragraph otherwise starts
+    // beside its FIRST row, so repeated Enter is needed to reach the bottom.
+    p.style.setProperty('clear', 'both');
+    p.appendChild(doc.createElement('br'));
+    table.parentNode.insertBefore(p, table.nextSibling);
+    return p;
+}
+
+/** Clear table selection and put the caret in the block after `table` (creates one if needed). */
+export function placeCaretAfterTable(jodit, table) {
+    if (!table?.isConnected) return false;
+    const block = ensureEditableBlockAfterTable(table);
+    if (!block) return false;
+    // Focus before selecting: focus handlers can restore an old in-table range.
+    jodit?.editor?.focus?.();
+    jodit.__emsFormatTableCells = null;
+    jodit.__emsToolbarCellFormat = false;
+    jodit.__emsSplitTableCells = null;
+    jodit.__emsTableSelAnchor = null;
+    jodit.__emsPreserveMultiTableSelect = false;
+    jodit.__emsSkipTableSelSync = false;
+    jodit.__emsLastMultiCellBlock = null;
+    clearAllTableCellSelection(jodit);
+    setActiveTableCell(jodit, null);
+    const doc = block.ownerDocument;
+    const win = doc?.defaultView || window;
+    try {
+        if (!block.firstChild) block.appendChild(doc.createElement('br'));
+        const range = doc.createRange();
+        range.setStart(block, 0);
+        range.collapse(true);
+        if (jodit?.s?.selectRange) {
+            jodit.s.selectRange(range);
+        } else {
+            const sel = win.getSelection?.();
+            sel?.removeAllRanges?.();
+            sel?.addRange?.(range);
+        }
+    } catch {
+        /* ignore */
+    }
+    try {
+        jodit?.editor?.focus?.();
+    } catch {
+        /* ignore */
+    }
+    return true;
+}
+
+/**
+ * When the whole table is selected, or the caret is clearly outside any table,
+ * prepare a document-level paste (new table after / at caret).
+ * Returns true when in-cell paste must be skipped.
+ */
+export function prepareDocumentTablePaste(jodit, getEditorBody, eventTarget = null) {
+    if (!jodit) return false;
+    const root =
+        (typeof getEditorBody === 'function' && getEditorBody()) || jodit.editor || null;
+    if (!root) return false;
+
+    const selected = getSelectedTableCells(jodit).filter((c) => c?.isConnected);
+    const selectedTable = selected[0]?.closest?.('table') || null;
+    if (selectedTable && isEntireTableSelected(jodit, selectedTable)) {
+        return placeCaretAfterTable(jodit, selectedTable);
+    }
+
+    const win = root.ownerDocument?.defaultView || window;
+    const sel = win.getSelection?.();
+    const caretNode = sel?.anchorNode || jodit.s?.range?.startContainer || null;
+    const caretCell = getTableCellFromNode(caretNode);
+    const eventCell = getTableCellFromNode(eventTarget);
+    const active = jodit.__emsActiveTableCell?.isConnected ? jodit.__emsActiveTableCell : null;
+    const liveCell =
+        (eventCell && root.contains(eventCell) && eventCell) ||
+        (caretCell && root.contains(caretCell) && caretCell) ||
+        null;
+
+    if (liveCell) return false;
+
+    /*
+     * Paste events sometimes report a non-cell target while the caret/active cell
+     * is still inside the grid — keep the in-cell paste path.
+     */
+    if (active && root.contains(active)) {
+        const anchorOutside =
+            caretNode &&
+            root.contains(caretNode) &&
+            !active.contains(caretNode) &&
+            !getTableCellFromNode(caretNode);
+        if (!anchorOutside) return false;
+        setActiveTableCell(jodit, null);
+    }
+
+    if (selected.length) {
+        clearAllTableCellSelection(jodit);
+        jodit.__emsFormatTableCells = null;
+    }
+    return true;
+}
+
+/** Prefer OS clipboard; fall back to last EMS copy (HTTP / blocked Clipboard API). */
+export function readTableClipboardText(jodit, clipboardData) {
+    let htmlRaw = '';
+    let plain = '';
+    try {
+        htmlRaw = String(clipboardData?.getData?.('text/html') || '');
+    } catch {
+        htmlRaw = '';
+    }
+    try {
+        plain = String(clipboardData?.getData?.('text/plain') || '');
+    } catch {
+        plain = '';
+    }
+    const mem = jodit?.__emsLastOsTableClip;
+    const memFresh = mem && Date.now() - (mem.at || 0) < 120000;
+    const matchesMemory = !plain || plain.replace(/\s+/g, ' ').trim() === String(mem?.plain || '').replace(/\s+/g, ' ').trim();
+    if (!htmlRaw && matchesMemory && memFresh && mem.html) {
+        htmlRaw = String(mem.html || '');
+    }
+    if (!plain && (!htmlRaw || htmlRaw === mem?.html) && memFresh && mem.plain) {
+        plain = String(mem.plain || '');
+    }
+    return {
+        htmlRaw,
+        plain: plain.replace(/\u00a0/g, ' ').replace(/\r\n/g, '\n').replace(/\r/g, '\n'),
+    };
+}
+
 /**
  * Paste a multi-cell clipboard into the existing table grid (Excel-style).
  * Avoids nested tables and keeps font size/color matched to neighboring body cells.
@@ -9384,22 +10185,30 @@ export function pasteClipboardTableIntoActiveTable(
     clipboardData,
     eventTarget = null
 ) {
-    if (!jodit || !clipboardData) return false;
+    if (!jodit || (!clipboardData && !jodit.__emsLastOsTableClip)) return false;
     const root =
         (typeof getEditorBody === 'function' && getEditorBody()) || jodit.editor || null;
     const fromEvent = getTableCellFromNode(eventTarget);
+    const win = root?.ownerDocument?.defaultView || window;
+    const caretNode =
+        win.getSelection?.()?.anchorNode || jodit.s?.range?.startContainer || null;
+    const fromCaret = getTableCellFromNode(caretNode);
+    const fromActive = getActiveTableCell(jodit, getEditorBody);
+    const caretClearlyOutside =
+        Boolean(caretNode && root?.contains?.(caretNode) && !getTableCellFromNode(caretNode));
+    /* Prefer live caret/event; fall back to active cell unless caret is clearly outside. */
     const anchor =
         (fromEvent && (!root || root.contains(fromEvent)) && fromEvent) ||
-        getActiveTableCell(jodit, getEditorBody);
+        (fromCaret && (!root || root.contains(fromCaret)) && fromCaret) ||
+        (!caretClearlyOutside && fromActive && (!root || root.contains(fromActive)) && fromActive) ||
+        null;
     if (!anchor || (root && !root.contains(anchor))) return false;
     const table = anchor.closest('table');
     if (!table) return false;
+    /* Whole-table selection → caller inserts a new table after this one. */
+    if (isEntireTableSelected(jodit, table)) return false;
 
-    const htmlRaw = String(clipboardData.getData?.('text/html') || '');
-    const plain = String(clipboardData.getData?.('text/plain') || '')
-        .replace(/\u00a0/g, ' ')
-        .replace(/\r\n/g, '\n')
-        .replace(/\r/g, '\n');
+    const { htmlRaw, plain } = readTableClipboardText(jodit, clipboardData);
     if (htmlRaw.includes('data-ems-cell-clip')) return false;
 
     const gridCells = parseClipboardHtmlToCellGrid(htmlRaw) || parseClipboardTsvToCellGrid(plain);
@@ -9411,13 +10220,17 @@ export function pasteClipboardTableIntoActiveTable(
     if (!pos) return false;
 
     /* Prefer exact live snapshot from last EMS copy (same font size/format as source). */
+    const internal = htmlRaw.includes(EMS_INTERNAL_TABLE_CLIP_ATTR);
     const liveGrid = jodit.__emsLastGridClip;
     const useLive =
+        internal &&
+        htmlRaw === jodit.__emsLastOsTableClip?.html &&
         liveGrid?.cells?.length &&
         Date.now() - (liveGrid.at || 0) < 120000 &&
         liveGrid.cells.length === gridCells.length &&
         liveGrid.cells[0]?.length === gridCells[0]?.length;
 
+    captureDocumentHistoryBeforeMutation(jodit);
     const touched = [];
     for (let r = 0; r < gridCells.length; r += 1) {
         const row = gridCells[r];
@@ -9430,15 +10243,45 @@ export function pasteClipboardTableIntoActiveTable(
             const styleAttr = live?.styleAttr || src.styleAttr || '';
             if (styleAttr) dest.setAttribute('style', styleAttr);
             else dest.removeAttribute('style');
-            ['align', 'valign', 'data-ems-valign'].forEach((attr) => {
+            [
+                'align',
+                'valign',
+                'data-ems-valign',
+                'data-ems-align',
+                'data-ems-align-custom',
+                'data-ems-cell-color',
+                'data-ems-cell-fill',
+                'data-ems-cell-bg',
+                'data-ems-header-fg',
+                'data-ems-user-font',
+            ].forEach((attr) => {
                 const val = live?.attrs?.[attr] ?? src.attrs?.[attr];
-                if (val != null) dest.setAttribute(attr, val);
+                if (val != null && val !== '') dest.setAttribute(attr, val);
+                else dest.removeAttribute(attr);
             });
-            if (live?.typo) applyTypographyToCell(dest, live.typo);
+            const bg = dest.getAttribute('data-ems-cell-bg');
+            if (!internal && bg && shouldPreserveOfficeComputedStyle('background-color', bg)) {
+                dest.style.setProperty('background-color', bg, 'important');
+                dest.style.setProperty('background', bg, 'important');
+                dest.setAttribute('data-ems-cell-fill', '1');
+            }
+            const color = dest.getAttribute('data-ems-cell-color');
+            if (!internal && (
+                dest.getAttribute('data-ems-header-fg') === 'light' ||
+                isLightHeaderTextColor(color) ||
+                (isDarkCellFillColor(bg) && (!color || (cssColorLuminance(color) ?? 0) <= 160))
+            )) {
+                applyBakedCellTextColor(dest, '#ffffff');
+            } else if (!internal && color && shouldPreserveOfficeComputedStyle('color', color)) {
+                applyBakedCellTextColor(dest, color);
+            }
             touched.push(dest);
         }
     }
-    if (!touched.length) return false;
+    if (!touched.length) {
+        jodit.__emsDocHistPending = null;
+        return false;
+    }
 
     jodit.__emsSkipHeavyPasteCleanup = true;
     setActiveTableCell(jodit, touched[touched.length - 1] || anchor);
@@ -9448,6 +10291,7 @@ export function pasteClipboardTableIntoActiveTable(
         /* ignore */
     }
     if (typeof jodit.synchronizeValues === 'function') jodit.synchronizeValues();
+    commitDocumentHistoryAfterMutation(jodit);
     jodit.e?.fire?.('change');
     return true;
 }
@@ -9473,6 +10317,12 @@ function parseClipboardHtmlToCellGrid(htmlRaw) {
                     align: cell.getAttribute('align'),
                     valign: cell.getAttribute('valign'),
                     'data-ems-valign': cell.getAttribute('data-ems-valign'),
+                    'data-ems-align': cell.getAttribute('data-ems-align'),
+                    'data-ems-align-custom': cell.getAttribute('data-ems-align-custom'),
+                    'data-ems-cell-color': cell.getAttribute('data-ems-cell-color'),
+                    'data-ems-cell-fill': cell.getAttribute('data-ems-cell-fill'),
+                    'data-ems-cell-bg': cell.getAttribute('data-ems-cell-bg'),
+                    'data-ems-header-fg': cell.getAttribute('data-ems-header-fg'),
                 },
             }))
         );
@@ -9505,7 +10355,9 @@ function plainTextMatchesCellClip(plain, clipPlain) {
 
 function parseClipboardTsvToCellGrid(plain) {
     const text = String(plain || '').trim();
-    if (!text || (!text.includes('\t') && !text.includes('\n'))) return null;
+    // Newlines also occur inside ordinary selected cell text. Only tabs
+    // establish a plain-text grid; HTML tables still support single-column rows.
+    if (!text || !text.includes('\t')) return null;
     const lines = text.split('\n').filter((line) => line.length);
     if (!lines.length) return null;
     const grid = lines.map((line) =>
@@ -9572,26 +10424,37 @@ export function pasteClipboardIntoActiveTableCell(
     clipboardData,
     eventTarget = null
 ) {
-    if (!jodit || !clipboardData) return false;
+    if (!jodit || (!clipboardData && !jodit.__emsLastOsTableClip && !jodit.__emsLastCellClip)) {
+        return false;
+    }
     const root =
         (typeof getEditorBody === 'function' && getEditorBody()) || jodit.editor || null;
-    /* Paste event target wins — more reliable than stale caret when clicking Amount then Ctrl+V. */
+    /* Prefer event/caret cell; fall back to active cell when paste target is the editor chrome. */
     const fromEvent = getTableCellFromNode(eventTarget);
+    const win = root?.ownerDocument?.defaultView || window;
+    const caretNode =
+        win.getSelection?.()?.anchorNode || jodit.s?.range?.startContainer || null;
+    const fromCaret = getTableCellFromNode(caretNode);
+    const fromActive = getActiveTableCell(jodit, getEditorBody);
+    const caretClearlyOutside =
+        Boolean(caretNode && root?.contains?.(caretNode) && !getTableCellFromNode(caretNode));
     const cell =
         (fromEvent && (!root || root.contains(fromEvent)) && fromEvent) ||
-        getActiveTableCell(jodit, getEditorBody);
+        (fromCaret && (!root || root.contains(fromCaret)) && fromCaret) ||
+        (!caretClearlyOutside && fromActive && (!root || root.contains(fromActive)) && fromActive) ||
+        null;
     if (!cell) return false;
     if (root && !root.contains(cell)) return false;
+    if (isEntireTableSelected(jodit, cell.closest('table'))) return false;
 
     /* Multi-cell / row paste into the same table — keep format via grid fill. */
     if (pasteClipboardTableIntoActiveTable(jodit, getEditorBody, clipboardData, eventTarget)) {
         return true;
     }
 
-    const htmlRaw = String(clipboardData.getData?.('text/html') || '');
-    const plain = String(clipboardData.getData?.('text/plain') || '')
-        .replace(/\u00a0/g, ' ')
-        .trim();
+    const clipped = readTableClipboardText(jodit, clipboardData);
+    const htmlRaw = clipped.htmlRaw;
+    const plain = clipped.plain.trim();
     const lastClip = jodit.__emsLastCellClip;
     const lastClipFresh =
         lastClip &&
@@ -9642,7 +10505,11 @@ export function pasteClipboardIntoActiveTableCell(
     }
     if (!inner) return false;
 
-    if (!insertHtmlAtCellCaret(cell, inner, jodit)) return false;
+    captureDocumentHistoryBeforeMutation(jodit);
+    if (!insertHtmlAtCellCaret(cell, inner, jodit)) {
+        jodit.__emsDocHistPending = null;
+        return false;
+    }
     jodit.__emsSkipHeavyPasteCleanup = true;
     try {
         focusTableCell(cell, jodit, false);
@@ -9650,6 +10517,7 @@ export function pasteClipboardIntoActiveTableCell(
         /* ignore */
     }
     if (typeof jodit.synchronizeValues === 'function') jodit.synchronizeValues();
+    commitDocumentHistoryAfterMutation(jodit);
     jodit.e?.fire?.('change');
     return true;
 }
@@ -9675,7 +10543,18 @@ function copyCellPresentation(src, dest) {
     } else {
         dest.removeAttribute('style');
     }
-    ['colspan', 'rowspan', 'data-ems-valign', 'valign', 'align'].forEach((attr) => {
+    [
+        'colspan',
+        'rowspan',
+        'data-ems-valign',
+        'valign',
+        'align',
+        'data-ems-align',
+        'data-ems-align-custom',
+        'data-ems-cell-color',
+        'data-ems-cell-fill',
+        'data-ems-cell-bg',
+    ].forEach((attr) => {
         const val = src.getAttribute(attr);
         if (val != null) dest.setAttribute(attr, val);
         else dest.removeAttribute(attr);
@@ -9701,10 +10580,24 @@ function getTableSelectionBounds(jodit, getEditorBody) {
     }
     const table = workCells[0]?.closest?.('table');
     if (!table) return null;
+    /* Prefer EMS grid — never hard-fail when Jodit Table module is unavailable in prod. */
+    let bound;
+    let grid;
+    const computed = computeCellsBoundFromGrid(table, workCells);
+    if (computed) {
+        bound = computed.bound;
+        grid = computed.grid;
+    } else {
     const tableModule = getJoditTableModule(jodit);
-    if (!tableModule) return null;
-    const bound = tableModule.getSelectedBound(table, workCells);
-    const { grid } = buildTableCellGrid(table);
+        if (!tableModule?.getSelectedBound) return null;
+        try {
+            bound = tableModule.getSelectedBound(table, workCells);
+            grid = buildTableCellGrid(table).grid;
+        } catch {
+            return null;
+        }
+    }
+    if (!bound || !grid) return null;
     const rowCount = grid.length;
     const colCount = Math.max(0, ...grid.map((row) => row.length));
     if (!rowCount || !colCount) return null;
@@ -9724,17 +10617,141 @@ function getTableSelectionBounds(jodit, getEditorBody) {
     };
 }
 
+/** Copy layout-critical attrs so paste can restore the same grid. */
 function cloneTableShellForClipboard(srcTable, doc) {
     const out = doc.createElement('table');
-    ['style', 'border', 'cellpadding', 'cellspacing', 'width', 'data-ems-paste-source', 'data-ems-pricing-cols'].forEach(
-        (attr) => {
+    [
+        'style',
+        'border',
+        'cellpadding',
+        'cellspacing',
+        'align',
+        'width',
+        'class',
+        'data-ems-paste-source',
+        'data-ems-pricing-cols',
+        'data-ems-excel-paste',
+        'data-ems-word-paste',
+        'data-ems-paste-formatted',
+        'data-ems-col-widths',
+        'data-ems-col-widths-custom',
+        'data-ems-row-heights',
+        'data-ems-row-heights-custom',
+        'data-ems-edit-cols-locked',
+        'id',
+    ].forEach((attr) => {
             const val = srcTable.getAttribute(attr);
-            if (val != null) out.setAttribute(attr, val);
-        }
-    );
-    const colgroup = srcTable.querySelector(':scope > colgroup');
-    if (colgroup) out.appendChild(colgroup.cloneNode(true));
+        if (val != null && val !== '') out.setAttribute(attr, val);
+    });
+    /* Fresh paste must not collide with live #ems-auto-price-summary-table. */
+    if (String(out.id || '').startsWith(EMS_AUTO_PRICE_SUMMARY_TABLE_ID)) {
+        out.removeAttribute('id');
+    }
     return out;
+}
+
+/** Prefer rendered widths, which may differ from the stored model after fitting to the page. */
+function readLiveColumnWidthsForClipboard(srcTable, colStart, colEnd) {
+    const rows = getTableRows(srcTable);
+    const colCount = Math.max(0, colEnd - colStart + 1);
+    if (!colCount || !rows.length) return [];
+    const fullCount = getLogicalColumnCount(rows) || getColumnCount(rows) || colCount;
+    const zoom = getQuotePreviewZoomFactor(srcTable) || 1;
+    const { grid } = buildTableCellGrid(srcTable);
+    const cols = srcTable.querySelectorAll(':scope > colgroup > col');
+    const fallback = parseStoredOfficeTableColumnWidths(srcTable);
+    const widths = [];
+    for (let column = colStart; column <= colEnd; column += 1) {
+        const col = cols[column];
+        const cell = grid.find(row => row[column]?.colSpan === 1)?.[column];
+        const measured = (cell || col)?.getBoundingClientRect().width / zoom;
+        widths.push(Math.max(1, Math.round(measured || fallback[column] || DEFAULT_TABLE_COLUMN_WIDTH)));
+    }
+    return widths;
+}
+
+/** Live px heights for the selected row range. */
+function readLiveRowHeightsForClipboard(srcTable, rowStart, rowEnd) {
+    const rows = getTableRows(srcTable);
+    const count = Math.max(0, rowEnd - rowStart + 1);
+    if (!count || !rows.length) return [];
+    const stored = srcTable.getAttribute('data-ems-row-heights')?.split(',') || [];
+    const zoom = getQuotePreviewZoomFactor(srcTable) || 1;
+    const out = [];
+    for (let r = rowStart; r <= rowEnd; r += 1) {
+        const row = rows[r];
+        const measured = row?.getBoundingClientRect().height / zoom;
+        const px = Math.round(measured || parseFloat(stored[r]) || parseCssPx(row?.style.height) || 0);
+        out.push(Math.max(1, px || DEFAULT_TABLE_ROW_HEIGHT));
+    }
+    return out;
+}
+
+/** Inline computed per-side borders from a live source cell onto its clipboard clone. */
+function bakeLiveCellBorders(src, clone) {
+    if (!src || !clone) return;
+    const win = src.ownerDocument?.defaultView;
+    if (!win?.getComputedStyle) return;
+    try {
+        const cs = win.getComputedStyle(src);
+        EMS_TABLE_BORDER_SIDE_NAMES.forEach((side) => {
+            const prop = `border-${side}`;
+            if (isVisibleBorderCssValue(clone.style.getPropertyValue(prop))) return;
+            const width = cs.getPropertyValue(`${prop}-width`).trim();
+            const style = cs.getPropertyValue(`${prop}-style`).trim();
+            const color = cs.getPropertyValue(`${prop}-color`).trim();
+            const w = parseFloat(width);
+            if (!width || !Number.isFinite(w) || w <= 0) return;
+            if (!style || style === 'none' || style === 'hidden') return;
+            clone.style.setProperty(prop, `${width} ${style} ${color}`, 'important');
+        });
+        if (cellHasVisibleBorderStyle(clone, win) || cellHasVisibleBorderStyle(src, win)) {
+            clone.setAttribute('data-ems-cell-border', '1');
+        }
+    } catch {
+        /* ignore */
+    }
+}
+
+/**
+ * Lock the clipboard clone to the source table's column widths + row heights
+ * so paste does not re-bootstrap / unscramble the grid.
+ */
+function bakeClipboardTableLayoutFromSource(srcTable, outTable, bound) {
+    if (!srcTable || !outTable || !bound) return;
+    const [rowStart, colStart] = bound[0];
+    const [rowEnd, colEnd] = bound[1];
+    const widths = readLiveColumnWidthsForClipboard(srcTable, colStart, colEnd);
+    const heights = readLiveRowHeightsForClipboard(srcTable, rowStart, rowEnd);
+    const outRows = getTableRows(outTable);
+    outTable.setAttribute(EMS_INTERNAL_TABLE_CLIP_ATTR, '1');
+
+    if (widths.length) {
+        applyColumnWidths(outTable, outRows, widths.slice(), { flexibleMin: false, preserveDimensions: true });
+        outTable.setAttribute('data-ems-col-widths', widths.join(','));
+        outTable.setAttribute('data-ems-col-widths-custom', '1');
+        outTable.setAttribute('data-ems-edit-cols-locked', '1');
+    }
+    if (heights.length && outRows.length) {
+        applyRowHeights(outTable, outRows, heights.slice());
+        outTable.setAttribute('data-ems-row-heights', heights.join(','));
+        outTable.setAttribute('data-ems-row-heights-custom', '1');
+    }
+
+    if (!outTable.getAttribute('data-ems-paste-source')) {
+        outTable.setAttribute('data-ems-paste-source', 'office');
+    }
+    outTable.classList.add('ems-office-paste-table');
+    outTable.style.setProperty('table-layout', 'fixed', 'important');
+    const sumW = widths.reduce((s, w) => s + (w || 0), 0);
+    const useW = sumW || Math.round(srcTable.getBoundingClientRect().width || 0);
+    if (useW > 0) {
+        outTable.style.setProperty('width', `${useW}px`, 'important');
+        outTable.style.setProperty('min-width', '0', 'important');
+        outTable.style.setProperty('max-width', '100%', 'important');
+        outTable.setAttribute('width', String(useW));
+        outTable.setAttribute('data-ems-table-outer-width', String(useW));
+    }
 }
 
 function buildTableFragmentFromSelection(ctx) {
@@ -9743,8 +10760,26 @@ function buildTableFragmentFromSelection(ctx) {
     const [rowEnd, colEnd] = bound[1];
     if (rowStart > rowEnd || colStart > colEnd) return null;
 
+    // A whole table already has the layout rules needed in both edit and preview.
+    // Freezing its editor measurements would prevent its rows from reflowing like the source.
+    if (rowStart === 0 && colStart === 0 && rowEnd === ctx.rowCount - 1 && colEnd === ctx.colCount - 1 &&
+        !table.hasAttribute(EMS_INTERNAL_TABLE_CLIP_ATTR) && !isEmsPricingSummaryTable(table)) {
+        const copy = table.cloneNode(true);
+        copy.removeAttribute('data-ems-cell-selecting');
+        copy.querySelectorAll('.ems-table-cell-selected, .jodit-table__selected-cell, .jodit_selected_cell, [data-jodit-selected-cell]')
+            .forEach(cell => {
+                cell.classList.remove('ems-table-cell-selected', 'jodit-table__selected-cell', 'jodit_selected_cell');
+                cell.removeAttribute('data-jodit-selected-cell');
+            });
+        copy.setAttribute(EMS_INTERNAL_TABLE_CLIP_ATTR, '1');
+        copy.setAttribute('data-ems-copy-source-layout', '1');
+        return copy;
+    }
+
     const doc = table.ownerDocument || document;
     const outTable = cloneTableShellForClipboard(table, doc);
+    let sourceSection;
+    let section;
 
     for (let r = rowStart; r <= rowEnd; r += 1) {
         const srcRow = grid[r]?.[colStart]?.closest?.('tr') || grid[r]?.[0]?.closest?.('tr');
@@ -9780,11 +10815,20 @@ function buildTableFragmentFromSelection(ctx) {
             tr.appendChild(clone);
         }
 
-        if (tr.cells.length) outTable.appendChild(tr);
+        if (tr.cells.length) {
+            if (!section || sourceSection !== srcRow?.parentElement) {
+                sourceSection = srcRow?.parentElement;
+                section = /^(THEAD|TBODY|TFOOT)$/.test(sourceSection?.tagName)
+                    ? sourceSection.cloneNode(false)
+                    : doc.createElement('tbody');
+                outTable.appendChild(section);
+            }
+            section.appendChild(tr);
+        }
     }
 
     if (!outTable.querySelector('tr')) return null;
-    applyDefaultManualTableBordersIfEmpty(outTable);
+    bakeClipboardTableLayoutFromSource(table, outTable, bound);
     return outTable;
 }
 
@@ -9838,14 +10882,11 @@ function buildTableClipboardPayload(ctx, win) {
     const fragment = buildTableFragmentFromSelection(ctx);
     if (!fragment) return null;
 
-    const wrapper = fragment.ownerDocument.createElement('div');
-    wrapper.appendChild(fragment);
-    stabilizeClauseEditorTablesForExport(wrapper);
-    /* Skip finalize on tiny clips — it treated the only row as a pricing header (navy/white). */
-    if (!isSingleCellTableSelection(ctx)) {
-    finalizeAllOfficePasteTablesFormatting(wrapper, win || window);
-    }
-
+    /*
+     * Do NOT run office finalize / stabilize on the detached clone — that re-measures
+     * in a non-editor layout and scrambles column widths and row heights.
+     */
+    void win;
     const tableHtml = fragment.outerHTML;
     return {
         html: wrapClipboardHtml(tableHtml),
@@ -9866,14 +10907,51 @@ function shouldUseNativeTextCopy(jodit, getEditorBody, ctx) {
     return cell.contains(range.commonAncestorContainer);
 }
 
-function writeTableClipboardPayload(payload, clipboardData) {
+function writeTableClipboardPayload(payload, clipboardData, jodit = null) {
     if (!payload) return false;
+    /* Same-editor paste fallback when OS clipboard is blocked (HTTP / Permissions-Policy). */
+    if (jodit) {
+        jodit.__emsLastOsTableClip = {
+            html: payload.html || '',
+            plain: payload.plain || '',
+            inner: payload.inner,
+            at: Date.now(),
+        };
+    }
     if (clipboardData) {
+        try {
         clipboardData.setData('text/html', payload.html);
         clipboardData.setData('text/plain', payload.plain);
         return true;
+        } catch (err) {
+            console.warn('[EMS] clipboardData.setData failed:', err);
+            /* Keep in-memory clip so Ctrl+V in the same editor still works. */
+            return Boolean(jodit?.__emsLastOsTableClip?.html);
+        }
     }
-    if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+    // A user-invoked toolbar command can still use the synchronous Copy event
+    // on HTTP. Write the prepared fragment before Jodit's copy handlers run.
+    const doc = jodit?.editor?.ownerDocument;
+    if (doc?.execCommand) {
+        let written = false;
+        const onCopy = event => {
+            try {
+                event.clipboardData.setData('text/html', payload.html);
+                event.clipboardData.setData('text/plain', payload.plain);
+                event.preventDefault();event.stopImmediatePropagation();written = true;
+            } catch { /* Fall back to the secure-context API or internal clip. */ }
+        };
+        doc.addEventListener('copy', onCopy, true);
+        try { doc.execCommand('copy'); } catch { /* Browser can deny programmatic copy. */ }
+        finally { doc.removeEventListener('copy', onCopy, true); }
+        if (written) return true;
+    }
+    const canAsyncWrite =
+        typeof window !== 'undefined' &&
+        window.isSecureContext &&
+        navigator.clipboard?.write &&
+        typeof ClipboardItem !== 'undefined';
+    if (canAsyncWrite) {
         navigator.clipboard
             .write([
                 new ClipboardItem({
@@ -9886,21 +10964,36 @@ function writeTableClipboardPayload(payload, clipboardData) {
             });
         return true;
     }
-    return false;
+    /* Insecure production (HTTP): OS clipboard API unavailable — in-memory clip still OK. */
+    return Boolean(jodit?.__emsLastOsTableClip?.html);
 }
 
 function copyTableSelectionToOsClipboard(jodit, getEditorBody, clipboardData) {
     const root =
         (typeof getEditorBody === 'function' && getEditorBody()) || jodit?.editor || null;
+    const selection = root?.ownerDocument.getSelection();
+    if (clipboardData && selection?.rangeCount) {
+        const { commonAncestorContainer } = selection.getRangeAt(0);
+        if ((commonAncestorContainer !== root || !selection.isCollapsed) &&
+            root.contains(commonAncestorContainer) &&
+            !getTableCellFromNode(commonAncestorContainer) &&
+            !(commonAncestorContainer.nodeType === 1 && commonAncestorContainer.closest('table'))) {
+            // A remembered cell must not override the current document selection.
+            return false;
+        }
+    }
     const ctx = getTableSelectionBounds(jodit, getEditorBody);
     if (!ctx || !root) return false;
     if (shouldUseNativeTextCopy(jodit, getEditorBody, ctx)) {
         const srcCell = ctx.cells?.[0] || null;
         const sel = (root.ownerDocument?.defaultView || window).getSelection?.();
         const text = String(sel?.toString() || '');
+        const selectedHtml = root.ownerDocument.createElement('div');
+        selectedHtml.appendChild(sel.getRangeAt(0).cloneContents());
+        jodit.__emsLastOsTableClip = null;
         jodit.__emsLastCellClip = {
             plain: text.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim(),
-            inner: escapeHtmlPlain(text).replace(/\r?\n/g, '<br>'),
+            inner: selectedHtml.innerHTML || escapeHtmlPlain(text).replace(/\r?\n/g, '<br>'),
             typo: srcCell ? readCellTypography(srcCell) : null,
             at: Date.now(),
         };
@@ -9931,9 +11024,9 @@ function copyTableSelectionToOsClipboard(jodit, getEditorBody, clipboardData) {
     }
 
     if (clipboardData) {
-        return writeTableClipboardPayload(payload, clipboardData);
+        return writeTableClipboardPayload(payload, clipboardData, jodit);
     }
-    return writeTableClipboardPayload(payload, null);
+    return writeTableClipboardPayload(payload, null, jodit);
 }
 
 /** Live DOM snapshot for in-table paste — HTML + computed font size/format from source. */
@@ -9954,11 +11047,21 @@ function snapshotGridClipFromSelection(ctx) {
             row.push({
                 innerHTML: clone.innerHTML || '',
                 styleAttr: clone.getAttribute('style') || '',
-                typo: readCellTypography(cell),
                 attrs: {
-                    align: cell.getAttribute('align'),
-                    valign: cell.getAttribute('valign'),
-                    'data-ems-valign': cell.getAttribute('data-ems-valign'),
+                    align: clone.getAttribute('align') || cell.getAttribute('align'),
+                    valign: clone.getAttribute('valign') || cell.getAttribute('valign'),
+                    'data-ems-valign':
+                        clone.getAttribute('data-ems-valign') || cell.getAttribute('data-ems-valign'),
+                    'data-ems-align':
+                        clone.getAttribute('data-ems-align') || cell.getAttribute('data-ems-align'),
+                    'data-ems-align-custom':
+                        clone.getAttribute('data-ems-align-custom') ||
+                        cell.getAttribute('data-ems-align-custom'),
+                    'data-ems-cell-color': clone.getAttribute('data-ems-cell-color'),
+                    'data-ems-cell-fill': clone.getAttribute('data-ems-cell-fill'),
+                    'data-ems-cell-bg': clone.getAttribute('data-ems-cell-bg'),
+                    'data-ems-header-fg': clone.getAttribute('data-ems-header-fg'),
+                    'data-ems-user-font': clone.getAttribute('data-ems-user-font'),
                 },
             });
         }
@@ -10146,6 +11249,20 @@ function pasteTableColumns(jodit, getEditorBody) {
 
 function runTableClipboardCommand(jodit, getEditorBody, action) {
     jodit.e?.fire?.('hidePopup');
+    const mutates = /^(cut|paste)/.test(action);
+    if (mutates) captureDocumentHistoryBeforeMutation(jodit);
+    if (/^(copy|cut)/.test(action)) {
+        const ctx=getTableSelectionBounds(jodit,getEditorBody);
+        if (ctx) {
+            const rows=/Row$/.test(action);
+            const bound=rows ? [[ctx.bound[0][0],0],[ctx.bound[1][0],ctx.colCount-1]] :
+                [[0,ctx.bound[0][1]],[ctx.rowCount-1,ctx.bound[1][1]]];
+            const cells=[...new Set(ctx.grid.slice(bound[0][0],bound[1][0]+1).flatMap(row=>row.slice(bound[0][1],bound[1][1]+1)))];
+            const payload=buildTableClipboardPayload({...ctx,bound,cells},ctx.table.ownerDocument.defaultView);
+            writeTableClipboardPayload(payload,null,jodit);
+        }
+    }
+    try {
     switch (action) {
         case 'copyRow':
             return copyTableRows(jodit, getEditorBody, false);
@@ -10161,6 +11278,12 @@ function runTableClipboardCommand(jodit, getEditorBody, action) {
             return pasteTableColumns(jodit, getEditorBody);
         default:
             return false;
+    }
+    } finally {
+        if (mutates) {
+            commitDocumentHistoryAfterMutation(jodit);
+            jodit.e?.fire?.('change');
+        }
     }
 }
 
@@ -10219,30 +11342,43 @@ function resolveJoditEditorBody(editor) {
         : () => editor?.editor || null;
 }
 
-const EMS_TABLE_ROW_COL_CLIP_VER = 6;
+const EMS_TABLE_ROW_COL_CLIP_VER = 9;
 
+/** Durable host — survives jodit.editor DOM swaps that drop wysiwyg-node listeners. */
+function getDurableTableEventHost(jodit, getEditorBody) {
+    return (
+        jodit?.workplace ||
+        jodit?.container ||
+        (typeof getEditorBody === 'function' && getEditorBody()) ||
+        jodit?.editor ||
+        null
+    );
+}
+
+function getLiveEditorRoot(jodit, getEditorBody) {
+    const root =
+        (typeof getEditorBody === 'function' && getEditorBody()) ||
+        jodit?.editor ||
+        null;
+    return root?.isConnected ? root : jodit?.editor || root;
+}
+
+function eventTargetInsideEditor(jodit, getEditorBody, target) {
+    const root = getLiveEditorRoot(jodit, getEditorBody);
+    if (!root || !target) return false;
+    if (target === root || root.contains(target)) return true;
+    /* Event may target a text node. */
+    const el = target.nodeType === 1 ? target : target.parentElement;
+    return Boolean(el && (el === root || root.contains(el)));
+}
+
+/**
+ * Copy/paste must keep working for the life of the Jodit instance.
+ * Binding only to `.jodit-wysiwyg` fails in production after value sync / remount
+ * replaces that node while our "already bound" flag still skips re-attach.
+ */
 function registerTableRowColumnClipboard(jodit, getEditorBody) {
     if (!jodit) return;
-    const existingRoot =
-        (typeof getEditorBody === 'function' && getEditorBody()) ||
-        jodit.editor ||
-        null;
-    if (
-        jodit.__emsTableRowColClipVer === EMS_TABLE_ROW_COL_CLIP_VER &&
-        existingRoot?.__emsTableRowColClipBound
-    ) {
-        return;
-    }
-    if (jodit.__emsTableRowColClipCleanup) {
-        try {
-            jodit.__emsTableRowColClipCleanup();
-        } catch {
-            /* ignore */
-        }
-        jodit.__emsTableRowColClipCleanup = null;
-    }
-    jodit.__emsTableRowColClipboard = true;
-    jodit.__emsTableRowColClipVer = EMS_TABLE_ROW_COL_CLIP_VER;
 
     const controls = {
         emsCopyRow: EMS_TABLE_COPY_ROW_CONTROL,
@@ -10257,6 +11393,8 @@ function registerTableRowColumnClipboard(jodit, getEditorBody) {
             jodit.o.controls[name] = control;
         }
     });
+    if (!jodit.__emsTableRowColCommandsBound) {
+        jodit.__emsTableRowColCommandsBound = true;
     jodit.registerCommand('emsCopySelection', () => {
         copyTableSelectionToOsClipboard(jodit, getEditorBody);
         return false;
@@ -10285,113 +11423,144 @@ function registerTableRowColumnClipboard(jodit, getEditorBody) {
         runTableClipboardCommand(jodit, getEditorBody, 'pasteColumn');
         return false;
     });
+    }
 
-    const onKeyDown = (e) => {
-        if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
-        const key = String(e.key || '').toLowerCase();
-        if (key !== 'c' && key !== 'x' && key !== 'v') return;
-
-        const root =
-            (typeof getEditorBody === 'function' && getEditorBody()) ||
-            jodit.editor ||
-            null;
-        if (!root) return;
-
-        const cell = getActiveTableCell(jodit, getEditorBody);
-        if (!cell || !root.contains(cell)) return;
-
-        const ctx = getTableSelectionBounds(jodit, getEditorBody);
-        if (!ctx) return;
-
-        if (key === 'v') {
-            const cellClip = jodit.__emsLastCellClip;
-            const cellClipFresh =
-                cellClip && Date.now() - (cellClip.at || 0) < 120000;
-            /* Cell copy must paste into the target cell, not insert a row. */
-            if (cellClipFresh) return;
-            const clip = getTableClipboard(jodit);
-            if (!clip) return;
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            if (clip.kind === 'rows') pasteTableRows(jodit, getEditorBody);
-            else if (clip.kind === 'columns') pasteTableColumns(jodit, getEditorBody);
+    const ensure = () => {
+        if (!isJoditInstanceUsable(jodit)) return;
+        const host = getDurableTableEventHost(jodit, getEditorBody);
+        if (!host?.addEventListener) return;
+        if (
+            jodit.__emsTableRowColClipVer === EMS_TABLE_ROW_COL_CLIP_VER &&
+            jodit.__emsTableClipHost === host &&
+            host.__emsTableRowColClipBound
+        ) {
             return;
         }
 
-        const cut = key === 'x';
-        if (ctx.fullRows) {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            copyTableRows(jodit, getEditorBody, cut);
-            copyTableSelectionToOsClipboard(jodit, getEditorBody);
-        } else if (ctx.fullColumns) {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            copyTableColumns(jodit, getEditorBody, cut);
-            copyTableSelectionToOsClipboard(jodit, getEditorBody);
+        if (typeof jodit.__emsTableRowColClipCleanup === 'function') {
+            try {
+                jodit.__emsTableRowColClipCleanup();
+            } catch {
+                /* ignore */
+            }
+            jodit.__emsTableRowColClipCleanup = null;
         }
-    };
 
-    const onCopy = (e) => {
-        const root =
-            (typeof getEditorBody === 'function' && getEditorBody()) ||
-            jodit.editor ||
-            null;
+        const ownsClipboardEvent = e => {
+            if (eventTargetInsideEditor(jodit, getEditorBody, e.target)) return true;
+            const root=getLiveEditorRoot(jodit,getEditorBody),doc=root?.ownerDocument;
+            return Boolean(doc && [doc,doc.body,doc.documentElement].includes(e.target) &&
+                (doc.activeElement===root || root.contains(doc.activeElement)));
+        };
+        const onCopy = (e) => {
+            if (!ownsClipboardEvent(e)) return;
+            const root = getLiveEditorRoot(jodit, getEditorBody);
         if (!root) return;
 
-        const fromTarget = getTableCellFromNode(e.target);
-        if (fromTarget && root.contains(fromTarget)) {
-            setActiveTableCell(jodit, fromTarget);
-        }
+            const fromTarget = getTableCellFromNode(e.target);
+            if (fromTarget && root.contains(fromTarget)) {
+                setActiveTableCell(jodit, fromTarget);
+            }
 
         const cell = getActiveTableCell(jodit, getEditorBody);
         if (!cell || !root.contains(cell)) return;
 
-        if (copyTableSelectionToOsClipboard(jodit, getEditorBody, e.clipboardData)) {
+            if (copyTableSelectionToOsClipboard(jodit, getEditorBody, e.clipboardData)) {
             e.preventDefault();
             e.stopImmediatePropagation();
-        }
-    };
+            }
+        };
 
-    const onPaste = (e) => {
-        const root =
-            (typeof getEditorBody === 'function' && getEditorBody()) ||
-            jodit.editor ||
-            null;
-        if (!root || !e?.clipboardData) return;
-        const fromTarget = getTableCellFromNode(e.target);
-        if (fromTarget && root.contains(fromTarget)) {
-            setActiveTableCell(jodit, fromTarget);
-        }
-        if (!getActiveTableCell(jodit, getEditorBody)) return;
-        if (pasteClipboardIntoActiveTableCell(jodit, getEditorBody, e.clipboardData, e.target)) {
+        const onPaste = (e) => {
+            if (!ownsClipboardEvent(e)) return;
+            const root = getLiveEditorRoot(jodit, getEditorBody);
+            if (!root) return;
+            if (!e?.clipboardData && !jodit.__emsLastOsTableClip && !jodit.__emsLastCellClip) {
+                return;
+            }
+            const fromTarget = getTableCellFromNode(e.target);
+            if (fromTarget && root.contains(fromTarget)) {
+                setActiveTableCell(jodit, fromTarget);
+            }
+            if (!getActiveTableCell(jodit, getEditorBody)) return;
+            if (pasteClipboardIntoActiveTableCell(jodit, getEditorBody, e.clipboardData, e.target)) {
             e.preventDefault();
             e.stopImmediatePropagation();
-        }
-    };
+            }
+        };
 
-    const attach = () => {
-        const root =
-            (typeof getEditorBody === 'function' && getEditorBody()) ||
-            jodit.editor ||
-            null;
-        if (!root || root.__emsTableRowColClipBound) return;
-        root.__emsTableRowColClipBound = true;
-        root.addEventListener('keydown', onKeyDown, true);
-        root.addEventListener('copy', onCopy, true);
-        root.addEventListener('paste', onPaste, true);
+        const onCut = (e) => {
+            if (!ownsClipboardEvent(e)) return;
+            const ctx = getTableSelectionBounds(jodit, getEditorBody);
+            if (!ctx || !copyTableSelectionToOsClipboard(jodit, getEditorBody, e.clipboardData)) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            captureDocumentHistoryBeforeMutation(jodit);
+            if (ctx.fullRows) copyTableRows(jodit, getEditorBody, true);
+            else if (ctx.fullColumns) copyTableColumns(jodit, getEditorBody, true);
+            else ctx.cells.forEach(cell => { cell.innerHTML = '<br>'; });
+            jodit.synchronizeValues?.();
+            commitDocumentHistoryAfterMutation(jodit);
+        };
+
+        // Use the trusted ClipboardEvent, which supports HTML even on HTTP.
+        // Cancelling keydown prevents that event and breaks the OS clipboard.
+        host.addEventListener('copy', onCopy, true);
+        host.addEventListener('cut', onCut, true);
+        host.addEventListener('paste', onPaste, true);
+        // Chromium targets body for clipboard shortcuts when a custom cell
+        // selection has no native text range. Only the focused editor owns it.
+        const doc=host.ownerDocument;
+        const outsideHost = handler => e => {if (!host.contains(e.target)) handler(e);};
+        const docCopy=outsideHost(onCopy),docCut=outsideHost(onCut),docPaste=outsideHost(onPaste);
+        doc.addEventListener('copy',docCopy,true);
+        doc.addEventListener('cut',docCut,true);
+        doc.addEventListener('paste',docPaste,true);
+        host.__emsTableRowColClipBound = true;
+        jodit.__emsTableClipHost = host;
+        jodit.__emsTableRowColClipVer = EMS_TABLE_ROW_COL_CLIP_VER;
+        jodit.__emsTableRowColClipboard = true;
+
         const cleanup = () => {
-            root.removeEventListener('keydown', onKeyDown, true);
-            root.removeEventListener('copy', onCopy, true);
-            root.removeEventListener('paste', onPaste, true);
-            root.__emsTableRowColClipBound = false;
+            try {
+                host.removeEventListener('copy', onCopy, true);
+                host.removeEventListener('cut', onCut, true);
+                host.removeEventListener('paste', onPaste, true);
+                doc.removeEventListener('copy',docCopy,true);
+                doc.removeEventListener('cut',docCut,true);
+                doc.removeEventListener('paste',docPaste,true);
+            } catch {
+                /* ignore */
+            }
+            host.__emsTableRowColClipBound = false;
+            if (jodit.__emsTableClipHost === host) jodit.__emsTableClipHost = null;
         };
         jodit.__emsTableRowColClipCleanup = cleanup;
-        jodit.e.on('beforeDestruct', cleanup);
     };
 
-    jodit.e.on('afterInit', attach);
-    attach();
+    if (!jodit.__emsTableRowColClipLifecycleBound) {
+        jodit.__emsTableRowColClipLifecycleBound = true;
+        jodit.e.on('afterInit.emsTableClip', ensure);
+        jodit.e.on('focus.emsTableClip', ensure);
+        jodit.e.on('afterSetMode.emsTableClip', ensure);
+        jodit.e.on('change.emsTableClip', () => {
+            /* Value sync can replace the wysiwyg node — re-home listeners on durable host. */
+            window.setTimeout(ensure, 0);
+        });
+        jodit.e.on('beforeDestruct.emsTableClip', () => {
+            try {
+                jodit.__emsTableRowColClipCleanup?.();
+            } catch {
+                /* ignore */
+            }
+            jodit.__emsTableRowColClipCleanup = null;
+        });
+    }
+
+    ensure();
+    requestAnimationFrame(ensure);
+    window.setTimeout(ensure, 0);
+    window.setTimeout(ensure, 50);
 }
 
 const EMS_TABLE_CELL_BORDER_STYLE = '1px solid #64748b';
@@ -10927,7 +12096,10 @@ export function snapshotOfficePasteCellPaint(cell, win) {
             cell.style.getPropertyValue('background') ||
             ''
         ).trim();
-        if (shouldPreserveOfficeComputedStyle('background-color', inlineBg)) {
+        if (
+            inlineBg &&
+            shouldPreserveOfficeComputedStyle('background-color', inlineBg)
+        ) {
             cell.setAttribute('data-ems-cell-fill', '1');
             cell.setAttribute('data-ems-cell-bg', inlineBg);
             cell.style.setProperty('background-color', inlineBg, 'important');
@@ -10935,14 +12107,18 @@ export function snapshotOfficePasteCellPaint(cell, win) {
             cell.removeAttribute('data-ems-bg-none');
         } else {
             const storedBg = cell.getAttribute('data-ems-cell-bg');
-            if (storedBg) {
+            if (shouldPreserveOfficeComputedStyle('background-color', storedBg)) {
                 cell.style.setProperty('background-color', storedBg, 'important');
                 cell.style.setProperty('background', storedBg, 'important');
                 cell.setAttribute('data-ems-cell-fill', '1');
                 cell.removeAttribute('data-ems-bg-none');
             } else {
                 const bg = resolveOfficePasteBackgroundColor(cell, win);
-                if (bg && shouldPreserveOfficeComputedStyle('background-color', bg)) {
+                if (
+                    bg &&
+                    !isSelectionOverlayBackground(bg) &&
+                    shouldPreserveOfficeComputedStyle('background-color', bg)
+                ) {
                     cell.setAttribute('data-ems-cell-fill', '1');
                     cell.setAttribute('data-ems-cell-bg', bg);
                     cell.style.setProperty('background-color', bg, 'important');
@@ -10953,30 +12129,63 @@ export function snapshotOfficePasteCellPaint(cell, win) {
         }
     }
 
-    const inlineColor = (cell.style.getPropertyValue('color') || '').trim();
-    if (shouldPreserveOfficeComputedStyle('color', inlineColor)) {
-        cell.setAttribute('data-ems-cell-color', inlineColor);
-        cell.style.setProperty('color', inlineColor, 'important');
-    } else {
-        const storedColor = cell.getAttribute('data-ems-cell-color');
-        if (storedColor) {
-            cell.style.setProperty('color', storedColor, 'important');
-        } else {
-            const color =
-                cell.style.getPropertyValue('color') ||
-                (win?.getComputedStyle ? win.getComputedStyle(cell).getPropertyValue('color').trim() : '');
-            if (shouldPreserveOfficeComputedStyle('color', color)) {
-                cell.setAttribute('data-ems-cell-color', color);
-                cell.style.setProperty('color', color, 'important');
-            }
-        }
-    }
+    normalizeOfficeCellForeground(cell);
     const weight =
         cell.style.getPropertyValue('font-weight') ||
         (win?.getComputedStyle ? win.getComputedStyle(cell).getPropertyValue('font-weight').trim() : '');
     if (shouldPreserveOfficeComputedStyle('font-weight', weight)) {
         cell.style.setProperty('font-weight', weight, 'important');
     }
+}
+
+/** Find the painted surface behind the text, including a fill inherited visually from its row. */
+function officeCellHasLightSurface(element) {
+    for (let el = element; el; el = el.parentElement) {
+        if (el.style.backgroundImage && el.style.backgroundImage !== 'none') return false;
+        const fill = el.style.backgroundColor || el.getAttribute('bgcolor') ||
+            el.getAttribute('data-ems-cell-bg');
+        if (shouldPreserveOfficeComputedStyle('background-color', fill)) {
+            return (cssColorLuminance(fill) ?? 0) > 180;
+        }
+        if (el.tagName === 'TABLE') break;
+    }
+    return true;
+}
+
+function normalizeOfficeCellForeground(cell) {
+    const inline = cell.style.color;
+    const stored = cell.getAttribute('data-ems-cell-color');
+    const marked = cell.getAttribute('data-ems-header-fg') === 'light';
+    let color = inline || cell.getAttribute('color') || stored;
+    const isNearWhite = value => (cssColorLuminance(value) ?? 0) >= 245;
+    if ((marked || isNearWhite(stored) || isNearWhite(color)) && officeCellHasLightSurface(cell)) {
+        cell.removeAttribute('data-ems-header-fg');
+        if (!color || isNearWhite(color)) {
+            cell.removeAttribute('color');
+            color = '#0f172a';
+        }
+        cell.querySelectorAll('[style*="color"], font[color]').forEach(run => {
+            if (!isNearWhite(run.style.color || run.getAttribute('color')) ||
+                !officeCellHasLightSurface(run)) return;
+            run.style.removeProperty('color');
+            run.removeAttribute('color');
+        });
+    } else if (!color && cellLooksLikeHeaderPaintCell(cell) && !officeCellHasLightSurface(cell)) {
+        color = readCellTextColorHint(cell, null) || '#ffffff';
+    }
+    if (color) {
+        cell.style.setProperty('color', color, 'important');
+        cell.setAttribute('data-ems-cell-color', color);
+        if (!isLightHeaderTextColor(color)) cell.removeAttribute('data-ems-header-fg');
+    }
+}
+
+/** Repair persisted header paint without reformatting table layout or text runs. */
+export function normalizeOfficeTableForegrounds(root) {
+    collectOfficePasteTables(root).forEach(table => {
+        if (isEmsPricingSummaryTable(table)) return;
+        table.querySelectorAll('td, th').forEach(normalizeOfficeCellForeground);
+    });
 }
 
 export function markOfficePasteCellFills(root, win) {
@@ -11032,18 +12241,42 @@ export function applyDefaultExcelTableBordersIfEmpty(table) {
 /** Resolve a pasted cell/row background from inline attrs, style, or computed paint. */
 function resolveOfficePasteBackgroundColor(el, win) {
     if (!el) return '';
+    const stored = el.getAttribute?.('data-ems-cell-bg');
+    if (
+        stored &&
+        !isSelectionOverlayBackground(stored) &&
+        shouldPreserveOfficeComputedStyle('background-color', stored)
+    ) {
+        return stored.trim();
+    }
     const bgAttr = el.getAttribute?.('bgcolor');
-    if (bgAttr && bgAttr.replace(/\s/g, '').toLowerCase() !== 'transparent') {
+    if (
+        bgAttr &&
+        bgAttr.replace(/\s/g, '').toLowerCase() !== 'transparent' &&
+        !isSelectionOverlayBackground(bgAttr)
+    ) {
         return bgAttr.trim();
     }
     if (el.style) {
         const bg =
             el.style.getPropertyValue('background-color') || el.style.getPropertyValue('background');
-        if (shouldPreserveOfficeComputedStyle('background-color', bg)) return bg.trim();
+        if (
+            bg &&
+            !isSelectionOverlayBackground(bg) &&
+            shouldPreserveOfficeComputedStyle('background-color', bg)
+        ) {
+            return bg.trim();
+        }
     }
     if (win?.getComputedStyle) {
         const bg = win.getComputedStyle(el).getPropertyValue('background-color').trim();
-        if (shouldPreserveOfficeComputedStyle('background-color', bg)) return bg;
+        if (
+            bg &&
+            !isSelectionOverlayBackground(bg) &&
+            shouldPreserveOfficeComputedStyle('background-color', bg)
+        ) {
+            return bg;
+        }
     }
     return '';
 }
@@ -11095,52 +12328,22 @@ export function trimTrailingEmptyOfficeTableColumns(table) {
 function officePasteNodeHasDistinctTextColor(node, win) {
     if (!node) return false;
     const inline = (node.style?.getPropertyValue('color') || '').trim();
-    if (shouldPreserveOfficeComputedStyle('color', inline)) return true;
-    if (node.tagName === 'FONT' && node.getAttribute('color')) return true;
+    if (inline && !isBodyDefaultTextColor(inline) && shouldPreserveOfficeComputedStyle('color', inline)) {
+        return true;
+    }
+    const fontColor = node.tagName === 'FONT' ? node.getAttribute('color') : '';
+    if (fontColor && !isBodyDefaultTextColor(fontColor)) return true;
     if (win?.getComputedStyle) {
         const computed = win.getComputedStyle(node).getPropertyValue('color').trim();
-        const compact = computed.replace(/\s/g, '').toLowerCase();
         if (
-            shouldPreserveOfficeComputedStyle('color', computed) &&
-            compact !== 'rgb(0,0,0)' &&
-            compact !== '#000000' &&
-            compact !== '#000'
+            computed &&
+            !isBodyDefaultTextColor(computed) &&
+            shouldPreserveOfficeComputedStyle('color', computed)
         ) {
             return true;
         }
     }
     return false;
-}
-
-/** If Excel shipped light header text without a preserved fill, keep text readable. */
-function ensureOfficePasteCellTextVisible(cell, win) {
-    if (!cell || !win?.getComputedStyle) return;
-    if (cell.hasAttribute('data-ems-cell-color')) return;
-    const text = String(cell.textContent || '').replace(/\u00a0/g, ' ').trim();
-    if (!text) return;
-    if (
-        [...cell.querySelectorAll('span, p, div, font, b, strong, i, em, u')].some((child) =>
-            officePasteNodeHasDistinctTextColor(child, win)
-        )
-    ) {
-        return;
-    }
-    const cs = win.getComputedStyle(cell);
-    const color = cs.getPropertyValue('color').trim();
-    const bg = cs.getPropertyValue('background-color').trim();
-    const parseRgb = (s) => {
-        const m = String(s || '').match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
-        if (!m) return null;
-        return { r: +m[1], g: +m[2], b: +m[3] };
-    };
-    const fg = parseRgb(color);
-    const bk = parseRgb(bg);
-    const fgLight = fg ? (fg.r + fg.g + fg.b) / 3 > 210 : false;
-    const bgLight =
-        !bk || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)' || (bk.r + bk.g + bk.b) / 3 > 210;
-    if (fgLight && bgLight) {
-        cell.style.setProperty('color', '#000000', 'important');
-    }
 }
 
 function isOfficePasteCellContentEmpty(el) {
@@ -11197,7 +12400,8 @@ function forceOfficePasteCellInnerSpacing(cell) {
             'mso-margin-bottom-alt',
         ].forEach((prop) => el.style.removeProperty(prop));
         el.style.setProperty('margin', '0', 'important');
-        el.style.setProperty('padding', '0', 'important');
+        // EMS list items reserve left padding for the marker in shared list CSS.
+        if (el.tagName !== 'LI') el.style.setProperty('padding', '0', 'important');
         el.style.setProperty('line-height', '1.1', 'important');
     });
 }
@@ -11248,6 +12452,11 @@ export function compactOfficePasteTableSpacing(table) {
     // Belt-and-suspenders: resized pricing tables carry data-ems-col-widths like Office pastes.
     if (isEmsPricingSummaryTable(table)) return;
     if (!isOfficePasteTableEl(table)) return;
+    /* Copied inside EMS — never strip baked row heights / cell padding. */
+    if (table.getAttribute?.(EMS_INTERNAL_TABLE_CLIP_ATTR) === '1') {
+        restoreInternalClipboardTableLayout(table);
+        return;
+    }
 
     if (!table.hasAttribute('data-ems-row-heights-custom')) {
         table.removeAttribute('data-ems-row-heights');
@@ -11321,6 +12530,11 @@ export function compactOfficePasteTableSpacing(table) {
 
 export function finalizeOfficePasteTableFormatting(table, win) {
     if (!table || isEmsPricingSummaryTable(table) || !isOfficePasteTableEl(table)) return;
+    /* EMS clipboard cells already carry their source paint and typography. */
+    if (table.getAttribute?.(EMS_INTERNAL_TABLE_CLIP_ATTR) === '1') {
+        restoreInternalClipboardTableLayout(table);
+        return;
+    }
 
     trimTrailingEmptyOfficeTableColumns(table);
     propagateOfficePasteRowBackgroundsToCells(table, win);
@@ -11349,9 +12563,6 @@ export function finalizeOfficePasteTableFormatting(table, win) {
     markOfficePasteCellFills(table, win);
     markOfficePasteTableBorders(table, win);
     applyDefaultOfficeTableBordersIfEmpty(table);
-    table.querySelectorAll('td, th').forEach((cell) => {
-        ensureOfficePasteCellTextVisible(cell, win);
-    });
     if (win) {
         inlineExcelPasteFontColors(table, win);
     }
@@ -11394,7 +12605,7 @@ export function finalizeOfficePasteListFormatting(root, win) {
  * Pasted BOQ often locked both on every cell; clearing strike alone left underline.
  */
 export function stripStrikethroughFromQuoteTable(table) {
-    if (!table?.querySelectorAll) return;
+    if (!table?.querySelectorAll || table.hasAttribute(EMS_INTERNAL_TABLE_CLIP_ATTR)) return;
     table.querySelectorAll('s, strike, del, u').forEach((el) => unwrapElement(el));
     const nodes = [
         table,
@@ -11786,9 +12997,9 @@ export const EMS_TABLE_BORDER_CONTROL = {
                 ? editor.__emsClauseEditorBody
                 : () => editor.editor || null;
         armTableToolbarCellStash(editor, getBody);
-        const cells = resolveTableFormatCellTargets(editor, getBody);
+        const cells = getTableCellsForCellLevelFormat(editor, getBody);
         if (!cells.length) return false;
-        applyTableBorderModeToCells(editor, cells, mode);
+        withDocumentHistoryMutation(editor, () => applyTableBorderModeToCells(editor, cells, mode));
         if (typeof editor.synchronizeValues === 'function') {
             editor.synchronizeValues();
         }
@@ -11803,7 +13014,7 @@ export const EMS_TABLE_BORDER_CONTROL = {
             typeof editor.__emsClauseEditorBody === 'function'
                 ? editor.__emsClauseEditorBody
                 : () => editor.editor || null;
-        return resolveTableFormatCellTargets(editor, getBody).length === 0;
+        return getTableCellsForCellLevelFormat(editor, getBody).length === 0;
     },
 };
 
@@ -11825,7 +13036,7 @@ export const EMS_TABLE_VALIGN_CONTROL = {
                 : () => editor.editor || null;
         const cells = getTableCellsForCellLevelFormat(editor, getBody);
         if (!cells.length) return false;
-        applyVerticalAlignToCells(cells, align);
+        withDocumentHistoryMutation(editor, () => applyVerticalAlignToCells(cells, align));
         if (typeof editor.synchronizeValues === 'function') {
             editor.synchronizeValues();
         }
@@ -11849,7 +13060,7 @@ export const EMS_TABLE_REPEAT_HEADER_CONTROL = {
             typeof editor.__emsClauseEditorBody === 'function'
                 ? editor.__emsClauseEditorBody
                 : () => editor.editor || null;
-        toggleRepeatHeaderRows(editor, getBody);
+        withDocumentHistoryMutation(editor, () => toggleRepeatHeaderRows(editor, getBody));
         editor.e?.fire('hidePopup');
         return false;
     },
@@ -11880,9 +13091,9 @@ function registerTableBorderControl(jodit, getEditorBody) {
     Object.keys(EMS_TABLE_BORDER_MAP).forEach((name) => {
         const mode = EMS_TABLE_BORDER_MAP[name];
         jodit.registerCommand(name, () => {
-            const cells = resolveTableFormatCellTargets(jodit, getEditorBody);
+            const cells = getTableCellsForCellLevelFormat(jodit, getEditorBody);
             if (!cells.length) return false;
-            applyTableBorderModeToCells(jodit, cells, mode);
+            withDocumentHistoryMutation(jodit, () => applyTableBorderModeToCells(jodit, cells, mode));
             if (typeof jodit.synchronizeValues === 'function') {
                 jodit.synchronizeValues();
             }
@@ -12011,6 +13222,8 @@ export function registerClauseEditorTableHooks(jodit, getEditorBody, options = {
     /* Amount copy/paste + cell-click active cell — versioned rebind on focus/HMR. */
     registerConditionalTableSelection(jodit, getEditorBody);
     registerTableRowColumnClipboard(jodit, getEditorBody);
+    registerTableArrowNavigation(jodit, getEditorBody);
+    registerTableSelectAll(jodit, getEditorBody);
     if (!toolbarOnly) {
         registerTablePopupContextMenuOnly(jodit, getEditorBody);
     }

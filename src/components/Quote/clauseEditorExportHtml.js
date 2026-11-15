@@ -7,6 +7,7 @@ import {
     propagateOfficePasteRowBackgroundsToCells,
     finalizeOfficePasteTableFormatting,
     snapshotOfficePasteCellPaint,
+    normalizeOfficeTableForegrounds,
     EMS_OFFICE_PASTE_TABLE_QUERY,
     isEmsPricingSummaryTable,
     isOfficePasteTableEl,
@@ -147,10 +148,12 @@ export function sanitizeClauseHtmlForPersist(html) {
             if (!table.getAttribute('data-ems-paste-source')) {
                 table.setAttribute('data-ems-paste-source', 'office');
             }
-            table.querySelectorAll('td, th').forEach((cell) => snapshotOfficePasteCellPaint(cell, null));
+            if (table.hasAttribute('data-ems-internal-table-clip')) return;
             propagateOfficePasteRowBackgroundsToCells(table, null);
             table.querySelectorAll('td, th').forEach((cell) => snapshotOfficePasteCellPaint(cell, null));
-            finalizeOfficePasteTableFormatting(table, null);
+            if (table.getAttribute('data-ems-paste-formatted') !== '1') {
+                finalizeOfficePasteTableFormatting(table, null);
+            }
             table.querySelectorAll('td, th').forEach((cell) => {
                 if (cellHasVisibleBorderStyle(cell) && !cell.hasAttribute('data-ems-cell-border')) {
                     cell.setAttribute('data-ems-cell-border', '1');
@@ -158,6 +161,7 @@ export function sanitizeClauseHtmlForPersist(html) {
             });
         });
 
+        normalizeOfficeTableForegrounds(root);
         normalizeClauseProseTextColors(root);
         /* Re-bake H/V split borders into persisted HTML so they survive exit-edit. */
         bakeEmsCellSplitsInRoot(root);

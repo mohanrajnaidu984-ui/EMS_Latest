@@ -394,12 +394,12 @@ function groupFitsPackLimit(
         if (sumH > 0 && sumH <= limit + sumSlack) return true;
     }
     if (!options?.fastAlign) {
-        if (typeof options.overflowTestForPage === 'function' && pageIdx != null) {
-            return !options.overflowTestForPage(pageIdx, group);
-        }
-        if (typeof options.overflowTest === 'function' && pageIdx == null) {
-            return !options.overflowTest(group);
-        }
+    if (typeof options.overflowTestForPage === 'function' && pageIdx != null) {
+        return !options.overflowTestForPage(pageIdx, group);
+    }
+    if (typeof options.overflowTest === 'function' && pageIdx == null) {
+        return !options.overflowTest(group);
+    }
     }
     if (!segmentHeightsPx?.length) return false;
     return sumSegmentHeightsPx(group, segmentHeightsPx) <= limit + sumSlack;
@@ -1549,9 +1549,9 @@ function expandParagraphListSegments(htmlParts) {
                      * Keep every blank the user inserted (including a single mid-clause gap).
                      * Lone trailing editor noise is dropped later by trimTrailingBlankParts.
                      */
-                    for (let j = 0; j < run; j += 1) {
-                        const bh = String(children[i + j].outerHTML || '').trim();
-                        if (bh) out.push(bh);
+                        for (let j = 0; j < run; j += 1) {
+                            const bh = String(children[i + j].outerHTML || '').trim();
+                            if (bh) out.push(bh);
                     }
                     i += run - 1;
                     continue;
@@ -1562,7 +1562,7 @@ function expandParagraphListSegments(htmlParts) {
                     if (innerPs.length >= 2) {
                         innerPs.forEach((p) => pushSplitP(p));
                     } else {
-                        out.push(h);
+                out.push(h);
                     }
                 } else {
                     out.push(h);
@@ -2577,7 +2577,7 @@ export function peelOverfullPageGroups(
             if (moved == null) continue;
             if (i + 1 < result.length) {
                 result[i + 1] = [moved, ...result[i + 1]];
-            } else {
+    } else {
                 result.push([moved]);
             }
             if (!group.length) {
@@ -2593,10 +2593,10 @@ export function peelOverfullPageGroups(
 
 /** @deprecated use peelOverfullPageGroups */
 function peelOverfullSplitTableGroups(
-    groups,
-    measureMergedGroupPx,
-    usablePx,
-    segments,
+        groups,
+        measureMergedGroupPx,
+        usablePx,
+        segments,
     options = {},
     segmentHeightsPx = null
 ) {
@@ -2958,7 +2958,7 @@ export function measureLiveContentFit(contentEl, options = {}) {
  */
 export function assertSegmentVisibilityOnSheets(
     previewRoot,
-    groups,
+        groups,
     segmentCount,
     options = {}
 ) {
@@ -3083,9 +3083,9 @@ export function assertSegmentVisibilityOnSheets(
  */
 export function packClauseSegmentsForContinuationPages(
     indices,
-    measureMergedGroupPx,
-    usablePx,
-    segments,
+        measureMergedGroupPx,
+        usablePx,
+        segments,
     options = {},
     segmentHeightsPx = null
 ) {
@@ -3245,13 +3245,13 @@ export function packClauseSegmentsForContinuationPages(
             segments
         );
         groups = peelOverfullPageGroups(
-            groups,
-            measureMergedGroupPx,
-            usablePx,
-            segments,
+        groups,
+        measureMergedGroupPx,
+        usablePx,
+        segments,
             packOpts,
             heights
-        );
+    );
         groups = trimLeadingBlankSegmentsOnPages(groups, segments);
         groups = ensureSegmentPageGroupsCoverAll(groups, segments.length);
     }
@@ -3535,24 +3535,24 @@ export function packSegmentsOntoPagesByEstimatedHeight(segments, usablePx = EMS_
     if (!segments?.length) return [];
     const hasSplit = segments.some((s) => /data-ems-table-split\s*=\s*["']?1/i.test(String(s?.html || '')));
     if (!hasSplit) {
-        const heights = estimateSegmentBlockHeightsPx(segments);
-        const usable = Math.max(usablePx || EMS_QUOTE_CONT_USABLE_PX_FALLBACK, 240);
+    const heights = estimateSegmentBlockHeightsPx(segments);
+    const usable = Math.max(usablePx || EMS_QUOTE_CONT_USABLE_PX_FALLBACK, 240);
         const packFudgePx = Math.min(20, Math.round(usable * 0.02));
         const limit = Math.max(usable - PACK_HEIGHT_SAFETY_PX, 200) + packFudgePx;
-        const pages = [];
-        let cur = [];
-        let sum = 0;
-        for (let i = 0; i < segments.length; i++) {
-            const h = Math.max(heights[i] || 0, 1);
+    const pages = [];
+    let cur = [];
+    let sum = 0;
+    for (let i = 0; i < segments.length; i++) {
+        const h = Math.max(heights[i] || 0, 1);
             if (cur.length > 0 && sum + h > limit) {
-                pages.push(cur);
-                cur = [];
-                sum = 0;
-            }
-            cur.push(i);
-            sum += h;
+            pages.push(cur);
+            cur = [];
+            sum = 0;
         }
-        if (cur.length) pages.push(cur);
+        cur.push(i);
+        sum += h;
+    }
+    if (cur.length) pages.push(cur);
         return fillEstimatedPageGroupsByHeights(
             pages.filter((g) => g.length > 0),
             heights,
@@ -3650,26 +3650,26 @@ export function packSegmentsOntoPagesByEstimatedHeightPerPage(
         /data-ems-table-split\s*=\s*["']?1/i.test(String(s?.html || ''))
     );
     if (!hasSplit) {
-        const heights = estimateSegmentBlockHeightsPx(segments);
-        const pages = [];
-        let cur = [];
-        let sum = 0;
-        let pageIdx = 0;
-        for (let i = 0; i < segments.length; i++) {
-            const h = Math.max(heights[i] || 0, 1);
-            const usable = Math.max(usablePxForPage(pageIdx) || EMS_QUOTE_CONT_USABLE_PX_FALLBACK, 240);
+    const heights = estimateSegmentBlockHeightsPx(segments);
+    const pages = [];
+    let cur = [];
+    let sum = 0;
+    let pageIdx = 0;
+    for (let i = 0; i < segments.length; i++) {
+        const h = Math.max(heights[i] || 0, 1);
+        const usable = Math.max(usablePxForPage(pageIdx) || EMS_QUOTE_CONT_USABLE_PX_FALLBACK, 240);
             const packFudgePx = Math.min(20, Math.round(usable * 0.02));
             const pageLimit = Math.max(usable - PACK_HEIGHT_SAFETY_PX, 200) + packFudgePx;
             if (cur.length > 0 && sum + h > pageLimit) {
-                pages.push(cur);
-                pageIdx += 1;
-                cur = [];
-                sum = 0;
-            }
-            cur.push(i);
-            sum += h;
+            pages.push(cur);
+            pageIdx += 1;
+            cur = [];
+            sum = 0;
         }
-        if (cur.length) pages.push(cur);
+        cur.push(i);
+        sum += h;
+    }
+    if (cur.length) pages.push(cur);
         const u0 = Math.max(usablePxForPage(0) || EMS_QUOTE_CONT_USABLE_PX_FALLBACK, 240);
         const limit0 = Math.max(u0 - PACK_HEIGHT_SAFETY_PX, 200) + 20;
         return fillEstimatedPageGroupsByHeights(

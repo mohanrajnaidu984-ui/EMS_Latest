@@ -1,0 +1,107 @@
+/* Glass is limited to panel surfaces; data rows stay opaque and crisp. */
+@media screen {
+    .sales-report-page {
+        --sr-bg-smoke: transparent;
+        --sr-page-bg:#eaf0f8;
+        --sr-section-header-gradient:linear-gradient(130deg,rgba(29,68,121,.96),rgba(64,118,182,.90));
+        background:
+            radial-gradient(ellipse at 8% 0%,rgba(165,209,247,.45),transparent 47%),
+            radial-gradient(ellipse at 95% 35%,rgba(188,198,239,.32),transparent 48%),
+            linear-gradient(145deg,#eef4fb,#e4edf7 62%,#edf1fa);
+        padding:0.45rem 0.55rem;
+    }
+    .sales-report-page .sr-filter-bar {
+        background:rgba(255,255,255,.61);
+        border:0;
+        border-radius:12px;
+        box-shadow:0 4px 16px rgba(30,65,109,.05);
+        padding:0.35rem 0.5rem;
+        margin-bottom:0.25rem;
+    }
+    .sales-report-page .sr-filter-label { color:#405773; font-weight:600; letter-spacing:.045em; }
+    .sales-report-page .sr-filter-field .form-select,
+    .sales-report-page .sr-ms-trigger {
+        border-color:#d3deec;
+        border-radius:7px;
+        background-color:rgba(255,255,255,.94);
+        box-shadow:0 1px 3px rgba(30,65,109,.035);
+    }
+    .sales-report-page .sr-cell.card {
+        background:rgba(255,255,255,.79) !important;
+        border:0 !important;
+        border-radius:13px;
+        box-shadow:0 7px 22px rgba(35,65,105,.08),0 1px 3px rgba(35,65,105,.045) !important;
+    }
+    .sales-report-page .sr-cell-won-combined,
+    .sales-report-page .sr-cell-target-combined,
+    .sales-report-page .sr-cell-gm-combined,
+    .sales-report-page .sr-cell-pipeline {
+        -webkit-backdrop-filter:blur(7px) saturate(112%);
+        backdrop-filter:blur(7px) saturate(112%);
+    }
+    .sales-report-page .sr-pipeline-header,
+    .sales-report-page .sr-report-table-title,
+    .sales-report-page .sr-summary-title {
+        background:var(--sr-section-header-gradient) !important;
+        border-bottom:1px solid rgba(19,53,98,.18) !important;
+        box-shadow:none !important;
+        text-shadow:0 1px 1px rgba(11,40,79,.18);
+    }
+    .sales-report-page .sr-stack-top { border-bottom-color:rgba(155,179,212,.35); }
+    .sales-report-page .sr-quarter-header,
+    .sales-report-page .sr-q-matrix__actual,
+    .sales-report-page .sr-q-matrix__target { border-color:rgba(162,185,218,.42); }
+    .sales-report-page .sr-detail-table thead th,
+    .sales-report-page .sr-top-won-table th {
+        background:#edf3fa;
+        color:#354d6d;
+        border-color:#dae5f2;
+    }
+    .sales-report-page .sr-detail-table__total-row td { background:#678bd7 !important; color:#fff; }
+    .sales-report-page .sr-top-won-buttons button,
+    .sales-report-page .sr-top-won-expand,
+    .sales-report-page .sr-table-expand-btn {
+        border-color:rgba(225,239,255,.55);
+        border-radius:5px;
+        background-color:rgba(255,255,255,.08);
+    }
+    .sales-report-page .sr-top-won-buttons button[aria-pressed="true"] {
+        background:#f4f8ff;
+        color:#244d84;
+        box-shadow:0 1px 3px rgba(15,40,75,.12);
+    }
+    .sales-report-page .sr-table-inner,
+    .sales-report-page .sr-top-won-table-wrap { scrollbar-color:#b4c5de #edf3fa; scrollbar-width:thin; }
+    @supports not (backdrop-filter:blur(1px)) {
+        .sales-report-page .sr-cell.card { background:#f7faff !important; }
+    }
+}
+
+/* Lightweight SVG glass finishes; chart animation stays disabled. */
+@media screen {
+    .sales-report-page .sr-chart-bar {
+        border-radius:10px;
+        background:linear-gradient(180deg,rgba(236,245,255,.40),rgba(255,255,255,.12));
+    }
+    .sales-report-page .recharts-bar-rectangle path {
+        filter:drop-shadow(0 2px 2px rgba(27,58,104,.13));
+    }
+    .sales-report-page .sr-donut-chart .recharts-pie-sector {
+        filter:drop-shadow(0 3px 5px rgba(25,59,102,.14));
+    }
+    .sales-report-page .sr-funnel-svg polygon {
+        filter:drop-shadow(0 1px 1px rgba(27,58,104,.12));
+    }
+    .sales-report-page .recharts-default-tooltip {
+        background:rgba(248,252,255,.94) !important;
+        border:1px solid rgba(158,185,220,.5) !important;
+        border-radius:10px;
+        box-shadow:0 8px 24px rgba(26,55,97,.14);
+        -webkit-backdrop-filter:blur(8px);
+        backdrop-filter:blur(8px);
+        font-size:11px;
+    }
+    .sales-report-page .recharts-cartesian-axis-line,
+    .sales-report-page .recharts-cartesian-axis-tick-line { stroke:#9fb2ca; stroke-opacity:.65; }
+    .sales-report-page .recharts-legend-item { color:#48617f; }
+}

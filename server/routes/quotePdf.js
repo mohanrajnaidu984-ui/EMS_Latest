@@ -1117,11 +1117,19 @@ async function loadHtmlInPage(page, html) {
 /**
  * Portrait-only render — proven stable path (all sheets portrait).
  */
+// Increase border rasterization precision without changing physical page geometry.
+// Apply only after pagination/layout measurements have completed.
+async function enableQuotePdfHairlineRendering(page) {
+    await page.evaluate(() => document.body.style.setProperty('zoom', '2', 'important'));
+}
+
 async function renderPortraitPdfBuffer(page, { preferCssPageSize = false } = {}) {
+    await enableQuotePdfHairlineRendering(page);
     const timeoutMs = quotePdfPageTimeoutMs();
     await page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 1 });
     pdfStepLog('page.pdf start (portrait-only)', { timeoutMs, preferCssPageSize });
     const opts = {
+        scale: 0.5,
         printBackground: true,
         format: 'A4',
         margin: { top: '0', right: '0', bottom: '0', left: '0' },
@@ -1301,9 +1309,11 @@ async function renderMixedOrientationPdfBuffer(page, sheetInfos) {
 
         await isolateQuoteSheetForPdfRender(page, i, w, h);
         await setPdfViewportForSheet(page, w, h);
+        await enableQuotePdfHairlineRendering(page);
 
         const pageBuf = await Promise.race([
             page.pdf({
+                scale: 0.5,
                 printBackground: true,
                 width: w,
                 height: h,

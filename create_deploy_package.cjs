@@ -1,8 +1,8 @@
-﻿/**
+/**
  * Build IIS deployment folder EMS_Deploy_YYYY-MM-DD (same layout as EMS_Deploy_2026-06-03).
  * Includes quote PDF (Puppeteer), Outlook/email draft routes, and local helper script.
  *
- * Usage: node create_deploy_package.cjs [--skip-uploads] [--with-node-modules]
+ * Usage: node create_deploy_package.cjs [--version=YYYY-MM-DD-vN] [--skip-uploads] [--with-node-modules]
  *        (production: no node_modules in zip â€” npm ci on server with Node 22 LTS)
  */
 const fs = require('fs');
@@ -16,7 +16,7 @@ const skipUploads = process.argv.includes('--skip-uploads');
 const withNodeModules = process.argv.includes('--with-node-modules');
 /** Optional: pin puppeteer@19.4.0 for Windows Server 2012 R2 (regenerates package-lock). Default: keep lock in sync. */
 const pinPuppeteer2012R2 = process.argv.includes('--ws2012');
-const BASELINE_VERSION = '2026-11-02-v1';
+const BASELINE_VERSION = '2026-11-15-v1';
 /** Must match server/routes/quotePdf.js quotePdfCssVersion */
 const PDF_CSS_VERSION = '2026-09-13-v7';
 const FRONTEND_BUNDLE_MARKERS = [
@@ -28,7 +28,11 @@ const FRONTEND_BUNDLE_MARKERS = [
 ];
 const dateStamp = new Date().toISOString().slice(0, 10);
 /** Unique folder name — use baseline so same-day rebuilds do not replace prior packages. */
-const PACKAGE_SLUG = BASELINE_VERSION;
+const versionArg = process.argv.find((arg) => arg.startsWith('--version='));
+const PACKAGE_SLUG = versionArg ? versionArg.slice('--version='.length) : BASELINE_VERSION;
+if (!/^\d{4}-\d{2}-\d{2}-v\d+$/.test(PACKAGE_SLUG)) {
+    throw new Error('Package version must use YYYY-MM-DD-vN format.');
+}
 const DEPLOY_DIR = path.join(PROJECT_ROOT, `EMS_Deploy_${PACKAGE_SLUG}`);
 const FRONTEND_DIR = path.join(DEPLOY_DIR, 'frontend');
 const FRONTEND_DIST_DIR = path.join(FRONTEND_DIR, 'dist');
@@ -1101,8 +1105,7 @@ console.log('========================================================');
 console.log(`Target: ${DEPLOY_DIR}\n`);
 
 if (fs.existsSync(DEPLOY_DIR)) {
-    console.log('Removing previous package folder...');
-    fs.rmSync(DEPLOY_DIR, { recursive: true, force: true });
+    throw new Error(`Package folder already exists: ${DEPLOY_DIR}. Use a new --version=YYYY-MM-DD-vN.`);
 }
 fs.mkdirSync(DEPLOY_DIR, { recursive: true });
 

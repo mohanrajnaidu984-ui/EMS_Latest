@@ -131,6 +131,8 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
     const [filteredTableData, setFilteredTableData] = useState([]);
 
     const [loading, setLoading] = useState(false);
+    /** Right-panel monthly history — independent of left calendar so the shell can paint early. */
+    const [historyLoading, setHistoryLoading] = useState(false);
     /** Modal enquiry grid only — opening the modal no longer refetches calendars. */
     const [modalEnquiryListLoading, setModalEnquiryListLoading] = useState(false);
 
@@ -377,6 +379,7 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
         async (signal) => {
             if (!currentUser) return;
             setLoading(true);
+            setHistoryLoading(true);
             try {
                 const salesEngineerForApi = resolveEffectiveSalesEngineerFilter({
                     salesEngineer: filters.salesEngineer,
@@ -403,7 +406,6 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
                 })();
 
                 const sumParams = new URLSearchParams({ ...baseParams, today: todayParam });
-
                 const calLeftParams = new URLSearchParams({
                     ...baseParams,
                     month: dateState.leftCalendar.month,
@@ -421,43 +423,79 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
 
                 const fetchOpts = signal ? { signal, cache: 'no-store' } : { cache: 'no-store' };
 
-                const leftPromise = fetch(`${API_URL}/calendar?${calLeftParams}`, fetchOpts).then(async (r) =>
-                    r.ok ? r.json() : null,
+                /*
+                 * Progressive load: left calendar (~0.5s) unblocks the shell first.
+                 * History (~multi-month) and summary fill in without holding the spinner.
+                 */
+                const leftPromise = fetch(`${API_URL}/calendar?${calLeftParams}`, fetchOpts).then(
+                    async (r) => (r.ok ? r.json() : null),
                 );
                 const historyPromise = fetch(`${API_URL}/calendars-history?${historyParams}`, fetchOpts).then(
                     async (r) => (r.ok ? r.json() : null),
                 );
-                const sumPromise = fetch(`${API_URL}/summary?${sumParams}`, fetchOpts).then((r) => (r.ok ? r.json() : {}));
+                const sumPromise = fetch(`${API_URL}/summary?${sumParams}`, fetchOpts).then((r) =>
+                    r.ok ? r.json() : {},
+                );
 
-                const [leftRaw, historyRaw, sumParsed] = await Promise.all([
-                    leftPromise,
-                    historyPromise,
-                    sumPromise,
-                ]);
-
-                const leftCal = normalizeDashboardCalendarPayload(leftRaw);
-                const historyMonths = Array.isArray(historyRaw?.months)
-                    ? historyRaw.months.map((row) => ({
-                          month: row.month,
-                          year: row.year,
-                          ...normalizeDashboardCalendarPayload(row),
-                      }))
-                    : [];
-                const historyYearTotals =
-                    historyRaw?.yearTotals && typeof historyRaw.yearTotals === 'object'
-                        ? historyRaw.yearTotals
-                        : null;
-
+                const leftRaw = await leftPromise;
                 if (signal?.aborted) return;
-
+                const leftCal = normalizeDashboardCalendarPayload(leftRaw);
                 setData((prev) => ({
                     ...prev,
                     calendarLeft: leftCal.daily,
                     calendarTotalsLeft: leftCal.totals,
-                    historyMonths,
-                    historyYearTotals,
-                    summary: sumParsed || {},
                 }));
+                setLoading(false);
+
+                const settleHistory = historyPromise
+                    .then((historyRaw) => {
+                        if (signal?.aborted) return;
+                        const historyMonths = Array.isArray(historyRaw?.months)
+                            ? historyRaw.months.map((row) => ({
+                                  month: row.month,
+                                  year: row.year,
+                                  ...normalizeDashboardCalendarPayload(row),
+                              }))
+                            : [];
+                        const historyYearTotals =
+                            historyRaw?.yearTotals && typeof historyRaw.yearTotals === 'object'
+                                ? historyRaw.yearTotals
+                                : null;
+                        setData((prev) => ({
+                            ...prev,
+                            historyMonths,
+                            historyYearTotals,
+                        }));
+                    })
+                    .catch((histErr) => {
+                        if (histErr?.name === 'AbortError') return;
+                        console.error('Dashboard history fetch error:', histErr);
+                        if (!signal?.aborted) {
+                            setData((prev) => ({
+                                ...prev,
+                                historyMonths: [],
+                                historyYearTotals: null,
+                            }));
+                        }
+                    })
+                    .finally(() => {
+                        if (!signal?.aborted) setHistoryLoading(false);
+                    });
+
+                const settleSummary = sumPromise
+                    .then((sumParsed) => {
+                        if (signal?.aborted) return;
+                        setData((prev) => ({
+                            ...prev,
+                            summary: sumParsed || {},
+                        }));
+                    })
+                    .catch((sumErr) => {
+                        if (sumErr?.name === 'AbortError') return;
+                        console.error('Dashboard summary fetch error:', sumErr);
+                    });
+
+                await Promise.all([settleHistory, settleSummary]);
             } catch (err) {
                 if (err?.name === 'AbortError') return;
                 console.error('Dashboard calendar fetch error:', err);
@@ -469,8 +507,10 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
                     historyYearTotals: null,
                     summary: {},
                 }));
-            } finally {
-                if (!signal?.aborted) setLoading(false);
+                if (!signal?.aborted) {
+                    setLoading(false);
+                    setHistoryLoading(false);
+                }
             }
         },
         [
@@ -879,7 +919,7 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
                                         anchorYear={dateState.leftCalendar.year}
                                         onBarClick={handleMonthBarClick}
                                         onYearBarClick={handleYearBarClick}
-                                        loading={loading}
+                                        loading={historyLoading}
                                     />
                                 </div>
                             </div>

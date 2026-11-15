@@ -50,6 +50,7 @@ if (fs.existsSync(envPath)) {
 
 const { buildOutlookDraftVbs, buildOutlookHtmlDraftVbs } = require(path.join(BACKEND_DIR, 'lib', 'outlookDraftVbs'));
 const { resolveEnquiryOutlookEmailFields } = require(path.join(BACKEND_DIR, 'lib', 'enquiryOutlookEmailFields'));
+const { loadChangeEmail } = require(path.join(BACKEND_DIR, 'lib', 'enquiryChangeEmail'));
 const { buildEnquiryNotifyEmailHtml, buildEnquiryOutlookSubject } = require(path.join(BACKEND_DIR, 'lib', 'enquiryNotifyEmailHtml'));
 const {
     buildCustomerAcknowledgementEmailHtml,
@@ -232,6 +233,12 @@ const server = http.createServer(async (req, res) => {
 });
 
 async function openEnquiryOutlookDraft(body) {
+    /* Enquiry-field-update emails are disabled; only new enquiry + addendum use this helper. */
+    if (body?.enquiryUpdate && body?.addendumNo == null) {
+        throw new Error(
+            'Enquiry update email notification is disabled. In-app notifications only.'
+        );
+    }
     const { requestNo, concernedSEs } = body || {};
     const reqNo = String(requestNo || '').trim();
     if (!reqNo) {
@@ -257,8 +264,9 @@ async function openEnquiryOutlookDraft(body) {
         concernedSEs: seNamesFromBody,
     });
     if (!to) throw new Error(`No email for SE(s): ${(seNames || []).join(', ') || 'none'}`);
-    const html = buildEnquiryNotifyEmailHtml(row, attachments, apiBase);
-    const subject = buildEnquiryOutlookSubject(row);
+    const { html, subject } = body?.enquiryUpdate || body?.addendumNo != null
+        ? await loadChangeEmail(row, body.addendumNo)
+        : { html: buildEnquiryNotifyEmailHtml(row, attachments, apiBase), subject: buildEnquiryOutlookSubject(row) };
     const dir = path.join(os.tmpdir(), 'ems-enquiry-outlook-helper', String(Date.now()));
     fs.mkdirSync(dir, { recursive: true });
     const htmlPath = path.join(dir, 'enquiry-email.html');

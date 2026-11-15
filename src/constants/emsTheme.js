@@ -26,6 +26,8 @@ export const EMS_QUOTE_ACCENT_HEADER_LINE_HEIGHT = 1.1;
 
 /** Quote A4 cover + panel bodies: very light sky under header bars (print/on-screen). */
 export const EMS_QUOTE_COVER_META_MID_BG = '#f0f9ff';
+/** Internal row separators only; outer panel borders retain their original colour. */
+export const EMS_QUOTE_META_ROW_SEPARATOR_COLOR = '#b8c6da';
 
 /** Clause title — no fill bar; slightly lighter navy text on white. */
 export const EMS_QUOTE_CLAUSE_HEADING_BG = 'transparent';
@@ -35,7 +37,8 @@ export const EMS_QUOTE_CLAUSE_HEADING_BORDER_RADIUS = '0';
 export const EMS_QUOTE_CLAUSE_HEADING_HEIGHT_SCALE = 0.857375;
 export const EMS_QUOTE_CLAUSE_HEADING_PADDING_Y = `calc(6px * 1.69 * 0.85 * ${EMS_QUOTE_CLAUSE_HEADING_HEIGHT_SCALE})`;
 export const EMS_QUOTE_CLAUSE_HEADING_PADDING_X = 'calc(14px * 1.69)';
-export const EMS_QUOTE_CLAUSE_HEADING_MARGIN_TOP = `calc(12px * ${EMS_QUOTE_CLAUSE_HEADING_HEIGHT_SCALE})`;
+export const EMS_QUOTE_CLAUSE_SECTION_MARGIN_BOTTOM = '9px';
+export const EMS_QUOTE_CLAUSE_HEADING_MARGIN_TOP = `calc(12px * ${EMS_QUOTE_CLAUSE_HEADING_HEIGHT_SCALE} * 0.75)`;
 export const EMS_QUOTE_CLAUSE_HEADING_MARGIN_BOTTOM = `calc(6px * 0.85 * ${EMS_QUOTE_CLAUSE_HEADING_HEIGHT_SCALE})`;
 export const EMS_QUOTE_CLAUSE_HEADING_FONT_SIZE = `calc(13px * ${EMS_QUOTE_CLAUSE_HEADING_HEIGHT_SCALE} * 1.2)`;
 export const EMS_QUOTE_CLAUSE_HEADING_FONT_WEIGHT = 700;
@@ -506,3 +509,31 @@ export function scopeEmsQuotePricingTablePresentationCss(scopeSelector) {
 
 /** Space below company logo row before To / Quote Details (was 20px; reduced 50%). */
 export const EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM = '10px';
+
+/**
+ * Quote letterhead logo box. Height-only caps left ultra-wide wordmarks
+ * (e.g. Almoayyed Contracting Company – KSA ~8:1) much larger than AAC/ACC logos.
+ * Max width keeps those in line with other division logos (~65–70mm visual).
+ */
+export const EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT = '12.6mm';
+export const EMS_QUOTE_HEADER_LOGO_MAX_WIDTH = '68mm';
+
+/** Place quote-detail separators at row boundaries, halfway through the 5px + 5px gap. */
+export const EMS_QUOTE_META_SEPARATOR_LAYOUT_CSS = `
+#quote-preview .quote-header-quote-panel-mid .quote-header-quote-panel-row + .quote-header-quote-panel-row .quote-header-quote-panel-value {
+    border-top: none !important;
+    position: relative;
+}
+#quote-preview .quote-header-quote-panel-mid .quote-header-quote-panel-row + .quote-header-quote-panel-row .quote-header-quote-panel-value::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -5px;
+    border-top: 1px solid ${EMS_QUOTE_META_ROW_SEPARATOR_COLOR};
+    pointer-events: none;
+}
+html[data-preview-pdf="1"] #quote-preview .quote-header-quote-panel-mid .quote-header-quote-panel-row + .quote-header-quote-panel-row .quote-header-quote-panel-value::before {
+    border-top-width: 0.5px;
+}
+`;

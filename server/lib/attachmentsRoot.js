@@ -66,7 +66,14 @@ function resolveLocalEnquiryAttachmentsRoot() {
     return path.join(__dirname, '..', 'data', 'ems-attachments');
 }
 
-function resolveEnquiryUploadDestinationWithRoot(root, requestNo, visibility, division) {
+function enquiryAttachmentSectionFolder(addendumNo) {
+    if (addendumNo == null || addendumNo === '') return 'Enquiry';
+    const number = Number(addendumNo);
+    if (!Number.isSafeInteger(number) || number < 1) throw new Error('Invalid addendum number');
+    return `Addendum-${number}`;
+}
+
+function resolveEnquiryUploadDestinationWithRoot(root, requestNo, visibility, division, addendumNo) {
     const rawNo = requestNo != null ? String(requestNo) : 'unknown';
     const safeRequestNo = sanitizeFolderName(rawNo, 'unknown');
     const safeDivision = sanitizeFolderName(division, 'General');
@@ -74,7 +81,7 @@ function resolveEnquiryUploadDestinationWithRoot(root, requestNo, visibility, di
     const visFolder = v === 'private'
         ? path.join('Enquiries', 'Private')
         : path.join('Enquiries', 'Public');
-    return path.join(root, visFolder, safeRequestNo, safeDivision);
+    return path.join(root, visFolder, safeRequestNo, enquiryAttachmentSectionFolder(addendumNo), safeDivision);
 }
 
 function canWriteToDirectory(dest) {
@@ -102,8 +109,8 @@ function canWriteToDirectory(dest) {
  * On Windows, Node/PM2 running as SYSTEM accesses UNC as the machine account
  * (e.g. ACG-WEBSVR02$ on 151.50.1.38). That account must have Modify on the share + NTFS.
  */
-function resolveWritableEnquiryUploadDestination(requestNo, visibility, division) {
-    const primary = resolveEnquiryUploadDestinationByVisibility(requestNo, visibility, division);
+function resolveWritableEnquiryUploadDestination(requestNo, visibility, division, addendumNo) {
+    const primary = resolveEnquiryUploadDestinationByVisibility(requestNo, visibility, division, addendumNo);
     const writeCheck = canWriteToDirectory(primary);
     if (writeCheck.ok) {
         return { dest: primary, usedFallback: false };
@@ -122,12 +129,12 @@ function resolveWritableEnquiryUploadDestination(requestNo, visibility, division
     throw err;
 }
 
-function resolveEnquiryUploadDestinationByVisibility(requestNo, visibility, division) {
+function resolveEnquiryUploadDestinationByVisibility(requestNo, visibility, division, addendumNo) {
     const rawNo = requestNo != null ? String(requestNo) : 'unknown';
     const safeRequestNo = sanitizeFolderName(rawNo, 'unknown');
     const safeDivision = sanitizeFolderName(division, 'General');
     const base = resolveEnquiryAttachmentVisibilityBase(visibility);
-    return path.join(base, safeRequestNo, safeDivision);
+    return path.join(base, safeRequestNo, enquiryAttachmentSectionFolder(addendumNo), safeDivision);
 }
 
 /**

@@ -55,8 +55,9 @@ function ownJobMatchesDivision(ownJob, divisionFilter) {
 }
 
 /**
- * Fast Search Quote path: return in-range EnquiryQuotes (+ enquiry headers).
- * List UI rows are built in JS — skips mapQuoteListingRows (pricing tree).
+ * Fast Search Quote path: EnquiryQuotes (+ enquiry headers), then light JS list rows.
+ * Supports date range and/or text criteria. Skips mapQuoteListingRows (pricing tree).
+ * Used for both dated search and criteria-only search (e.g. project name "marassi").
  */
 async function runQuoteListSearchByQuoteDate(
     sqlConn,
@@ -66,7 +67,9 @@ async function runQuoteListSearchByQuoteDate(
 ) {
     const d1 = normalizeSearchDateParam(dateFrom);
     const d2 = normalizeSearchDateParam(dateTo);
-    if (!d1 || !d2) {
+    const qTrim = String(q || '').trim();
+    const hasDateRange = !!(d1 && d2);
+    if (!hasDateRange && !qTrim) {
         return { quoteRows: [], accessCtx: null, userEmail: rawUserEmail, usedFastPath: false };
     }
 
@@ -85,8 +88,12 @@ async function runQuoteListSearchByQuoteDate(
         return { quoteRows: [], accessCtx: accessCtx || null, userEmail, usedFastPath: true };
     }
 
-    const qTrim = String(q || '').trim();
-    const qqLower = qTrim ? lit(qTrim).toLowerCase() : '';
+    const likePat = qTrim
+        ? `N'%${lit(qTrim)
+              .replace(/\[/g, '[[]')
+              .replace(/%/g, '[%]')
+              .replace(/_/g, '[_]')}%'`
+        : `N'%'`;
     const numericOnly = /^\d+$/.test(qTrim);
     const divisionClause = buildEnquiryMasterDepartmentExistsSql(division);
     const ownJobDivisionSql = buildOwnJobDivisionSql(division, 'qtSeed');
@@ -96,38 +103,40 @@ async function runQuoteListSearchByQuoteDate(
     const uEsc = (userEmail || '').replace(/'/g, "''");
     const uLocalEsc = ((userEmail || '').split('@')[0] || '').trim().replace(/'/g, "''");
 
-    const datePred = `
+    const datePred = hasDateRange
+        ? `
         qtSeed.QuoteDate IS NOT NULL
         AND qtSeed.QuoteDate >= CAST(N'${lit(d1)}' AS DATETIME)
         AND qtSeed.QuoteDate < DATEADD(day, 1, CAST(N'${lit(d2)}' AS DATETIME))
-    `;
+    `
+        : `qtSeed.QuoteDate IS NOT NULL`;
 
     let textPred = '1 = 1';
     if (qTrim) {
         if (numericOnly) {
+            /* RequestNo / quote-no / workflow — equality + indexed-friendly quote pattern. */
             textPred = `(
                 LTRIM(RTRIM(CAST(E.RequestNo AS NVARCHAR(100)))) = N'${lit(qTrim)}'
                 OR CHARINDEX(N'/${lit(qTrim).toUpperCase()}-L', UPPER(LTRIM(RTRIM(ISNULL(qtSeed.QuoteNumber, N''))))) > 0
                 OR EXISTS (
                     SELECT 1 FROM QuoteApprovalSteps qtWfSrch
-                    WHERE LTRIM(RTRIM(qtWfSrch.RequestNo)) = LTRIM(RTRIM(E.RequestNo))
+                    WHERE qtWfSrch.RequestNo = E.RequestNo
                       AND LTRIM(RTRIM(ISNULL(qtWfSrch.WorkflowNo, N''))) = N'${lit(qTrim)}'
                 )
             )`;
         } else {
+            /*
+             * Criteria text (project / customer / quote no): CI LIKE — no LOWER/CHARINDEX scans,
+             * and no correlated QuoteApprovalSteps probe (workflow nos are numeric-only above).
+             */
             textPred = `(
-                CHARINDEX(N'${qqLower}', LOWER(CAST(E.RequestNo AS NVARCHAR(100)))) > 0
-                OR CHARINDEX(N'${qqLower}', LOWER(LTRIM(RTRIM(ISNULL(E.ProjectName, N''))))) > 0
-                OR CHARINDEX(N'${qqLower}', LOWER(LTRIM(RTRIM(ISNULL(E.CustomerName, N''))))) > 0
-                OR CHARINDEX(N'${qqLower}', LOWER(LTRIM(RTRIM(ISNULL(E.ClientName, N''))))) > 0
-                OR CHARINDEX(N'${qqLower}', LOWER(LTRIM(RTRIM(ISNULL(E.ConsultantName, N''))))) > 0
-                OR CHARINDEX(N'${qqLower}', LOWER(LTRIM(RTRIM(ISNULL(qtSeed.QuoteNumber, N''))))) > 0
-                OR CHARINDEX(N'${qqLower}', LOWER(LTRIM(RTRIM(ISNULL(qtSeed.PreparedBy, N''))))) > 0
-                OR EXISTS (
-                    SELECT 1 FROM QuoteApprovalSteps qtWfSrch
-                    WHERE LTRIM(RTRIM(qtWfSrch.RequestNo)) = LTRIM(RTRIM(E.RequestNo))
-                      AND CHARINDEX(N'${qqLower}', LOWER(LTRIM(RTRIM(ISNULL(qtWfSrch.WorkflowNo, N''))))) > 0
-                )
+                CAST(E.RequestNo AS NVARCHAR(100)) LIKE ${likePat}
+                OR E.ProjectName LIKE ${likePat}
+                OR E.CustomerName LIKE ${likePat}
+                OR E.ClientName LIKE ${likePat}
+                OR E.ConsultantName LIKE ${likePat}
+                OR qtSeed.QuoteNumber LIKE ${likePat}
+                OR qtSeed.PreparedBy LIKE ${likePat}
             )`;
         }
     }
@@ -186,8 +195,19 @@ async function runQuoteListSearchByQuoteDate(
         }
     }
 
-    const query = `
-        SELECT
+    /*
+     * Text-only: drive from EnquiryMaster so ProjectName/Customer LIKE can filter early.
+     * Date-range: drive from EnquiryQuotes so QuoteDate range is applied first.
+     */
+    const fromJoinSql = hasDateRange
+        ? `
+        FROM EnquiryQuotes qtSeed
+        INNER JOIN EnquiryMaster E ON E.RequestNo = qtSeed.RequestNo`
+        : `
+        FROM EnquiryMaster E
+        INNER JOIN EnquiryQuotes qtSeed ON qtSeed.RequestNo = E.RequestNo`;
+
+    const selectList = `
             E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName,
             E.EnquiryDate, E.DueDate, E.Status, E.EnquiryStatus,
             qtSeed.ID AS QuoteId,
@@ -199,10 +219,11 @@ async function runQuoteListSearchByQuoteDate(
             qtSeed.LeadJob,
             qtSeed.ToName,
             qtSeed.PreparedBy,
-            ISNULL(qtSeed.TotalAmount, 0) AS TotalAmount
-        FROM EnquiryQuotes qtSeed
-        INNER JOIN EnquiryMaster E
-            ON LTRIM(RTRIM(E.RequestNo)) = LTRIM(RTRIM(qtSeed.RequestNo))
+            ISNULL(qtSeed.TotalAmount, 0) AS TotalAmount`;
+
+    const query = `
+        SELECT ${selectList}
+        ${fromJoinSql}
         WHERE ${datePred}
           AND ${textPred}
           AND ${accessPred}
@@ -222,22 +243,8 @@ async function runQuoteListSearchByQuoteDate(
     } catch (err) {
         if (/Invalid object name/i.test(String(err.message || '')) && /QuoteApprovalSteps/i.test(String(err.message || ''))) {
             const queryNoWf = `
-                SELECT
-                    E.RequestNo, E.ProjectName, E.CustomerName, E.ClientName, E.ConsultantName,
-                    E.EnquiryDate, E.DueDate, E.Status, E.EnquiryStatus,
-                    qtSeed.ID AS QuoteId,
-                    qtSeed.QuoteNumber,
-                    qtSeed.QuoteDate,
-                    qtSeed.QuoteNo,
-                    qtSeed.RevisionNo,
-                    qtSeed.OwnJob,
-                    qtSeed.LeadJob,
-                    qtSeed.ToName,
-                    qtSeed.PreparedBy,
-                    ISNULL(qtSeed.TotalAmount, 0) AS TotalAmount
-                FROM EnquiryQuotes qtSeed
-                INNER JOIN EnquiryMaster E
-                    ON LTRIM(RTRIM(E.RequestNo)) = LTRIM(RTRIM(qtSeed.RequestNo))
+                SELECT ${selectList}
+                ${fromJoinSql}
                 WHERE ${datePred}
                   AND ${textPred.replace(/OR EXISTS \(\s*SELECT 1 FROM QuoteApprovalSteps[\s\S]*?\)/gi, '')}
                   AND (

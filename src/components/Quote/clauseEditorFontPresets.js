@@ -5,7 +5,7 @@
 import { normalizeSize } from 'jodit/esm/core/helpers/normalize/normalize-size.js';
 import { Dom } from 'jodit/esm/core/dom/dom.js';
 import { css } from 'jodit/esm/core/helpers/utils/css.js';
-import { QUOTE_PREVIEW_FONT_STACK } from './quotePrintDocumentHtml';
+import { QUOTE_PACK_FONT_STACK, QUOTE_SEGOE_UI_FONT_STACK } from './quotePackFonts';
 import {
     restoreClauseEditorFormatSelection,
     closeListToolbarPopup,
@@ -24,8 +24,9 @@ import {
     readUniformTableCellStyle,
     armTableToolbarCellStash,
 } from './clauseEditorTable';
+import { withDocumentHistoryMutation } from './clauseEditorDocHistory';
 
-export const EMS_CLAUSE_EDITOR_FONT_STACK = QUOTE_PREVIEW_FONT_STACK;
+export const EMS_CLAUSE_EDITOR_FONT_STACK = QUOTE_PACK_FONT_STACK;
 
 /** Word-like point sizes for the toolbar font-size dropdown. */
 export const EMS_CLAUSE_EDITOR_FONT_SIZE_LIST = [
@@ -79,7 +80,7 @@ export function getClauseEditorDefaultFontSizePt(editor) {
 
 /** Jodit font dropdown: stack key → display label. */
 export const EMS_CLAUSE_EDITOR_FONT_LIST = {
-    [EMS_CLAUSE_EDITOR_FONT_STACK]: 'Segoe UI',
+    [QUOTE_SEGOE_UI_FONT_STACK]: 'Segoe UI',
     'Arial, Helvetica, sans-serif': 'Arial',
     "'Courier New', Courier, monospace": 'Courier New',
     'Georgia, Palatino, serif': 'Georgia',
@@ -102,8 +103,7 @@ const normalizeFontFamily = (value) =>
 /** Map computed font-family to a list key for Jodit font select. */
 export function resolveClauseEditorFontListKey(fontFamily) {
     const norm = normalizeFontFamily(fontFamily);
-    if (!norm) return EMS_CLAUSE_EDITOR_FONT_STACK;
-    if (norm.includes('segoe ui')) return EMS_CLAUSE_EDITOR_FONT_STACK;
+    if (!norm || /^(selawik|segoe ui)(,|$)/.test(norm)) return QUOTE_SEGOE_UI_FONT_STACK;
 
     for (const stack of Object.keys(EMS_CLAUSE_EDITOR_FONT_LIST)) {
         const stackNorm = normalizeFontFamily(stack);
@@ -113,7 +113,7 @@ export function resolveClauseEditorFontListKey(fontFamily) {
         }
     }
 
-    return EMS_CLAUSE_EDITOR_FONT_STACK;
+    return QUOTE_SEGOE_UI_FONT_STACK;
 }
 
 /** Human label shown in the toolbar font dropdown (e.g. Segoe UI). */
@@ -493,6 +493,7 @@ const applyFontCommand = (editor, command, rawValue) => {
         typeof editor?.__emsClauseEditorBody === 'function'
             ? editor.__emsClauseEditorBody
             : () => editor?.editor || null;
+    restoreClauseEditorFormatSelection(editor);
     armTableToolbarCellStash(editor, getBody);
     if (tryApplyTableCellFormatCommand(editor, getBody, command, rawValue)) {
         editor?.e?.fire?.('change');
@@ -644,7 +645,7 @@ export const EMS_RESET_FONT_TOOLBAR_CONTROL = {
     tooltip: 'Reset font to default (Segoe UI)',
     exec: (editor, _current, { control }) => {
         const whole = control?.args?.[0] === 'document';
-        resetClauseEditorFontToDefault(editor, whole ? 'document' : 'selection');
+        withDocumentHistoryMutation(editor, () => resetClauseEditorFontToDefault(editor, whole ? 'document' : 'selection'));
         return true;
     },
     list: {
@@ -653,7 +654,7 @@ export const EMS_RESET_FONT_TOOLBAR_CONTROL = {
     },
     childExec: (editor, _current, { control, button }) => {
         const key = control?.args?.[0];
-        resetClauseEditorFontToDefault(editor, key === 'document' ? 'document' : 'selection');
+        withDocumentHistoryMutation(editor, () => resetClauseEditorFontToDefault(editor, key === 'document' ? 'document' : 'selection'));
         closeListToolbarPopup(editor, button);
         return true;
     },
@@ -663,7 +664,7 @@ const resolveFontControlArg = (control) => control?.args?.[0];
 
 /** Apply font on list-item pick only — parent button click opens the dropdown. */
 const runFontToolbarChildExec = (editor, command, control, button) => {
-    applyFontCommand(editor, command, resolveFontControlArg(control));
+    withDocumentHistoryMutation(editor, () => applyFontCommand(editor, command, resolveFontControlArg(control)));
     closeListToolbarPopup(editor, button);
 };
 
@@ -691,7 +692,7 @@ export const EMS_FONT_TOOLBAR_CONTROL = {
             if (headingFamily) return resolveClauseEditorFontListKey(headingFamily);
         }
         const family = readClauseEditorSelectionFontFamily(editor);
-        return family ? resolveClauseEditorFontListKey(family) : EMS_CLAUSE_EDITOR_FONT_STACK;
+        return resolveClauseEditorFontListKey(family);
     },
     isChildActive: (editor, button) => {
         const value = button.state.value;

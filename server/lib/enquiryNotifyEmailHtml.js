@@ -270,8 +270,9 @@ function buildEnquiryDetailsTableHtml(row, attachments = [], apiPublicBase = '',
  * @param {Array<{ ID: number, FileName: string, downloadUrl: string }>} attachments
  * @param {string} [apiPublicBase]
  */
-function buildEnquiryNotifyEmailHtml(row, attachments = [], apiPublicBase = '') {
+function buildEnquiryNotifyEmailHtml(row, attachments = [], apiPublicBase = '', options = {}) {
     const rowDefs = buildEnquiryDetailsRowDefs(row, attachments, apiPublicBase);
+    if (options.extraRows?.length) rowDefs.splice(2, 0, ...options.extraRows);
     const refNo = escapeHtml(row.RequestNo);
     const enqDate = formatEnquiryDate(row.EnquiryDate);
 
@@ -285,7 +286,7 @@ function buildEnquiryNotifyEmailHtml(row, attachments = [], apiPublicBase = '') 
 <p style="margin:0 0 6px 0;font-family:${FONT_FAMILY};">Greetings !!!</p>
 <p style="margin:0 0 6px 0;font-family:${FONT_FAMILY};font-size:11pt;line-height:1.4;">&nbsp;</p>
 <p style="margin:0 0 14px 0;line-height:1.4;font-family:${FONT_FAMILY};">Please find given below, details pertaining to a customer Enquiry no. <b>${refNo}</b> on <b>${escapeHtml(enqDate)}</b>. Please report closure in Enquiry Management System.</p>
-${buildEnquiryTable(rowDefs)}
+${buildEnquiryTable(rowDefs, options.tableOptions)}
 <p style="margin:14px 0 6px 0;font-family:${FONT_FAMILY};font-size:11pt;line-height:1.4;">&nbsp;</p>
 <p style="margin:0 0 10px 0;font-family:${FONT_FAMILY};">Best regards,</p>
 <p style="margin:0;font-size:10pt;font-family:${FONT_FAMILY};color:#64748b;"><i>* This is an Auto Generated E-mail by Enquiry Management System *</i></p>

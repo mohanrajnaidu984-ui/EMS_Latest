@@ -3,6 +3,7 @@ import {
     CELL_FONT,
     THIN_BORDER,
     setupEmsExcelReportHeader,
+    enableEmsExcelAutoFilter,
     downloadExcelBlob,
     safeExcelFilePart,
 } from '../../utils/emsExcelWorkbook';
@@ -111,7 +112,7 @@ export async function downloadProbabilityListXlsx({
         `Rows: ${list.length}`,
         `Exported: ${new Date().toLocaleString('en-GB')}`
     ].filter(Boolean);
-    const { dataStartRow } = await setupEmsExcelReportHeader(workbook, sheet, {
+    const { headerRowIndex, dataStartRow } = await setupEmsExcelReportHeader(workbook, sheet, {
         lastCol,
         title,
         metaText: metaParts.join('  |  '),
@@ -191,6 +192,12 @@ export async function downloadProbabilityListXlsx({
 
     COLUMNS.forEach((col, i) => {
         sheet.getColumn(i + 1).width = col.width;
+    });
+
+    enableEmsExcelAutoFilter(sheet, {
+        headerRowIndex,
+        lastCol,
+        lastDataRow: dataStartRow + list.length - 1,
     });
 
     const buffer = await workbook.xlsx.writeBuffer();

@@ -5,6 +5,8 @@
 import {
     EMS_QUOTE_COVER_SIGNATORY_LIFT_PX,
     EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM,
+    EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT,
+    EMS_QUOTE_HEADER_LOGO_MAX_WIDTH,
     EMS_QUOTE_PDF_PREVIEW_GAP_PX,
     EMS_QUOTE_PDF_FOOTER_GAP_EXTRA_PX,
     EMS_QUOTE_PRINT_FOOTER_MIN_HEIGHT,
@@ -175,8 +177,8 @@ html[data-preview-pdf="1"] #quote-preview .quote-sheet-logo-row img,
     display: block !important;
     height: auto !important;
     width: auto !important;
-    max-height: 12.6mm !important;
-    max-width: 100% !important;
+    max-height: ${EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT} !important;
+    max-width: ${EMS_QUOTE_HEADER_LOGO_MAX_WIDTH} !important;
     object-fit: contain !important;
     object-position: right top !important;
     margin-left: auto !important;
@@ -235,10 +237,10 @@ html[data-preview-pdf="1"] #quote-print-root[data-print-with-header='1'] .quote-
     visibility: visible !important;
     display: block !important;
     opacity: 1 !important;
-    max-height: 12.6mm !important;
+    max-height: ${EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT} !important;
     height: auto !important;
     width: auto !important;
-    max-width: 100% !important;
+    max-width: ${EMS_QUOTE_HEADER_LOGO_MAX_WIDTH} !important;
     object-fit: contain !important;
     object-position: right top !important;
     margin-left: auto !important;
@@ -355,8 +357,8 @@ html[data-preview-pdf="1"] #quote-preview .quote-a4-sheet--continuation > .quote
     position: static !important;
     height: auto !important;
     width: auto !important;
-    max-height: ${QUOTE_A4_LOGO_BAND_MM * 0.6}mm !important;
-    max-width: 100% !important;
+    max-height: ${EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT} !important;
+    max-width: ${EMS_QUOTE_HEADER_LOGO_MAX_WIDTH} !important;
     object-fit: contain !important;
     object-position: right top !important;
     display: block !important;

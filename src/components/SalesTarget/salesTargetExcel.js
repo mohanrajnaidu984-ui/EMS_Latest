@@ -4,6 +4,7 @@ import {
     THIN_BORDER,
     TOTAL_FILL,
     setupEmsExcelReportHeader,
+    enableEmsExcelAutoFilter,
     downloadExcelBlob,
     safeExcelFilePart,
 } from '../../utils/emsExcelWorkbook';
@@ -66,7 +67,7 @@ export async function downloadSalesTargetXlsx({
         `Exported: ${new Date().toLocaleString('en-GB')}`
     ].filter(Boolean);
 
-    const { dataStartRow } = await setupEmsExcelReportHeader(workbook, sheet, {
+    const { headerRowIndex, dataStartRow } = await setupEmsExcelReportHeader(workbook, sheet, {
         lastCol,
         title,
         metaText: metaParts.join('  |  '),
@@ -179,6 +180,16 @@ export async function downloadSalesTargetXlsx({
 
     columns.forEach((col, i) => {
         sheet.getColumn(i + 1).width = col.width;
+    });
+
+    /* Filter engineer/item rows only — leave totals outside AutoFilter. */
+    const lastDataRow = includeTotals
+        ? dataStartRow + keys.length * 2 - 1
+        : excelRowIdx - 1;
+    enableEmsExcelAutoFilter(sheet, {
+        headerRowIndex,
+        lastCol,
+        lastDataRow,
     });
 
     const buffer = await workbook.xlsx.writeBuffer();

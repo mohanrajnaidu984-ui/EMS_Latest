@@ -57,7 +57,7 @@ async function sendEnquiryNotificationViaSmtp({
         : buildSmtpTransport(transportExtra || {});
 
     const replyToList = splitRecipients(replyTo);
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
         from,
         to: toList,
         cc: ccList.length ? ccList : undefined,
@@ -67,7 +67,16 @@ async function sendEnquiryNotificationViaSmtp({
         html: String(html || ''),
     });
 
-    return { from, to: toList.join('; '), cc: ccList.join('; '), bcc: bccList.join('; ') };
+    return {
+        from,
+        to: toList.join('; '),
+        cc: ccList.join('; '),
+        bcc: bccList.join('; '),
+        messageId: info?.messageId,
+        accepted: info?.accepted,
+        rejected: info?.rejected,
+        response: info?.response,
+    };
 }
 
 module.exports = { sendEnquiryNotificationViaSmtp, splitRecipients };

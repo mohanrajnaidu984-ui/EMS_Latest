@@ -26,4 +26,39 @@ describe('sanitizeQuoteRichHtml Excel title / spell-mark soup', () => {
         expect(out).toMatch(/xlsx/);
         expect(out).toMatch(/Hello/);
     });
+
+    it('keeps white header paint from font color / bgcolor across sanitize', () => {
+        const html = `<table data-ems-paste-source="office" data-ems-internal-table-clip="1">
+<tr><td bgcolor="#1F4E79"><font color="#FFFFFF">Item</font></td></tr>
+</table>`;
+        const out = sanitizeQuoteRichHtml(html);
+        expect(out).toMatch(/#FFFFFF|#ffffff|rgb\(255,\s*255,\s*255\)/i);
+        expect(out).toMatch(/#1F4E79|#1f4e79/i);
+        expect(out).toMatch(/data-ems-cell-color/i);
+        expect(out).toMatch(/data-ems-cell-bg/i);
+    });
+
+    it('repairs stale white BOQ foregrounds while retaining authored dark fills and mixed colors', () => {
+        const html = `<table data-ems-paste-source="office">
+            <thead><tr style="background-color:#555"><th style="color:white">Description</th></tr></thead>
+            <tbody><tr><td data-ems-header-fg="light" data-ems-cell-color="white" style="color:#182438">
+                Item <strong style="color:#945214">Reference</strong>
+            </td><td style="color:white"><span style="color:white">1</span></td>
+            <td style="background-color:#1565c0;color:white">10</td></tr></tbody>
+        </table>`;
+        const doc = new DOMParser().parseFromString(sanitizeQuoteRichHtml(html), 'text/html');
+        const [description, quantity, blue] = doc.querySelectorAll('td');
+        const color = value => {
+            const sample = doc.createElement('span');
+            sample.style.color = value;
+            return sample.style.color;
+        };
+        expect(doc.querySelector('th').style.color).toBe('white');
+        expect(description.hasAttribute('data-ems-header-fg')).toBe(false);
+        expect(description.style.color).toBe(color('#182438'));
+        expect(description.querySelector('strong').style.color).toBe(color('#945214'));
+        expect(quantity.style.color).toBe(color('#0f172a'));
+        expect(quantity.querySelector('span').style.color).toBe('');
+        expect(blue.style.color).toBe('white');
+    });
 });

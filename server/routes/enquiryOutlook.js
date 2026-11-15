@@ -1,3 +1,4 @@
+const { loadChangeEmail } = require('../lib/enquiryChangeEmail');
 /**
  * Enquiry acknowledgement — Outlook draft (VBScript) for new enquiries.
  */
@@ -23,12 +24,18 @@ const {
 const { loadEnquiryEmailRow } = require('../lib/loadEnquiryEmailRow');
 const { runOutlookHtmlDraftVbs } = require('../lib/runOutlookHtmlDraftVbs');
 const { sendEnquiryNotificationViaSmtp } = require('../lib/enquiryNotifySmtp');
+const { getSmtpFromEmail } = require('../lib/smtpTransport');
 const { isInactiveEnquiryStatus } = require('../lib/enquiryStatus');
 
 const router = express.Router();
 
 function useSmtpForEnquiryNotify() {
     return String(process.env.EMS_ENQUIRY_NOTIFY_VIA_SMTP || '').trim() === '1';
+}
+
+/** Same shared SMTP From as due notifications (SMTP_FROM → SMTP_USER). */
+function enquiryChangeFromEmail() {
+    return String(process.env.EMS_ENQUIRY_CHANGE_FROM || getSmtpFromEmail() || 'ems@almoayyedcg.com').trim();
 }
 
 function smtpFallbackEnabled() {
@@ -99,6 +106,17 @@ router.get('/outlook-email-fields', async (req, res) => {
 
 /** POST /api/enquiries/outlook-draft — send enquiry notification via Outlook (no draft window). */
 router.post('/outlook-draft', express.json({ limit: '5mb' }), async (req, res) => {
+    const isAddendum = req.body?.addendumNo != null;
+    const isEnquiryUpdateOnly = Boolean(req.body?.enquiryUpdate) && !isAddendum;
+    /* New enquiry + addendum: From = creator/adder via Outlook (not forced shared SMTP). */
+    const isCreatorFromMail = !isEnquiryUpdateOnly;
+    /* Enquiry-field-update email is disabled; in-app notifications only. */
+    if (isEnquiryUpdateOnly) {
+        return res.status(400).json({
+            error: 'enquiry_update_email_disabled',
+            message: 'Enquiry update email notification is not required. Use in-app notifications only.',
+        });
+    }
     if (process.platform !== 'win32') {
         return res.status(501).json({ error: 'Outlook send is supported on Windows only' });
     }
@@ -114,7 +132,7 @@ router.post('/outlook-draft', express.json({ limit: '5mb' }), async (req, res) =
         if (!row) {
             return res.status(404).json({ error: 'Enquiry not found' });
         }
-        if (isInactiveEnquiryStatus(row.EnquiryStatus)) {
+        if (!req.body.enquiryUpdate && req.body.addendumNo == null && isInactiveEnquiryStatus(row.EnquiryStatus)) {
             console.log(`[enquiry-outlook] Skipping internal notify for inactive enquiry ${reqNo}`);
             return res.json({
                 success: true,
@@ -144,13 +162,12 @@ router.post('/outlook-draft', express.json({ limit: '5mb' }), async (req, res) =
             });
         }
 
-        const html = buildEnquiryNotifyEmailHtml(row, attachments, apiBase);
-        const subject = buildEnquiryOutlookSubject(row);
+        const { html, subject } = req.body?.enquiryUpdate || req.body?.addendumNo != null
+            ? await loadChangeEmail(row, req.body.addendumNo)
+            : { html: buildEnquiryNotifyEmailHtml(row, attachments, apiBase), subject: buildEnquiryOutlookSubject(row) };
 
-        if (useSmtpForEnquiryNotify()) {
-            await sendEnquiryNotificationViaSmtp({ to, cc, subject, html, fromEmail: userEmail, fromDisplayName: userDisplayName });
-            return res.json({ success: true, sent: true, via: 'smtp', to, cc, subject });
-        }
+        const creatorFrom = String(userEmail || '').trim();
+        const resolveSmtpFrom = () => creatorFrom || enquiryChangeFromEmail();
 
         const dir = path.join(os.tmpdir(), 'ems-enquiry-outlook', String(Date.now()));
         fs.mkdirSync(dir, { recursive: true });
@@ -160,12 +177,21 @@ router.post('/outlook-draft', express.json({ limit: '5mb' }), async (req, res) =
 
         try {
             await runOutlookInternalSend({ htmlPath, vbsPath, dir, to, cc, subject });
-            return res.json({ success: true, sent: true, via: 'outlook', to, cc, subject });
+            return res.json({
+                success: true,
+                sent: true,
+                via: 'outlook',
+                to,
+                cc,
+                subject,
+                from: creatorFrom || 'local-outlook',
+            });
         } catch (outlookErr) {
             if (!smtpFallbackEnabled()) throw outlookErr;
             console.warn('[enquiry-outlook] Outlook send failed, trying SMTP fallback:', outlookErr.message);
             try {
-                await sendEnquiryNotificationViaSmtp({ to, cc, subject, html, fromEmail: userEmail, fromDisplayName: userDisplayName });
+                const fromEmail = resolveSmtpFrom();
+                await sendEnquiryNotificationViaSmtp({ to, cc, subject, html, fromEmail });
                 return res.json({
                     success: true,
                     sent: true,
@@ -173,13 +199,16 @@ router.post('/outlook-draft', express.json({ limit: '5mb' }), async (req, res) =
                     to,
                     cc,
                     subject,
+                    from: fromEmail,
                     outlookError: outlookErr.message || String(outlookErr),
                 });
             } catch (smtpErr) {
                 console.error('[enquiry-outlook] SMTP fallback failed:', smtpErr);
                 return res.status(500).json({
                     error: 'notify_send_failed',
-                    message: `Outlook: ${outlookErr.message || outlookErr}. SMTP: ${smtpErr.message || smtpErr}.`,
+                    message: isCreatorFromMail
+                        ? `Internal notify must send from the creator/adder account. Outlook: ${outlookErr.message || outlookErr}. SMTP: ${smtpErr.message || smtpErr}. Start the local Outlook helper.`
+                        : `Outlook: ${outlookErr.message || outlookErr}. SMTP: ${smtpErr.message || smtpErr}.`,
                     outlookError: outlookErr.message || String(outlookErr),
                     smtpError: smtpErr.message || String(smtpErr),
                 });

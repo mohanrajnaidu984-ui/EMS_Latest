@@ -1,0 +1,814 @@
+{
+  "year": 2026,
+  "generatedAt": "2026-11-11T05:59:34.972Z",
+  "divisions": [
+    {
+      "Year": 2026,
+      "Division": "AC Maint-Elec",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 56,
+      "BookedValue": 2656764.27,
+      "BookedGpValue": 201302.2,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    },
+    {
+      "Year": 2026,
+      "Division": "AC Maint-HVAC",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 242,
+      "BookedValue": 2799316.75,
+      "BookedGpValue": 304410.65,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    },
+    {
+      "Year": 2026,
+      "Division": "Almoayyed Aluminium",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 5,
+      "BookedValue": 2878306,
+      "BookedGpValue": 168580.9,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    },
+    {
+      "Year": 2026,
+      "Division": "Almoayyed Property",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 8,
+      "BookedValue": 3080,
+      "BookedGpValue": 0,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    },
+    {
+      "Year": 2026,
+      "Division": "Almoayyed Transport",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 8,
+      "BookedValue": 1736000,
+      "BookedGpValue": 153461.8,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    },
+    {
+      "Year": 2026,
+      "Division": "BMS Maint",
+      "TargetRows": 8,
+      "Engineers": 2,
+      "TargetValue": 360000,
+      "TargetGpValue": 72000,
+      "BookedJobs": 22,
+      "BookedValue": 180601.08,
+      "BookedGpValue": 26608.28,
+      "MissingBookedGp": 0,
+      "LastUpdated": "2026-06-07T07:51:08.060Z"
+    },
+    {
+      "Year": 2026,
+      "Division": "BMS Project",
+      "TargetRows": 8,
+      "Engineers": 2,
+      "TargetValue": 2200000,
+      "TargetGpValue": 390000,
+      "BookedJobs": 109,
+      "BookedValue": 551685.43,
+      "BookedGpValue": 68737.52,
+      "MissingBookedGp": 0,
+      "LastUpdated": "2026-06-07T07:51:57.820Z"
+    },
+    {
+      "Year": 2026,
+      "Division": "Civil Maint",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 2,
+      "BookedValue": 1716125.24,
+      "BookedGpValue": 130906.6,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    },
+    {
+      "Year": 2026,
+      "Division": "Cleaning Maint",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 35,
+      "BookedValue": 19301,
+      "BookedGpValue": 3683.41,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    },
+    {
+      "Year": 2026,
+      "Division": "Direct Sales - AAC",
+      "TargetRows": 8,
+      "Engineers": 2,
+      "TargetValue": 1250000,
+      "TargetGpValue": 163500,
+      "BookedJobs": 0,
+      "BookedValue": 0,
+      "BookedGpValue": 0,
+      "MissingBookedGp": 0,
+      "LastUpdated": "2026-08-17T06:38:02.517Z"
+    },
+    {
+      "Year": 2026,
+      "Division": "Direct Sales - ACG",
+      "TargetRows": 24,
+      "Engineers": 6,
+      "TargetValue": 4000002,
+      "TargetGpValue": 439500.24,
+      "BookedJobs": 27,
+      "BookedValue": 68269.09,
+      "BookedGpValue": 10841.17,
+      "MissingBookedGp": 0,
+      "LastUpdated": "2026-09-10T12:02:38.940Z"
+    },
+    {
+      "Year": 2026,
+      "Division": "Direct Sales - CamAir",
+      "TargetRows": 4,
+      "Engineers": 1,
+      "TargetValue": 500000,
+      "TargetGpValue": 50000,
+      "BookedJobs": 7,
+      "BookedValue": 108279.5,
+      "BookedGpValue": 12350.29,
+      "MissingBookedGp": 0,
+      "LastUpdated": "2026-08-17T06:36:38.270Z"
+    },
+    {
+      "Year": 2026,
+      "Division": "Duct Factory",
+      "TargetRows": 12,
+      "Engineers": 3,
+      "TargetValue": 1000000,
+      "TargetGpValue": 142000,
+      "BookedJobs": 8,
+      "BookedValue": 398157,
+      "BookedGpValue": 57001.03,
+      "MissingBookedGp": 0,
+      "LastUpdated": "2026-09-07T13:25:32.060Z"
+    },
+    {
+      "Year": 2026,
+      "Division": "Electrical Project",
+      "TargetRows": 12,
+      "Engineers": 3,
+      "TargetValue": 5000000,
+      "TargetGpValue": 500000,
+      "BookedJobs": 8,
+      "BookedValue": 1085128.61,
+      "BookedGpValue": 51522.57,
+      "MissingBookedGp": 0,
+      "LastUpdated": "2026-06-24T13:04:56.070Z"
+    },
+    {
+      "Year": 2026,
+      "Division": "HVAC Project",
+      "TargetRows": 16,
+      "Engineers": 4,
+      "TargetValue": 8800000,
+      "TargetGpValue": 780250,
+      "BookedJobs": 15,
+      "BookedValue": 2789613.05,
+      "BookedGpValue": 245759.18,
+      "MissingBookedGp": 0,
+      "LastUpdated": "2026-06-15T14:39:10.910Z"
+    },
+    {
+      "Year": 2026,
+      "Division": "IBMS Maint",
+      "TargetRows": 4,
+      "Engineers": 1,
+      "TargetValue": 400000,
+      "TargetGpValue": 100000,
+      "BookedJobs": 29,
+      "BookedValue": 51654.05,
+      "BookedGpValue": 14979.16,
+      "MissingBookedGp": 0,
+      "LastUpdated": "2026-07-01T14:23:48.263Z"
+    },
+    {
+      "Year": 2026,
+      "Division": "IBMS Project",
+      "TargetRows": 4,
+      "Engineers": 1,
+      "TargetValue": 500002,
+      "TargetGpValue": 100000.2,
+      "BookedJobs": 3,
+      "BookedValue": 15662.3,
+      "BookedGpValue": 2760.36,
+      "MissingBookedGp": 0,
+      "LastUpdated": "2026-09-01T08:30:29.770Z"
+    },
+    {
+      "Year": 2026,
+      "Division": "IFM Civil Maint",
+      "TargetRows": 8,
+      "Engineers": 2,
+      "TargetValue": 1500000,
+      "TargetGpValue": 259500,
+      "BookedJobs": 93,
+      "BookedValue": 405247.35,
+      "BookedGpValue": 62890.02,
+      "MissingBookedGp": 0,
+      "LastUpdated": "2026-09-10T15:08:58.357Z"
+    },
+    {
+      "Year": 2026,
+      "Division": "IFM Cleaning Services",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 13,
+      "BookedValue": 97290.95,
+      "BookedGpValue": 12872.14,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    },
+    {
+      "Year": 2026,
+      "Division": "IFM Elec Maint",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 5,
+      "BookedValue": 842,
+      "BookedGpValue": 122.45,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    },
+    {
+      "Year": 2026,
+      "Division": "Interiors Project",
+      "TargetRows": 24,
+      "Engineers": 6,
+      "TargetValue": 10200003,
+      "TargetGpValue": 1240000,
+      "BookedJobs": 24,
+      "BookedValue": 5538083.39,
+      "BookedGpValue": 322449.07,
+      "MissingBookedGp": 0,
+      "LastUpdated": "2026-10-19T05:53:43.243Z"
+    },
+    {
+      "Year": 2026,
+      "Division": "Landscape Maint",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 28,
+      "BookedValue": 55444.7,
+      "BookedGpValue": 6719.06,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    },
+    {
+      "Year": 2026,
+      "Division": "Landscape Project",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 2,
+      "BookedValue": 7825,
+      "BookedGpValue": 685.6,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    },
+    {
+      "Year": 2026,
+      "Division": "Machine Leasing",
+      "TargetRows": 4,
+      "Engineers": 1,
+      "TargetValue": 465992,
+      "TargetGpValue": 93198.4,
+      "BookedJobs": 46,
+      "BookedValue": 391930,
+      "BookedGpValue": 59723.56,
+      "MissingBookedGp": 0,
+      "LastUpdated": "2026-09-07T05:21:19.063Z"
+    },
+    {
+      "Year": 2026,
+      "Division": "Plumbing & Fire Fighting Project",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 6,
+      "BookedValue": 1501239,
+      "BookedGpValue": 120120.6,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    },
+    {
+      "Year": 2026,
+      "Division": "Scaffolding",
+      "TargetRows": 4,
+      "Engineers": 1,
+      "TargetValue": 770000,
+      "TargetGpValue": 246400,
+      "BookedJobs": 73,
+      "BookedValue": 774859.73,
+      "BookedGpValue": 76906.22,
+      "MissingBookedGp": 0,
+      "LastUpdated": "2026-09-07T05:29:12.790Z"
+    },
+    {
+      "Year": 2026,
+      "Division": "Security Project",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 1,
+      "BookedValue": 960,
+      "BookedGpValue": 144,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    },
+    {
+      "Year": 2026,
+      "Division": "Simplex Project",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 24,
+      "BookedValue": 661250,
+      "BookedGpValue": 59986.95,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    },
+    {
+      "Year": 2026,
+      "Division": "YK Real Estate",
+      "TargetRows": 0,
+      "Engineers": 0,
+      "TargetValue": 0,
+      "TargetGpValue": 0,
+      "BookedJobs": 6,
+      "BookedValue": 3565,
+      "BookedGpValue": 0,
+      "MissingBookedGp": 0,
+      "LastUpdated": null
+    }
+  ],
+  "masterDivisions": [
+    {
+      "Division": "AC Maint-Elec",
+      "CompanyName": "Almoayyed Air Conditioning W.L.L.",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "AC Maint-HVAC",
+      "CompanyName": "Almoayyed Air Conditioning W.L.L.",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Almoayyed Aluminium",
+      "CompanyName": "Almoayyed Aluminium W.L.L.",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Almoayyed Property",
+      "CompanyName": "Almoayyed Property Development . W.L.L.",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Almoayyed Transport",
+      "CompanyName": "Almoayyed Transport CO W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Almoayyed Water Solutions",
+      "CompanyName": "Almoayyed Transport",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "BMS Maint",
+      "CompanyName": "Almoayyed Air Conditioning W.L.L.",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "BMS Project",
+      "CompanyName": "Almoayyed Air Conditioning W.L.L.",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Business Development",
+      "CompanyName": "Almoayyed Contracting Group W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Civil Maint",
+      "CompanyName": "Almoayyed Contracting W.L.L.",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Civil Project",
+      "CompanyName": "Almoayyed Contracting W.L.L.",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Cleaning Maint",
+      "CompanyName": "Almoayyed Cleaning & Maintenance W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Designers Gallery",
+      "CompanyName": "Designers Gallery Company W L L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Direct Sales - AAC",
+      "CompanyName": "Almoayyed Air Conditioning W.L.L.",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Direct Sales - ACG",
+      "CompanyName": "Almoayyed Contracting Group W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Direct Sales - CamAir",
+      "CompanyName": "Cam Air International W.L.L.",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Duct Factory",
+      "CompanyName": "Almoayyed Air Ducts Factory W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Electrical Project",
+      "CompanyName": "Almoayyed Air Conditioning W.L.L.",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "HVAC Project",
+      "CompanyName": "Almoayyed Air Conditioning W.L.L.",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "HVAC Project - KSA",
+      "CompanyName": "Almoayyed Contracting Company",
+      "Currency": "SAR",
+      "Status": "Active"
+    },
+    {
+      "Division": "IBMS Maint",
+      "CompanyName": "YK Almoayyed Integrated Building Solutions",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "IBMS Project",
+      "CompanyName": "YK Almoayyed Integrated Building Solutions",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "IFM Civil Maint",
+      "CompanyName": "Integrated Facility Management W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "IFM Cleaning Services",
+      "CompanyName": "Integrated Facility Management W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "IFM Elec Maint",
+      "CompanyName": "Integrated Facility Management W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "IFM Facility",
+      "CompanyName": "Integrated Facility Management W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "IFM Home Maint",
+      "CompanyName": "Integrated Facility Management W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "IFM HVAC Maint",
+      "CompanyName": "Integrated Facility Management W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "IFM Project",
+      "CompanyName": "Integrated Facility Management W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Interiors Maint",
+      "CompanyName": "Almoayyed Interiors",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Interiors Project",
+      "CompanyName": "Almoayyed Interiors",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Interiors Project - KSA",
+      "CompanyName": "Almoayyed Contracting Company",
+      "Currency": "SAR",
+      "Status": "Active"
+    },
+    {
+      "Division": "Landscape Maint",
+      "CompanyName": "Almoayyed Landscapes and Swimming Pools",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Landscape Project",
+      "CompanyName": "Almoayyed Landscapes and Swimming Pools",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Machine Leasing",
+      "CompanyName": "Almoayyed Scaffolding Company W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Plumbing & Fire Fighting Project",
+      "CompanyName": "Almoayyed Air Conditioning W.L.L.",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Scaffolding",
+      "CompanyName": "Almoayyed Scaffolding Company W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Security Project",
+      "CompanyName": "Almoayyed Security",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Simplex Project",
+      "CompanyName": "Simplex Almoayyed W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "Steel Fabrication",
+      "CompanyName": "Almoayyed Contracting W.L.L.",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "YK Almoayyed",
+      "CompanyName": "Y.K. Almoayyed & Sons",
+      "Currency": "BHD",
+      "Status": "Active"
+    },
+    {
+      "Division": "YK Real Estate",
+      "CompanyName": "YK Real Estate Investments & Developments Company W.L.L",
+      "Currency": "BHD",
+      "Status": "Active"
+    }
+  ],
+  "commitments": [
+    {
+      "Year": 2026,
+      "Division": "AC Maint-HVAC",
+      "Revenue": 11400000,
+      "GpValue": 2034000,
+      "GpPct": 18
+    },
+    {
+      "Year": 2026,
+      "Division": "Almoayyed Aluminium",
+      "Revenue": 1607000,
+      "GpValue": 193750,
+      "GpPct": 0
+    },
+    {
+      "Year": 2026,
+      "Division": "Almoayyed Transport",
+      "Revenue": 2700000,
+      "GpValue": 594000,
+      "GpPct": 22
+    },
+    {
+      "Year": 2026,
+      "Division": "Almoayyed Watersolution",
+      "Revenue": 100000,
+      "GpValue": 46800,
+      "GpPct": 0
+    },
+    {
+      "Year": 2026,
+      "Division": "BMS Maint",
+      "Revenue": 140000,
+      "GpValue": 56000,
+      "GpPct": 40
+    },
+    {
+      "Year": 2026,
+      "Division": "BMS Project",
+      "Revenue": 1437000,
+      "GpValue": 252000,
+      "GpPct": 18
+    },
+    {
+      "Year": 2026,
+      "Division": "Civil Maint",
+      "Revenue": 3036000,
+      "GpValue": 331500,
+      "GpPct": 11
+    },
+    {
+      "Year": 2026,
+      "Division": "Civil Project",
+      "Revenue": 26404000,
+      "GpValue": 2622000,
+      "GpPct": 10
+    },
+    {
+      "Year": 2026,
+      "Division": "Cleaning Maint",
+      "Revenue": 3600000,
+      "GpValue": 504000,
+      "GpPct": 14
+    },
+    {
+      "Year": 2026,
+      "Division": "Designers Gallery",
+      "Revenue": 550000,
+      "GpValue": 79000,
+      "GpPct": 14
+    },
+    {
+      "Year": 2026,
+      "Division": "Direct Sales",
+      "Revenue": 4000000,
+      "GpValue": 425000,
+      "GpPct": 11
+    },
+    {
+      "Year": 2026,
+      "Division": "Duct Factory",
+      "Revenue": 995000,
+      "GpValue": 149250,
+      "GpPct": 15
+    },
+    {
+      "Year": 2026,
+      "Division": "Electrical Project",
+      "Revenue": 5000000,
+      "GpValue": 500000,
+      "GpPct": 10
+    },
+    {
+      "Year": 2026,
+      "Division": "HVAC Project",
+      "Revenue": 8710000,
+      "GpValue": 780000,
+      "GpPct": 9
+    },
+    {
+      "Year": 2026,
+      "Division": "IFM Civil Maint",
+      "Revenue": 1500000,
+      "GpValue": 259500,
+      "GpPct": 17
+    },
+    {
+      "Year": 2026,
+      "Division": "IFM Cleaning Services",
+      "Revenue": 2300000,
+      "GpValue": 372600,
+      "GpPct": 16
+    },
+    {
+      "Year": 2026,
+      "Division": "IFM HVAC Maint",
+      "Revenue": 750000,
+      "GpValue": 137250,
+      "GpPct": 18
+    },
+    {
+      "Year": 2026,
+      "Division": "Interiors Project",
+      "Revenue": 6000000,
+      "GpValue": 750000,
+      "GpPct": 13
+    },
+    {
+      "Year": 2026,
+      "Division": "Landscape Maint",
+      "Revenue": 500000,
+      "GpValue": 125000,
+      "GpPct": 25
+    },
+    {
+      "Year": 2026,
+      "Division": "Landscape Project",
+      "Revenue": 1300000,
+      "GpValue": 150000,
+      "GpPct": 12
+    },
+    {
+      "Year": 2026,
+      "Division": "Machine Leasing",
+      "Revenue": 465992,
+      "GpValue": 111838,
+      "GpPct": 0
+    },
+    {
+      "Year": 2026,
+      "Division": "Plumbing & Fire Fighting Project",
+      "Revenue": 3500000,
+      "GpValue": 390000,
+      "GpPct": 11
+    },
+    {
+      "Year": 2026,
+      "Division": "Scaffolding",
+      "Revenue": 770000,
+      "GpValue": 242550,
+      "GpPct": 32
+    },
+    {
+      "Year": 2026,
+      "Division": "Security Project",
+      "Revenue": 4870000,
+      "GpValue": 701600,
+      "GpPct": 15
+    },
+    {
+      "Year": 2026,
+      "Division": "Simplex Project",
+      "Revenue": 850000,
+      "GpValue": 75000,
+      "GpPct": 9
+    }
+  ]
+}

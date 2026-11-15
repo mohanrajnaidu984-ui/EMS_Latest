@@ -1,3 +1,5 @@
+import AddendumBlock from './AddendumBlock';
+import { removeUnsavedAddendum } from './removeUnsavedAddendum';
 import React, { useState, useEffect, useRef, useMemo, useCallback, useLayoutEffect } from 'react';
 import { useData } from '../../context/DataContext';
 import { useAuth } from '../../context/AuthContext';
@@ -289,6 +291,10 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
     // Validation Errors
     const [errors, setErrors] = useState({});
     const [attachments, setAttachments] = useState([]);
+    const [addendums, setAddendums] = useState([]);
+    const savedAddendumsRef = useRef([]);
+    const pendingAddendumNotificationsRef = useRef(new Set());
+    const loadedAddendumRequestRef = useRef(null);
     const [pendingFiles, setPendingFiles] = useState([]); // Now stores only meta: { id, fileName, previewUrl }
     const fileObjectsRef = useRef({}); // Stores actual File objects: { [id]: File }
     const [ackSEList, setAckSEList] = useState([]);
@@ -1211,6 +1217,12 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
             }
         }
 
+        const blankAddendums = (addendums || []).filter((a) => !String(a?.Details || '').trim());
+        if (blankAddendums.length > 0) {
+            newErrors.AddendumDetails = 'Required';
+            newErrors.AddendumDetailsNos = blankAddendums.map((a) => a.AddendumNo);
+        }
+
         if (Object.keys(newErrors).length > 0) {
             setErrors(newErrors);
             // Scroll to error message section after a brief delay to ensure it's rendered
@@ -1311,10 +1323,13 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                 }
 
                 let attachmentNote = '';
+                const changedAddendums = await saveAddendums(formData.RequestNo);
                 if (pendingFiles.length > 0) {
                     const attOk = await uploadPendingFiles(formData.RequestNo);
-                    if (!attOk) attachmentNote = ' — some attachments could not be saved.';
+                    if (!attOk) return;
                 }
+                /* Enquiry-field updates: no email — only addendum emails (and in-app notifications). */
+                if (changedAddendums.length) await notifyEnquiryChanges(formData.RequestNo, changedAddendums);
 
                 const updatedRequestNo = formData.RequestNo;
                 resetForm();
@@ -1330,11 +1345,16 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
 
                 if (result.success) {
                     const savedRequestNo = String(result.requestNo || '').trim();
+                    loadedAddendumRequestRef.current = savedRequestNo;
+                    setFormData(prev => ({ ...prev, RequestNo: savedRequestNo }));
+                    setIsModifyMode(true);
+                    const changedAddendums = await saveAddendums(savedRequestNo);
                     let attachmentNote = '';
                     if (pendingFiles.length > 0) {
                         const attOk = await uploadPendingFiles(savedRequestNo);
-                        if (!attOk) attachmentNote = ' — some attachments could not be saved.';
+                        if (!attOk) { setFormData(prev => ({ ...prev, RequestNo: savedRequestNo })); setIsModifyMode(true); return; }
                     }
+                    if (changedAddendums.length) await notifyEnquiryChanges(savedRequestNo, changedAddendums);
 
                     const concernedSEsForMail = [...selectedConcernedSEs];
                     const ackSeName = ackSEList[0];
@@ -1405,7 +1425,7 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
             }
         } catch (err) {
             console.error('Submit failed:', err);
-            alert('An unexpected error occurred during submission.');
+            alert(err.message || 'An unexpected error occurred during submission.');
         } finally {
             submitInFlightRef.current = false;
             setIsSubmitting(false);
@@ -1433,6 +1453,47 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
         }
     };
 
+    const handleRemoveAddendum = (number) => {
+        if (!canEdit || isSubmitting || submitInFlightRef.current) return;
+        const result = removeUnsavedAddendum(addendums, pendingFiles, savedAddendumsRef.current.map(a => a.AddendumNo), number);
+        if (!result) return;
+        result.removedFiles.forEach(file => {
+            delete fileObjectsRef.current[file.id];
+            if (file.previewUrl) URL.revokeObjectURL(file.previewUrl);
+        });
+        setAddendums(result.addendums);
+        setPendingFiles(result.pendingFiles);
+    };
+
+    const saveAddendums = async (requestNo) => {
+        const changed = addendums.filter(a => !savedAddendumsRef.current.some(old => old.AddendumNo === a.AddendumNo && old.Details === a.Details)
+            || pendingFiles.some(f => f.addendumNo === a.AddendumNo)).map(a => a.AddendumNo);
+        if (addendums.length) {
+            const res = await fetch(`/api/enquiries/${encodeURIComponent(requestNo)}/addendums?${attachmentUserQuery()}`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addendums: addendums.map(a => ({ ...a,
+                    OriginalDetails: savedAddendumsRef.current.find(old => old.AddendumNo === a.AddendumNo)?.Details ?? null })) })
+            });
+            if (!res.ok) { const data = await res.json(); throw new Error(data.error || 'Could not save addendums'); }
+        }
+        changed.forEach(n => pendingAddendumNotificationsRef.current.add(n));
+        savedAddendumsRef.current = addendums.map(a => ({ ...a }));
+        return [...pendingAddendumNotificationsRef.current];
+    };
+    const notifyEnquiryChanges = async (requestNo, numbers) => {
+        /* Addendum emails only — no enquiry-field-update email. */
+        const targets = (numbers || []).filter((n) => n != null);
+        for (const addendumNo of targets) {
+            const result = await sendEnquiryInternalNotification({
+                apiBase: EMS_API_BASE,
+                requestNo,
+                addendumNo,
+                userEmail: currentUser?.EmailId || currentUser?.email || '',
+                userDisplayName: currentUser?.FullName || currentUser?.name || 'System',
+            });
+            if (!result.ok) throw new Error('Enquiry saved, but notification email failed: ' + result.error);
+            pendingAddendumNotificationsRef.current.delete(addendumNo);
+        }
+    };
     const uploadPendingFiles = async (requestNo) => {
         const userName = currentUser?.name || currentUser?.FullName || 'System';
         // Prefer explicit DivisionName when it is a single label; else first assigned Department token.
@@ -1441,11 +1502,12 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                 ? (parseUserDepartments(currentUser?.Department || currentUser?.DivisionName || '')[0] || '')
                 : (currentUser?.DivisionName || parseUserDepartments(currentUser?.Department || '')[0] || '');
         const failures = [];
+        const succeeded = new Set();
 
         const groups = pendingFiles.reduce((acc, item) => {
             const visibility = item.visibility || 'Public';
             const type = item.type || 'File';
-            const key = `${visibility}\0${type}`;
+            const key = `${visibility}\0${type}\0${item.addendumNo || ''}`;
             if (!acc[key]) acc[key] = [];
             acc[key].push(item);
             return acc;
@@ -1453,7 +1515,7 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
 
         for (const key in groups) {
             const items = groups[key];
-            const [visibility, type] = key.split('\0');
+            const [visibility, type, addendumNo] = key.split('\0');
 
             if (type === 'File') {
                 const uploadData = new FormData();
@@ -1464,13 +1526,13 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                 if (!uploadData.has('files')) continue;
 
                 try {
-                    const res = await fetch(`/api/attachments/upload?requestNo=${encodeURIComponent(requestNo)}&userName=${encodeURIComponent(userName)}&visibility=${visibility}&type=File&division=${encodeURIComponent(userDivision)}`, {
+                    const res = await fetch(`/api/attachments/upload?requestNo=${encodeURIComponent(requestNo)}&userName=${encodeURIComponent(userName)}&visibility=${visibility}&type=File&division=${encodeURIComponent(userDivision)}&addendumNo=${addendumNo}`, {
                         method: 'POST',
                         body: uploadData
                     });
                     if (!res.ok) {
                         failures.push(`${visibility} files: ${await readAttachmentUploadError(res)}`);
-                    }
+                    } else items.forEach(item => succeeded.add(item.id));
                 } catch (err) {
                     failures.push(`${visibility} files: ${err.message || 'Upload failed'}`);
                 }
@@ -1486,13 +1548,13 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                     if (!uploadData.has('files')) continue;
 
                     try {
-                        const res = await fetch(`/api/attachments/upload?requestNo=${encodeURIComponent(requestNo)}&userName=${encodeURIComponent(userName)}&visibility=${visibility}&type=File&division=${encodeURIComponent(userDivision)}`, {
+                        const res = await fetch(`/api/attachments/upload?requestNo=${encodeURIComponent(requestNo)}&userName=${encodeURIComponent(userName)}&visibility=${visibility}&type=File&division=${encodeURIComponent(userDivision)}&addendumNo=${addendumNo}`, {
                             method: 'POST',
                             body: uploadData
                         });
                         if (!res.ok) {
                             failures.push(`${visibility} folder: ${await readAttachmentUploadError(res)}`);
-                        }
+                        } else succeeded.add(item.id);
                     } catch (err) {
                         failures.push(`${visibility} folder: ${err.message || 'Upload failed'}`);
                     }
@@ -1502,12 +1564,12 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                     try {
                         const url = item.LinkURL || item.linkUrl;
                         const fName = item.FileName || item.fileName;
-                        const res = await fetch(`/api/attachments/upload?requestNo=${encodeURIComponent(requestNo)}&userName=${encodeURIComponent(userName)}&visibility=${visibility}&type=Link&linkUrl=${encodeURIComponent(url)}&fileName=${encodeURIComponent(fName)}&division=${encodeURIComponent(userDivision)}`, {
+                        const res = await fetch(`/api/attachments/upload?requestNo=${encodeURIComponent(requestNo)}&userName=${encodeURIComponent(userName)}&visibility=${visibility}&type=Link&linkUrl=${encodeURIComponent(url)}&fileName=${encodeURIComponent(fName)}&division=${encodeURIComponent(userDivision)}&addendumNo=${addendumNo}`, {
                             method: 'POST'
                         });
                         if (!res.ok) {
                             failures.push(`${visibility} link: ${await readAttachmentUploadError(res)}`);
-                        }
+                        } else succeeded.add(item.id);
                     } catch (err) {
                         failures.push(`${visibility} link: ${err.message || 'Upload failed'}`);
                     }
@@ -1515,9 +1577,9 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
             }
         }
 
-        setPendingFiles([]);
-        fileObjectsRef.current = {};
-        await fetchAttachments();
+        setPendingFiles(prev => prev.filter(item => !succeeded.has(item.id)));
+        succeeded.forEach(id => delete fileObjectsRef.current[id]);
+        await loadAttachmentsForEnquiry(requestNo);
 
         if (failures.length > 0) {
             alert(`Some attachments could not be saved:\n\n${failures.join('\n')}`);
@@ -1527,6 +1589,10 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
     };
 
     const resetForm = () => {
+        setAddendums([]);
+        savedAddendumsRef.current = [];
+        pendingAddendumNotificationsRef.current.clear();
+        loadedAddendumRequestRef.current = null;
         pendingFiles.forEach((item) => {
             if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
         });
@@ -1823,11 +1889,11 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
         );
     };
 
-    const handleAddLink = (visibility = 'Public') => {
-        if (!hyperlink.url) return;
+    const handleAddLink = (visibility = 'Public', addendumNo = null, linkText = hyperlink.url) => {
+        if (!linkText) return;
 
         // Split by newlines or commas, then filter out empty lines
-        const links = hyperlink.url.split(/[\n,]+/).map(l => l.trim()).filter(l => l.length > 0);
+        const links = linkText.split(/[\n,]+/).map(l => l.trim()).filter(l => l.length > 0);
 
         if (links.length === 0) return;
 
@@ -1835,6 +1901,7 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
         const addedDate = new Date().toISOString();
         const newLinks = links.map((link, index) => ({
             id: now + index,
+            addendumNo,
             FileName: link, // Match SQL naming
             isPending: true,
             visibility,
@@ -1855,12 +1922,13 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
         return params.toString();
     };
 
-    const renderAttachmentList = (visibility, type) => {
+    const renderAttachmentList = (visibility, type, addendumNo = null) => {
         const userDeptCsv = currentUser?.Department || currentUser?.DivisionName || '';
         const isAdmin = (currentUser?.role || currentUser?.Roles || '').toLowerCase().includes('admin');
 
         // Combined filter for both individual files and folders when type is 'File'
         const filteredPending = pendingFiles.filter(f => {
+            if ((f.addendumNo || null) !== addendumNo) return false;
             if ((f.visibility || 'Public') !== visibility) return false;
             const fType = f.type || 'File';
             if (type === 'File') return fType === 'File' || fType === 'Folder';
@@ -1868,6 +1936,7 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
         });
 
         const filteredUploaded = attachments.filter(a => {
+            if ((a.AddendumNo || null) !== addendumNo) return false;
             if ((a.Visibility || 'Public') === 'Private') {
                 if (visibility !== 'Private') return false;
 
@@ -1956,7 +2025,7 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
 
                             <div className="d-flex align-items-center gap-1">
                                 {item.isPending ? (
-                                    !isLimitedEdit && (
+                                    (!isLimitedEdit || addendumNo != null) && (
                                     <button type="button" className="btn btn-sm btn-outline-danger p-0" style={{ width: type === 'Link' ? '24px' : '28px', height: type === 'Link' ? '24px' : '28px', fontSize: '10px' }} onClick={() => handleRemoveAttachment(item.id, true)} title="Remove"><i className="bi bi-trash"></i></button>
                                     )
                                 ) : (
@@ -1993,7 +2062,7 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
 
     // --- File Upload ---
     // --- File Upload ---
-    const handleFileUpload = (e, visibility = 'Public') => {
+    const handleFileUpload = (e, visibility = 'Public', addendumNo = null) => {
         const files = e.target.files;
         if (!files || files.length === 0) return;
 
@@ -2009,7 +2078,7 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
             fileObjectsRef.current[id] = Array.from(files);
             setPendingFiles(prev => [...prev, {
                 id,
-                fileName: rootFolderName,
+                fileName: rootFolderName, addendumNo,
                 isPending: true,
                 visibility,
                 type: 'Folder',
@@ -2025,7 +2094,7 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                 const file = files[i];
                 const fid = now + i;
                 fileObjectsRef.current[fid] = file;
-                newMeta.push({ id: fid, fileName: file.name, isPending: true, visibility, type: 'File', addedDate });
+                newMeta.push({ addendumNo, id: fid, fileName: file.name, isPending: true, visibility, type: 'File', addedDate });
             }
             setPendingFiles(prev => [...prev, ...newMeta]);
         }
@@ -2033,7 +2102,7 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
     };
 
     const handleRemoveAttachment = async (attachmentId, isPending = false) => {
-        if (isLimitedEdit) return;
+        if (isLimitedEdit && !(isPending && pendingFiles.some(f => f.id === attachmentId && f.addendumNo))) return;
 
         if (isPending) {
             // No confirmation needed for pending files (not saved yet)
@@ -2070,8 +2139,23 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
     };
 
     const loadAttachmentsForEnquiry = async (requestNo) => {
+        if (loadedAddendumRequestRef.current !== String(requestNo)) {
+            pendingAddendumNotificationsRef.current.clear();
+            setAddendums([]);
+            savedAddendumsRef.current = [];
+            loadedAddendumRequestRef.current = String(requestNo);
+        }
         setAttachments([]);
         try {
+            if (!submitInFlightRef.current) {
+                const addendumRes = await fetch(`/api/enquiries/${encodeURIComponent(requestNo)}/addendums?${attachmentUserQuery()}`);
+                if (!addendumRes.ok) throw new Error('Could not load addendums');
+                const loadedAddendums = await addendumRes.json();
+                if (!submitInFlightRef.current && loadedAddendumRequestRef.current === String(requestNo)) {
+                    setAddendums(loadedAddendums);
+                    savedAddendumsRef.current = loadedAddendums;
+                }
+            }
             const res = await fetch(`/api/attachments?requestNo=${encodeURIComponent(requestNo)}&${attachmentUserQuery()}`);
             if (res.ok) {
                 const data = await res.json();
@@ -2922,10 +3006,10 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                                             </div>
                                         </div>
 
-                                        {/* Card 3: Attachments & Remarks */}
+                                        {/* Card 3: Enquiry Attachments */}
                                         <div className="card mb-4 shadow-sm border-0 bg-light card-overline">
                                             <div className="card-body p-4">
-                                                <h5 className="card-title fw-bold mb-4">Attachments & Remarks</h5>
+                                                <h5 className="card-title fw-bold mb-4">Enquiry Attachments (Received along with the Enquiry)</h5>
 
                                                 {/* Document Received */}
                                                 <div className="row mb-3">
@@ -3073,6 +3157,34 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                                                     </div>
                                                 </div>
 
+                                                {/* Addendums */}
+                                                <div className="mb-3">
+                                                    {addendums.map(a => <AddendumBlock key={a.draftId || a.AddendumNo} addendum={a} disabled={!canEdit || isSubmitting}
+                                                        detailsError={Array.isArray(errors.AddendumDetailsNos) && errors.AddendumDetailsNos.includes(a.AddendumNo) ? 'Required' : undefined}
+                                                        onRemove={savedAddendumsRef.current.some(saved => saved.AddendumNo === a.AddendumNo) ? undefined : () => handleRemoveAddendum(a.AddendumNo)}
+                                                        onDetails={Details => {
+                                                            setAddendums(prev => prev.map(old => old.AddendumNo === a.AddendumNo ? { ...old, Details } : old));
+                                                            if (String(Details || '').trim()) {
+                                                                setErrors(prev => {
+                                                                    const nos = Array.isArray(prev.AddendumDetailsNos)
+                                                                        ? prev.AddendumDetailsNos.filter((n) => n !== a.AddendumNo)
+                                                                        : [];
+                                                                    if (!prev.AddendumDetails && !prev.AddendumDetailsNos) return prev;
+                                                                    const next = { ...prev };
+                                                                    if (nos.length) next.AddendumDetailsNos = nos;
+                                                                    else {
+                                                                        delete next.AddendumDetails;
+                                                                        delete next.AddendumDetailsNos;
+                                                                    }
+                                                                    return next;
+                                                                });
+                                                            }
+                                                        }}
+                                                        onFiles={(e,v) => handleFileUpload(e,v,a.AddendumNo)}
+                                                        onLinks={(v,text) => handleAddLink(v,a.AddendumNo,text)}
+                                                        renderList={(v,t) => renderAttachmentList(v,t,a.AddendumNo)} />)}
+                                                    <button type="button" className="btn btn-outline-primary mb-3" disabled={!canEdit || isSubmitting} onClick={() => setAddendums(prev => [...prev, { draftId: `draft-${Date.now()}-${Math.random()}`, AddendumNo: Math.max(0, ...prev.map(a => a.AddendumNo)) + 1, Details: '' }])}>Addendum +</button>
+                                                </div>
                                                 {/* Remarks */}
                                                 <div className="row mb-3">
                                                     <div className="col-md-12">
@@ -3259,7 +3371,8 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                                                             .filter(
                                                                 (field) =>
                                                                     !field.endsWith('Ids') &&
-                                                                    field !== 'EnquiryForAccountable'
+                                                                    field !== 'EnquiryForAccountable' &&
+                                                                    field !== 'AddendumDetailsNos'
                                                             )
                                                             .map((field) => (
                                                             <li key={field}>
@@ -3278,6 +3391,11 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                                                                 {field === 'ConcernedSE' && 'Concerned SE'}
                                                                 {field === 'DetailsOfEnquiry' && 'Details of Enquiry'}
                                                                 {field === 'CustomerRefNo' && 'Customer Ref. No'}
+                                                                {field === 'AddendumDetails' && (
+                                                                    Array.isArray(errors.AddendumDetailsNos) && errors.AddendumDetailsNos.length
+                                                                        ? `Addendum Details (Addendum-${errors.AddendumDetailsNos.join(', Addendum-')})`
+                                                                        : 'Addendum Details'
+                                                                )}
                                                             </li>
                                                         ))}
                                                     </ul>

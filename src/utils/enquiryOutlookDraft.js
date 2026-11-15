@@ -76,14 +76,18 @@ export async function isOutlookLocalHelperAvailable() {
 }
 
 /** Internal enquiry notification — direct send (no draft window). */
-export async function sendEnquiryInternalNotification({ apiBase, requestNo, concernedSEs, userEmail, userDisplayName }) {
+export async function sendEnquiryInternalNotification({ apiBase, requestNo, concernedSEs, userEmail, userDisplayName, addendumNo, enquiryUpdate }) {
     const payload = {
+        addendumNo, enquiryUpdate,
         requestNo: String(requestNo || '').trim(),
         concernedSEs: Array.isArray(concernedSEs) ? concernedSEs.filter(Boolean) : [],
         userEmail: userEmail || '',
         userDisplayName: userDisplayName || '',
     };
 
+    // New enquiry + addendum: local Outlook first so From = the signed-in creator/adder.
+    // Enquiry-field-update emails are not used by the UI anymore.
+    const isAddendum = addendumNo != null;
     const localTry = await tryUrls(LOCAL_INTERNAL_URLS, payload, 15000);
     if (localTry.ok) return { ok: true, method: 'local-helper', ...localTry };
 
@@ -95,7 +99,9 @@ export async function sendEnquiryInternalNotification({ apiBase, requestNo, conc
         error:
             (serverTry.error || 'Could not send internal notification email') +
             '\n\n' +
-            HELPER_START_HINT,
+            (isAddendum
+                ? 'Addendum mail must send from your Outlook account. Start: node scripts/quote-outlook-local-helper.js (classic Outlook open).'
+                : HELPER_START_HINT),
     };
 }
 

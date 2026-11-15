@@ -4,6 +4,7 @@
  */
 
 import { remapSymbolFontGreekInHtml } from './quoteSymbolFont.js';
+import { normalizeOfficeTableForegrounds } from './clauseEditorTable.js';
 
 const ALLOWED_TAGS = new Set([
     'A', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'SUB', 'SUP', 'BR', 'HR',
@@ -14,11 +15,67 @@ const ALLOWED_TAGS = new Set([
 
 const ALLOWED_ATTRS = new Set([
     'href', 'src', 'alt', 'title', 'colspan', 'rowspan', 'width', 'height',
-    'align', 'valign', 'class', 'id', 'style', 'data-ems-indent', 'data-ems-row',
+    'align', 'valign', 'class', 'id', 'style', 'bgcolor', 'color',
+    'data-ems-indent', 'data-ems-row',
     'data-ems-amount', 'data-ems-pricing-cols', 'data-ems-col-widths',
     'data-ems-row-heights', 'data-ems-paste-source', 'data-ems-heading-custom',
     'start', 'type',
 ]);
+
+/** Repair legacy Office cell list items whose inline padding overrides the marker gutter. */
+export function clearTableListMarkerPadding(root) {
+    root.querySelectorAll(':is(td, th) :is(ul[class*="ems-bullet-"], ol[class*="ems-num-"]) > li[style]').forEach((item) => {
+        item.style.removeProperty('padding-left');
+        item.style.removeProperty('padding-inline-start');
+    });
+}
+
+/** Promote legacy bgcolor / font color attrs to inline style before attr stripping. */
+function promoteLegacyPaintAttrsToStyles(root) {
+    if (!root?.querySelectorAll) return;
+    root.querySelectorAll('[bgcolor]').forEach((el) => {
+        const bg = (el.getAttribute('bgcolor') || '').trim();
+        if (!bg) return;
+        if (!(el.style?.getPropertyValue('background-color') || '').trim()) {
+            el.style.setProperty('background-color', bg, 'important');
+            el.style.setProperty('background', bg, 'important');
+        }
+        if (/^(TD|TH)$/i.test(el.tagName || '')) {
+            el.setAttribute('data-ems-cell-fill', '1');
+            el.setAttribute('data-ems-cell-bg', bg);
+        }
+    });
+    root.querySelectorAll('font[color], [color]').forEach((el) => {
+        if (!/^(FONT|TD|TH|SPAN|P|DIV|B|STRONG|I|EM|U|A)$/i.test(el.tagName || '')) return;
+        const c = (el.getAttribute('color') || '').trim();
+        if (!c) return;
+        if (!(el.style?.getPropertyValue('color') || '').trim()) {
+            el.style.setProperty('color', c, 'important');
+        }
+        const compact = c.replace(/\s/g, '').toLowerCase();
+        const light =
+            compact === 'white' ||
+            compact === '#fff' ||
+            compact === '#ffffff' ||
+            /^rgb\(\s*255\s*,\s*255\s*,\s*255\s*\)$/i.test(compact);
+        if (/^(TD|TH)$/i.test(el.tagName || '')) {
+            el.setAttribute('data-ems-cell-color', c);
+            if (light) el.setAttribute('data-ems-header-fg', 'light');
+        } else {
+            /* Header white often lives only on nested <font color> — stamp the cell too. */
+            const cell = el.closest?.('td, th');
+            if (cell && (cell.tagName === 'TH' || cell.closest('table')?.rows[0] === cell.parentElement) &&
+                !cell.getAttribute('data-ems-cell-color') && !cell.style.color) {
+                cell.setAttribute('data-ems-cell-color', c);
+                if (!(cell.style?.getPropertyValue('color') || '').trim()) {
+                    cell.style.setProperty('color', c, 'important');
+                }
+                if (light) cell.setAttribute('data-ems-header-fg', 'light');
+            }
+        }
+        el.removeAttribute('color');
+    });
+}
 
 function stripDisallowed(root) {
     /* TITLE must be removed (not unwrapped): Excel clipboard <title>…xlsx</title> is
@@ -29,6 +86,7 @@ function stripDisallowed(root) {
     ).forEach((el) => {
         el.remove();
     });
+    promoteLegacyPaintAttrsToStyles(root);
     root.querySelectorAll('*').forEach((el) => {
         if (!ALLOWED_TAGS.has(el.tagName)) {
             const parent = el.parentNode;
@@ -265,6 +323,8 @@ export function sanitizeQuoteRichHtml(html) {
     const root = doc.getElementById('ems-san');
     if (!root) return body;
     stripDisallowed(root);
+    normalizeOfficeTableForegrounds(root);
+    clearTableListMarkerPadding(root);
     unwrapSpellMarkSpans(root);
     stripLeakedCssTextNodes(root);
     normalizeNbspAndSpacerRuns(root);

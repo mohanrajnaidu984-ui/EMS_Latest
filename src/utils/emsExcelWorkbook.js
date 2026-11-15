@@ -131,7 +131,32 @@ export async function setupEmsExcelReportHeader(workbook, sheet, {
 
     sheet.views = [{ state: 'frozen', ySplit: headerRowIndex }];
 
+    /* Header-only filter range; call enableEmsExcelAutoFilter again after data rows
+     * so the range covers the full table (Excel opens with Filter enabled). */
+    if (lastCol >= 1) {
+        enableEmsExcelAutoFilter(sheet, {
+            headerRowIndex,
+            lastCol,
+            lastDataRow: headerRowIndex,
+        });
+    }
+
     return { headerRowIndex, dataStartRow: headerRowIndex + 1 };
+}
+
+/**
+ * Turn on Excel AutoFilter for the header + data block (Filter dropdowns on open).
+ * Prefer lastDataRow = last real data row (exclude totals / blank footers).
+ */
+export function enableEmsExcelAutoFilter(sheet, { headerRowIndex = 3, lastCol, lastDataRow } = {}) {
+    const fromRow = Number(headerRowIndex) || 3;
+    const toCol = Number(lastCol) || 0;
+    const toRow = Number(lastDataRow) || fromRow;
+    if (!sheet || toCol < 1 || toRow < fromRow) return;
+    sheet.autoFilter = {
+        from: { row: fromRow, column: 1 },
+        to: { row: toRow, column: toCol },
+    };
 }
 
 export function downloadExcelBlob(buffer, fileName) {

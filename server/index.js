@@ -382,7 +382,8 @@ const enquiryAttachmentStorage = multer.diskStorage({
             const { dest, usedFallback, primaryAttempted } = resolveWritableEnquiryUploadDestination(
                 req.query.requestNo,
                 visibility,
-                division
+                division,
+                req.query.addendumNo
             );
             req._attachmentUploadDest = dest;
             req._attachmentUsedLocalFallback = usedFallback;
@@ -568,7 +569,7 @@ app.get('/api/system/attachment-storage-probe', (req, res) => {
         const requestNo = req.query.requestNo || 'probe';
         const visibility = req.query.visibility || 'Public';
         const division = req.query.division || 'General';
-        const resolved = resolveWritableEnquiryUploadDestination(requestNo, visibility, division);
+        const resolved = resolveWritableEnquiryUploadDestination(requestNo, visibility, division, req.query.addendumNo);
         const dest = resolved.dest;
         const probeFile = path.join(dest, `.ems-write-probe-${Date.now()}.tmp`);
         const userInfo = (() => {
@@ -1415,6 +1416,7 @@ app.get('/api/enquiries', async (req, res) => {
 
 const enquiryOutlookRoutes = require('./routes/enquiryOutlook');
 app.use('/api/enquiries', enquiryOutlookRoutes);
+app.use('/api/enquiries', require('./routes/enquiryAddendums'));
 
 /**
  * Fast typeahead for Quote/Pricing Enquiry No box.
@@ -3122,6 +3124,19 @@ const {
     canReadAttachmentByVisibility,
 } = require('./lib/attachmentAccess');
 
+const { ensureAddendumSchema } = require('./lib/enquiryAddendums');
+app.use('/api/attachments', async (req, res, next) => {
+    try {
+        await ensureAddendumSchema();
+        if (req.query.addendumNo) {
+            const number = Number(req.query.addendumNo);
+            if (!Number.isInteger(number) || number < 1) return res.status(400).json({ error: 'Invalid addendum number' });
+            const found = await sql.query`SELECT AddendumNo FROM EnquiryAddendums WHERE RequestNo=${req.query.requestNo} AND AddendumNo=${number}`;
+            if (!found.recordset.length) return res.status(400).json({ error: 'Save addendum details before uploading' });
+        }
+        next();
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
 // Upload Attachment - Store in DB
 // Upload Attachment - Store in Disk and DB (files land under ENQUIRY_ATTACHMENTS_ROOT/<RequestNo>/)
 app.post('/api/attachments/upload', (req, res, next) => {
@@ -3130,7 +3145,7 @@ app.post('/api/attachments/upload', (req, res, next) => {
         const division = req.query.division || 'General';
         const requestNo = req.query.requestNo;
         if (requestNo) {
-            const resolved = resolveWritableEnquiryUploadDestination(requestNo, visibility, division);
+            const resolved = resolveWritableEnquiryUploadDestination(requestNo, visibility, division, req.query.addendumNo);
             console.log('[attachments/upload] destination:', resolved.dest, resolved.usedFallback ? '(local fallback)' : '');
             if (resolved.usedFallback) {
                 console.warn('[attachments/upload] primary not writable:', resolved.primaryAttempted);
@@ -3163,12 +3178,13 @@ app.post('/api/attachments/upload', (req, res, next) => {
 
     try {
         const uploadedFiles = [];
+        const addendumNo = req.query.addendumNo ? Number(req.query.addendumNo) : null;
 
         // Handle Hyperlink case
         if (type === 'Link' && linkUrl) {
             const fileName = req.query.fileName || linkUrl;
-            await sql.query`INSERT INTO Attachments (RequestNo, FileName, FilePath, UploadedAt, Visibility, AttachmentType, LinkURL, UploadedBy, Division) 
-            VALUES(${requestNo}, ${fileName}, NULL, ${new Date()}, ${visibility}, 'Link', ${linkUrl}, ${uploadedBy}, ${division})`;
+            await sql.query`INSERT INTO Attachments (RequestNo, FileName, FilePath, UploadedAt, Visibility, AttachmentType, LinkURL, UploadedBy, Division, AddendumNo)
+            VALUES(${requestNo}, ${fileName}, NULL, ${new Date()}, ${visibility}, 'Link', ${linkUrl}, ${uploadedBy}, ${division}, ${addendumNo})`;
             uploadedFiles.push({ fileName });
         }
 
@@ -3194,8 +3210,8 @@ app.post('/api/attachments/upload', (req, res, next) => {
                     throw new Error(`RequestNo ${requestNo} not found in EnquiryMaster`);
                 }
 
-                await sql.query`INSERT INTO Attachments (RequestNo, FileName, FilePath, UploadedAt, Visibility, AttachmentType, LinkURL, UploadedBy, Division) 
-                VALUES(${requestNo}, ${fileName}, ${filePath}, ${new Date()}, ${visibility}, 'File', NULL, ${uploadedBy}, ${division})`;
+                await sql.query`INSERT INTO Attachments (RequestNo, FileName, FilePath, UploadedAt, Visibility, AttachmentType, LinkURL, UploadedBy, Division, AddendumNo)
+                VALUES(${requestNo}, ${fileName}, ${filePath}, ${new Date()}, ${visibility}, 'File', NULL, ${uploadedBy}, ${division}, ${addendumNo})`;
 
                 uploadedFiles.push({ fileName });
             }
@@ -3249,7 +3265,7 @@ app.get('/api/attachments', async (req, res) => {
         if (!accessCtx.allowed) {
             return res.status(403).json({ error: accessCtx.reason || 'Access denied' });
         }
-        const result = await sql.query`SELECT ID, RequestNo, FileName, UploadedAt, Visibility, AttachmentType, LinkURL, UploadedBy, Division FROM Attachments WHERE RequestNo = ${requestNo} `;
+        const result = await sql.query`SELECT ID, RequestNo, AddendumNo, FileName, UploadedAt, Visibility, AttachmentType, LinkURL, UploadedBy, Division FROM Attachments WHERE RequestNo = ${requestNo} `;
         const rows = (result.recordset || []).filter((r) => canReadAttachmentByVisibility(r, accessCtx));
         res.json(rows);
     } catch (err) {
@@ -3296,9 +3312,10 @@ app.delete('/api/attachments/:id', async (req, res) => {
     const userRole = req.query.userRole || '';
     try {
         // Get file path first
-        const result = await sql.query`SELECT RequestNo, FilePath, Visibility, Division, UploadedBy FROM Attachments WHERE ID = ${id} `;
+        const result = await sql.query`SELECT RequestNo, AddendumNo, FilePath, Visibility, Division, UploadedBy FROM Attachments WHERE ID = ${id} `;
         if (result.recordset.length > 0) {
             const att = result.recordset[0];
+            if (att.AddendumNo) return res.status(403).json({ error: 'Saved addendum attachments cannot be deleted' });
             const accessCtx = await getAttachmentAccessContext(att.RequestNo, userEmail, userRole);
             if (!canReadAttachmentByVisibility(att, accessCtx)) {
                 return res.status(403).json({ error: accessCtx.reason || 'Access denied' });

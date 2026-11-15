@@ -4,6 +4,7 @@ import {
     THIN_BORDER,
     TOTAL_FILL,
     setupEmsExcelReportHeader,
+    enableEmsExcelAutoFilter,
     downloadExcelBlob,
     safeExcelFilePart,
 } from '../../utils/emsExcelWorkbook';
@@ -15,6 +16,12 @@ function dash(v) {
     if (v == null) return '—';
     const s = String(v).trim();
     return s === '' ? '—' : s;
+}
+
+export function formatChanceLabel(value) {
+    const label = dash(value);
+    const match = label.match(/\s*\(\s*(\d+(?:\.\d+)?)\s*%\s*\)\s*$/);
+    return match ? `(${match[1]}%) ${label.slice(0, match.index).trim()}`.trim() : label;
 }
 
 function toExcelDate(v) {
@@ -30,14 +37,11 @@ function formatExactAmount(num) {
     return n;
 }
 
-function formatWonGrossProfitText(row) {
-    const jv = Number(row.JobValue) || 0;
+function grossProfitPercent(row) {
     const gpPctRaw = row.GrossMargin ?? row.WonGrossProfit;
-    if (gpPctRaw === null || gpPctRaw === undefined || gpPctRaw === '') return '—';
+    if (gpPctRaw === null || gpPctRaw === undefined || gpPctRaw === '') return null;
     const gpPct = Number(String(gpPctRaw).replace(/%/g, '').trim());
-    if (Number.isNaN(gpPct)) return '—';
-    const gpVal = jv * (gpPct / 100);
-    return `${gpVal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${Math.round(gpPct)}%)`;
+    return Number.isFinite(gpPct) ? gpPct : null;
 }
 
 function pendingStatusLabel(row, headingLabel) {
@@ -61,6 +65,13 @@ export function getJobsExportColumns(topJobStatus, tableConfig) {
         { key: 'jobValue', header: cfg.valueHeader || 'Value', width: 16, type: 'number' }
     ];
 
+    if (topJobStatus === 'Won' || topJobStatus === 'Follow Up') {
+        cols.push(
+            { key: 'grossProfitValue', header: 'Gross Profit', width: 20, type: 'number' },
+            { key: 'grossProfitPercent', header: 'Gross Profit (%)', width: 18, type: 'number' }
+        );
+    }
+
     if (topJobStatus === 'Quoted') {
         cols.push(
             { key: 'quoteRef', header: cfg.metricHeader || 'Quote Ref', width: 28, type: 'text' },
@@ -69,7 +80,6 @@ export function getJobsExportColumns(topJobStatus, tableConfig) {
         );
     } else if (topJobStatus === 'Won') {
         cols.push(
-            { key: 'metric', header: cfg.metricHeader || 'Gross Profit (%)', width: 20, type: 'text' },
             { key: 'bookedDate', header: 'Booked Date', width: 12, type: 'date' }
         );
     } else if (topJobStatus === 'Lost') {
@@ -79,7 +89,6 @@ export function getJobsExportColumns(topJobStatus, tableConfig) {
         );
     } else if (topJobStatus === 'Follow Up') {
         cols.push(
-            { key: 'grossMargin', header: 'Gross Margin', width: 18, type: 'text' },
             { key: 'metric', header: cfg.metricHeader || 'Chance %', width: 12, type: 'text' },
             { key: 'expectedDate', header: 'Expected Date', width: 12, type: 'date' }
         );
@@ -150,8 +159,12 @@ function cellValueForRow(col, row, idx, topJobStatus, headingLabel) {
             return toExcelDate(row.LostDate);
         case 'expectedDate':
             return toExcelDate(row.ExpectedDate);
-        case 'grossMargin':
-            return formatWonGrossProfitText(row);
+        case 'grossProfitValue': {
+            const pct = grossProfitPercent(row);
+            return pct == null ? null : (Number(row.JobValue) || 0) * pct / 100;
+        }
+        case 'grossProfitPercent':
+            return grossProfitPercent(row);
         case 'clientName':
             return dash(row.ClientName);
         case 'consultantName':
@@ -165,9 +178,8 @@ function cellValueForRow(col, row, idx, topJobStatus, headingLabel) {
         case 'extra':
             return dash(row.ReasonForLost || row.FollowUpRemarks);
         case 'metric':
-            if (topJobStatus === 'Won') return formatWonGrossProfitText(row);
             if (topJobStatus === 'Lost') return dash(row.LostToWhom || row.CustomerName);
-            if (topJobStatus === 'Follow Up') return dash(row.ProbabilityChance);
+            if (topJobStatus === 'Follow Up') return formatChanceLabel(row.ProbabilityChance);
             if (topJobStatus === 'Pending') return pendingStatusLabel(row, headingLabel);
             if (topJobStatus === 'Quoted') return dash(row.QuoteRef);
             return dash(row.Status || headingLabel);
@@ -213,7 +225,7 @@ export async function downloadJobsTableXlsx({
         `Rows: ${list.length}`,
         `Exported: ${new Date().toLocaleString('en-GB')}`
     ].filter(Boolean);
-    const { dataStartRow } = await setupEmsExcelReportHeader(workbook, sheet, {
+    const { headerRowIndex, dataStartRow } = await setupEmsExcelReportHeader(workbook, sheet, {
         lastCol,
         title,
         metaText: metaParts.join('  |  '),
@@ -240,6 +252,12 @@ export async function downloadJobsTableXlsx({
                 } else {
                     cell.value = '—';
                 }
+            } else if (col.key === 'grossProfitPercent') {
+                cell.value = raw == null ? '—' : raw;
+                cell.numFmt = '0"%"';
+            } else if (col.key === 'grossProfitValue') {
+                cell.value = raw == null ? '—' : raw;
+                cell.numFmt = '#,##0.00';
             } else if (col.type === 'number' && col.key === 'jobValue') {
                 cell.value = formatExactAmount(raw);
                 cell.numFmt = '#,##0.00';
@@ -271,6 +289,12 @@ export async function downloadJobsTableXlsx({
             cell.value = { formula: `SUM(${sheet.getColumn(valueColIdx).letter}${dataStartRow}:${sheet.getColumn(valueColIdx).letter}${totalRowIdx - 1})` };
             cell.numFmt = '#,##0.00';
             cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        } else if (col.key === 'grossProfitValue' || col.key === 'grossProfitPercent') {
+            const letter = sheet.getColumn(i + 1).letter;
+            const range = `${letter}${dataStartRow}:${letter}${totalRowIdx - 1}`;
+            cell.value = { formula: col.key === 'grossProfitValue' ? `SUM(${range})` : `IFERROR(AVERAGE(${range}),0)` };
+            cell.numFmt = col.key === 'grossProfitValue' ? '#,##0.00' : '0"%"';
+            cell.alignment = { horizontal: 'right', vertical: 'middle' };
         } else {
             cell.value = '';
         }
@@ -278,6 +302,13 @@ export async function downloadJobsTableXlsx({
 
     columns.forEach((col, i) => {
         sheet.getColumn(i + 1).width = col.width;
+    });
+
+    /* Filter data rows only — leave totals row outside AutoFilter. */
+    enableEmsExcelAutoFilter(sheet, {
+        headerRowIndex,
+        lastCol,
+        lastDataRow: dataStartRow + list.length - 1,
     });
 
     const buffer = await workbook.xlsx.writeBuffer();

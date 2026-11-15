@@ -14,6 +14,11 @@ import {
     shouldSkipToolbarTextRestoreForTableCells,
 } from './clauseEditorTable';
 import { stripClauseEditorExportEmptyNodes } from './clauseEditorExportHtml';
+import {
+    captureDocumentHistoryBeforeMutation,
+    commitDocumentHistoryAfterMutation,
+    withDocumentHistoryMutation,
+} from './clauseEditorDocHistory';
 
 /** Jodit deep-merges `control.list` — mark atomic so base keys like `default` are not kept. */
 function markJoditConfigAtom(value) {
@@ -37,7 +42,7 @@ export const BULLET_LIST_MENU = emsToolbarListMenu([
     ['disc', '●  Solid round'],
     ['circle', '○  Hollow round'],
     ['square', '■  Solid square'],
-    ['check', '✓  Tick'],
+    ['ems-tick', '✓  Tick'],
     ['arrow', '➤  Arrow'],
     ['diamond', '◆  Diamond'],
 ]);
@@ -715,7 +720,13 @@ function beginListPresetApply(jodit) {
 
 function scheduleListApplyCaretStabilize(jodit, tagName, caretOffset, selectionBookmark, onDone) {
     jodit.__emsSkipToolbarSelRestore = true;
+    const doc = getWysiwygEditor(jodit)?.ownerDocument;
+    let superseded = false;
+    const onUserAction = () => { superseded = true; };
+    doc?.addEventListener('pointerdown', onUserAction, { capture: true, once: true });
+    doc?.addEventListener('keydown', onUserAction, { capture: true, once: true });
     const stabilize = () => {
+        if (superseded) return;
         if (selectionBookmark && restoreTextRangeBookmark(jodit, selectionBookmark)) {
             jodit.__emsListApplyCaretLi = null;
             return;
@@ -724,6 +735,8 @@ function scheduleListApplyCaretStabilize(jodit, tagName, caretOffset, selectionB
         if (placed) jodit.__emsListApplyCaretLi = null;
     };
     const finish = () => {
+        doc?.removeEventListener('pointerdown', onUserAction, true);
+        doc?.removeEventListener('keydown', onUserAction, true);
         stabilize();
         jodit.__emsListApplyCaretLi = null;
         jodit.__emsSkipToolbarSelRestore = false;
@@ -1010,7 +1023,8 @@ export function restoreTableCellCaretBookmark(jodit, bookmark) {
     }
 }
 
-export { tryClauseEditorHistoryCommand, tryJoditTableHistoryCommand, installClauseEditorUndoHooks, bindClauseEditorUndoHotkeys, beginOfficePastePostProcess, checkpointHistoryAfterOfficePaste, isOfficePastePostProcessActive, isOfficePasteHistoryPaused, bindOfficePasteHistoryGuard } from './clauseEditorTableHistory';
+/* History/undo lives in clauseEditorTableHistory + clauseEditorDocHistory — do not
+ * re-export from here (that created a Rollup circular init cycle and broke paste in prod). */
 
 export function clauseEditorHtmlContainsTable(html) {
     return /<table[\s>]/i.test(String(html || ''));
@@ -2044,7 +2058,13 @@ function stashClauseEditorToolbarPointerDown(e, jodit) {
                 : () => wys || jodit.editor || null;
         armTableToolbarCellStash(jodit, getBody);
         const hasBodyTextSel = Boolean(getClauseEditorActiveTextRange(jodit));
-        if (
+        const liveRange = bodyActive && getClauseEditorLiveRange(jodit);
+        if (!hasBodyTextSel && liveRange?.collapsed && wys?.contains(liveRange.startContainer)) {
+            // Preserve a new caret position instead of restoring an older word selection.
+            jodit.__emsSavedListRange = liveRange.cloneRange();
+            jodit.__emsLastGoodListRange = null;
+            jodit.__emsListToolbarSelStashed = true;
+        } else if (
             bodyActive ||
             hasBodyTextSel ||
             (jodit.s?.isInsideArea && jodit.s?.range && !jodit.s.range.collapsed)
@@ -2917,6 +2937,45 @@ function tryApplyPlainSubNumberStyle(jodit, type) {
 }
 
 function applyListPreset(jodit, tagName, type, presets, clearClassNames, oppositeClearClassNames) {
+    captureDocumentHistoryBeforeMutation(jodit);
+    try {
+        return applyListPresetToSelection(jodit, tagName, type, presets, clearClassNames, oppositeClearClassNames);
+    } finally {
+        commitDocumentHistoryAfterMutation(jodit);
+    }
+}
+
+function applyListPresetToSelection(jodit, tagName, type, presets, clearClassNames, oppositeClearClassNames) {
+    restoreListToolbarSelection(jodit);
+    const editorRoot = getWysiwygEditor(jodit);
+    const selection = getEffectiveListRange(jodit) || getClauseEditorLiveRange(jodit);
+    const cellFor = node => (node?.nodeType === 1 ? node : node?.parentElement)?.closest('td, th');
+    const cell = cellFor(selection?.startContainer);
+    if (cell && editorRoot?.contains(cell) && cellFor(selection.endContainer) === cell) {
+        // Use the browser's cell-scoped list edit. The clause-level rebuild
+        // deliberately excludes tables to protect their rows and columns.
+        const currentList = (selection.startContainer.nodeType === 1
+            ? selection.startContainer : selection.startContainer.parentElement)?.closest('ol, ul');
+        const inCellList = currentList && cell.contains(currentList) ? currentList : null;
+        if (type === 'none') {
+            if (inCellList?.tagName.toLowerCase() === tagName) unwrapListsToParagraphs([inCellList]);
+        } else {
+            const preset = presets[type] || (tagName === 'ul' ? UL_PRESETS.disc : OL_PRESETS.decimal);
+            if (inCellList?.tagName.toLowerCase() === tagName) {
+                applyPresetToListElement(inCellList, preset, clearClassNames, oppositeClearClassNames);
+            } else {
+                selectClauseEditorRange(jodit, selection);
+                const existing = new Set(cell.querySelectorAll(tagName));
+                cell.ownerDocument.execCommand(tagName === 'ul' ? 'insertUnorderedList' : 'insertOrderedList');
+                for (const list of cell.querySelectorAll(tagName)) {
+                    if (!existing.has(list)) applyPresetToListElement(list, preset, clearClassNames, oppositeClearClassNames);
+                }
+            }
+        }
+        clearListToolbarSelectionStash(jodit);
+        notifyEditorContentChange(jodit);
+        return true;
+    }
     if (tagName === 'ol' && tryApplyPlainSubNumberStyle(jodit, type)) {
         return true;
     }
@@ -2928,7 +2987,6 @@ function applyListPreset(jodit, tagName, type, presets, clearClassNames, opposit
     const preset = presets[key] || (tagName === 'ul' ? UL_PRESETS.disc : OL_PRESETS.decimal);
     const oppClear = oppositeClearClassNames || (tagName === 'ul' ? OL_CLASS_NAMES : BULLET_CLASS_NAMES);
 
-    const editorRoot = getWysiwygEditor(jodit);
     if (!editorRoot) return true;
 
     const caretOffset = captureListApplyCaretOffset(jodit, editorRoot);
@@ -5234,7 +5292,24 @@ function restoreIndentCaretOffset(jodit, offset) {
 }
 
 /** Word-like line indent for paragraphs and list items (toolbar + Tab). */
+export function canOutdentClauseEditorLine(jodit) {
+    const root = getWysiwygEditor(jodit);
+    const range = getClauseEditorLiveRange(jodit);
+    if (!root || !range || !root.contains(range.startContainer) || isClauseEditorSelectionInTable(jodit)) return false;
+    if (!range.collapsed) return true;
+    const block = getEditableLineBlock(root, range);
+    return Boolean(block && (
+        parseInlineMarginLeftPx(block) > 0 ||
+        (block.tagName === 'LI' && block.parentElement?.parentElement?.tagName === 'LI') ||
+        (getPlainNumberParts(block)?.length || 0) > 1
+    ));
+}
+
 export function applyClauseEditorLineIndent(jodit, outdent = false) {
+    return withDocumentHistoryMutation(jodit, () => applyLineIndent(jodit, outdent));
+}
+
+function applyLineIndent(jodit, outdent) {
     const root = getWysiwygEditor(jodit);
     if (!root || isClauseEditorSelectionInTable(jodit)) return false;
 
@@ -5437,7 +5512,8 @@ export const EMS_UL_TOOLBAR_CONTROL = markJoditConfigAtom({
     tooltip: 'Bullet Library',
     list: BULLET_LIST_MENU,
     exec: (jodit, _current, { control, button }) => {
-        const key = control.args?.[0] ?? 'disc';
+        const option = control.args?.[0];
+        const key = option === 'ems-tick' ? 'check' : (option ?? 'disc');
         applyListPreset(jodit, 'ul', key, UL_PRESETS, BULLET_CLASS_NAMES, OL_CLASS_NAMES);
         closeListToolbarPopup(jodit, button);
     },

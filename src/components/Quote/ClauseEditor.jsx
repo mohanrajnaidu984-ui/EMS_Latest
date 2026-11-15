@@ -3,6 +3,7 @@ import JoditEditor from 'jodit-react';
 import {
     registerClauseEditorListCommands,
     applyClauseEditorLineIndent,
+    canOutdentClauseEditorLine,
     restoreClauseEditorFormatSelection,
     normalizeClauseListHtml,
     normalizeClauseListHtmlInString,
@@ -26,16 +27,20 @@ import {
 import {
     bindTableCellHistoryRecorder,
     clearEmsTableCellHistory,
+    clearEmsDocumentHistory,
     canEmsTableCellHistoryUndo,
     canEmsTableCellHistoryRedo,
     installClauseEditorUndoHooks,
     bindClauseEditorUndoHotkeys,
     beginOfficePastePostProcess,
     checkpointHistoryAfterOfficePaste,
+    captureDocumentHistoryBeforeMutation,
+    canEmsDocumentHistoryUndo,
+    canEmsDocumentHistoryRedo,
     bindOfficePasteHistoryGuard,
 } from './clauseEditorTableHistory';
 import { stripClauseEditorExportEmptyNodes, inlineBlobImagesInDomRoot, normalizeClauseProseTextColors } from './clauseEditorExportHtml';
-import { sanitizeQuoteRichHtml } from './quoteSanitizeHtml';
+import { clearTableListMarkerPadding, sanitizeQuoteRichHtml } from './quoteSanitizeHtml';
 import {
     convertOfficeVmlShapesToImages,
     htmlNeedsOfficeImageRepair,
@@ -67,6 +72,10 @@ import {
     registerClauseEditorTableHooks,
     pasteClipboardIntoActiveTableCell,
     pasteClipboardTableIntoActiveTable,
+    prepareDocumentTablePaste,
+    readTableClipboardText,
+    restoreInternalClipboardTablesInRoot,
+    restoreInternalClipboardTableLayout,
     buildTableFormatToolbarControlOverrides,
     EMS_TABLE_REPEAT_HEADER_CONTROL,
     EMS_TABLE_BORDER_CONTROL,
@@ -646,6 +655,7 @@ const applyExcelClassRulesToTables = (doc, rawHtml) => {
 
 const OFFICE_PROMOTE_STYLE_PROPS = [
     'background-color',
+    'color',
     'font-family',
     'font-size',
     'font-weight',
@@ -668,8 +678,10 @@ const promoteOfficePasteCellStyles = (root) => {
             if (c) font.style.setProperty('color', c);
             font.removeAttribute('color');
         });
+        const headerLight = cell.getAttribute('data-ems-header-fg') === 'light';
         OFFICE_PROMOTE_STYLE_PROPS.forEach((prop) => {
-            const cellVal = cell.style.getPropertyValue(prop);
+            let cellVal = cell.style.getPropertyValue(prop);
+            if (prop === 'color' && headerLight) cellVal = '#ffffff';
             if (!cellVal) return;
             cell.querySelectorAll('span, p, div, font, li, b, strong, i, em, u').forEach((child) => {
                 const childVal = (child.style.getPropertyValue(prop) || '').trim().toLowerCase();
@@ -678,9 +690,14 @@ const promoteOfficePasteCellStyles = (root) => {
                     !childVal ||
                     childVal === 'windowtext' ||
                     childVal === 'windowframe' ||
-                    (prop === 'color' && childVal === 'black' && cellVal.toLowerCase() !== 'black')
+                    (prop === 'color' &&
+                        (childVal === 'black' ||
+                            childVal === '#0f172a' ||
+                            childVal === 'rgb(15, 23, 42)' ||
+                            childVal === 'rgb(15,23,42)') &&
+                        cellVal.toLowerCase() !== 'black')
                 ) {
-                    child.style.setProperty(prop, cellVal);
+                    child.style.setProperty(prop, cellVal, prop === 'color' ? 'important' : undefined);
                 }
             });
         });
@@ -740,7 +757,7 @@ const OFFICE_LIST_MARKER_ONLY_RE =
     /^[\s\u00a0]*(?:[\u2022●○■➤◆▪▸►·o\-\-*•]|\d+[\.\)]|[a-z][\.\)]|[ivxlcdm]+[\.\)])\s*$/i;
 
 const OFFICE_LIST_MARKER_PREFIX_RE =
-    /^\s*(?:[\u2022●○■➤◆▪▸►·o\-\-*•]|\d+[\.\)]\s*|[a-z][\.\)]\s*|[ivxlcdm]+[\.\)]\s*)/i;
+    /^\s*(?:[\u2022●○■➤◆▪▸►·•]\s*|[o\-*]\s+|\d+[\.\)]\s+|[a-z][\.\)]\s+|[ivxlcdm]+[\.\)]\s+)/i;
 
 const officeListCellPlainText = (cell) =>
     String(cell?.textContent || '').replace(/\u00a0/g, ' ').trim();
@@ -819,8 +836,10 @@ const isOfficePseudoListTable = (table, { plainText = '' } = {}) => {
             if (!body) continue;
             const col0Marker = cellLooksLikeBulletMarker(cells[0]);
             const gutter = isNarrowOfficeListGutterCell(cells[0]);
-            const bodyHasPrefix = OFFICE_LIST_MARKER_PREFIX_RE.test(body);
-            if (col0Marker || gutter || bodyHasPrefix) markerRows += 1;
+            // Amounts such as 12.340 are not list markers. Never discard a
+            // non-marker description/quantity column merely because col 2
+            // starts with digits or col 1 has a narrow width.
+            if (col0Marker || (gutter && !officeListCellPlainText(cells[0]))) markerRows += 1;
             continue;
         }
         const body = officeListCellPlainText(cells[0]);
@@ -906,16 +925,22 @@ const officeChildShouldKeepStyle = (prop, childVal, cellVal) => {
         const cellNorm = String(cellVal || '')
             .replace(/\s/g, '')
             .toLowerCase();
+        /* Body slate / black must yield to cell white (dark Excel headers). */
         if (
-            childNorm !== cellNorm &&
-            childNorm !== 'rgb(0,0,0)' &&
-            childNorm !== '#000000' &&
-            childNorm !== '#000' &&
-            childNorm !== 'black'
+            childNorm === 'rgb(0,0,0)' ||
+            childNorm === '#000000' ||
+            childNorm === '#000' ||
+            childNorm === 'black' ||
+            childNorm === '#0f172a' ||
+            childNorm === 'rgb(15,23,42)' ||
+            childNorm === 'rgba(15,23,42,1)'
         ) {
+            return false;
+        }
+        if (childNorm !== cellNorm) {
             return true;
         }
-        return childNorm === 'black' && cellNorm !== 'black';
+        return false;
     }
     if (prop === 'font-weight') {
         const n = parseInt(childVal, 10);
@@ -1260,6 +1285,7 @@ const insertWordListHtmlIntoEditor = (jodit, html, e, cleanupAfterPaste) => {
     e?.preventDefault?.();
     e?.stopImmediatePropagation?.();
     try {
+        captureDocumentHistoryBeforeMutation(jodit);
         withOfficePasteInsertGuard(jodit, () => {
             withJoditHistoryBlocked(jodit, () => {
                 jodit.s.focus();
@@ -1273,6 +1299,7 @@ const insertWordListHtmlIntoEditor = (jodit, html, e, cleanupAfterPaste) => {
     } catch (_err) {
         return false;
     }
+    cleanupAfterPaste?.();
     return true;
 };
 
@@ -1508,8 +1535,12 @@ const normalizePastedTables = (root) => {
     if (!root || typeof root.querySelectorAll !== 'function') return;
     if (isTableStructureResizeActive(root)) return;
     stripPastedEditorArtifacts(root);
+    restoreInternalClipboardTablesInRoot(root);
+    clearTableListMarkerPadding(root);
     const tables = root.querySelectorAll('table');
     tables.forEach((table) => {
+        /* EMS copy/paste — widths/heights already baked; do not re-bootstrap. */
+        if (table.getAttribute('data-ems-internal-table-clip') === '1') return;
         /*
          * Multi-col BOQ / office schedules: do NOT sync stored widths here.
          * Sync on enter-edit re-applied percent-like models and scrambled the grid;
@@ -1650,14 +1681,29 @@ const tsvPlainToHtmlTable = (plain) => {
 };
 
 /** Excel/Word put both text/html and image/png on the clipboard; Jodit's uploader prefers the PNG. */
-const clipboardHasOfficeTableData = (dataTransfer) => {
-    if (!dataTransfer) return false;
-    const html = dataTransfer.getData?.('text/html') || '';
-    const plain = dataTransfer.getData?.('text/plain') || '';
+const clipboardHasOfficeTableData = (dataTransfer, jodit = null) => {
+    let html = '';
+    let plain = '';
+    try {
+        html = dataTransfer?.getData?.('text/html') || '';
+    } catch {
+        html = '';
+    }
+    try {
+        plain = dataTransfer?.getData?.('text/plain') || '';
+    } catch {
+        plain = '';
+    }
+    if ((!html || !/<[a-z][\s>]/i.test(html)) && jodit) {
+        const mem = readTableClipboardText(jodit, dataTransfer);
+        html = mem.htmlRaw || html;
+        plain = mem.plain || plain;
+    }
     // Excel always puts tab-separated values on the clipboard for cell ranges.
     if (plain.includes('\t')) return true;
     if (html && /<[a-z][\s>]/i.test(html)) {
         if (/<table[\s>]/i.test(html)) return true;
+        if (/data-ems-internal-table-clip|data-ems-cell-clip/i.test(html)) return true;
         if (/schemas-microsoft-com:office|Excel\.Sheet|Word\.Document|ProgId/i.test(html)) return true;
         if (/mso-/i.test(html) && /<tr[\s>]/i.test(html)) return true;
     }
@@ -1692,17 +1738,77 @@ const extractEmsMixedClauseClipboardHtml = (htmlRaw) => {
     return sanitizePastedHtmlString(root.innerHTML.trim());
 };
 
-const extractOfficeTableHtmlFromClipboard = (dataTransfer) => {
-    if (!dataTransfer) return '';
-    const htmlRaw = (dataTransfer.getData?.('text/html') || '').trim();
-    const plain = dataTransfer.getData?.('text/plain') || '';
-    const rtf = dataTransfer.getData?.('text/rtf') || '';
+/** EMS table copy already baked col/row px — do not run Word/Excel iframe re-measure. */
+const extractEmsInternalTableClipboardHtml = (htmlRaw) => {
+    const raw = String(htmlRaw || '').trim();
+    if (!raw || !/data-ems-internal-table-clip/i.test(raw) || !/<table[\s>]/i.test(raw)) {
+        return '';
+    }
+    const fragment = extractOfficeHtmlFragment(raw) || raw;
+    let doc;
+    try {
+        doc = new DOMParser().parseFromString(
+            `<div id="__ems_internal_table_clip">${fragment}</div>`,
+            'text/html'
+        );
+    } catch (_e) {
+        return '';
+    }
+    const root = doc.getElementById('__ems_internal_table_clip');
+    if (!root) return '';
+    root.querySelectorAll('table[data-ems-internal-table-clip]').forEach((table) => {
+        if (table.hasAttribute('data-ems-copy-source-layout')) return;
+        if (!table.getAttribute('data-ems-paste-source')) {
+            table.setAttribute('data-ems-paste-source', 'office');
+        }
+        table.classList.add('ems-office-paste-table');
+        table.setAttribute('data-ems-col-widths-custom', '1');
+        if (table.hasAttribute('data-ems-row-heights')) {
+            table.setAttribute('data-ems-row-heights-custom', '1');
+        }
+    });
+    /* Light sanitize only — skip applyOfficeClipboardHtml (iframe width scramble). */
+    unlockNestedContentEditable(root);
+    stripSymbolAndUnknownFonts(root);
+    return sanitizeQuoteRichHtml(root.innerHTML.trim());
+};
+
+const extractOfficeTableHtmlFromClipboard = (dataTransfer, jodit = null) => {
+    const clipped = jodit
+        ? readTableClipboardText(jodit, dataTransfer)
+        : {
+              htmlRaw: (() => {
+                  try {
+                      return dataTransfer?.getData?.('text/html') || '';
+                  } catch {
+                      return '';
+                  }
+              })(),
+              plain: (() => {
+                  try {
+                      return dataTransfer?.getData?.('text/plain') || '';
+                  } catch {
+                      return '';
+                  }
+              })(),
+          };
+    const htmlRaw = String(clipped.htmlRaw || '').trim();
+    const plain = String(clipped.plain || '');
+    if (!dataTransfer && !htmlRaw) return '';
+    let rtf = '';
+    try {
+        rtf = dataTransfer?.getData?.('text/rtf') || '';
+    } catch {
+        rtf = '';
+    }
 
     // Prefer HTML whenever Excel sent a table — plain TSV drops colors, fonts, and merges.
     const officePasteOptions = { plainText: plain };
     const withImages = (html) => repairOfficeHtmlImagesFromRtf(html, rtf);
 
     if (htmlRaw && /<table[\s>]/i.test(htmlRaw)) {
+        const emsInternal = extractEmsInternalTableClipboardHtml(htmlRaw);
+        if (emsInternal) return withImages(emsInternal);
         const emsMixed = extractEmsMixedClauseClipboardHtml(htmlRaw);
         if (emsMixed) return withImages(emsMixed);
         return withImages(sanitizePastedHtmlString(applyOfficeClipboardHtml(htmlRaw, officePasteOptions)));
@@ -2132,8 +2238,12 @@ const ClauseEditor = ({
         const finish = () => {
             runOfficeColumnInit();
             const live = joditInstRef.current || editor.current;
-            if (!isJoditAlive(live) || !isEditorFocused()) {
-                syncEditorToParent();
+            /* Always sync after paste so parent/global history sees the new HTML (even while focused). */
+            if (isJoditAlive(live)) {
+                live.__emsPendingChangeEmit = true;
+                void syncEditorToParent();
+            } else {
+                void syncEditorToParent();
             }
         };
         const runCleanup = (target) => {
@@ -2154,6 +2264,7 @@ const ClauseEditor = ({
                 });
                 finalizeOfficePasteListFormatting(target, target?.ownerDocument?.defaultView);
                 finalizeAllOfficePasteTablesFormatting(target, target?.ownerDocument?.defaultView);
+                restoreInternalClipboardTablesInRoot(target);
                 target.querySelectorAll?.('table[data-ems-paste-source="office"], table.ems-office-paste-table').forEach((table) => {
                     stripOfficePasteTableClassNames(table);
                 });
@@ -2198,14 +2309,22 @@ const ClauseEditor = ({
     const processPasteHandler = useCallback((e, text /* , _types */) => {
         const dt = e?.clipboardData;
         const jodit = resolveJoditInstance(editor, joditInstRef);
-        if (dt && clipboardHasOfficeTableData(dt) && isJoditAlive(jodit)) {
+        if (clipboardHasOfficeTableData(dt, jodit) && isJoditAlive(jodit)) {
             jodit.__emsLastOfficePasteClipboard = dt;
         }
         const wordListHtml = tryConvertWordListClipboard(dt);
         if (wordListHtml?.trim()) return wordListHtml;
-        const plain = dt?.getData?.('text/plain') || '';
-        if (dt && clipboardHasOfficeTableData(dt)) {
-            const fromClipboard = extractOfficeTableHtmlFromClipboard(dt);
+        const plain = isJoditAlive(jodit)
+            ? readTableClipboardText(jodit, dt).plain
+            : (() => {
+                  try {
+                      return dt?.getData?.('text/plain') || '';
+                  } catch {
+                      return '';
+                  }
+              })();
+        if (clipboardHasOfficeTableData(dt, jodit)) {
+            const fromClipboard = extractOfficeTableHtmlFromClipboard(dt, jodit);
             if (fromClipboard?.trim()) {
                 return maybeConvertPastedTableHtmlToList(fromClipboard, plain);
             }
@@ -2292,17 +2411,50 @@ const ClauseEditor = ({
         (e) => {
             const dt = e?.clipboardData;
             const joditEarly = resolveJoditInstance(editor, joditInstRef);
+            if (isJoditAlive(joditEarly) && joditEarly.__emsOfficePastePostProcess) {
+                checkpointHistoryAfterOfficePaste(joditEarly);
+            }
+            /*
+             * Whole-table copy/paste (or caret after the table): insert as a new block.
+             * Do not fill cells from a stale active-cell / full-table selection.
+             */
+            let forceDocumentTablePaste = false;
+            try {
+                forceDocumentTablePaste =
+                    isJoditAlive(joditEarly) &&
+                    clipboardHasOfficeTableData(dt, joditEarly) &&
+                    prepareDocumentTablePaste(joditEarly, getEditorBody, e?.target);
+            } catch (err) {
+                console.warn('[EMS] prepareDocumentTablePaste failed:', err);
+                forceDocumentTablePaste = false;
+            }
             /*
              * In-cell paste (Amount ← Amount): never insert a nested office <table>.
              * Our cell copy used to wrap one td as a pricing table → finalize painted it
              * navy/white and Description often landed in Amount from stale selection.
              */
-            if (
-                isJoditAlive(joditEarly) &&
-                dt &&
-                (pasteClipboardTableIntoActiveTable(joditEarly, getEditorBody, dt, e?.target) ||
-                    pasteClipboardIntoActiveTableCell(joditEarly, getEditorBody, dt, e?.target))
-            ) {
+            let handledInCell = false;
+            if (!forceDocumentTablePaste && isJoditAlive(joditEarly) && (dt || joditEarly.__emsLastOsTableClip || joditEarly.__emsLastCellClip)) {
+                try {
+                    handledInCell =
+                        pasteClipboardTableIntoActiveTable(
+                            joditEarly,
+                            getEditorBody,
+                            dt,
+                            e?.target
+                        ) ||
+                        pasteClipboardIntoActiveTableCell(
+                            joditEarly,
+                            getEditorBody,
+                            dt,
+                            e?.target
+                        );
+                } catch (err) {
+                    console.warn('[EMS] in-cell table paste failed:', err);
+                    handledInCell = false;
+                }
+            }
+            if (handledInCell) {
                 e.preventDefault();
                 e.stopImmediatePropagation?.();
                 cleanupAfterPaste();
@@ -2313,10 +2465,18 @@ const ClauseEditor = ({
                 const jodit = resolveJoditInstance(editor, joditInstRef);
                 return insertWordListHtmlIntoEditor(jodit, wordListHtml, e, cleanupAfterPaste);
             }
-            if (!clipboardHasOfficeTableData(dt)) return false;
-            const plain = dt?.getData?.('text/plain') || '';
+            if (!clipboardHasOfficeTableData(dt, joditEarly)) return false;
+            const plain =
+                readTableClipboardText(joditEarly, dt).plain ||
+                (() => {
+                    try {
+                        return dt?.getData?.('text/plain') || '';
+                    } catch {
+                        return '';
+                    }
+                })();
             let html = maybeConvertPastedTableHtmlToList(
-                extractOfficeTableHtmlFromClipboard(dt),
+                extractOfficeTableHtmlFromClipboard(dt, joditEarly),
                 plain
             );
             if (!html || !html.trim()) return false;
@@ -2347,21 +2507,49 @@ const ClauseEditor = ({
 
             const insertHtml = (finalHtml) => {
                 if (!isJoditAlive(jodit) || !finalHtml?.trim()) return;
+                const internal = /<table\b[^>]*\bdata-ems-internal-table-clip="1"/i.test(finalHtml);
+                const root = getEditorBody();
+                const existing = internal ? new Set(root?.querySelectorAll('table')) : null;
                 try {
+                    /* Snapshot before paste so Ctrl+Z can remove the inserted table. */
+                    captureDocumentHistoryBeforeMutation(jodit);
                     withOfficePasteInsertGuard(jodit, () => {
                         withJoditHistoryBlocked(jodit, () => {
                             jodit.s.focus();
                             jodit.s.insertHTML(finalHtml);
+                            const body =
+                                (typeof jodit.__emsClauseEditorBody === 'function' &&
+                                    jodit.__emsClauseEditorBody()) ||
+                                jodit.editor ||
+                                getEditorBody();
+                            if (internal) {
+                                body?.querySelectorAll('table[data-ems-internal-table-clip]').forEach((table) => {
+                                    if (existing.has(table)) return;
+                                    if (table.hasAttribute('data-ems-copy-source-layout')) {
+                                        table.removeAttribute('data-ems-copy-source-layout');
+                                        table.removeAttribute('data-ems-internal-table-clip');
+                                        return;
+                                    }
+                                    restoreInternalClipboardTableLayout(table);
+                                });
+                            } else {
+                                restoreInternalClipboardTablesInRoot(body);
+                            }
                             if (typeof jodit.synchronizeValues === 'function') {
                                 jodit.synchronizeValues();
                             }
                         });
-                        jodit.e?.fire?.('afterPaste', e);
+                        if (internal) {
+                            checkpointHistoryAfterOfficePaste(jodit);
+                            void syncEditorToParent();
+                        } else {
+                            jodit.e?.fire?.('afterPaste', e);
+                        }
                     });
                 } catch (_err) {
-                    /* ignore */
+                    jodit.__emsDocHistPending = null;
                 }
-                afterInsertMaybeImportImages();
+                if (!internal) afterInsertMaybeImportImages();
             };
 
             const needsImageRepair =
@@ -2380,7 +2568,7 @@ const ClauseEditor = ({
             insertHtml(html);
             return true;
         },
-        [cleanupAfterPaste, getEditorBody, promptFillImagesFromXlsx]
+        [cleanupAfterPaste, getEditorBody, promptFillImagesFromXlsx, syncEditorToParent]
     );
 
     const beforePastePreferOfficeHtml = useCallback(
@@ -2653,7 +2841,9 @@ const ClauseEditor = ({
                     return true;
                 },
                 isDisabled: (editor) => {
+                    if (editor.__emsDocumentInputHistory) return !canEmsDocumentHistoryUndo(editor);
                     if (canEmsTableCellHistoryUndo(editor)) return false;
+                    if (canEmsDocumentHistoryUndo(editor)) return false;
                     if (editor.history?.canUndo?.()) return false;
                     const host =
                         typeof document !== 'undefined'
@@ -2673,7 +2863,9 @@ const ClauseEditor = ({
                     return true;
                 },
                 isDisabled: (editor) => {
+                    if (editor.__emsDocumentInputHistory) return !canEmsDocumentHistoryRedo(editor);
                     if (canEmsTableCellHistoryRedo(editor)) return false;
+                    if (canEmsDocumentHistoryRedo(editor)) return false;
                     if (editor.history?.canRedo?.()) return false;
                     const host =
                         typeof document !== 'undefined'
@@ -2698,6 +2890,7 @@ const ClauseEditor = ({
             },
             outdent: {
                 tooltip: 'Decrease indent',
+                isDisabled: (editor) => !canOutdentClauseEditorLine(editor),
                 exec: (editor) => {
                     restoreClauseEditorFormatSelection(editor);
                     applyClauseEditorLineIndent(editor, true);
@@ -2805,14 +2998,15 @@ const ClauseEditor = ({
                     'processPaste.emsOfficeFormatGuard',
                     (e, text) => {
                         const dt = e?.clipboardData;
-                        const plain = dt?.getData?.('text/plain') || '';
-                        const html = dt?.getData?.('text/html') || '';
+                        const clipped = readTableClipboardText(jodit, dt);
+                        const plain = clipped.plain || '';
+                        const html = clipped.htmlRaw || '';
                         const office =
                             (typeof text === 'string' &&
                                 (clipboardHasOfficeHtml(text) ||
                                     /<table[\s>]/i.test(text) ||
                                     /Word\.Document|mso-|schemas-microsoft-com:office/i.test(text))) ||
-                            clipboardHasOfficeTableData(dt) ||
+                            clipboardHasOfficeTableData(dt, jodit) ||
                             (html && clipboardHasOfficeHtml(html));
                         if (office || plainTextLooksLikeExcelGrid(plain)) {
                             enableOfficePasteInsertGuard(jodit);
@@ -2832,7 +3026,7 @@ const ClauseEditor = ({
                 registerClauseEditorListCommands(jodit);
                 registerClauseEditorTableHooks(jodit, getBody, { toolbarOnly });
                 /* Refresh resize/menu hooks on focus so HMR / long-lived editors pick up fixes. */
-                const hooksRefreshVer = 38;
+                const hooksRefreshVer = 43;
                 if (jodit.__emsTableHooksFocusRefreshVer !== hooksRefreshVer) {
                     jodit.e.off('focus.emsTableHooksRefresh');
                     jodit.__emsTableHooksFocusRefreshVer = hooksRefreshVer;
@@ -2932,6 +3126,7 @@ const ClauseEditor = ({
                         if (!isJoditAlive(jodit)) return;
                         jodit.__emsApplyingClauseHistory = true;
                         clearEmsTableCellHistory(jodit);
+                        clearEmsDocumentHistory(jodit);
                         const next = unlockHtmlStringForEditing(stripSpellMarksFromHtml(String(html ?? '')));
                         jodit.value = next;
                         lastEmittedRef.current = next;
@@ -2986,13 +3181,35 @@ const ClauseEditor = ({
                 }
 
                 const wrap = h().wrapperRef?.current;
-                if (wrap && !wrap.__emsPasteCaptureBound) {
+                /*
+                 * Wrapper-level paste must survive editor remounts. Rebind when the wrap
+                 * node changes; never skip forever on a stale __emsPasteCaptureBound flag.
+                 */
+                if (wrap && wrap.__emsPasteCaptureJodit !== jodit) {
+                    if (typeof wrap.__emsPasteCaptureCleanup === 'function') {
+                        try {
+                            wrap.__emsPasteCaptureCleanup();
+                        } catch {
+                            /* ignore */
+                        }
+                    }
+                    const onWrapPaste = (e) => h().insertOfficeTableFromClipboard?.(e);
+                    wrap.addEventListener('paste', onWrapPaste, true);
                     wrap.__emsPasteCaptureBound = true;
-                    wrap.addEventListener(
-                        'paste',
-                        (e) => h().insertOfficeTableFromClipboard?.(e),
-                        true
-                    );
+                    wrap.__emsPasteCaptureJodit = jodit;
+                    wrap.__emsPasteCaptureCleanup = () => {
+                        wrap.removeEventListener('paste', onWrapPaste, true);
+                        wrap.__emsPasteCaptureBound = false;
+                        wrap.__emsPasteCaptureJodit = null;
+                        wrap.__emsPasteCaptureCleanup = null;
+                    };
+                    jodit.e.on('beforeDestruct.emsWrapPaste', () => {
+                        try {
+                            wrap.__emsPasteCaptureCleanup?.();
+                        } catch {
+                            /* ignore */
+                        }
+                    });
                 }
 
                 const runEnterEditUnscramble = () => {
@@ -3910,12 +4127,12 @@ const ClauseEditor = ({
                     display: none !important;
                     pointer-events: none !important;
                 }
-                /* Narrow handle so text near borders can still be selected. */
+                /* Hit box matches JS positionHandle (8px / -4px); 2px guide centered. */
                 .ems-table-col-resizer {
                     position: fixed !important;
                     z-index: 2147483000 !important;
-                    width: 6px !important;
-                    margin-left: -3px !important;
+                    width: 8px !important;
+                    margin-left: -4px !important;
                     cursor: col-resize !important;
                     pointer-events: auto !important;
                     display: block !important;
@@ -3926,7 +4143,7 @@ const ClauseEditor = ({
                 .ems-table-col-resizer::after {
                     content: '';
                     position: absolute;
-                    left: 2px;
+                    left: 3px;
                     top: 0;
                     bottom: 0;
                     width: 2px;
@@ -4248,6 +4465,23 @@ const ClauseEditor = ({
                 .clause-editor-wrapper .jodit-wysiwyg table {
                     margin-top: 4px !important;
                     margin-bottom: 4px !important;
+                }
+                /* Persist toolbar text-align across exit-edit / browse (BOQ + office tables). */
+                .clause-editor-wrapper .jodit-wysiwyg table td[data-ems-align-custom="1"][data-ems-align="left"],
+                .clause-editor-wrapper .jodit-wysiwyg table th[data-ems-align-custom="1"][data-ems-align="left"] {
+                    text-align: left !important;
+                }
+                .clause-editor-wrapper .jodit-wysiwyg table td[data-ems-align-custom="1"][data-ems-align="center"],
+                .clause-editor-wrapper .jodit-wysiwyg table th[data-ems-align-custom="1"][data-ems-align="center"] {
+                    text-align: center !important;
+                }
+                .clause-editor-wrapper .jodit-wysiwyg table td[data-ems-align-custom="1"][data-ems-align="right"],
+                .clause-editor-wrapper .jodit-wysiwyg table th[data-ems-align-custom="1"][data-ems-align="right"] {
+                    text-align: right !important;
+                }
+                .clause-editor-wrapper .jodit-wysiwyg table td[data-ems-align-custom="1"][data-ems-align="justify"],
+                .clause-editor-wrapper .jodit-wysiwyg table th[data-ems-align-custom="1"][data-ems-align="justify"] {
+                    text-align: justify !important;
                 }
                 .clause-editor-wrapper .jodit-wysiwyg table td[data-ems-valign="top"],
                 .clause-editor-wrapper .jodit-wysiwyg table th[data-ems-valign="top"] {

@@ -1543,6 +1543,7 @@ router.get('/list/search', async (req, res) => {
             buildQuoteListSearchExtraWhere.normalizeSearchDateParam(dateFrom || '') &&
             buildQuoteListSearchExtraWhere.normalizeSearchDateParam(dateTo || '')
         );
+        const hasText = String(q || '').trim().length > 0;
 
         let pendingRaw = [];
         let quotedRaw = [];
@@ -1558,11 +1559,11 @@ router.get('/list/search', async (req, res) => {
         const tAccess = Date.now();
 
         /*
-         * Date-range Search Quote: seed from EnquiryQuotes.QuoteDate first.
-         * The old path ran pending + quoted + approval scanners over the user's full
-         * enquiry universe, then applied the date EXISTS — that is what felt "stuck".
+         * Fast Search Quote: seed from EnquiryQuotes (+ optional QuoteDate range / text).
+         * Criteria-only search (no From/To dates) used to run pending+quoted+approval scanners
+         * then mapQuoteListingRows — that is what felt stuck on project-name searches.
          */
-        if (hasDateRange) {
+        if (hasDateRange || hasText) {
             const fast = await runQuoteListSearchByQuoteDate(
                 sql,
                 userEmail,
@@ -1580,7 +1581,7 @@ router.get('/list/search', async (req, res) => {
             const tMap = Date.now();
             const enriched = await enrichQuoteListRowsWithApprovalStatus(merged);
             console.log(
-                `[list/search] fastPath rows=${enriched.length} quotes=${quoteRows.length} accessMs=${tAccess - t0} sqlMs=${tSql - tAccess} mapMs=${tMap - tSql} enrichMs=${Date.now() - tMap} totalMs=${Date.now() - t0} div=${divisionTrim || '-'} q=${String(q || '').slice(0, 40)}`
+                `[list/search] fastPath rows=${enriched.length} quotes=${quoteRows.length} accessMs=${tAccess - t0} sqlMs=${tSql - tAccess} mapMs=${tMap - tSql} enrichMs=${Date.now() - tMap} totalMs=${Date.now() - t0} div=${divisionTrim || '-'} q=${String(q || '').slice(0, 40)} mode=${hasDateRange ? 'date' : 'text'}`
             );
             return res.json(enriched);
         }

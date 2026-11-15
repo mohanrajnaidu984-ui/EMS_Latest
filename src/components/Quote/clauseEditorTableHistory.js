@@ -8,6 +8,23 @@ import {
     withJoditHistoryBlocked,
     getWysiwygEditor,
 } from './clauseEditorListPresets';
+import {
+    captureDocumentHistoryBeforeMutation,
+    commitDocumentHistoryAfterMutation,
+    tryDocumentHistoryUndo,
+    tryDocumentHistoryRedo,
+    canEmsDocumentHistoryUndo,
+    canEmsDocumentHistoryRedo,
+    clearEmsDocumentHistory,
+} from './clauseEditorDocHistory';
+
+export {
+    captureDocumentHistoryBeforeMutation,
+    commitDocumentHistoryAfterMutation,
+    canEmsDocumentHistoryUndo,
+    canEmsDocumentHistoryRedo,
+    clearEmsDocumentHistory,
+};
 
 const MAX_TABLE_CELL_HISTORY = 200;
 const UNDO_GUARD_MS = 80;
@@ -200,34 +217,61 @@ export function bindClauseEditorUndoHotkeys(jodit, getEditorBody) {
     };
 
     jodit.e.on('afterInit.emsClauseUndoHotkeys', attach);
+    jodit.e.on('focus.emsClauseUndoHotkeys', attach);
+    jodit.e.on('afterSetMode.emsClauseUndoHotkeys', attach);
     attach();
 }
 
 /**
- * In-table → EMS cell stack. Otherwise → Jodit history. Empty Jodit stack → global clause history.
- * Does NOT run updateStack or post-undo DOM sync (those corrupted the stack).
+ * Legacy fallback order (instances without the chronological input recorder):
+ * 1) In-table cell typing stack
+ * 2) Document stack (table paste / structure)
+ * 3) Jodit native history
+ * 4) Global clause history (across clauses / after exit-edit)
  */
 export function installClauseEditorUndoHooks(jodit, { onGlobalUndo, onGlobalRedo } = {}) {
-    if (!jodit || jodit.__emsClauseUndoHooks) return;
+    if (!jodit) return;
+    if (jodit.__emsClauseUndoHooksVer === 2) return;
+    if (jodit.__emsClauseUndoHooks) {
+        try {
+            jodit.e.off('beforeCommand.emsClauseUndoRoute');
+            jodit.e.off('afterCommand.emsClauseUndoRoute');
+        } catch {
+            /* ignore */
+        }
+    }
     jodit.__emsClauseUndoHooks = true;
+    jodit.__emsClauseUndoHooksVer = 2;
 
     jodit.e.on('beforeCommand.emsClauseUndoRoute', (command) => {
         const cmd = String(command || '').toLowerCase();
         if (cmd !== 'undo' && cmd !== 'redo') return;
-        if (guardDuplicateUndo(jodit, cmd)) return false;
+        if (!jodit.__emsDocumentInputHistory && guardDuplicateUndo(jodit, cmd)) return false;
+
+        // A single chronological document stack includes ordinary typing as
+        // well as structural table edits. Never replay older cell/native stacks
+        // after it, or an undone paste can reappear.
+        if (jodit.__emsDocumentInputHistory) {
+            if (jodit.__emsOfficePastePostProcess) checkpointHistoryAfterOfficePaste(jodit);
+            commitDocumentHistoryAfterMutation(jodit);
+            if (cmd === 'undo') tryDocumentHistoryUndo(jodit);
+            else tryDocumentHistoryRedo(jodit);
+            return false;
+        }
 
         if (cmd === 'undo') {
             if (tryEmsTableCellHistoryUndo(jodit)) return false;
-            if (!jodit.history?.canUndo?.()) {
-                if (onGlobalUndo?.()) return false;
-            }
-            return;
+            if (tryDocumentHistoryUndo(jodit)) return false;
+            if (jodit.history?.canUndo?.()) return;
+            if (onGlobalUndo?.()) return false;
+            return false;
         }
 
         if (tryEmsTableCellHistoryRedo(jodit)) return false;
-        if (!jodit.history?.canRedo?.()) {
-            if (onGlobalRedo?.()) return false;
-        }
+        if (tryDocumentHistoryRedo(jodit)) return false;
+        if (jodit.history?.canRedo?.()) return;
+        if (onGlobalRedo?.()) return false;
+        return false;
     });
 
     jodit.e.on('afterCommand.emsClauseUndoRoute', (command) => {
@@ -298,13 +342,22 @@ export function checkpointHistoryAfterOfficePaste(jodit) {
                 jodit.history.startValue = snap.make();
             }
         });
+        /* Drop noisy cell ladder from paste formatting — document stack keeps the paste itself. */
         clearEmsTableCellHistory(jodit);
+        commitDocumentHistoryAfterMutation(jodit);
     } catch {
         /* ignore */
     } finally {
         jodit.__emsOfficePastePostProcess = false;
         jodit.__emsOfficePasteHistoryStackLen = undefined;
         blockJoditHistorySnapshot(jodit, false);
+        try {
+            jodit.__emsPendingChangeEmit = true;
+            jodit.e?.fire?.('change');
+            jodit.e?.fire?.('updateToolbar');
+        } catch {
+            /* ignore */
+        }
     }
 }
 
@@ -321,6 +374,7 @@ export function isOfficePastePostProcessActive(jodit) {
 export function bindTableCellHistoryRecorder(jodit, getEditorBody) {
     if (!jodit || jodit.__emsTableCellHistBound) return;
     jodit.__emsTableCellHistBound = true;
+    jodit.__emsDocumentInputHistory = true;
 
     const attach = () => {
         const root =
@@ -329,6 +383,12 @@ export function bindTableCellHistoryRecorder(jodit, getEditorBody) {
         root.__emsTableCellHistRecorderBound = true;
 
         const onPreEdit = (e) => {
+            if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') {
+                e.preventDefault();e.stopImmediatePropagation();
+                jodit.execCommand(e.inputType === 'historyUndo' ? 'undo' : 'redo');
+                return;
+            }
+            if (jodit.__emsApplyingClauseHistory || isOfficePasteHistoryPaused(jodit)) return;
             if (e?.ctrlKey || e?.metaKey || e?.altKey) return;
             if (
                 e.type === 'keydown' &&
@@ -339,10 +399,12 @@ export function bindTableCellHistoryRecorder(jodit, getEditorBody) {
             ) {
                 return;
             }
-            rememberTableCellPreEditState(jodit);
+            captureDocumentHistoryBeforeMutation(jodit);
         };
 
-        const onPostEdit = () => commitTableCellHistoryFromPreEdit(jodit);
+        const onPostEdit = () => {
+            if (!isOfficePasteHistoryPaused(jodit)) commitDocumentHistoryAfterMutation(jodit);
+        };
 
         root.addEventListener('keydown', onPreEdit, true);
         root.addEventListener('beforeinput', onPreEdit, true);
@@ -353,34 +415,34 @@ export function bindTableCellHistoryRecorder(jodit, getEditorBody) {
                 jodit.__emsSkipTableCellHistOnPaste = true;
                 return;
             }
-            rememberTableCellPreEditState(jodit);
+            captureDocumentHistoryBeforeMutation(jodit);
         });
         jodit.e.on('afterPaste.emsTableCellHist', () => {
             if (jodit.__emsSkipTableCellHistOnPaste) {
                 jodit.__emsSkipTableCellHistOnPaste = false;
                 return;
             }
-            commitTableCellHistoryFromPreEdit(jodit);
+            if (!isOfficePasteHistoryPaused(jodit)) commitDocumentHistoryAfterMutation(jodit);
         });
 
         jodit.e.on('beforeCommand.emsTableCellHist', (command) => {
             const c = String(command || '').toLowerCase();
             if (
-                /^(bold|italic|underline|strikethrough|forecolor|background|brush|fontsize|font|justify)/.test(
+                /^(bold|italic|underline|strikethrough|forecolor|background|brush|fontsize|font|justify|table|insert|delete|remove|ems|orderedlist|unorderedlist|indent|outdent|applylineheight|paragraph|formatblock)/.test(
                     c
                 )
             ) {
-                rememberTableCellPreEditState(jodit);
+                captureDocumentHistoryBeforeMutation(jodit);
             }
         });
         jodit.e.on('afterCommand.emsTableCellHist', (command) => {
             const c = String(command || '').toLowerCase();
             if (
-                /^(bold|italic|underline|strikethrough|forecolor|background|brush|fontsize|font|justify)/.test(
+                /^(bold|italic|underline|strikethrough|forecolor|background|brush|fontsize|font|justify|table|insert|delete|remove|ems|orderedlist|unorderedlist|indent|outdent|applylineheight|paragraph|formatblock)/.test(
                     c
                 )
             ) {
-                commitTableCellHistoryFromPreEdit(jodit);
+                commitDocumentHistoryAfterMutation(jodit);
             }
         });
 
@@ -392,6 +454,8 @@ export function bindTableCellHistoryRecorder(jodit, getEditorBody) {
     };
 
     jodit.e.on('afterInit.emsTableCellHist', attach);
+    jodit.e.on('focus.emsTableCellHist', attach);
+    jodit.e.on('afterSetMode.emsTableCellHist', attach);
     attach();
 }
 

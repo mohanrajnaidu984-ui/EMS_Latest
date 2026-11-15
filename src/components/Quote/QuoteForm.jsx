@@ -53,12 +53,15 @@ import {
     EMS_QUOTE_ACCENT_HEADER_FONT_SIZE,
     EMS_QUOTE_ACCENT_HEADER_LINE_HEIGHT,
     EMS_QUOTE_COVER_META_MID_BG,
+    EMS_QUOTE_META_ROW_SEPARATOR_COLOR,
+    EMS_QUOTE_META_SEPARATOR_LAYOUT_CSS,
     EMS_QUOTE_CLAUSE_HEADING_BG,
     EMS_QUOTE_CLAUSE_HEADING_TEXT_COLOR,
     EMS_QUOTE_CLAUSE_HEADING_BORDER_RADIUS,
     EMS_QUOTE_CLAUSE_HEADING_PADDING_Y,
     EMS_QUOTE_CLAUSE_HEADING_PADDING_X,
     EMS_QUOTE_CLAUSE_HEADING_MARGIN_TOP,
+    EMS_QUOTE_CLAUSE_SECTION_MARGIN_BOTTOM,
     EMS_QUOTE_CLAUSE_HEADING_MARGIN_BOTTOM,
     EMS_QUOTE_CLAUSE_HEADING_FONT_SIZE,
     EMS_QUOTE_CLAUSE_HEADING_FONT_WEIGHT,
@@ -79,6 +82,8 @@ import {
     EMS_QUOTE_PRINT_FOOTER_MIN_HEIGHT,
     EMS_QUOTE_PRINT_FOOTER_RULE_WIDTH,
     EMS_QUOTE_LOGO_ROW_MARGIN_BOTTOM,
+    EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT,
+    EMS_QUOTE_HEADER_LOGO_MAX_WIDTH,
     EMS_QUOTE_PRICING_TABLE_CELL_BORDER,
     EMS_QUOTE_PRICING_TABLE_OUTER_BORDER,
     EMS_QUOTE_PRICING_TABLE_HEAD_CELL_BORDER,
@@ -1306,10 +1311,10 @@ function getClauseDisplayBodyHtml(html, listKey, displayMajor, options = {}) {
     /* Skip DOMParser VAT reconcile while typing — it freezes the editor on every keystroke. */
     if (isPricing && options.reconcile !== false) {
         if (pricingFooterVatInconsistent(body)) {
-            body = ensurePricingTableColgroupInHtml(reconcilePricingVatAmountCellsInHtml(body));
+        body = ensurePricingTableColgroupInHtml(reconcilePricingVatAmountCellsInHtml(body));
         } else {
-            body = ensurePricingTableColgroupInHtml(body);
-        }
+        body = ensurePricingTableColgroupInHtml(body);
+    }
         /* Stamp full base before pagination copies attrs onto row-split fragments. */
         body = stampPricingBaseTotalAttrsInHtml(body);
         /* 3.1 / 4.1 must use this table's VAT %, not the currency default (10% vs 12%). */
@@ -3366,7 +3371,11 @@ function pricingTableHasDiscountBlock(table) {
     ) {
         return true;
     }
-    /* Split continuation fragment: Discount row may be on another page. */
+    /* Only split fragments may inherit a discount without a visible footer. */
+    if (table.getAttribute('data-ems-table-split') !== '1') {
+        clearPricingDiscountState(table);
+        return false;
+    }
     if (readStampedPricingDiscountTotal(table) != null) return true;
     const pct = parseFloat(table.getAttribute('data-ems-discount-pct') || '');
     if (Number.isFinite(pct) && pct > 0) return true;
@@ -3431,10 +3440,10 @@ function escapeCssAttrSelector(value) {
  * data-ems-pricing-discount-total / % / sibling fragments that still hold Discount.
  */
 function parseDiscountAmountFromPricingTable(table, lineBaseTotal = null) {
-    if (!table) return 0;
+    if (!table || !pricingTableHasDiscountBlock(table)) return 0;
 
     const fromRow = readDiscountAmountFromDiscountRow(table);
-    if (fromRow != null && fromRow > 0) {
+    if (fromRow != null) {
         stampPricingDiscountTotalOnTable(table, fromRow);
         return fromRow;
     }
@@ -3488,11 +3497,7 @@ function parseDiscountAmountFromPricingTable(table, lineBaseTotal = null) {
 
 function calcTaxedBaseFromPricingTable(table, lineBaseTotal) {
     const base = roundBhdAmount(lineBaseTotal);
-    const hasDiscount =
-        pricingTableHasDiscountBlock(table) ||
-        readStampedPricingDiscountTotal(table) != null ||
-        (parseFloat(table?.getAttribute?.('data-ems-discount-pct') || '') || 0) > 0 ||
-        (parseFloat(table?.getAttribute?.('data-ems-discount-amount') || '') || 0) > 0;
+    const hasDiscount = pricingTableHasDiscountBlock(table);
     if (!hasDiscount) return base;
     return roundBhdAmount(base - parseDiscountAmountFromPricingTable(table, base));
 }
@@ -3512,6 +3517,13 @@ function clearPricingDiscountAmountLock(table) {
     if (!table) return;
     table.removeAttribute('data-ems-discount-locked');
     table.removeAttribute('data-ems-discount-amount');
+}
+
+function clearPricingDiscountState(table) {
+    if (!table) return;
+    clearPricingDiscountAmountLock(table);
+    table.removeAttribute('data-ems-discount-pct');
+    table.removeAttribute('data-ems-pricing-discount-total');
 }
 
 /**
@@ -3552,9 +3564,11 @@ function normalizeDiscountRowsInPricingTable(
             storedRaw != null && String(storedRaw).trim() !== '' ? parseFloat(storedRaw) : null;
         const rawAmt = String(amtCell?.textContent || '').trim();
         const lockedAmtAttr = parseFloat(table.getAttribute('data-ems-discount-amount'));
-        /* Auto-lock when displayed amount ≠ base×rounded% (e.g. typed 100 → label 5.66%). */
+        /* Recover legacy fixed amounts only before a percentage has been tracked.
+         * A changed base must recalculate an existing percentage, not lock the old amount. */
         if (
             !isPricingDiscountAmountLocked(table) &&
+            storedPct == null &&
             !editingLabel &&
             lineBase != null &&
             lineBase > 0 &&
@@ -4063,23 +4077,23 @@ function getPricingTableFooterColumnCount(table, templateRow) {
  * Plain 2-cell rows on 5-col tables leave Qty/Unit/Amount empty and wrap labels.
  */
 function createPricingFooterRowMatchingTemplate(doc, table, templateRow, rowKind, amountAttr, label, amountText) {
-    const tr = doc.createElement('tr');
-    tr.setAttribute('data-ems-row', rowKind);
+        const tr = doc.createElement('tr');
+        tr.setAttribute('data-ems-row', rowKind);
     const { labelStyle, amountStyle } = getPricingDiscountFooterCellStyles(templateRow);
     const colCount = getPricingTableFooterColumnCount(table, templateRow);
-    const tdLabel = doc.createElement('td');
-    tdLabel.setAttribute('style', labelStyle);
-    tdLabel.textContent = label;
+        const tdLabel = doc.createElement('td');
+        tdLabel.setAttribute('style', labelStyle);
+        tdLabel.textContent = label;
     if (colCount > 2) {
         tdLabel.setAttribute('colspan', String(colCount - 1));
     }
-    const tdAmt = doc.createElement('td');
-    tdAmt.setAttribute('data-ems-amount', amountAttr);
-    tdAmt.setAttribute('style', amountStyle);
-    tdAmt.textContent = amountText;
-    tr.appendChild(tdLabel);
-    tr.appendChild(tdAmt);
-    return tr;
+        const tdAmt = doc.createElement('td');
+        tdAmt.setAttribute('data-ems-amount', amountAttr);
+        tdAmt.setAttribute('style', amountStyle);
+        tdAmt.textContent = amountText;
+        tr.appendChild(tdLabel);
+        tr.appendChild(tdAmt);
+        return tr;
 }
 
 /** True when Discount/Final row does not cover the full table width (broken BOQ layout). */
@@ -4546,6 +4560,7 @@ function removeDiscountBlockFromPricingTable(table) {
         }
     }
     toRemove.forEach((row) => row.parentNode?.removeChild(row));
+    clearPricingDiscountState(table);
     const lineBase = parseBaseTotalFromPricingTableElement(table);
     if (lineBase != null && Number.isFinite(lineBase)) {
         patchPricingTableFooterDom(table, lineBase);
@@ -6003,13 +6018,12 @@ function resolveQuoteLogoSrc(logo) {
     return withApiBaseForUploads(encodeAppStaticPath(`/${s}`));
 }
 
-/* 60% of prior 21 mm max — band stays 21 mm; logo top/right edges unchanged. */
-const QUOTE_HEADER_LOGO_MAX_HEIGHT = '12.6mm';
+/* Band stays ~21 mm; img capped by height + width so wide ACC/KSA wordmarks match other logos. */
 const QUOTE_HEADER_LOGO_STYLE = {
     height: 'auto',
     width: 'auto',
-    maxHeight: QUOTE_HEADER_LOGO_MAX_HEIGHT,
-    maxWidth: '100%',
+    maxHeight: EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT,
+    maxWidth: EMS_QUOTE_HEADER_LOGO_MAX_WIDTH,
     objectFit: 'contain',
     objectPosition: 'right top',
     display: 'block',
@@ -8856,8 +8870,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         quoteSearchAbortRef.current?.abort();
         const abortController = new AbortController();
         quoteSearchAbortRef.current = abortController;
-        setShowQuoteListSummaryOverQuote(true);
-        clearLeftPanelForToolbarSearchRef.current?.();
         const userEmail = currentUser?.EmailId || currentUser?.email || '';
         const q = quoteListSearchCriteria.trim();
         const df = normalizeQuoteSearchDateParam(quoteListDateFrom);
@@ -8879,6 +8891,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             setQuoteSearchError('Select a division to search quotes.');
             return;
         }
+        /* Show list overlay + start fetch before left-panel clear. Full handleClear used to
+         * set showQuoteListSummaryOverQuote(false) and reset the whole quote form on every
+         * Search click — that fought the overlay and froze the 500KB QuoteForm for seconds. */
+        setShowQuoteListSummaryOverQuote(true);
         setQuoteSearchLoading(true);
         setQuoteSearchError('');
         try {
@@ -8888,9 +8904,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             if (df) params.set('dateFrom', df);
             if (dt) params.set('dateTo', dt);
             if (divToUse) params.set('division', divToUse);
-            const res = await fetch(`${API_BASE}/api/quotes/list/search?${params.toString()}`, {
+            const fetchPromise = fetch(`${API_BASE}/api/quotes/list/search?${params.toString()}`, {
                 signal: abortController.signal,
             });
+            clearLeftPanelForToolbarSearchRef.current?.({ keepQuoteListSummary: true });
+            setShowQuoteListSummaryOverQuote(true);
+            const res = await fetchPromise;
             if (abortController.signal.aborted) return;
             if (!res.ok) {
                 let message = `Search failed (${res.status})`;
@@ -10737,19 +10756,19 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                   splitParagraphs: true,
               };
         const formatBody = (html, listKey, displayMajor) => {
-            const editingPricing = expandedClause === 'pricingTerms';
-            const isPricingBody =
-                listKey === 'showPricingTerms' ||
-                /data-ems-amount=["']vat["']/i.test(html) ||
-                /data-ems-row=["']vat["']/i.test(html) ||
-                /id=["']ems-auto-price-summary-table/i.test(html) ||
-                /data-ems-pricing-cols=["']fixed["']/i.test(html);
+                  const editingPricing = expandedClause === 'pricingTerms';
+                  const isPricingBody =
+                      listKey === 'showPricingTerms' ||
+                      /data-ems-amount=["']vat["']/i.test(html) ||
+                      /data-ems-row=["']vat["']/i.test(html) ||
+                      /id=["']ems-auto-price-summary-table/i.test(html) ||
+                      /data-ems-pricing-cols=["']fixed["']/i.test(html);
             const htmlLen = String(html || '').length;
             /* Large draft BOQ/pricing: DOMParser reconcile on every segment rebuild freezes the tab. */
             const allowReconcile =
                 htmlLen < 100000 && !(editingPricing && isPricingBody);
-            return getClauseDisplayBodyHtml(html, listKey, displayMajor, {
-                spell: false,
+                  return getClauseDisplayBodyHtml(html, listKey, displayMajor, {
+                      spell: false,
                 reconcile: allowReconcile,
                 /* Row heights already baked on exit-edit — skip full DOM re-measure per clause. */
                 bakeRowHeights: false,
@@ -10880,7 +10899,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         };
     }, [handleQuotePreviewWheel, isQuotePreviewVisible]);
 
-    /* clausePaginationLayoutKey replaces activeClausesList in deps — list identity churned and retriggered packing → max update depth. */
+    /* Depend on serialized quotePackInputKey for segment/heading/orientation content.
+     * Their object identities can change on every render; subscribing to those
+     * identities restarts the estimate/measure cycle after its own state updates. */
     useLayoutEffect(() => {
         if (!isQuotePreviewVisible) return;
         if (EMS_USE_PAGED_QUOTE) {
@@ -10949,7 +10970,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 200
             );
             const packed = reflowContinuationPagesTopDown(
-                clauseSegmentsForPagination,
+                      clauseSegmentsForPagination,
                 compactPackHeightsPx(clauseSegmentsForPagination, null),
                 safeUsable
             );
@@ -10997,7 +11018,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 200
             );
             const packed = reflowContinuationPagesTopDown(
-                clauseSegmentsForPagination,
+                      clauseSegmentsForPagination,
                 compactPackHeightsPx(clauseSegmentsForPagination, null),
                 safeUsable
             );
@@ -11218,10 +11239,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                   });
             if (!continuation.length) {
                 continuation = reflowContinuationPagesTopDown(
-                    clauseSegmentsForPagination,
+                          clauseSegmentsForPagination,
                     compactPackHeightsPx(clauseSegmentsForPagination, heights),
-                    portraitContUsablePx
-                );
+                          portraitContUsablePx
+                      );
             }
             /* The duplicate CSS root exists only during this synchronous measure.
              * Never leave it for preview queries, integrity checks or PDF capture. */
@@ -11286,7 +11307,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             setQuoteAlignPageBusy(true);
             const go = () => {
                 if (cancelled || clausePackRunGenRef.current !== packGen) return;
-                applyPack();
+                    applyPack();
                 let integrity = assertSegmentPageGroupsIntegrity(
                     packedGroupsAwaitingPaintRef.current || [],
                     clauseSegmentsForPagination.length
@@ -11335,15 +11356,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     }, [
         clausePaginationLayoutKey,
-        clauseSegmentsForPagination,
-        clauseHeadingHtml,
         isQuotePreviewVisible,
         expandedClause,
         clausePreviewMembershipSig,
         clausePackRetryNonce,
         quoteAlignPageNonce,
         clausePackSplitMode,
-        quotePageOrientations,
         quotePackInputKey,
     ]);
 
@@ -11430,13 +11448,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         if (hasLandscapeSheets) {
             return ensureSegmentPageGroupsCoverAll(
                 packSegmentsOntoPagesByEstimatedHeightPerPage(
-                    clauseSegmentsForPagination,
-                    (continuationPageIdx) => {
-                        const sheetIdx = continuationPageIdx + 1;
-                        return quotePageOrientations[sheetIdx] === 'landscape'
-                            ? EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK
-                            : EMS_QUOTE_CONT_USABLE_PX_FALLBACK;
-                    }
+                clauseSegmentsForPagination,
+                (continuationPageIdx) => {
+                    const sheetIdx = continuationPageIdx + 1;
+                    return quotePageOrientations[sheetIdx] === 'landscape'
+                        ? EMS_QUOTE_CONT_USABLE_PX_LANDSCAPE_FALLBACK
+                        : EMS_QUOTE_CONT_USABLE_PX_FALLBACK;
+                }
                 ),
                 n
             );
@@ -14970,7 +14988,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         recipientHydrateAttemptRef.current = attemptKey;
 
         if (isQuoteInternalCustomer(enquiryData, pricingData?.jobs, tn)) {
-            const cleanTarget = collapseSpacesLower(stripQuoteJobPrefix(tn));
+        const cleanTarget = collapseSpacesLower(stripQuoteJobPrefix(tn));
             const profileMatch = profiles.find((p) => {
                 const a = collapseSpacesLower(stripQuoteJobPrefix(p?.itemName || ''));
                 const b = collapseSpacesLower(stripQuoteJobPrefix(p?.name || ''));
@@ -15025,14 +15043,14 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         if (masterToContactSyncedRef.current === key) return;
 
         if (isQuoteInternalCustomer(enquiryData, pricingData?.jobs, tn)) {
-            const profiles = enquiryData?.availableProfiles || [];
-            if (!profiles.length) return;
-            const cleanTarget = collapseSpacesLower(stripQuoteJobPrefix(tn));
-            const profile = profiles.find((p) => {
-                const a = collapseSpacesLower(stripQuoteJobPrefix(p?.itemName || ''));
-                const b = collapseSpacesLower(stripQuoteJobPrefix(p?.name || ''));
-                return (a && a === cleanTarget) || (b && b === cleanTarget);
-            });
+        const profiles = enquiryData?.availableProfiles || [];
+        if (!profiles.length) return;
+        const cleanTarget = collapseSpacesLower(stripQuoteJobPrefix(tn));
+        const profile = profiles.find((p) => {
+            const a = collapseSpacesLower(stripQuoteJobPrefix(p?.itemName || ''));
+            const b = collapseSpacesLower(stripQuoteJobPrefix(p?.name || ''));
+            return (a && a === cleanTarget) || (b && b === cleanTarget);
+        });
             masterToContactSyncedRef.current = key;
             setToAddress(String(profile?.address || '').trim());
             setToPhone(String(profile?.phone || '').trim());
@@ -15733,16 +15751,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             (detailKeys.norm && selectedKeys.norm && detailKeys.norm === selectedKeys.norm);
                         if (detailsMatchSelected) {
                             console.log('[handleCustomerChange] Using Enquiry Customer Details fallback (same customer)');
-                            const addr =
-                                composeCustomerToAddress(details, selectedName) ||
-                                String(details.Address || '').trim();
-                            setToAddress(addr);
+                        const addr =
+                            composeCustomerToAddress(details, selectedName) ||
+                            String(details.Address || '').trim();
+                        setToAddress(addr);
                             setToPhone(
                                 `${details.Phone1 || ''} ${details.Phone2 ? '/ ' + details.Phone2 : ''}`.trim()
                             );
-                            setToEmail(details.EmailId || '');
-                            setToFax(details.FaxNo || '');
-                            foundInEnquiry = true;
+                        setToEmail(details.EmailId || '');
+                        setToFax(details.FaxNo || '');
+                        foundInEnquiry = true;
                         } else {
                             console.log(
                                 '[handleCustomerChange] Enquiry customerDetails belong to a different customer — leave blanks'
@@ -18346,7 +18364,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         };
 
         if (opts.isDraftRow === true) {
-            if (!skipRecipientFromRow) {
+        if (!skipRecipientFromRow) {
                 setToName(recipientToName);
                 applyMasterToContactForName(recipientToName);
             } else if (preserveRecipient) {
@@ -20400,15 +20418,15 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     detailKeys.strippedKey === selKeys.strippedKey) ||
                                 (detailKeys.norm && selKeys.norm && detailKeys.norm === selKeys.norm);
                             if (detailsMatchSelected) {
-                                const addr =
-                                    composeCustomerToAddress(details, toNameForLoad) ||
-                                    String(details.Address || '').trim();
-                                setToAddress(addr);
+                            const addr =
+                                composeCustomerToAddress(details, toNameForLoad) ||
+                                String(details.Address || '').trim();
+                            setToAddress(addr);
                                 setToPhone(
                                     `${details.Phone1 || ''} ${details.Phone2 ? '/ ' + details.Phone2 : ''}`.trim()
                                 );
-                                setToEmail(details.EmailId || '');
-                                setToFax(details.FaxNo || '');
+                            setToEmail(details.EmailId || '');
+                            setToFax(details.FaxNo || '');
                             } else {
                                 setToAddress('');
                                 setToPhone('');
@@ -22026,8 +22044,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         setQuoteAttachments((prev) => (prev.length === 0 ? prev : []));
     }, [quoteId, quoteDraftId, approvalWorkflowDraftId, fetchQuoteAttachments]);
 
-    // Clear selection
-    const handleClear = () => {
+    // Clear selection. opts.keepQuoteListSummary: Search Quote must not hide the results overlay.
+    const handleClear = (opts = {}) => {
+        const keepQuoteListSummary = opts?.keepQuoteListSummary === true;
         const email = normalizeDraftUserEmailForApi(currentUser?.EmailId || currentUser?.email || '');
         if (email) clearQuoteSessionSnapshot(email);
         quoteSessionRestoredRef.current = false;
@@ -22046,7 +22065,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         setExistingQuotes([]);
         setQuoteScopedForPanel([]);
         setScopedQuotesFetchSettledKey(null);
-        setPendingFiles([]); // Clear queue
+        setPendingFiles([]); // Clear void
         setExpandedGroups({});
         setSearchTerm('');
         setSuggestions([]);
@@ -22067,7 +22086,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         setSelectedLeadId(null);
         setEnquiryDivisionScopeNotice('');
         setBrowsePreviousQuotesRevisions(false);
+        if (!keepQuoteListSummary) {
         setShowQuoteListSummaryOverQuote(false);
+        }
         setActiveQuoteTab('self');
         setEnquiryLeadLoading(false);
         setEnquiryData(null);
@@ -22717,7 +22738,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 }
                 normalizeClauseProseTextColors(wys);
                 if (hasTable) {
-                    stabilizeClauseEditorTablesForExport(wys);
+                stabilizeClauseEditorTablesForExport(wys);
                 }
                 // Pricing: lock 24px / multi-fit on live DOM so baked attrs survive into clause state.
                 if (contentKey === 'pricingTerms') {
@@ -22786,7 +22807,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     /** Re-run A4 page packing + cover-letter gaps + table column widths (same as after refresh). */
     const alignQuotePreviewPages = useCallback(async () => {
         /* Keep current sheets visible — clearing to [] forced a blank hang on large quotes. */
-        setQuoteAlignPageBusy(true);
+            setQuoteAlignPageBusy(true);
         const editingKey = expandedClause;
         if (editingKey) {
             await commitActiveClausePreviewEdit(editingKey);
@@ -22879,10 +22900,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             setExpandedClause(null);
             /* Defer live row-height bake until idle so normal-mode preview paints first. */
             const bakeAfterExit = () => {
-                const root = document.getElementById('quote-preview');
-                if (!root) return;
-                forcePricingVatInDomRoot(root);
-                if (key !== 'pricingTerms') {
+                    const root = document.getElementById('quote-preview');
+                    if (!root) return;
+                    forcePricingVatInDomRoot(root);
+                    if (key !== 'pricingTerms') {
                     const editedBlocks = root.querySelectorAll(
                         `.quote-clause-block[data-clause-edit-key="${CSS.escape(String(key))}"]`
                     );
@@ -22891,27 +22912,27 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                     } else {
                         applyAllTableRowHeightsInRoot(root);
                     }
-                    return;
-                }
-                const current = String(clauseContentRef.current?.pricingTerms || '');
-                if (!clauseHtmlHasEmsAutoPricingTable(current)) {
-                    applyAllTableRowHeightsInRoot(root);
-                    return;
-                }
-                const baked = fitPricingTablesInRootAndBakeIntoHtml(root, current);
+                        return;
+                    }
+                    const current = String(clauseContentRef.current?.pricingTerms || '');
+                    if (!clauseHtmlHasEmsAutoPricingTable(current)) {
+                        applyAllTableRowHeightsInRoot(root);
+                        return;
+                    }
+                    const baked = fitPricingTablesInRootAndBakeIntoHtml(root, current);
                 let nextHtml = ensurePricingTableColgroupInHtml(baked);
                 if (!/data-ems-row-heights=/i.test(nextHtml)) {
                     nextHtml = applyTableRowHeightModelInHtmlString(nextHtml);
                 }
-                if (nextHtml && nextHtml !== current) {
-                    setClauseContent((prev) => {
-                        const next = { ...prev, pricingTerms: nextHtml };
-                        clauseContentRef.current = next;
-                        return next;
-                    });
-                } else {
-                    applyAllTableRowHeightsInRoot(root);
-                }
+                    if (nextHtml && nextHtml !== current) {
+                            setClauseContent((prev) => {
+                                const next = { ...prev, pricingTerms: nextHtml };
+                                clauseContentRef.current = next;
+                                return next;
+                        });
+                    } else {
+                        applyAllTableRowHeightsInRoot(root);
+                    }
                 /*
                  * Soft re-pack only — force fine-split OFF.
                  * Fine mode shattered every clause into tiny segments → blank pages.
@@ -23383,69 +23404,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         setEditingClauseLiveSig('');
         setExpandedClause(null);
 
-        // Left-panel Quote Details (keep current customer dropdown; stay in draft mode)
-        setQuoteDate(quoteRowDateToInputYmd(row));
-        setValidityDays(Number(row.ValidityDays ?? row.validityDays) || 30);
-        setCustomerReference(
-            String(
-                row.CustomerReference ??
-                    row.customerReference ??
-                    row.YourRef ??
-                    row.yourref ??
-                    ''
-            ).trim()
-        );
-        // New revision round — user enters a fresh reason
-        setReasonForRevision('');
-        setSubject(String(row.Subject ?? row.subject ?? '').trim());
-        {
-            const fromQuote = String(row.QuoteType ?? row.quoteType ?? '')
-                .split(',')
-                .map((s) => s.trim())
-                .filter(Boolean);
-            const fromEnq = resolveSelectedEnquiryTypes(enquiryData);
-            setQuoteTypeList(fromQuote.length > 0 ? fromQuote : fromEnq);
-            setQuoteEnquiryTypeSelect('');
-        }
-        {
-            const fromRow = String(row.PreparedBy ?? row.preparedby ?? '').trim();
-            if (fromRow) {
-                setPreparedBy(fromRow);
-            }
-            const rowEmail = String(row.PreparedByEmail ?? row.preparedbyemail ?? '').trim();
-            setLoadedQuotePreparedByEmail(
-                resolvePreparedByEmailForPersist(
-                    fromRow,
-                    usersList,
-                    currentUser,
-                    preparedByOptions,
-                    rowEmail
-                )
-            );
-        }
-        setSignatory(String(row.Signatory ?? row.signatory ?? '').trim());
-        setSignatoryDesignation(
-            String(row.SignatoryDesignation ?? row.signatoryDesignation ?? '').trim()
-        );
-        setCoSignatory(String(row.CoSignatory ?? row.coSignatory ?? '').trim());
-        setCoSignatoryDesignation(
-            String(row.CoSignatoryDesignation ?? row.coSignatoryDesignation ?? '').trim()
-        );
-
-        // Attention of + contact lines (do not overwrite selected customer name)
-        const savedAtt = String(row.ToAttention ?? row.toattention ?? '').trim();
-        if (savedAtt) {
-            setToAttention(savedAtt);
-        }
-        const rowAddr = String(row.ToAddress ?? row.toaddress ?? '').trim();
-        const rowPhone = String(row.ToPhone ?? row.tophone ?? '').trim();
-        const rowEmailTo = String(row.ToEmail ?? row.toemail ?? '').trim();
-        const rowFax = String(row.ToFax ?? row.tofax ?? '').trim();
-        if (rowAddr) setToAddress(rowAddr);
-        if (rowPhone) setToPhone(rowPhone);
-        if (rowEmailTo) setToEmail(rowEmailTo);
-        if (rowFax) setToFax(rowFax);
-
+        // Covering page (page 1) stays for the user to fill manually — do not copy
+        // Quote Date / Validity / Subject / Prepared By / Attention / address / signatories.
+        // Only clause content (from page 2 onward) is loaded from the previous revision.
         const sourceQuoteNo = Number(row.QuoteNo ?? row.quoteNo ?? 0);
         if (Number.isFinite(sourceQuoteNo) && sourceQuoteNo > 0) {
             setRevisionSourceQuoteNoBoth(sourceQuoteNo);
@@ -23454,22 +23415,18 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         applyQuoteClauseBundleFromRow(row, { sync: true });
         markQuoteDraftEdited?.();
         alert(
-            `Quote details and clauses loaded from ${String(row.QuoteNumber || row.quoteNumber || 'previous revision').trim()}.`
+            `Clauses loaded from ${String(row.QuoteNumber || row.quoteNumber || 'previous revision').trim()}. Covering page was left for you to fill.`
         );
     }, [
         applyQuoteClauseBundleFromRow,
         browsePreviousQuotesRevisions,
-        currentUser,
-        enquiryData,
         existingQuotes,
         exitClausePreviewEdit,
         expandedClause,
         flushPreviewClauseEditorSync,
         markQuoteDraftEdited,
-        preparedByOptions,
         selectedPrevRevisionQuoteId,
         setRevisionSourceQuoteNoBoth,
-        usersList,
     ]);
 
     const handleExportTemplate = useCallback(async () => {
@@ -23722,6 +23679,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             const preview = quotePreviewLayoutRef.current;
             const t = e.target;
             if (!(t instanceof Element)) return;
+            if (t.closest('.quote-clause-inline-editor .jodit-wysiwyg')) return;
 
             const hit = resolveQuotePreviewClauseBlockFromPointer(
                 e.clientX,
@@ -28548,37 +28506,37 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                         With Acceptance
                     </label>
                     <label
-                        title="Checked: include logo and company footer in print/PDF. Unchecked: hide them when printing on pre-printed letterhead (layout space kept)."
+                    title="Checked: include logo and company footer in print/PDF. Unchecked: hide them when printing on pre-printed letterhead (layout space kept)."
+                    style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: embeddedApprovalReview ? '4px' : '3px',
+                        fontSize: toolbarLabelFontPx,
+                        color: '#64748b',
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                        lineHeight: 1,
+                        height: `${toolbarBtnPx}px`,
+                        margin: 0,
+                        boxSizing: 'border-box',
+                    }}
+                >
+                    <input
+                        type="checkbox"
+                        checked={printWithHeader}
+                        onChange={(e) => setPrintWithHeader(e.target.checked)}
                         style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: embeddedApprovalReview ? '4px' : '3px',
-                            fontSize: toolbarLabelFontPx,
-                            color: '#64748b',
-                            cursor: 'pointer',
-                            whiteSpace: 'nowrap',
-                            lineHeight: 1,
-                            height: `${toolbarBtnPx}px`,
+                            width: embeddedApprovalReview ? '15px' : '13px',
+                            height: embeddedApprovalReview ? '15px' : '13px',
                             margin: 0,
-                            boxSizing: 'border-box',
+                            padding: 0,
+                            flexShrink: 0,
+                            verticalAlign: 'middle',
                         }}
-                    >
-                        <input
-                            type="checkbox"
-                            checked={printWithHeader}
-                            onChange={(e) => setPrintWithHeader(e.target.checked)}
-                            style={{
-                                width: embeddedApprovalReview ? '15px' : '13px',
-                                height: embeddedApprovalReview ? '15px' : '13px',
-                                margin: 0,
-                                padding: 0,
-                                flexShrink: 0,
-                                verticalAlign: 'middle',
-                            }}
-                        />
-                        With Header
-                    </label>
+                    />
+                    With Header
+                </label>
                 </div>
                 <button
                     type="button"
@@ -30669,7 +30627,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                     title={
                                                         browsePreviousQuotesRevisions
                                                             ? 'Turn off Previous Quotes / Revisions to load clauses into a new draft'
-                                                            : 'Load clause content from the selected previous revision'
+                                                            : 'Load clauses from page 2 onward. Covering page (page 1) is left for you to fill.'
                                                     }
                                                 >
                                                     Load
@@ -30868,10 +30826,10 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                 />
                                                             </span>
                                                         ) : (
-                                                            <span style={{ fontSize: '11.05px', fontWeight: '500', lineHeight: 1.35 }}>
-                                                                {sideSerial ? `${sideSerial}. ` : ''}
-                                                                {title}
-                                                            </span>
+                                                        <span style={{ fontSize: '11.05px', fontWeight: '500', lineHeight: 1.35 }}>
+                                                            {sideSerial ? `${sideSerial}. ` : ''}
+                                                            {title}
+                                                        </span>
                                                         )}
                                                     </label>
 
@@ -33144,8 +33102,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     #quote-preview .quote-continuation-header img {
                                         height: auto !important;
                                         width: auto !important;
-                                        max-height: 12.6mm !important;
-                                        max-width: 100% !important;
+                                        max-height: ${EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT} !important;
+                                        max-width: ${EMS_QUOTE_HEADER_LOGO_MAX_WIDTH} !important;
                                         object-fit: contain !important;
                                         object-position: right top !important;
                                         display: block !important;
@@ -33276,8 +33234,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         display: block;
                                         height: auto;
                                         width: auto;
-                                        max-height: 12.6mm;
-                                        max-width: 100%;
+                                        max-height: ${EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT};
+                                        max-width: ${EMS_QUOTE_HEADER_LOGO_MAX_WIDTH};
                                         object-fit: contain;
                                         object-position: right top;
                                         margin-left: auto;
@@ -33330,7 +33288,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     }
                                     /* Clause title — navy text, no background bar */
                                     .quote-clause-block--continuation {
-                                        margin-bottom: 12px;
+                                        margin-bottom: ${EMS_QUOTE_CLAUSE_SECTION_MARGIN_BOTTOM};
                                     }
                                     .quote-clause-heading-panel.quote-preview-panel-shell {
                                         margin-top: ${EMS_QUOTE_CLAUSE_HEADING_MARGIN_TOP} !important;
@@ -33501,7 +33459,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         .quote-header-quote-panel-row
                                         + .quote-header-quote-panel-row
                                         .quote-header-quote-panel-value {
-                                        border-top: 1px solid #e2e8f0;
+                                        border-top: 1px solid ${EMS_QUOTE_META_ROW_SEPARATOR_COLOR};
                                     }
                                     .quote-header-quote-panel-mid .quote-header-quote-panel-label {
                                         display: flex;
@@ -33701,7 +33659,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         border-top: none !important;
                                     }
                                     .quote-cover-meta-table tbody tr.quote-cover-meta-row-mid + tr.quote-cover-meta-row-mid td:last-child {
-                                        border-top: 1px solid #e2e8f0 !important;
+                                        border-top: 1px solid ${EMS_QUOTE_META_ROW_SEPARATOR_COLOR} !important;
                                         border-bottom: none !important;
                                         border-left: none !important;
                                         border-right: none !important;
@@ -33765,8 +33723,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                      * Right-hand A4 preview only (#quote-preview): compact clause stacking.
                                      * Scoped IDs beat loose .clause-content rules + inline h3 margins where possible.
                                      */
+                                    ${EMS_QUOTE_META_SEPARATOR_LAYOUT_CSS}
                                     #quote-preview .quote-clause-block {
-                                        margin-bottom: 12px !important;
+                                        margin-bottom: ${EMS_QUOTE_CLAUSE_SECTION_MARGIN_BOTTOM} !important;
                                     }
                                     #quote-preview .quote-clause-block:not(.quote-clause-block--continuation) > h3 {
                                         margin: 0 0 4px 0 !important;
@@ -33832,6 +33791,23 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                     #quote-preview .clause-content table td,
                                     #quote-preview .clause-content table th {
                                         color: unset;
+                                    }
+                                    /* Keep user/toolbar cell align after exit-edit. */
+                                    #quote-preview .clause-content table td[data-ems-align-custom="1"][data-ems-align="left"],
+                                    #quote-preview .clause-content table th[data-ems-align-custom="1"][data-ems-align="left"] {
+                                        text-align: left !important;
+                                    }
+                                    #quote-preview .clause-content table td[data-ems-align-custom="1"][data-ems-align="center"],
+                                    #quote-preview .clause-content table th[data-ems-align-custom="1"][data-ems-align="center"] {
+                                        text-align: center !important;
+                                    }
+                                    #quote-preview .clause-content table td[data-ems-align-custom="1"][data-ems-align="right"],
+                                    #quote-preview .clause-content table th[data-ems-align-custom="1"][data-ems-align="right"] {
+                                        text-align: right !important;
+                                    }
+                                    #quote-preview .clause-content table td[data-ems-align-custom="1"][data-ems-align="justify"],
+                                    #quote-preview .clause-content table th[data-ems-align-custom="1"][data-ems-align="justify"] {
+                                        text-align: justify !important;
                                     }
                                     #quote-preview .clause-content > p,
                                     #quote-preview .clause-content > div:not(:has(table)) {
@@ -34282,8 +34258,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         .quote-continuation-header img {
                                             height: auto !important;
                                             width: auto !important;
-                                            max-height: 12.6mm !important;
-                                            max-width: 100% !important;
+                                            max-height: ${EMS_QUOTE_HEADER_LOGO_MAX_HEIGHT} !important;
+                                            max-width: ${EMS_QUOTE_HEADER_LOGO_MAX_WIDTH} !important;
                                             object-fit: contain !important;
                                             object-position: right top !important;
                                             display: block !important;
@@ -34340,7 +34316,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                             border-top: none !important;
                                         }
                                         .quote-cover-meta-table tbody tr.quote-cover-meta-row-mid + tr.quote-cover-meta-row-mid td:last-child {
-                                            border-top: 1px solid #e2e8f0 !important;
+                                            border-top: 1px solid ${EMS_QUOTE_META_ROW_SEPARATOR_COLOR} !important;
                                             border-bottom: none !important;
                                             border-left: none !important;
                                             border-right: none !important;

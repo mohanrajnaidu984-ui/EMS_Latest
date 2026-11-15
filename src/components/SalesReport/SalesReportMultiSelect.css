@@ -123,3 +123,72 @@
 .sr-multi-select__option span {
     line-height: 1.25;
 }
+
+.sr-multi-select__option--locked {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.sr-multi-select__option--locked input {
+    cursor: not-allowed;
+}
+
+.sr-multi-select__option--other-currency {
+    opacity: 0.7;
+}
+
+.sr-multi-select__hint {
+    margin-left: auto;
+    font-size: 0.7rem;
+    color: #64748b;
+    align-self: center;
+}
+
+.sr-multi-select__group {
+    padding-bottom: 4px;
+}
+
+.sr-multi-select__group + .sr-multi-select__group {
+    border-top: 1px solid #e2e8f0;
+    margin-top: 4px;
+    padding-top: 4px;
+}
+
+.sr-multi-select__group-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 10px 2px;
+    position: sticky;
+    top: 0;
+    background: #f8fafc;
+    z-index: 1;
+}
+
+.sr-multi-select__group-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #334155;
+}
+
+.sr-multi-select__group-select {
+    border: none;
+    background: none;
+    color: #0d6efd;
+    font-size: 0.7rem;
+    padding: 0;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.sr-multi-select__group-select:disabled {
+    color: #94a3b8;
+    cursor: not-allowed;
+}
+
+.sr-multi-select__group-body--dim {
+    opacity: 0.55;
+}

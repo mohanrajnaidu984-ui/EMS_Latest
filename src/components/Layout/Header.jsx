@@ -3,6 +3,7 @@ import emsMarkLogo from '../../assets/ems_logo2.png';
 import { getAcgBrandLogoSrc } from '../../utils/acgBrandLogo';
 import NotificationDropdown from './NotificationDropdown';
 import UserProfile from './UserProfile';
+import HeaderSalesSummary from './HeaderSalesSummary';
 import { isQuoteModuleTab, QUOTE_TAB_B2B } from '../../utils/quoteNav';
 import { EMS_PENDING_APPROVALS_CHANGED } from '../../constants/approvalEvents';
 import { EMS_CHATBOX_UNREAD_CHANGED } from '../../constants/chatboxEvents';
@@ -299,6 +300,7 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
           zIndex: 1
         }}>
           <div className="d-flex align-items-end w-100 h-100" style={{ position: 'relative' }}>
+            <HeaderSalesSummary email={userEmail} />
             {/* Left: EMS Text */}
             <div
               className="d-flex align-items-center logo-container"

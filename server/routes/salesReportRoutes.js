@@ -83,6 +83,54 @@ async function fetchCcMailScopedPairs(email) {
         .filter((r) => r.company || r.division);
 }
 
+/** Normalize Master_EnquiryFor.Currency for Sales Report company grouping (default BHD). */
+function normalizeSalesReportCurrencyCode(raw) {
+    const code = String(raw || '')
+        .trim()
+        .toUpperCase();
+    if (!code) return 'BHD';
+    if (code === 'BD' || code === 'BAHRAIN' || code === 'BAHRAINI DINAR') return 'BHD';
+    return code;
+}
+
+/** Map company name → currency from Master_EnquiryFor (one currency per company). */
+async function fetchSalesReportCompanyCurrencies(companyNames = null) {
+    const names = Array.isArray(companyNames)
+        ? [...new Set(companyNames.map((n) => String(n || '').trim()).filter(Boolean))]
+        : null;
+    const request = new sql.Request();
+    let sqlText = `
+        SELECT
+            LTRIM(RTRIM(CompanyName)) AS CompanyName,
+            COALESCE(
+                MAX(CASE
+                    WHEN NULLIF(LTRIM(RTRIM(ISNULL(Currency, N''))), N'') IS NOT NULL
+                    THEN LTRIM(RTRIM(Currency))
+                END),
+                N'BHD'
+            ) AS Currency
+        FROM Master_EnquiryFor
+        WHERE CompanyName IS NOT NULL AND LTRIM(RTRIM(CompanyName)) <> N''
+    `;
+    if (names && names.length) {
+        const parts = names.map((n, i) => {
+            const key = `cc${i}`;
+            request.input(key, sql.NVarChar, n);
+            return `@${key}`;
+        });
+        sqlText += ` AND LTRIM(RTRIM(CompanyName)) IN (${parts.join(', ')}) `;
+    }
+    sqlText += ` GROUP BY LTRIM(RTRIM(CompanyName)) `;
+    const result = await request.query(sqlText);
+    const map = {};
+    for (const row of result.recordset || []) {
+        const name = String(row.CompanyName || '').trim();
+        if (!name) continue;
+        map[name] = normalizeSalesReportCurrencyCode(row.Currency);
+    }
+    return map;
+}
+
 /** CC-mail users may only query company/division pairs from their CCMailIds rows (SE filter stays optional). */
 function clampSalesReportQueryToCcPairs(req, pairs) {
     if (!pairs || pairs.length === 0) return;
@@ -1530,10 +1578,19 @@ router.get('/filters', async (req, res) => {
 
         if (!scopedEmail || scopedFiltersUnlocked) {
             const companyQuery = `
-                SELECT DISTINCT CompanyName 
-                FROM Master_EnquiryFor 
-                WHERE CompanyName IS NOT NULL AND CompanyName <> ''
-                ORDER BY CompanyName ASC
+                SELECT
+                    LTRIM(RTRIM(CompanyName)) AS CompanyName,
+                    COALESCE(
+                        MAX(CASE
+                            WHEN NULLIF(LTRIM(RTRIM(ISNULL(Currency, N''))), N'') IS NOT NULL
+                            THEN LTRIM(RTRIM(Currency))
+                        END),
+                        N'BHD'
+                    ) AS Currency
+                FROM Master_EnquiryFor
+                WHERE CompanyName IS NOT NULL AND LTRIM(RTRIM(CompanyName)) <> N''
+                GROUP BY LTRIM(RTRIM(CompanyName))
+                ORDER BY LTRIM(RTRIM(CompanyName)) ASC
             `;
             const qCompanies = parseReportFilterList(company);
             const qDivisions = parseReportFilterList(division);
@@ -1578,9 +1635,18 @@ router.get('/filters', async (req, res) => {
                 request.query(roleSQL)
             ]);
 
+            const companyNames = companies.recordset.map((r) => r.CompanyName);
+            const companyCurrencies = {};
+            for (const row of companies.recordset || []) {
+                const name = String(row.CompanyName || '').trim();
+                if (!name) continue;
+                companyCurrencies[name] = normalizeSalesReportCurrencyCode(row.Currency);
+            }
+
             return res.json({
                 years: years.recordset.map(r => r.Year),
-                companies: companies.recordset.map(r => r.CompanyName),
+                companies: companyNames,
+                companyCurrencies,
                 divisions: divisions.recordset.map(r => r.DepartmentName),
                 roles: roles.recordset.map(r => r.FullName)
             });
@@ -1613,9 +1679,13 @@ router.get('/filters', async (req, res) => {
                 lockedCompany = ((cRes.recordset || [])[0]?.CompanyName || '').trim();
                 if (lockedCompany) break;
             }
+            const companyCurrencies = lockedCompany
+                ? await fetchSalesReportCompanyCurrencies([lockedCompany])
+                : {};
             return res.json({
                 years: years.recordset.map(r => r.Year),
                 companies: lockedCompany ? [lockedCompany] : [],
+                companyCurrencies,
                 divisions: userDeptTokens,
                 roles: userFullName ? [userFullName] : []
             });
@@ -1625,6 +1695,7 @@ router.get('/filters', async (req, res) => {
         const qDivisions = parseReportFilterList(division);
 
         const companies = [...new Set(scopedPairs.map(r => r.company).filter(Boolean))].sort();
+        const companyCurrencies = await fetchSalesReportCompanyCurrencies(companies);
 
         const divisionSource = hasReportFilterList(qCompanies)
             ? scopedPairs.filter((p) => qCompanies.includes(p.company))
@@ -1664,6 +1735,7 @@ router.get('/filters', async (req, res) => {
         res.json({
             years: years.recordset.map(r => r.Year),
             companies,
+            companyCurrencies,
             divisions,
             roles
         });
@@ -1676,6 +1748,13 @@ router.get('/filters', async (req, res) => {
 
 router.get('/summary', async (req, res) => {
     try {
+        const bhdOnly = String(req.query.currency || '').trim().toUpperCase() === 'BHD';
+        const headerOnly = bhdOnly && req.query.view === 'header';
+        const bhdDivisionClause = (division) => ` AND EXISTS (
+            SELECT 1 FROM Master_EnquiryFor mefCurrency
+            WHERE UPPER(LTRIM(RTRIM(ISNULL(mefCurrency.DepartmentName,N'')))) = UPPER(LTRIM(RTRIM(${division})))
+              AND UPPER(COALESCE(NULLIF(LTRIM(RTRIM(mefCurrency.Currency)),N''),N'BHD')) = N'BHD'
+        ) `;
         const __srAllT0 = Date.now();
         await applySalesReportEmailScope(req);
         const ctx = buildSalesReportItemValueContext(req);
@@ -1728,7 +1807,7 @@ router.get('/summary', async (req, res) => {
             divisions,
             companies,
             allowList
-        );
+        ) + (bhdOnly ? bhdDivisionClause(SQL_TOPJOB_OWNJOB_DIVISION) : '');
         const probPartitionByExpr = hasReportFilterList(effectiveQuotedSeList)
             ? `P.RequestNo, LTRIM(RTRIM(ISNULL(P.OwnJobName, N''))), LTRIM(RTRIM(ISNULL(P.LeadJobName, N'')))`
             : `P.RequestNo, LTRIM(RTRIM(ISNULL(P.PreparedBy, '')))`;
@@ -1756,6 +1835,7 @@ WITH LatestProbByUpdate AS (
 
         // 1. Target vs Job Booked — target from SalesTargets (All SE = sum every SalesEngineer row in division)
         let targetFilter = ' WHERE FinancialYear = @year ';
+        if (bhdOnly) targetFilter += bhdDivisionClause('SalesTargets.Division');
         if (nonCcBlock) {
             targetFilter += ' AND 1=0 ';
         } else {
@@ -1891,11 +1971,46 @@ FROM FuScoped;
         `;
 
         /* Pending/10% pipeline is loaded via /pipeline-pending (was ~3–5s and blocked charts). */
+        // Header leaderboard is deliberately global for every user; only the KPI
+        // figures above retain their SE / CC / management access scope.
+        const headerTopDivisionsSql = `
+WITH RankedGlobalProbability AS (
+    SELECT P.*, ROW_NUMBER() OVER (
+        PARTITION BY P.RequestNo,LTRIM(RTRIM(ISNULL(P.OwnJobName,N''))),LTRIM(RTRIM(ISNULL(P.LeadJobName,N'')))
+        ORDER BY P.UpdatedDateTime DESC,P.ID DESC
+    ) AS HeaderRank
+    FROM dbo.Probability P
+    INNER JOIN EnquiryMaster E ON E.RequestNo=P.RequestNo
+    WHERE 1=1 ${bhdDivisionClause(SQL_TOPJOB_OWNJOB_DIVISION)}
+)
+SELECT TOP (5) ${SQL_TOPJOB_OWNJOB_DIVISION} AS Division,
+    SUM(${SQL_PROB_WON_VALUE}) AS BookedValue
+FROM RankedGlobalProbability P
+INNER JOIN EnquiryMaster E ON E.RequestNo=P.RequestNo
+WHERE P.HeaderRank=1 AND LOWER(LTRIM(RTRIM(ISNULL(P.Status,''))))='won'
+    AND YEAR(COALESCE(P.BookedDate,P.UpdatedDateTime,E.EnquiryDate))=@year
+GROUP BY ${SQL_TOPJOB_OWNJOB_DIVISION}
+HAVING SUM(${SQL_PROB_WON_VALUE})>0
+ORDER BY BookedValue DESC,Division ASC;
+        `;
+        const headerKpiSql = `${latestProbByUpdateCte}
+SELECT N'QTR' AS Section,
+    DATEPART(QUARTER,COALESCE(P.BookedDate,P.UpdatedDateTime,E.EnquiryDate)) AS Q,
+    SUM(${SQL_PROB_WON_VALUE}) AS TotalActual,
+    SUM((${SQL_PROB_WON_VALUE})*CAST(ISNULL(P.GrossMargin,0) AS DECIMAL(18,4))/100.0) AS GmActual
+FROM LatestProbByUpdate P
+INNER JOIN EnquiryMaster E ON E.RequestNo=P.RequestNo
+WHERE LOWER(LTRIM(RTRIM(ISNULL(P.Status,''))))='won'
+    AND YEAR(COALESCE(P.BookedDate,P.UpdatedDateTime,E.EnquiryDate))=@year
+    ${safeQuarter ? 'AND DATEPART(QUARTER,COALESCE(P.BookedDate,P.UpdatedDateTime,E.EnquiryDate))=@quarterNums' : ''}
+GROUP BY DATEPART(QUARTER,COALESCE(P.BookedDate,P.UpdatedDateTime,E.EnquiryDate));
+        `;
         const [
             targetBundleRes,
             probKpiBundle,
             quotedRes,
             probabilityFunnelResRaw,
+            headerTopDivisionsRes,
         ] = await Promise.all([
             cloneMssqlRequest(request).query(`
                 SELECT Quarter, SUM(ISNULL(TargetValue, 0)) as TotalTarget,
@@ -1905,11 +2020,11 @@ FROM FuScoped;
                 ${targetFilter}
                 GROUP BY Quarter
             `),
-            cloneMssqlRequest(request).query(probKpiSql).catch((e) => {
+            cloneMssqlRequest(request).query(headerOnly ? headerKpiSql : probKpiSql).catch((e) => {
                 console.warn('[Sales Report] Probability KPI bundle fallback:', e.message);
                 return null;
             }),
-            cloneMssqlRequest(request).query(
+            headerOnly ? Promise.resolve({ recordset: [] }) : cloneMssqlRequest(request).query(
                 buildQuotedMaxPerEnquiryKpiSql(
                     request,
                     quotedTableFilterClause,
@@ -1920,7 +2035,7 @@ FROM FuScoped;
                     quotedSeAccountableClause
                 )
             ),
-            cloneMssqlRequest(request)
+            headerOnly ? Promise.resolve({ recordset: [] }) : cloneMssqlRequest(request)
                 .query(
                     buildSalesReportProbabilityFunnelAggregateSql(
                         funnelLatestProbCte,
@@ -1932,11 +2047,16 @@ FROM FuScoped;
                     console.warn('[Sales Report] Funnel Probability fallback:', pfErr.message);
                     return { recordset: [] };
                 }),
+            bhdOnly ? cloneMssqlRequest(request).query(headerTopDivisionsSql).catch(error => {
+                console.warn('[Sales Report] Header division ranking unavailable:', error.message);
+                return { recordset: [], unavailable: true };
+            }) : Promise.resolve({ recordset: [] }),
         ]);
         if (process.env.EMS_SR_TIMING === '1') {
             console.log(`[Sales Report summary] ${Date.now() - __srAllT0}ms`);
         }
 
+        if (bhdOnly && !probKpiBundle) throw new Error('BHD-scoped booking totals unavailable');
         const targetRes = {
             recordset: (targetBundleRes.recordset || []).map((r) => ({
                 Quarter: r.Quarter,
@@ -2052,6 +2172,9 @@ FROM FuScoped;
         winLoss.quotedValue = q0.TotalValue || 0;
 
         res.json({
+            ...(bhdOnly ? { currency: 'BHD',
+                topDivisions: (headerTopDivisionsRes.recordset || []).map((row,index) => ({rank:index+1,division:row.Division,bookedValue:Number(row.BookedValue)||0})),
+                topDivisionsUnavailable: !!headerTopDivisionsRes.unavailable } : {}),
             targetVsActual: quarters,
             grossMarginTargetVsActual: gmQuarters,
             avgWonBookedGpPct,
@@ -2366,6 +2489,14 @@ router.get('/top-job-booked', async (req, res) => {
                       ${wonTopJobFilterClause}
                 ) __lw
                 WHERE __lw.__rn = 1
+            ), WonQuotesByRef AS (
+                SELECT Q.QuoteDate,Q.QuoteType,
+                    LTRIM(RTRIM(ISNULL(Q.QuoteNumber,N''))) AS QuoteNumberKey,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY LTRIM(RTRIM(ISNULL(Q.QuoteNumber,N'')))
+                        ORDER BY ISNULL(Q.RevisionNo,0) DESC,Q.ID DESC
+                    ) AS QuoteRank
+                FROM EnquiryQuotes Q
             )
             SELECT
                 x.RequestNo,
@@ -2420,12 +2551,8 @@ router.get('/top-job-booked', async (req, res) => {
                     NULLIF(LTRIM(RTRIM(ISNULL(wonQ.QuoteType, N''))), N'') AS QuoteType
                 FROM LatestProbWonScope P
                 INNER JOIN EnquiryMaster E ON E.RequestNo = P.RequestNo
-                OUTER APPLY (
-                    SELECT TOP 1 Q.QuoteDate, Q.QuoteType
-                    FROM EnquiryQuotes Q
-                    WHERE LTRIM(RTRIM(ISNULL(Q.QuoteNumber, N''))) = LTRIM(RTRIM(ISNULL(P.QuoteRef, N'')))
-                    ORDER BY ISNULL(Q.RevisionNo, 0) DESC, Q.ID DESC
-                ) wonQ
+                LEFT JOIN WonQuotesByRef wonQ
+                    ON wonQ.QuoteNumberKey=LTRIM(RTRIM(ISNULL(P.QuoteRef,N''))) AND wonQ.QuoteRank=1
                 WHERE ${wonProbWhere}
                   AND YEAR(COALESCE(P.BookedDate, P.UpdatedDateTime, E.EnquiryDate)) = @year
                   ${safeQuarter ? `AND DATEPART(QUARTER, COALESCE(P.BookedDate, P.UpdatedDateTime, E.EnquiryDate)) = @quarterNums` : ''}

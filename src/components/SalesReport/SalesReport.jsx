@@ -2,16 +2,68 @@ import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallba
 import { createPortal } from 'react-dom';
 import { useAuth } from '../../context/AuthContext';
 import {
-    BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer,
+    BarChart, Bar, LabelList, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer,
     PieChart, Pie, Cell, CartesianGrid
 } from 'recharts';
 import { Printer, Mail, Maximize2, Minimize2, FilterX } from 'lucide-react';
-import { downloadJobsTableXlsx } from './salesReportJobsExcel';
+import { downloadJobsTableXlsx, formatChanceLabel } from './salesReportJobsExcel';
 import ExcelDownloadButton from '../shared/ExcelDownloadButton';
 import SalesReportMultiSelect from './SalesReportMultiSelect';
 import './SalesReport.css';
+import SalesTopWon from './SalesTopWon';
+import './SalesReportGlass.css';
+import { readJsonInFlight } from '../../utils/inflightApiJson';
 import { useMasterCurrency } from '../../hooks/useMasterCurrency';
 import MasterCurrencyBadge from '../shared/MasterCurrencyBadge';
+import { DEFAULT_CURRENCY, normalizeCurrencyCode } from '../../utils/currency';
+
+/** Keep only companies that share the currency of the first selected company. */
+function pruneCompaniesToSingleCurrency(companies, currencyByCompany) {
+    const list = Array.isArray(companies) ? companies.filter(Boolean) : [];
+    if (list.length <= 1) return list;
+    const map = currencyByCompany && typeof currencyByCompany === 'object' ? currencyByCompany : {};
+    const firstCode = normalizeCurrencyCode(map[list[0]] || DEFAULT_CURRENCY);
+    return list.filter((name) => normalizeCurrencyCode(map[name] || DEFAULT_CURRENCY) === firstCode);
+}
+
+/** Build currency-grouped company options for the Company Name multi-select. */
+function buildCompanyCurrencyGroups(companies, currencyByCompany) {
+    const list = Array.isArray(companies) ? companies.filter(Boolean) : [];
+    const map = currencyByCompany && typeof currencyByCompany === 'object' ? currencyByCompany : {};
+    const byCode = new Map();
+    for (const name of list) {
+        const code = normalizeCurrencyCode(map[name] || DEFAULT_CURRENCY);
+        if (!byCode.has(code)) byCode.set(code, []);
+        byCode.get(code).push(name);
+    }
+    const preferred = ['BHD', 'SAR', 'AED', 'KWD', 'OMR', 'QAR', 'USD', 'EUR', 'GBP'];
+    const codes = [...byCode.keys()].sort((a, b) => {
+        const ia = preferred.indexOf(a);
+        const ib = preferred.indexOf(b);
+        if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+        return a.localeCompare(b);
+    });
+    return codes.map((code) => ({
+        id: code,
+        label: code,
+        options: byCode.get(code).slice().sort((a, b) => a.localeCompare(b)),
+    }));
+}
+
+/**
+ * Empty company filter must not mix currencies: expand to all companies of one currency
+ * (prefer BHD). Explicit selection is pruned to a single currency.
+ */
+function resolveCompaniesForApi(selected, companies, currencyByCompany) {
+    const map = currencyByCompany && typeof currencyByCompany === 'object' ? currencyByCompany : {};
+    if (Array.isArray(selected) && selected.length) {
+        return pruneCompaniesToSingleCurrency(selected, map);
+    }
+    const groups = buildCompanyCurrencyGroups(companies, map);
+    if (!groups.length) return [];
+    const preferred = groups.find((g) => g.id === DEFAULT_CURRENCY) || groups[0];
+    return preferred.options.slice();
+}
 
 /** A4 landscape printable area (mm margins each side). */
 const SR_PRINT_PAGE_MM = { width: 297, height: 210, margin: 6 };
@@ -92,9 +144,9 @@ const SR_DONUT_GRADIENTS = {
     'Follow up': { id: 'srDonutGradFollowUp', hi: '#7BA3FF', lo: '#2952c4' }
 };
 
-/** Target vs Actual / GM charts — actual darker slate; target lighter periwinkle */
-const BAR_TARGET_FILL = '#8fa9d2';
-const BAR_ACTUAL_FILL = '#20396D';
+/** Target vs Actual / GP charts — blue target and red achievement, with glass highlights. */
+const BAR_TARGET_FILL = '#2563eb';
+const BAR_ACTUAL_FILL = '#dc2626';
 
 /** SVG fill URLs (unique per chart so two BarCharts can coexist) */
 const SR_BAR_JB = { target: 'url(#srBarJbTarget)', actual: 'url(#srBarJbActual)' };
@@ -177,7 +229,7 @@ const SR_TA_LEGEND_FONT_SIZE = Math.round(9 * SR_TA_TEXT_SCALE);
 const SR_TA_XAXIS_HEIGHT = Math.round(16 * SR_TA_TEXT_SCALE);
 
 /** Job Booking + Gross margin: tight chart left; quarter table padding matches Recharts plot inset so Q1–Q4 line up with bar / x-axis centres */
-const SR_TA_ALIGNED_BAR_MARGIN = { top: 6, right: 6, left: 2, bottom: 6 };
+const SR_TA_ALIGNED_BAR_MARGIN = { top: 30, right: 6, left: 2, bottom: 6 };
 /** Left offset to category plot (margin.left + Y-axis width) — same basis as Recharts layout. */
 const SR_TA_PLOT_OFFSET_LEFT = SR_TA_ALIGNED_BAR_MARGIN.left + SR_TA_YAXIS_WIDTH;
 const SR_TA_PLOT_OFFSET_RIGHT = SR_TA_ALIGNED_BAR_MARGIN.right;
@@ -669,7 +721,8 @@ const DEFAULT_TOP_JOB_COL_WIDTHS = {
     customerName: 138,
     jobValue: 96,
     chart: 113,
-    grossMargin: 120,
+    grossMargin: 108,
+    grossProfitValue: 90,
     metric: 110,
     quoteDate: 95,
     bookedDate: 95,
@@ -701,7 +754,7 @@ const TOP_JOB_CLIP_COLS = new Set([
     'extra',
 ]);
 
-const TOP_JOB_COL_WIDTHS_VERSION = 5;
+const TOP_JOB_COL_WIDTHS_VERSION = 7;
 
 function readTopJobColWidths() {
     // Always use current code defaults. Stale localStorage was blocking width tweaks (HMR + merge).
@@ -792,8 +845,11 @@ function SalesPipelineFunnelVisual({ rows, formatFullNumber, formatGmParts }) {
                                 x2="0"
                                 y2="1"
                             >
-                                <stop offset="0%" stopColor={mixHexWithWhite(row.fill, 0.38)} />
-                                <stop offset="100%" stopColor={mixHexWithBlack(row.fill, 0.42)} />
+                                <stop offset="0%" stopColor={mixHexWithWhite(row.fill,0.48)} />
+                                <stop offset="12%" stopColor={mixHexWithWhite(row.fill,0.26)} />
+                                <stop offset="45%" stopColor={mixHexWithWhite(row.fill,0.08)} />
+                                <stop offset="50%" stopColor={mixHexWithBlack(row.fill,0.04)} />
+                                <stop offset="100%" stopColor={mixHexWithBlack(row.fill,0.28)} />
                             </linearGradient>
                         ))}
                     </defs>
@@ -815,8 +871,8 @@ function SalesPipelineFunnelVisual({ rows, formatFullNumber, formatGmParts }) {
                                 <polygon
                                     points={pts}
                                     fill={`url(#srFunnelGrad-${i})`}
-                                    stroke="#1e293b"
-                                    strokeOpacity={0.42}
+                                    stroke="#6385b2"
+                                    strokeOpacity={0.22}
                                     strokeWidth="0.5"
                                     strokeLinejoin="miter"
                                     vectorEffect="non-scaling-stroke"
@@ -920,10 +976,6 @@ const SalesReport = () => {
     const [selectedDivisions, setSelectedDivisions] = useState(() =>
         parseSrFilterListPref(readSrPref('', 'division', ''))
     );
-    const { currencyCode: salesReportCurrencyCode } = useMasterCurrency({
-        division: selectedDivisions?.[0] || '',
-        companyName: selectedCompanies?.[0] || '',
-    });
     const [selectedRoles, setSelectedRoles] = useState(() =>
         parseSrFilterListPref(readSrPref('', 'role', 'All'))
     );
@@ -936,6 +988,7 @@ const SalesReport = () => {
     const [summaryLoading, setSummaryLoading] = useState(false);
     const [topJobsLoading, setTopJobsLoading] = useState(false);
     const [pipelinePending, setPipelinePending] = useState({ totalValue: 0, count: 0 });
+    const [topWonExpanded, setTopWonExpanded] = useState(false);
     const [tableExpanded, setTableExpanded] = useState(
         () => readSrPref('', 'tableExpanded', '') === '1'
     );
@@ -958,6 +1011,7 @@ const SalesReport = () => {
     const [activeHeaderFilter, setActiveHeaderFilter] = useState(null);
     const [headerFilterSearch, setHeaderFilterSearch] = useState('');
     const [headerFilterDraft, setHeaderFilterDraft] = useState([]);
+    const [headerFilterAddCurrent, setHeaderFilterAddCurrent] = useState(false);
     const headerFilterBtnRefs = useRef({});
     const tableScrollWrapRef = useRef(null);
     const [filterPanelPos, setFilterPanelPos] = useState(null);
@@ -967,8 +1021,45 @@ const SalesReport = () => {
     const [filterOptions, setFilterOptions] = useState({
         years: [],
         companies: [],
+        companyCurrencies: {},
         divisions: [],
         roles: []
+    });
+
+    const companyCurrencyGroups = useMemo(
+        () => buildCompanyCurrencyGroups(filterOptions.companies, filterOptions.companyCurrencies),
+        [filterOptions.companies, filterOptions.companyCurrencies]
+    );
+
+    /** Companies sent to summary/jobs APIs — never mixes currencies. */
+    const companiesForApi = useMemo(
+        () =>
+            resolveCompaniesForApi(
+                selectedCompanies,
+                filterOptions.companies,
+                filterOptions.companyCurrencies
+            ),
+        [selectedCompanies, filterOptions.companies, filterOptions.companyCurrencies]
+    );
+
+    const companyAnchorForCurrency = useMemo(() => {
+        if (selectedCompanies?.[0]) return selectedCompanies[0];
+        if (companiesForApi?.[0]) return companiesForApi[0];
+        return (
+            (companyCurrencyGroups.find((g) => g.id === DEFAULT_CURRENCY) || companyCurrencyGroups[0])
+                ?.options?.[0] || ''
+        );
+    }, [selectedCompanies, companiesForApi, companyCurrencyGroups]);
+
+    const companyAllLabel = useMemo(() => {
+        const g =
+            companyCurrencyGroups.find((x) => x.id === DEFAULT_CURRENCY) || companyCurrencyGroups[0];
+        return g ? `All ${g.id} companies` : 'All companies';
+    }, [companyCurrencyGroups]);
+
+    const { currencyCode: salesReportCurrencyCode } = useMasterCurrency({
+        division: selectedDivisions?.[0] || '',
+        companyName: companyAnchorForCurrency || '',
     });
 
     /**
@@ -982,11 +1073,12 @@ const SalesReport = () => {
         const ac = new AbortController();
         const timer = window.setTimeout(async () => {
             try {
-                const email = (currentUser?.EmailId || currentUser?.email || storedLoginEmail || '').trim();
+                const email = userEmailNorm;
                 const params = new URLSearchParams();
                 if (email) params.append('email', email);
                 if (!filterLocks.company) {
-                    appendSrFilterParams(params, 'company', selectedCompanies);
+                    // Cascading divisions/roles follow the same single-currency company set as the report.
+                    appendSrFilterParams(params, 'company', companiesForApi);
                     appendSrFilterParams(params, 'division', selectedDivisions);
                 }
 
@@ -997,24 +1089,33 @@ const SalesReport = () => {
 
                 const data = await response.json();
                 const companies = data.companies || [];
+                const companyCurrencies =
+                    data.companyCurrencies && typeof data.companyCurrencies === 'object'
+                        ? data.companyCurrencies
+                        : {};
                 const divisions = data.divisions || [];
                 const roles = data.roles || [];
                 const years = data.years || [];
 
                 setFilterOptions((prev) => {
+                    const currSame =
+                        JSON.stringify(prev.companyCurrencies || {}) ===
+                        JSON.stringify(companyCurrencies);
                     if (
                         srFilterListsEqual(prev.years, years) &&
                         srFilterListsEqual(prev.companies, companies) &&
                         srFilterListsEqual(prev.divisions, divisions) &&
-                        srFilterListsEqual(prev.roles, roles)
+                        srFilterListsEqual(prev.roles, roles) &&
+                        currSame
                     ) {
                         return prev;
                     }
-                    return { years, companies, divisions, roles };
+                    return { years, companies, companyCurrencies, divisions, roles };
                 });
                 setSelectedCompanies((prev) => {
                     if (!prev.length) return prev;
-                    const next = prev.filter((c) => companies.includes(c));
+                    const inList = prev.filter((c) => companies.includes(c));
+                    const next = pruneCompaniesToSingleCurrency(inList, companyCurrencies);
                     if (!next.length || srFilterListsEqual(prev, next)) return prev;
                     return next;
                 });
@@ -1028,18 +1129,17 @@ const SalesReport = () => {
                 if (error?.name === 'AbortError') return;
                 console.error('Failed to fetch sales report filters', error);
             }
-        }, 300);
+        }, filterOptions.companies.length ? 150 : 0);
 
         return () => {
             window.clearTimeout(timer);
             ac.abort();
         };
     }, [
-        selectedCompanies,
+        companiesForApi,
         selectedDivisions,
         filterLocks.company,
-        currentUser,
-        storedLoginEmail,
+        userEmailNorm,
         accessResolved,
     ]);
 
@@ -1131,10 +1231,10 @@ const SalesReport = () => {
         try {
             const params = new URLSearchParams();
             params.append('year', year);
-            appendSrFilterParams(params, 'company', selectedCompanies);
+            appendSrFilterParams(params, 'company', companiesForApi);
             appendSrFilterParams(params, 'division', selectedDivisions);
             appendSrFilterParams(params, 'role', selectedRoles);
-            const email = (currentUser?.EmailId || currentUser?.email || storedLoginEmail || '').trim();
+            const email = userEmailNorm;
             if (email) params.append('email', email);
 
             const res = await fetch(`/api/sales-report/summary?${params.toString()}`, { signal });
@@ -1170,7 +1270,7 @@ const SalesReport = () => {
         } finally {
             if (!signal.aborted) setSummaryLoading(false);
         }
-    }, [year, selectedCompanies, selectedDivisions, selectedRoles, filterLocks.company, currentUser, storedLoginEmail]);
+    }, [year, companiesForApi, selectedDivisions, selectedRoles, userEmailNorm]);
 
     /** Heavy Pending/10% pipeline bucket — does not block chart loading. */
     const fetchPipelinePending = useCallback(async (signal) => {
@@ -1178,10 +1278,10 @@ const SalesReport = () => {
         try {
             const params = new URLSearchParams();
             params.append('year', year);
-            appendSrFilterParams(params, 'company', selectedCompanies);
+            appendSrFilterParams(params, 'company', companiesForApi);
             appendSrFilterParams(params, 'division', selectedDivisions);
             appendSrFilterParams(params, 'role', selectedRoles);
-            const email = (currentUser?.EmailId || currentUser?.email || storedLoginEmail || '').trim();
+            const email = userEmailNorm;
             if (email) params.append('email', email);
 
             const res = await fetch(`/api/sales-report/pipeline-pending?${params.toString()}`, { signal });
@@ -1196,7 +1296,7 @@ const SalesReport = () => {
             if (e?.name === 'AbortError') return;
             console.error('Failed to fetch pipeline pending', e);
         }
-    }, [year, selectedCompanies, selectedDivisions, selectedRoles, filterLocks.company, currentUser, storedLoginEmail]);
+    }, [year, companiesForApi, selectedDivisions, selectedRoles, userEmailNorm]);
 
     const fetchTopJobBooked = useCallback(async (signal) => {
         setTopJobsLoading(true);
@@ -1205,17 +1305,17 @@ const SalesReport = () => {
         try {
             const params = new URLSearchParams();
             params.append('year', year);
-            appendSrFilterParams(params, 'company', selectedCompanies);
+            appendSrFilterParams(params, 'company', companiesForApi);
             appendSrFilterParams(params, 'division', selectedDivisions);
             appendSrFilterParams(params, 'role', selectedRoles);
             params.append('topJobStatus', topJobStatus);
-            const email = (currentUser?.EmailId || currentUser?.email || storedLoginEmail || '').trim();
+            const email = userEmailNorm;
             if (email) params.append('email', email);
 
-            const res = await fetch(`/api/sales-report/top-job-booked?${params.toString()}`, { signal });
+            const res = await readJsonInFlight(`/api/sales-report/top-job-booked?${params.toString()}`);
             if (signal.aborted) return;
             if (res.ok) {
-                const data = await res.json();
+                const data = res.data;
                 setReportData((prev) => ({
                     ...prev,
                     topJobBooked: data.topJobBooked || []
@@ -1231,23 +1331,32 @@ const SalesReport = () => {
         } finally {
             if (!signal.aborted) setTopJobsLoading(false);
         }
-    }, [year, selectedCompanies, selectedDivisions, selectedRoles, topJobStatus, filterLocks.company, currentUser, storedLoginEmail]);
+    }, [year, companiesForApi, selectedDivisions, selectedRoles, topJobStatus, userEmailNorm]);
 
-    const reportReady = year && prefsHydrated && accessResolved;
+    const companyFiltersReady =
+        filterLocks.company ||
+        filterOptions.companies.length > 0 ||
+        Object.keys(filterOptions.companyCurrencies || {}).length > 0;
+    const reportReady = Boolean(year && prefsHydrated && accessResolved && companyFiltersReady);
+    const wonRankingUrl = useMemo(() => {
+        const params = new URLSearchParams();
+        params.append('year', year);
+        appendSrFilterParams(params, 'company', companiesForApi);
+        appendSrFilterParams(params, 'division', selectedDivisions);
+        appendSrFilterParams(params, 'role', selectedRoles);
+        params.append('topJobStatus', 'Won');
+        if (userEmailNorm) params.append('email', userEmailNorm);
+        return '/api/sales-report/top-job-booked?' + params.toString();
+    }, [year, companiesForApi, selectedDivisions, selectedRoles, userEmailNorm]);
 
     useEffect(() => {
         if (!reportReady) return;
         const ac = new AbortController();
-        fetchSummary(ac.signal);
+        setPipelinePending({ totalValue:0,count:0 });
+        // Prioritize visible KPIs; Pending is the slower secondary pipeline query.
+        fetchSummary(ac.signal).then(() => { if (!ac.signal.aborted) void fetchPipelinePending(ac.signal); });
         return () => ac.abort();
-    }, [fetchSummary, reportReady]);
-
-    useEffect(() => {
-        if (!reportReady) return;
-        const ac = new AbortController();
-        fetchPipelinePending(ac.signal);
-        return () => ac.abort();
-    }, [fetchPipelinePending, reportReady]);
+    }, [fetchSummary, fetchPipelinePending, reportReady]);
 
     useEffect(() => {
         if (!reportReady) return;
@@ -1257,7 +1366,7 @@ const SalesReport = () => {
     }, [fetchTopJobBooked, reportReady]);
 
     useEffect(() => {
-        const email = (currentUser?.EmailId || currentUser?.email || storedLoginEmail || '').trim();
+        const email = userEmailNorm;
         if (!email) {
             setAccessResolved(true);
             return;
@@ -1327,10 +1436,14 @@ const SalesReport = () => {
         return () => {
             cancelled = true;
         };
-    }, [currentUser, storedLoginEmail]);
+    }, [userEmailNorm]);
 
     const handleCompaniesChange = (next) => {
-        setSelectedCompanies(next);
+        const pruned = pruneCompaniesToSingleCurrency(
+            Array.isArray(next) ? next : [],
+            filterOptions.companyCurrencies
+        );
+        setSelectedCompanies(pruned);
         setSelectedDivisions([]);
         setSelectedRoles([]);
     };
@@ -1400,7 +1513,7 @@ const SalesReport = () => {
     };
 
     /** WonGrossProfit / GrossMargin is GP %; JobValue is full units — GP amount = JobValue × GP% / 100. */
-    const formatJobBookedGrossMargin = (row) => {
+    const formatJobBookedGrossMargin = (row, percentOnly = false) => {
         const jv = Number(row.JobValue) || 0;
         const gpPct = parseRowGrossMarginPct(row);
         if (gpPct == null) return '—';
@@ -1408,8 +1521,7 @@ const SalesReport = () => {
         const pctRounded = Math.round(gpPct);
         return (
             <>
-                {formatK(gpVal)} {pctRounded}
-                <span className="sr-pct-sym">%</span>
+                {percentOnly ? <>{pctRounded}<span className="sr-pct-sym">%</span></> : formatK(gpVal)}
             </>
         );
     };
@@ -1559,7 +1671,7 @@ const SalesReport = () => {
         if (topJobStatus === 'Quoted') return String(row.QuoteRef || '—');
         if (topJobStatus === 'Won') return String(Math.round(Number(row.WonGrossProfit) || 0));
         if (topJobStatus === 'Lost') return String(row.LostToWhom || row.CustomerName || '—');
-        if (topJobStatus === 'Follow Up') return String(row.ProbabilityChance || '—');
+        if (topJobStatus === 'Follow Up') return formatChanceLabel(row.ProbabilityChance);
         return String(row.Status || '—');
     };
 
@@ -1579,6 +1691,10 @@ const SalesReport = () => {
         if (key === 'projectName') return String(row.ProjectName || '—');
         if (key === 'customerName') return String(row.CustomerName || '—');
         if (key === 'jobValue') return String(Number(row.JobValue) || 0);
+        if (key === 'grossProfitValue') {
+            const pct = parseRowGrossMarginPct(row);
+            return pct == null ? '—' : String((Number(row.JobValue) || 0) * pct / 100);
+        }
         if (key === 'metric') return getTopJobMetricFilterValue(row);
         if (key === 'quoteDate') {
             if (!row.QuoteDate) return '—';
@@ -1615,7 +1731,13 @@ const SalesReport = () => {
             { key: 'consultantName', label: 'Consultant Name' },
             { key: 'concernSe', label: 'Concern SE/EE/TE/QS' }
         ];
-        if (topJobStatus === 'Won') cols.splice(4, 0, { key: 'bookedDate', label: 'Booked Date' });
+        if (topJobStatus === 'Won' || topJobStatus === 'Follow Up') {
+            cols.splice(4, 0, { key: 'grossProfitValue', label: 'Gross Profit' });
+        }
+        if (topJobStatus === 'Won') {
+            cols.splice(cols.findIndex(c => c.key === 'metric'), 1);
+            cols.splice(4, 0, { key: 'bookedDate', label: 'Booked Date' });
+        }
         if (topJobStatus === 'Lost') cols.splice(4, 0, { key: 'lostDate', label: 'Lost Date' });
         if (topJobStatus === 'Follow Up') cols.splice(4, 0, { key: 'expectedDate', label: 'Expected Date' });
         if (topJobStatus === 'Pending') {
@@ -1789,12 +1911,30 @@ const SalesReport = () => {
 
     const getTopJobColStyle = useCallback(
         (key) => {
-            const w = Number(topJobColWidths[key] ?? DEFAULT_TOP_JOB_COL_WIDTHS[key]);
+            const w = Number(topJobColWidths[key] ?? DEFAULT_TOP_JOB_COL_WIDTHS[key])
+                * (key === 'metric' && topJobStatus === 'Follow Up' ? 1.3 : 1);
             if (!Number.isFinite(w) || w <= 0) return undefined;
             return { width: w, minWidth: w, maxWidth: w };
         },
-        [topJobColWidths]
+        [topJobColWidths, topJobStatus]
     );
+
+    useLayoutEffect(() => {
+        if (topJobStatus !== 'Won' && topJobStatus !== 'Follow Up') return;
+        const widths = {};
+        for (const key of ['grossProfitValue', 'grossMargin']) {
+            const button = headerFilterBtnRefs.current[key];
+            const header = button?.closest('th');
+            if (!header) continue;
+            const style = window.getComputedStyle(header);
+            const buttonStyle = window.getComputedStyle(button);
+            const contentWidth = [...button.children].reduce((sum, child) => sum + child.getBoundingClientRect().width, 0);
+            widths[key] = Math.ceil(contentWidth + (parseFloat(buttonStyle.columnGap) || 0)
+                + (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0)
+                + (parseFloat(style.borderLeftWidth) || 0) + (parseFloat(style.borderRightWidth) || 0) + 2);
+        }
+        if (Object.keys(widths).length) setTopJobColWidths(previous => ({ ...previous, ...widths }));
+    }, [topJobStatus, tableExpanded]);
 
     const onTopJobColResizeMove = useCallback((e) => {
         const r = topJobColResizeRef.current;
@@ -1835,6 +1975,7 @@ const SalesReport = () => {
     }, [onTopJobColResizeMove, onTopJobColResizeEnd]);
 
     const openHeaderFilter = (key) => {
+        setHeaderFilterAddCurrent(Array.isArray(topJobColumnFilters[key]));
         if (key === 'jobValue') {
             setHeaderFilterSearch('');
             setTopJobValueFilterDraft(
@@ -1980,7 +2121,7 @@ const SalesReport = () => {
             return row.LostToWhom || row.CustomerName || '—';
         }
         if (topJobStatus === 'Follow Up') {
-            return row.ProbabilityChance || '—';
+            return formatChanceLabel(row.ProbabilityChance);
         }
         if (topJobStatus === 'Pending') {
             const st = String(row.Status || '').trim().toLowerCase();
@@ -2133,7 +2274,7 @@ const SalesReport = () => {
                 headingLabel: topJobsHeadingWord,
                 meta: {
                     year,
-                    company: selectedCompanies,
+                    company: companiesForApi,
                     division: selectedDivisions,
                     role: selectedRoles,
                 }
@@ -2180,18 +2321,24 @@ const SalesReport = () => {
                     className="sr-th-filter-search"
                     value={headerFilterSearch}
                     onChange={(e) => {
-                        const q = String(e.target.value || '');
-                        setHeaderFilterSearch(q);
-                        const nq = q.trim().toLowerCase();
-                        const matched = options.filter((o) => String(o).toLowerCase().includes(nq));
-                        setHeaderFilterDraft(matched);
+                        setHeaderFilterSearch(String(e.target.value || ''));
                     }}
                     placeholder="Search..."
                 />
                 <div className="sr-th-filter-actions">
-                    <button type="button" onClick={() => setHeaderFilterDraft(visible)}>Select All</button>
-                    <button type="button" onClick={() => setHeaderFilterDraft([])}>Unselect All</button>
+                    <button type="button" onClick={() => setHeaderFilterDraft(prev => [...new Set([...prev, ...visible])])}>Select All</button>
+                    <button type="button" onClick={() => setHeaderFilterDraft(prev => prev.filter(value => !visible.includes(value)))}>Unselect All</button>
                 </div>
+                {searchQ ? (
+                    <label className="sr-th-filter-option">
+                        <input
+                            type="checkbox"
+                            checked={headerFilterAddCurrent}
+                            onChange={e => setHeaderFilterAddCurrent(e.target.checked)}
+                        />
+                        <span>Add current selection to filter</span>
+                    </label>
+                ) : null}
                 {isDateColumn ? (
                     <div className="sr-th-filter-options">
                         {Object.keys(dateGroups)
@@ -2268,7 +2415,7 @@ const SalesReport = () => {
                                     checked={headerFilterDraft.includes(opt)}
                                     onChange={(e) =>
                                         setHeaderFilterDraft((prev) =>
-                                            e.target.checked ? [...prev, opt] : prev.filter((v) => v !== opt)
+                                            e.target.checked ? [...new Set([...prev, opt])] : prev.filter((v) => v !== opt)
                                         )
                                     }
                                 />
@@ -2295,12 +2442,15 @@ const SalesReport = () => {
                         type="button"
                         className="sr-th-filter-apply"
                         onClick={() => {
+                            const selection = searchQ && !headerFilterAddCurrent
+                                ? headerFilterDraft.filter(value => visible.includes(value))
+                                : headerFilterDraft;
                             setTopJobColumnFilters((prev) => {
                                 const next = { ...prev };
-                                if (headerFilterDraft.length === options.length) {
+                                if (selection.length === options.length) {
                                     delete next[key];
                                 } else {
-                                    next[key] = [...headerFilterDraft];
+                                    next[key] = [...selection];
                                 }
                                 return next;
                             });
@@ -2378,9 +2528,9 @@ const SalesReport = () => {
                         if (el) headerFilterBtnRefs.current.grossMargin = el;
                     }}
                     onClick={() => openHeaderFilter('grossMargin')}
-                    title="Filter by Gross Margin % from Probability"
+                    title="Filter by Gross Profit % from Probability"
                 >
-                    <span>Gross Margin</span>
+                    <span>Gross Profit (%)</span>
                     <span className={`sr-th-filter-caret${isFiltered ? ' sr-th-filter-caret--active' : ''}`}>▼</span>
                 </button>
                 <span
@@ -2500,11 +2650,11 @@ const SalesReport = () => {
         );
     };
 
-    const contentLoading = summaryLoading || topJobsLoading;
+    const contentLoading = summaryLoading;
 
     return (
         <div
-            className={`container-fluid sales-report-page sales-report-fit d-flex flex-column${tableExpanded ? ' sr-table-expanded' : ''}`}
+            className={`container-fluid sales-report-page sales-report-fit d-flex flex-column${tableExpanded ? ' sr-table-expanded' : ''}${topWonExpanded ? ' sr-top-won-expanded' : ''}`}
             style={{
                 width: '100vw',
                 marginLeft: 'calc(50% - 50vw)',
@@ -2532,10 +2682,12 @@ const SalesReport = () => {
                             ariaLabel="Company Name"
                             minWidth={338}
                             options={filterOptions.companies}
+                            groups={companyCurrencyGroups}
+                            singleGroupSelection
                             value={selectedCompanies}
                             onChange={handleCompaniesChange}
                             disabled={filterLocks.company || filterOptions.companies.length === 0}
-                            allLabel="All companies"
+                            allLabel={companyAllLabel}
                         />
                         <SalesReportMultiSelect
                             label="Division Name"
@@ -2666,9 +2818,10 @@ const SalesReport = () => {
                                                         x2="1"
                                                         y2="1"
                                                     >
-                                                        <stop offset="0%" stopColor={g.hi} />
-                                                        <stop offset="55%" stopColor={g.lo} />
-                                                        <stop offset="100%" stopColor={g.lo} />
+                                                        <stop offset="0%" stopColor={mixHexWithWhite(g.hi,0.38)} stopOpacity={0.95} />
+                                                        <stop offset="35%" stopColor={g.hi} stopOpacity={0.92} />
+                                                        <stop offset="52%" stopColor={mixHexWithWhite(g.lo,0.12)} />
+                                                        <stop offset="100%" stopColor={mixHexWithBlack(g.lo,0.12)} />
                                                     </linearGradient>
                                                 ))}
                                             </defs>
@@ -2794,12 +2947,14 @@ const SalesReport = () => {
                                     <BarChart data={targetVsActualData} margin={SR_TA_ALIGNED_BAR_MARGIN}>
                                         <defs>
                                             <linearGradient id="srBarJbTarget" x1="0" y1="1" x2="0" y2="0">
-                                                <stop offset="0%" stopColor={mixHexWithWhite(BAR_TARGET_FILL, 0.08)} />
-                                                <stop offset="100%" stopColor={mixHexWithWhite(BAR_TARGET_FILL, 0.42)} />
+                                                <stop offset="0%" stopColor={mixHexWithBlack(BAR_TARGET_FILL,0.12)} stopOpacity={0.96} />
+                                                <stop offset="55%" stopColor={mixHexWithWhite(BAR_TARGET_FILL,0.20)} stopOpacity={0.94} />
+                                                <stop offset="100%" stopColor={mixHexWithWhite(BAR_TARGET_FILL,0.56)} stopOpacity={0.96} />
                                             </linearGradient>
                                             <linearGradient id="srBarJbActual" x1="0" y1="1" x2="0" y2="0">
-                                                <stop offset="0%" stopColor={BAR_ACTUAL_FILL} />
-                                                <stop offset="100%" stopColor={mixHexWithWhite(BAR_ACTUAL_FILL, 0.35)} />
+                                                <stop offset="0%" stopColor={mixHexWithBlack(BAR_ACTUAL_FILL,0.12)} stopOpacity={0.96} />
+                                                <stop offset="55%" stopColor={mixHexWithWhite(BAR_ACTUAL_FILL,0.20)} stopOpacity={0.94} />
+                                                <stop offset="100%" stopColor={mixHexWithWhite(BAR_ACTUAL_FILL,0.56)} stopOpacity={0.96} />
                                             </linearGradient>
                                         </defs>
                                         <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#e8ecf4" strokeOpacity={0.95} />
@@ -2811,8 +2966,12 @@ const SalesReport = () => {
                                             wrapperStyle={{ fontSize: SR_TA_LEGEND_FONT_SIZE, color: SR_CHART_LEGEND_GREY }}
                                             verticalAlign="bottom"
                                         />
-                                        <Bar dataKey="target" name="Target" fill={SR_BAR_JB.target} radius={[5, 5, 0, 0]} maxBarSize={20} isAnimationActive={false} />
-                                        <Bar dataKey="actual" name="Actual Achieved" fill={SR_BAR_JB.actual} radius={[5, 5, 0, 0]} maxBarSize={20} isAnimationActive={false} />
+                                        <Bar dataKey="target" name="Target" fill={SR_BAR_JB.target} radius={[5, 5, 0, 0]} maxBarSize={20} isAnimationActive={false}>
+                                            <LabelList dataKey="target" position="top" offset={16} formatter={formatSalesAmountString} fill={BAR_TARGET_FILL} fontSize={9} fontWeight={600} />
+                                        </Bar>
+                                        <Bar dataKey="actual" name="Actual Achieved" fill={SR_BAR_JB.actual} radius={[5, 5, 0, 0]} maxBarSize={20} isAnimationActive={false}>
+                                            <LabelList dataKey="actual" position="top" offset={4} formatter={formatSalesAmountString} fill={BAR_ACTUAL_FILL} fontSize={9} fontWeight={600} />
+                                        </Bar>
                                     </BarChart>
                                 </ResponsiveContainer>
                             </div>
@@ -2902,12 +3061,14 @@ const SalesReport = () => {
                                     <BarChart data={grossMarginData} margin={SR_TA_ALIGNED_BAR_MARGIN}>
                                         <defs>
                                             <linearGradient id="srBarGmTarget" x1="0" y1="1" x2="0" y2="0">
-                                                <stop offset="0%" stopColor={mixHexWithWhite(BAR_TARGET_FILL, 0.08)} />
-                                                <stop offset="100%" stopColor={mixHexWithWhite(BAR_TARGET_FILL, 0.42)} />
+                                                <stop offset="0%" stopColor={mixHexWithBlack(BAR_TARGET_FILL,0.12)} stopOpacity={0.96} />
+                                                <stop offset="55%" stopColor={mixHexWithWhite(BAR_TARGET_FILL,0.20)} stopOpacity={0.94} />
+                                                <stop offset="100%" stopColor={mixHexWithWhite(BAR_TARGET_FILL,0.56)} stopOpacity={0.96} />
                                             </linearGradient>
                                             <linearGradient id="srBarGmActual" x1="0" y1="1" x2="0" y2="0">
-                                                <stop offset="0%" stopColor={BAR_ACTUAL_FILL} />
-                                                <stop offset="100%" stopColor={mixHexWithWhite(BAR_ACTUAL_FILL, 0.35)} />
+                                                <stop offset="0%" stopColor={mixHexWithBlack(BAR_ACTUAL_FILL,0.12)} stopOpacity={0.96} />
+                                                <stop offset="55%" stopColor={mixHexWithWhite(BAR_ACTUAL_FILL,0.20)} stopOpacity={0.94} />
+                                                <stop offset="100%" stopColor={mixHexWithWhite(BAR_ACTUAL_FILL,0.56)} stopOpacity={0.96} />
                                             </linearGradient>
                                         </defs>
                                         <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#e8ecf4" strokeOpacity={0.95} />
@@ -2919,8 +3080,12 @@ const SalesReport = () => {
                                             wrapperStyle={{ fontSize: SR_TA_LEGEND_FONT_SIZE, color: SR_CHART_LEGEND_GREY }}
                                             verticalAlign="bottom"
                                         />
-                                        <Bar dataKey="target" name="Target" fill={SR_BAR_GM.target} radius={[5, 5, 0, 0]} maxBarSize={20} isAnimationActive={false} />
-                                        <Bar dataKey="actual" name="Actual Achieved" fill={SR_BAR_GM.actual} radius={[5, 5, 0, 0]} maxBarSize={20} isAnimationActive={false} />
+                                        <Bar dataKey="target" name="Target" fill={SR_BAR_GM.target} radius={[5, 5, 0, 0]} maxBarSize={20} isAnimationActive={false}>
+                                            <LabelList dataKey="target" position="top" offset={16} formatter={formatSalesAmountString} fill={BAR_TARGET_FILL} fontSize={9} fontWeight={600} />
+                                        </Bar>
+                                        <Bar dataKey="actual" name="Actual Achieved" fill={SR_BAR_GM.actual} radius={[5, 5, 0, 0]} maxBarSize={20} isAnimationActive={false}>
+                                            <LabelList dataKey="actual" position="top" offset={4} formatter={formatSalesAmountString} fill={BAR_ACTUAL_FILL} fontSize={9} fontWeight={600} />
+                                        </Bar>
                                     </BarChart>
                                 </ResponsiveContainer>
                             </div>
@@ -2940,46 +3105,18 @@ const SalesReport = () => {
                                     />
                                 </div>
                             </div>
-                            <div className="sr-pipeline-summary flex-shrink-0">
-                                {FUNNEL_STAGES.map((stage, i) => {
-                                    const v = Number(funnelData[i]?.value) || 0;
-                                    const showGm = stage.probability !== 10;
-                                    const gmParts = showGm
-                                        ? formatFunnelGrossMarginParts(funnelData[i] || {})
-                                        : null;
-                                    return (
-                                        <div
-                                            key={stage.probability}
-                                            className="sr-pipeline-summary-row d-flex align-items-center justify-content-between gap-2"
-                                        >
-                                            <div className="d-flex align-items-center gap-2 min-w-0 flex-grow-1">
-                                                <span className="sr-pipeline-summary-pct">{stage.pctLabel || `${stage.probability}%`}</span>
-                                                <span className="sr-pipeline-swatch" style={{ backgroundColor: stage.color }} title={stage.name} aria-hidden />
-                                                <span className="sr-pipeline-summary-legend text-truncate">{stage.name}</span>
-                                            </div>
-                                            <span className="sr-pipeline-summary-value text-end">
-                                                <span className="sr-pipeline-summary-value-main text-nowrap">
-                                                    {formatFunnelSummaryValue(v)}
-                                                </span>
-                                                {gmParts ? (
-                                                    <span className="sr-pipeline-summary-gm d-block text-nowrap">
-                                                        <span className="sr-pipeline-summary-gp-prefix">{gmParts.prefix}</span>
-                                                        {` ${gmParts.detail}`}
-                                                    </span>
-                                                ) : null}
-                                            </span>
-                                        </div>
-                                    );
-                                })}
-                            </div>
                         </div>
                     </section>
+
+                    <SalesTopWon url={reportReady ? wonRankingUrl : null} formatValue={formatSalesAmountString}
+                        expanded={topWonExpanded} onToggleExpanded={() => { setTopWonExpanded(prev => !prev); setTableExpanded(false); }} />
 
                     <section className="sr-cell sr-cell-table card border-0 shadow-sm">
                         <div className="card-header sr-report-table-title sr-report-table-title--toolbar px-2 py-1 small">
                             <span className="flex-grow-1" aria-hidden />
                             <span className="sr-report-table-heading text-center flex-shrink-0 px-1">
                                 Jobs ({topJobsHeadingWord})
+                                {topJobsLoading ? <span className="ms-2 small" role="status">Loading jobs…</span> : null}
                             </span>
                             <div className="flex-grow-1 d-flex justify-content-end align-items-center no-print">
                                 <button
@@ -3050,9 +3187,10 @@ const SalesReport = () => {
                                             'sr-job-bar-th',
                                             'Each row: % of the table Total (same as the blue Total row in the value column); bar length matches that %.'
                                         )}
-                                        {topJobStatus === 'Follow Up'
-                                            ? renderGrossMarginFilterHeader()
-                                            : null}
+                                        {topJobStatus === 'Won' || topJobStatus === 'Follow Up' ? <>
+                                            {renderFilterableHeader('grossProfitValue', 'Gross Profit', 'text-end text-nowrap')}
+                                            {renderGrossMarginFilterHeader()}
+                                        </> : null}
                                         {topJobStatus === 'Quoted' ? (
                                             <>
                                                 {renderFilterableHeader('metric', topJobsTableConfig.metricHeader, 'text-end text-nowrap')}
@@ -3061,7 +3199,6 @@ const SalesReport = () => {
                                             </>
                                         ) : topJobStatus === 'Won' ? (
                                             <>
-                                                {renderFilterableHeader('metric', topJobsTableConfig.metricHeader, 'text-end text-nowrap')}
                                                 {renderFilterableHeader('bookedDate', 'Booked Date', 'text-nowrap')}
                                             </>
                                         ) : topJobStatus === 'Lost' ? (
@@ -3129,12 +3266,14 @@ const SalesReport = () => {
                                                 )}
                                             </td>
                                             <td style={getTopJobColStyle('chart')} />
-                                            {topJobStatus === 'Follow Up' ? (
-                                                <td className="text-end fw-semibold" style={getTopJobColStyle('grossMargin')}>
-                                                    {formatK(topRowsFilteredWonGpTotal)} ({topRowsFilteredWonAvgGpPct}
-                                                    <span className="sr-pct-sym">%</span>)
+                                            {topJobStatus === 'Won' || topJobStatus === 'Follow Up' ? (<>
+                                                <td className="text-end fw-semibold" style={getTopJobColStyle('grossProfitValue')}>
+                                                    {formatK(topRowsFilteredWonGpTotal)}
                                                 </td>
-                                            ) : null}
+                                                <td className="text-end fw-semibold" style={getTopJobColStyle('grossMargin')}>
+                                                    {topRowsFilteredWonAvgGpPct}<span className="sr-pct-sym">%</span>
+                                                </td>
+                                            </>) : null}
                                             {topJobStatus === 'Quoted' ? (
                                                 <>
                                                     <td />
@@ -3143,10 +3282,6 @@ const SalesReport = () => {
                                                 </>
                                             ) : topJobStatus === 'Won' ? (
                                                 <>
-                                                    <td className="text-end fw-semibold">
-                                                        {formatK(topRowsFilteredWonGpTotal)} ({topRowsFilteredWonAvgGpPct}
-                                                        <span className="sr-pct-sym">%</span>)
-                                                    </td>
                                                     <td />
                                                 </>
                                             ) : topJobStatus === 'Lost' ? (
@@ -3196,7 +3331,7 @@ const SalesReport = () => {
                                                     10 +
                                                     (topJobStatus === 'Quoted' ? 2 : 0) +
                                                     (topJobStatus === 'Won' || topJobStatus === 'Lost' || topJobStatus === 'Follow Up' ? 1 : 0) +
-                                                    (topJobStatus === 'Follow Up' ? 1 : 0) +
+                                                    (topJobStatus === 'Follow Up' ? 2 : topJobStatus === 'Won' ? 1 : 0) +
                                                     (topJobStatus === 'Pending' ? 2 : 0) +
                                                     (TOP_JOB_PROB_QUOTE_REF_DATE_STATUSES.has(topJobStatus) ? 2 : 0) +
                                                     (TOP_JOB_QUOTE_TYPE_STATUSES.has(topJobStatus) ? 1 : 0) +
@@ -3325,11 +3460,14 @@ const SalesReport = () => {
                                                             </div>
                                                         </td>
                                                     )}
-                                                    {topJobStatus === 'Follow Up' ? (
-                                                        <td className="text-end small text-nowrap" style={getTopJobColStyle('grossMargin')}>
+                                                    {topJobStatus === 'Won' || topJobStatus === 'Follow Up' ? (<>
+                                                        <td className="text-end small text-nowrap" style={getTopJobColStyle('grossProfitValue')}>
                                                             {formatJobBookedGrossMargin(row)}
                                                         </td>
-                                                    ) : null}
+                                                        <td className="text-end small text-nowrap" style={getTopJobColStyle('grossMargin')}>
+                                                            {formatJobBookedGrossMargin(row, true)}
+                                                        </td>
+                                                    </>) : null}
                                                     {topJobStatus === 'Quoted' ? (
                                                         <>
                                                             <td
@@ -3354,9 +3492,6 @@ const SalesReport = () => {
                                                         </>
                                                     ) : topJobStatus === 'Won' ? (
                                                         <>
-                                                            <td className="text-end small text-nowrap" style={getTopJobColStyle('metric')}>
-                                                                {renderTopJobsMetricCell(row)}
-                                                            </td>
                                                             <td className="text-nowrap" style={getTopJobColStyle('bookedDate')}>
                                                                 {formatDateShort(row.BookedDate)}
                                                             </td>
