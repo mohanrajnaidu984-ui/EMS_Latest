@@ -12,6 +12,7 @@ function buildChangeEmail(row, addendum, attachments, now = new Date()) {
         : `Enquiry ${row.RequestNo} Updated on dated ${shortDate}`;
     const extraRows = addendum ? [
         ['Addendum No.:', String(addendum.AddendumNo).padStart(2, '0')],
+        ['Addendum Received Date:', formatEnquiryDate(addendum.ReceivedDate)],
         ['Addendum Details:', `<div>${escapeHtml(addendum.Details).replace(/\n/g, '<br>')}</div>`],
         ['Addendum Added By:', `<div>${escapeHtml(addendum.CreatedByEmail || '')}</div>`],
     ] : [];
@@ -32,7 +33,7 @@ async function loadChangeEmail(row, addendumNo) {
     await ensureAddendumSchema();
     let addendum = null;
     if (addendumNo != null) {
-        const result = await sql.query`SELECT AddendumNo,Details,CreatedByEmail FROM EnquiryAddendums WHERE RequestNo=${row.RequestNo} AND AddendumNo=${Number(addendumNo)}`;
+        const result = await sql.query`SELECT AddendumNo,Details,CreatedByEmail,ReceivedDate FROM EnquiryAddendums WHERE RequestNo=${row.RequestNo} AND AddendumNo=${Number(addendumNo)}`;
         addendum = result.recordset[0];
         if (!addendum) throw new Error('Addendum not found');
     }

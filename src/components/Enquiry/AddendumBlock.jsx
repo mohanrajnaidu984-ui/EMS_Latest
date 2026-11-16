@@ -1,13 +1,42 @@
 import React, { useState } from 'react';
+import DateInput from './DateInput';
 import ValidationTooltip from '../Common/ValidationTooltip';
 
-export default function AddendumBlock({ addendum, disabled, onRemove, onDetails, onFiles, onLinks, renderList, detailsError }) {
+export default function AddendumBlock({
+    addendum,
+    disabled,
+    onRemove,
+    onDetails,
+    onReceivedDate,
+    onFiles,
+    onLinks,
+    renderList,
+    detailsError,
+    receivedDateError,
+}) {
     const [links, setLinks] = useState('');
     const number = addendum.AddendumNo;
     return <section className="border rounded p-3 mb-3" style={{ backgroundColor: '#fffdf0' }}>
         <div className="d-flex align-items-center justify-content-between mb-2">
             <h5 className="mb-0">Addendum-{number}</h5>
             {onRemove && <button type="button" className="btn btn-sm btn-outline-danger" disabled={disabled} onClick={onRemove}>Remove Addendum</button>}
+        </div>
+        <div className="mb-3" style={{ maxWidth: 280, position: 'relative' }}>
+            <label className="form-label" htmlFor={`addendum-received-${number}`}>
+                Addendum Received Date <span className="text-danger">*</span>
+            </label>
+            <DateInput
+                id={`addendum-received-${number}`}
+                value={addendum.ReceivedDate || ''}
+                onChange={(e) => onReceivedDate?.(e.target.value)}
+                placeholder="DD-MMM-YYYY"
+                disabled={disabled}
+                required
+                aria-required="true"
+                aria-invalid={receivedDateError ? 'true' : undefined}
+                className={receivedDateError ? 'form-control is-invalid' : 'form-control'}
+            />
+            {receivedDateError && <ValidationTooltip message={receivedDateError} />}
         </div>
         <label className="form-label" htmlFor={`addendum-details-${number}`}>
             Details of this Addendum <span className="text-danger">*</span>

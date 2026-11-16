@@ -1222,6 +1222,11 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
             newErrors.AddendumDetails = 'Required';
             newErrors.AddendumDetailsNos = blankAddendums.map((a) => a.AddendumNo);
         }
+        const blankReceivedDates = (addendums || []).filter((a) => !String(a?.ReceivedDate || '').trim());
+        if (blankReceivedDates.length > 0) {
+            newErrors.AddendumReceivedDate = 'Required';
+            newErrors.AddendumReceivedDateNos = blankReceivedDates.map((a) => a.AddendumNo);
+        }
 
         if (Object.keys(newErrors).length > 0) {
             setErrors(newErrors);
@@ -1466,7 +1471,11 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
     };
 
     const saveAddendums = async (requestNo) => {
-        const changed = addendums.filter(a => !savedAddendumsRef.current.some(old => old.AddendumNo === a.AddendumNo && old.Details === a.Details)
+        const sameDate = (a, b) => String(a || '').slice(0, 10) === String(b || '').slice(0, 10);
+        const changed = addendums.filter(a => !savedAddendumsRef.current.some(old =>
+            old.AddendumNo === a.AddendumNo
+            && old.Details === a.Details
+            && sameDate(old.ReceivedDate, a.ReceivedDate))
             || pendingFiles.some(f => f.addendumNo === a.AddendumNo)).map(a => a.AddendumNo);
         if (addendums.length) {
             const res = await fetch(`/api/enquiries/${encodeURIComponent(requestNo)}/addendums?${attachmentUserQuery()}`, {
@@ -2152,8 +2161,14 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                 if (!addendumRes.ok) throw new Error('Could not load addendums');
                 const loadedAddendums = await addendumRes.json();
                 if (!submitInFlightRef.current && loadedAddendumRequestRef.current === String(requestNo)) {
-                    setAddendums(loadedAddendums);
-                    savedAddendumsRef.current = loadedAddendums;
+                    const normalized = (loadedAddendums || []).map((a) => ({
+                        ...a,
+                        ReceivedDate: a?.ReceivedDate
+                            ? String(a.ReceivedDate).slice(0, 10)
+                            : '',
+                    }));
+                    setAddendums(normalized);
+                    savedAddendumsRef.current = normalized;
                 }
             }
             const res = await fetch(`/api/attachments?requestNo=${encodeURIComponent(requestNo)}&${attachmentUserQuery()}`);
@@ -3161,6 +3176,7 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                                                 <div className="mb-3">
                                                     {addendums.map(a => <AddendumBlock key={a.draftId || a.AddendumNo} addendum={a} disabled={!canEdit || isSubmitting}
                                                         detailsError={Array.isArray(errors.AddendumDetailsNos) && errors.AddendumDetailsNos.includes(a.AddendumNo) ? 'Required' : undefined}
+                                                        receivedDateError={Array.isArray(errors.AddendumReceivedDateNos) && errors.AddendumReceivedDateNos.includes(a.AddendumNo) ? 'Required' : undefined}
                                                         onRemove={savedAddendumsRef.current.some(saved => saved.AddendumNo === a.AddendumNo) ? undefined : () => handleRemoveAddendum(a.AddendumNo)}
                                                         onDetails={Details => {
                                                             setAddendums(prev => prev.map(old => old.AddendumNo === a.AddendumNo ? { ...old, Details } : old));
@@ -3180,10 +3196,28 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                                                                 });
                                                             }
                                                         }}
+                                                        onReceivedDate={ReceivedDate => {
+                                                            setAddendums(prev => prev.map(old => old.AddendumNo === a.AddendumNo ? { ...old, ReceivedDate } : old));
+                                                            if (String(ReceivedDate || '').trim()) {
+                                                                setErrors(prev => {
+                                                                    const nos = Array.isArray(prev.AddendumReceivedDateNos)
+                                                                        ? prev.AddendumReceivedDateNos.filter((n) => n !== a.AddendumNo)
+                                                                        : [];
+                                                                    if (!prev.AddendumReceivedDate && !prev.AddendumReceivedDateNos) return prev;
+                                                                    const next = { ...prev };
+                                                                    if (nos.length) next.AddendumReceivedDateNos = nos;
+                                                                    else {
+                                                                        delete next.AddendumReceivedDate;
+                                                                        delete next.AddendumReceivedDateNos;
+                                                                    }
+                                                                    return next;
+                                                                });
+                                                            }
+                                                        }}
                                                         onFiles={(e,v) => handleFileUpload(e,v,a.AddendumNo)}
                                                         onLinks={(v,text) => handleAddLink(v,a.AddendumNo,text)}
                                                         renderList={(v,t) => renderAttachmentList(v,t,a.AddendumNo)} />)}
-                                                    <button type="button" className="btn btn-outline-primary mb-3" disabled={!canEdit || isSubmitting} onClick={() => setAddendums(prev => [...prev, { draftId: `draft-${Date.now()}-${Math.random()}`, AddendumNo: Math.max(0, ...prev.map(a => a.AddendumNo)) + 1, Details: '' }])}>Addendum +</button>
+                                                    <button type="button" className="btn btn-outline-primary mb-3" disabled={!canEdit || isSubmitting} onClick={() => setAddendums(prev => [...prev, { draftId: `draft-${Date.now()}-${Math.random()}`, AddendumNo: Math.max(0, ...prev.map(a => a.AddendumNo)) + 1, Details: '', ReceivedDate: '' }])}>Addendum +</button>
                                                 </div>
                                                 {/* Remarks */}
                                                 <div className="row mb-3">
@@ -3372,7 +3406,8 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                                                                 (field) =>
                                                                     !field.endsWith('Ids') &&
                                                                     field !== 'EnquiryForAccountable' &&
-                                                                    field !== 'AddendumDetailsNos'
+                                                                    field !== 'AddendumDetailsNos' &&
+                                                                    field !== 'AddendumReceivedDateNos'
                                                             )
                                                             .map((field) => (
                                                             <li key={field}>
@@ -3395,6 +3430,11 @@ const EnquiryForm = ({ requestNoToOpen, onOpenEnquiry }) => {
                                                                     Array.isArray(errors.AddendumDetailsNos) && errors.AddendumDetailsNos.length
                                                                         ? `Addendum Details (Addendum-${errors.AddendumDetailsNos.join(', Addendum-')})`
                                                                         : 'Addendum Details'
+                                                                )}
+                                                                {field === 'AddendumReceivedDate' && (
+                                                                    Array.isArray(errors.AddendumReceivedDateNos) && errors.AddendumReceivedDateNos.length
+                                                                        ? `Addendum Received Date (Addendum-${errors.AddendumReceivedDateNos.join(', Addendum-')})`
+                                                                        : 'Addendum Received Date'
                                                                 )}
                                                             </li>
                                                         ))}

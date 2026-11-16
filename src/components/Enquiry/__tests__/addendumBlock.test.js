@@ -32,8 +32,16 @@ describe('addendum attachments', () => {
         const host = document.createElement('div'); document.body.append(host);
         const onLinks = vi.fn();
         root = createRoot(host);
-        act(() => root.render(React.createElement(AddendumBlock, { addendum: { AddendumNo: 2, Details: 'Extra floor' }, onDetails: vi.fn(), onFiles: vi.fn(), onLinks, renderList: () => null })));
+        act(() => root.render(React.createElement(AddendumBlock, {
+            addendum: { AddendumNo: 2, Details: 'Extra floor', ReceivedDate: '2026-11-14' },
+            onDetails: vi.fn(),
+            onReceivedDate: vi.fn(),
+            onFiles: vi.fn(),
+            onLinks,
+            renderList: () => null,
+        })));
         expect(host.textContent).toContain('Addendum-2');
+        expect(host.textContent).toContain('Addendum Received Date');
         expect(host.querySelector('#addendum-details-2').value).toBe('Extra floor');
         expect(host.querySelector('#addendum-details-2').required).toBe(true);
         expect(host.textContent).toContain('Details of this Addendum');
@@ -54,6 +62,19 @@ describe('addendum attachments', () => {
         })));
         expect(host.querySelector('#addendum-details-3').classList.contains('is-invalid')).toBe(true);
         expect(host.textContent).toContain('Required');
+    });
+    it('marks blank received date as required when a date error is provided', () => {
+        const host = document.createElement('div'); document.body.append(host);
+        root = createRoot(host);
+        act(() => root.render(React.createElement(AddendumBlock, {
+            addendum: { AddendumNo: 4, Details: 'Ok', ReceivedDate: '' },
+            receivedDateError: 'Required',
+            onReceivedDate: vi.fn(),
+            renderList: () => null,
+        })));
+        expect(host.textContent).toContain('Addendum Received Date');
+        expect(host.textContent).toContain('Required');
+        expect(host.querySelector('#addendum-received-4').classList.contains('is-invalid')).toBe(true);
     });
     it('disables editing and uploading when the enquiry cannot be edited', () => {
         const host = document.createElement('div'); document.body.append(host);
