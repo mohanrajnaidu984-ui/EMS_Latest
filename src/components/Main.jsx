@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { QUOTE_TAB_B2B, QUOTE_TAB_B2C, isQuoteModuleTab } from '../utils/quoteNav';
 import { isChatboxEnabled, disconnectChatboxSocket } from '../utils/chatboxSocket';
 
@@ -18,6 +18,12 @@ const Help = lazy(() => loadAppModule('Help'));
 const Usage = lazy(() => loadAppModule('Usage'));
 import { useAuth } from '../context/AuthContext';
 
+const moduleLoadingFallback = (
+    <div className="p-3 text-muted" role="status" data-ems-module-loading="1">
+        Loading…
+    </div>
+);
+
 const Main = ({ activeTab, onNavigate, enquiryToOpen, openContext, onOpenEnquiry }) => {
     const { currentUser } = useAuth();
     const roleString = currentUser?.role || currentUser?.Roles || '';
@@ -29,6 +35,10 @@ const Main = ({ activeTab, onNavigate, enquiryToOpen, openContext, onOpenEnquiry
               : [];
     const canSeeUsage = userRoles.includes('admin') || userRoles.includes('system');
     const chatboxOn = isChatboxEnabled();
+    /** Keep Quote B2B mounted after first visit so selected enquiry/quote details survive tab switches. */
+    const [quoteB2bMounted, setQuoteB2bMounted] = useState(false);
+    /** Keep Pricing mounted after first visit so open enquiry + customer tab survive module switches. */
+    const [pricingMounted, setPricingMounted] = useState(false);
 
     /* Any non-ChatBox tab (especially Quote): tear down sockets so they cannot steal CPU/network. */
     useEffect(() => {
@@ -37,8 +47,19 @@ const Main = ({ activeTab, onNavigate, enquiryToOpen, openContext, onOpenEnquiry
         }
     }, [activeTab, chatboxOn]);
 
+    useEffect(() => {
+        if (activeTab === QUOTE_TAB_B2B) setQuoteB2bMounted(true);
+    }, [activeTab]);
+
+    useEffect(() => {
+        if (activeTab === 'Pricing') setPricingMounted(true);
+    }, [activeTab]);
+
+    const quoteB2bVisible = activeTab === QUOTE_TAB_B2B;
+    const pricingVisible = activeTab === 'Pricing';
     const isFullHeightTab =
         isQuoteModuleTab(activeTab) ||
+        activeTab === 'Pricing' ||
         activeTab === 'Probability' ||
         activeTab === 'Approvals' ||
         (chatboxOn && activeTab === 'ChatBox');
@@ -52,44 +73,78 @@ const Main = ({ activeTab, onNavigate, enquiryToOpen, openContext, onOpenEnquiry
               overflow: 'hidden',
           }
         : undefined;
+    const keepAliveVisibleStyle = {
+        flex: 1,
+        minHeight: 0,
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+    };
+    const quoteKeepAliveStyle = quoteB2bVisible ? keepAliveVisibleStyle : { display: 'none' };
+    const pricingKeepAliveStyle = pricingVisible ? keepAliveVisibleStyle : { display: 'none' };
 
     return (
         <div style={fullHeightShellStyle}>
-            {/* Tab Content */}
-            <Suspense fallback={<div className="p-3 text-muted" role="status" data-ems-module-loading="1">Loading…</div>}>
+            {/*
+              Keep-alive modules use their own Suspense boundaries. A shared Suspense would
+              unmount Pricing when Quote (or another lazy tab) first loads and wipe the open enquiry.
+            */}
             <div className="tab-content" style={fullHeightShellStyle}>
                 {chatboxOn && activeTab === 'ChatBox' && (
-                    <ChatBox
-                        openRequestNo={
-                            openContext?.tab === 'ChatBox'
-                                ? openContext?.chatRequestNo || openContext?.requestNo || null
-                                : null
-                        }
-                    />
+                    <Suspense fallback={moduleLoadingFallback}>
+                        <ChatBox
+                            openRequestNo={
+                                openContext?.tab === 'ChatBox'
+                                    ? openContext?.chatRequestNo || openContext?.requestNo || null
+                                    : null
+                            }
+                        />
+                    </Suspense>
                 )}
                 {activeTab === 'Dashboard' && (
-                    <Dashboard onNavigate={onNavigate} onOpenEnquiry={onOpenEnquiry} />
+                    <Suspense fallback={moduleLoadingFallback}>
+                        <Dashboard onNavigate={onNavigate} onOpenEnquiry={onOpenEnquiry} />
+                    </Suspense>
                 )}
                 {activeTab === 'About' && (
-                    <About />
+                    <Suspense fallback={moduleLoadingFallback}>
+                        <About />
+                    </Suspense>
                 )}
                 {activeTab === 'Enquiry' && (
-                    <EnquiryForm requestNoToOpen={enquiryToOpen} onOpenEnquiry={onOpenEnquiry} />
+                    <Suspense fallback={moduleLoadingFallback}>
+                        <EnquiryForm requestNoToOpen={enquiryToOpen} onOpenEnquiry={onOpenEnquiry} />
+                    </Suspense>
                 )}
-                {activeTab === 'Pricing' && (
-                    <PricingForm openContext={openContext} />
+                {(pricingMounted || pricingVisible) && (
+                    <div style={pricingKeepAliveStyle} aria-hidden={!pricingVisible}>
+                        <Suspense fallback={moduleLoadingFallback}>
+                            <PricingForm openContext={openContext} />
+                        </Suspense>
+                    </div>
                 )}
-                {activeTab === QUOTE_TAB_B2B && (
-                    <QuoteForm openContext={openContext} />
+                {(quoteB2bMounted || quoteB2bVisible) && (
+                    <div style={quoteKeepAliveStyle} aria-hidden={!quoteB2bVisible}>
+                        <Suspense fallback={moduleLoadingFallback}>
+                            <QuoteForm openContext={openContext} />
+                        </Suspense>
+                    </div>
                 )}
                 {activeTab === QUOTE_TAB_B2C && (
-                    <QuoteB2CPlaceholder />
+                    <Suspense fallback={moduleLoadingFallback}>
+                        <QuoteB2CPlaceholder />
+                    </Suspense>
                 )}
                 {activeTab === 'Approvals' && (
-                    <QuoteApprovalPage openContext={openContext} />
+                    <Suspense fallback={moduleLoadingFallback}>
+                        <QuoteApprovalPage openContext={openContext} />
+                    </Suspense>
                 )}
                 {activeTab === 'Probability' && (
-                    <ProbabilityForm />
+                    <Suspense fallback={moduleLoadingFallback}>
+                        <ProbabilityForm />
+                    </Suspense>
                 )}
                 {activeTab === 'Sales Report' && (
                     <Suspense
@@ -105,16 +160,21 @@ const Main = ({ activeTab, onNavigate, enquiryToOpen, openContext, onOpenEnquiry
                     </Suspense>
                 )}
                 {activeTab === 'Help' && (
-                    <Help />
+                    <Suspense fallback={moduleLoadingFallback}>
+                        <Help />
+                    </Suspense>
                 )}
                 {activeTab === 'Usage' && canSeeUsage && (
-                    <Usage />
+                    <Suspense fallback={moduleLoadingFallback}>
+                        <Usage />
+                    </Suspense>
                 )}
                 {activeTab === 'Reports' && (
-                    <SalesTarget />
+                    <Suspense fallback={moduleLoadingFallback}>
+                        <SalesTarget />
+                    </Suspense>
                 )}
             </div>
-            </Suspense>
         </div>
     );
 };

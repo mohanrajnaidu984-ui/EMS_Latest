@@ -268,6 +268,21 @@ export const AuthProvider = ({ children }) => {
         setCurrentUser(null);
         // Keep emsRememberMe + emsRememberedEmail so the login checkbox/email stay filled.
         clearSessionAuthStorage();
+        try {
+            const emailKey = String(email || '').trim().toLowerCase();
+            if (emailKey) {
+                sessionStorage.removeItem(`ems_dashboard_coordinator_defaults_${emailKey}`);
+                localStorage.removeItem(`dashboard_filters_${emailKey}`);
+                localStorage.removeItem(`dashboard_dateState_${emailKey}`);
+            }
+            sessionStorage.removeItem('ems_dashboard_coordinator_defaults_user');
+            // Legacy unscoped keys — must not leak admin HVAC/SE picks into the next login.
+            localStorage.removeItem('dashboard_filters');
+            localStorage.removeItem('dashboard_dateState');
+            localStorage.removeItem('dashboard_filters_owner');
+        } catch {
+            /* ignore */
+        }
         window.location.href = '/';
     };
 

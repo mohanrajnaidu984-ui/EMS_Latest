@@ -120,7 +120,7 @@ function getQuoteListFilterValue(row, key) {
     }
 }
 
-/** Count quote lines shown in the “To Customer and Quote details” column for one row. */
+/** Count quote lines shown in the “Customer Name: to whom we quoted” column for one row. */
 function countQuoteLinesInRow(enq) {
     if (!enq) return 0;
     if (Array.isArray(enq.ListQuoteDetailLines) && enq.ListQuoteDetailLines.length > 0) {
@@ -633,7 +633,7 @@ export default function DashboardQuoteSummaryTable({
                             ) : null}
                             <TableColumnFilterHeader
                                 colKey="listQuoteDetails"
-                                label="To Customer and Quote details"
+                                label="Customer Name: to whom we quoted"
                                 sortField="LatestQuoteDate"
                                 sortConfig={sortConfig}
                                 onSort={handleSort}
@@ -888,12 +888,61 @@ export default function DashboardQuoteSummaryTable({
                                                     padding: '2px 8px',
                                                     borderRadius: '4px',
                                                 };
+                                                /** Concerned SEs for the quote division (maroon); accountable bold. */
                                                 const preparedByStyle = {
                                                     fontSize: '11px',
                                                     color: '#800000',
-                                                    fontWeight: 500,
+                                                    fontWeight: 400,
                                                     whiteSpace: 'normal',
                                                     wordBreak: 'break-word',
+                                                };
+                                                /** Same as Enquiry Divisions/SE: all assignees, accountable bold. */
+                                                const renderSeMembers = (ln) => {
+                                                    const members = Array.isArray(ln?.seMembers)
+                                                        ? ln.seMembers
+                                                              .map((m) => ({
+                                                                  name: String(m?.name || m?.SEName || '').trim(),
+                                                                  isAccountable: !!(m?.isAccountable ?? m?.IsAccountable),
+                                                              }))
+                                                              .filter((m) => m.name)
+                                                        : [];
+                                                    if (members.length > 0) {
+                                                        return (
+                                                            <span style={preparedByStyle}>
+                                                                {members.map((m, mi) => (
+                                                                    <span key={`${m.name}-${mi}`}>
+                                                                        {mi > 0 ? ', ' : ''}
+                                                                        <span style={{ fontWeight: m.isAccountable ? 700 : 400 }}>
+                                                                            {m.name}
+                                                                        </span>
+                                                                    </span>
+                                                                ))}
+                                                            </span>
+                                                        );
+                                                    }
+                                                    const fallback = String(
+                                                        ln?.concernedSe ??
+                                                            ln?.ConcernedSe ??
+                                                            ln?.preparedBy ??
+                                                            ln?.PreparedBy ??
+                                                            '',
+                                                    ).trim();
+                                                    return fallback ? <span style={preparedByStyle}>{fallback}</span> : null;
+                                                };
+                                                const detailPersonName = (ln) => {
+                                                    if (Array.isArray(ln?.seMembers) && ln.seMembers.length) {
+                                                        return ln.seMembers
+                                                            .map((m) => String(m?.name || '').trim())
+                                                            .filter(Boolean)
+                                                            .join(', ');
+                                                    }
+                                                    return String(
+                                                        ln?.concernedSe ??
+                                                            ln?.ConcernedSe ??
+                                                            ln?.preparedBy ??
+                                                            ln?.PreparedBy ??
+                                                            '',
+                                                    ).trim();
                                                 };
 
                                                 const declineLineStyle = {
@@ -913,7 +962,6 @@ export default function DashboardQuoteSummaryTable({
                                                         : enq.ListQuoteDetailLines;
                                                     if (!visibleLines.length) return null;
                                                     return visibleLines.map((ln, li) => {
-                                                        const linePrep = String(ln.preparedBy ?? ln.PreparedBy ?? '').trim();
                                                         const isDeclined =
                                                             !!ln.declinedToQuote ||
                                                             /\(Decline to Quote\)/i.test(String(ln.textLine || ''));
@@ -927,7 +975,7 @@ export default function DashboardQuoteSummaryTable({
                                                                         {formatRuntimeCurrencyAmount(ln.bdTotal)}
                                                                     </span>
                                                                 ) : null}
-                                                                {linePrep ? <span style={preparedByStyle}>{linePrep}</span> : null}
+                                                                {renderSeMembers(ln)}
                                                             </div>
                                                         );
                                                     });
@@ -944,9 +992,7 @@ export default function DashboardQuoteSummaryTable({
                                                         .join(' · ');
                                                     const multiPrep = [
                                                         ...new Set(
-                                                            visibleRefs.map((line) =>
-                                                                String(line.preparedBy ?? line.PreparedBy ?? '').trim(),
-                                                            ).filter(Boolean),
+                                                            visibleRefs.map((line) => detailPersonName(line)).filter(Boolean),
                                                         ),
                                                     ].join(' · ');
                                                     return (

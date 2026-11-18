@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import Draggable from 'react-draggable';
 import { useData } from '../../context/DataContext'; // Reuse for masters if needed
-import { useAuth } from '../../context/AuthContext';
+import { useAuth, getStoredLoginEmail } from '../../context/AuthContext';
 import DashboardFilters from './LeftPanel/DashboardFilters';
 import CalendarView from './LeftPanel/CalendarView';
 import CalendarBarChart from './LeftPanel/CalendarBarChart';
@@ -18,64 +18,156 @@ import {
     getCcDepartmentNamesForUser,
     getRegularUserDashboardFilterDefaults,
     isDashboardCoordinatorUser,
+    getDashboardDivisionOptions,
+    getDashboardSeNamesForFilter,
 } from '../../utils/dashboardCcAccess';
 import './DashboardLayout.css';
 import { useMasterCurrency } from '../../hooks/useMasterCurrency';
+
+function normalizeDashboardUserKey(email) {
+    return String(email || '')
+        .trim()
+        .toLowerCase()
+        .replace(/@almcg\.com$/i, '@almoayyedcg.com');
+}
+
+function dashboardFiltersStorageKey(email) {
+    const key = normalizeDashboardUserKey(email);
+    return key ? `dashboard_filters_${key}` : 'dashboard_filters';
+}
+
+function dashboardDateStateStorageKey(email) {
+    const key = normalizeDashboardUserKey(email);
+    return key ? `dashboard_dateState_${key}` : 'dashboard_dateState';
+}
+
+const DEFAULT_DASHBOARD_FILTERS = {
+    division: 'All',
+    salesEngineer: 'All',
+    mode: 'future',
+    dateType: 'Enquiry Date',
+    status: 'All',
+    search: '',
+};
+
+function readDashboardFiltersForUser(email) {
+    const userKey = normalizeDashboardUserKey(email);
+    if (!userKey) return { ...DEFAULT_DASHBOARD_FILTERS };
+    try {
+        const scoped = localStorage.getItem(dashboardFiltersStorageKey(userKey));
+        if (scoped) {
+            const parsed = JSON.parse(scoped);
+            if (parsed && typeof parsed === 'object') return { ...DEFAULT_DASHBOARD_FILTERS, ...parsed };
+        }
+        // Migrate legacy unscoped key only when it belongs to this user.
+        const owner = normalizeDashboardUserKey(localStorage.getItem('dashboard_filters_owner'));
+        const legacy = localStorage.getItem('dashboard_filters');
+        if (legacy && owner && owner === userKey) {
+            const parsed = JSON.parse(legacy);
+            if (parsed && typeof parsed === 'object') return { ...DEFAULT_DASHBOARD_FILTERS, ...parsed };
+        }
+    } catch (e) {
+        console.error('Failed to parse dashboard_filters', e);
+    }
+    return { ...DEFAULT_DASHBOARD_FILTERS };
+}
+
+function readDashboardDateStateForUser(email) {
+    const userKey = normalizeDashboardUserKey(email);
+    const now = new Date();
+    const fallback = {
+        leftCalendar: { month: now.getMonth() + 1, year: now.getFullYear() },
+        rightCalendar: { month: now.getMonth() + 1, year: now.getFullYear() },
+        selectedDate: null,
+        selectedType: 'all',
+    };
+    if (!userKey) return fallback;
+    try {
+        const scoped = localStorage.getItem(dashboardDateStateStorageKey(userKey));
+        if (scoped) {
+            const parsed = JSON.parse(scoped);
+            if (parsed && typeof parsed === 'object') {
+                return {
+                    ...fallback,
+                    ...parsed,
+                    leftCalendar: { ...fallback.leftCalendar, ...(parsed.leftCalendar || {}) },
+                    rightCalendar: { ...fallback.rightCalendar, ...(parsed.rightCalendar || {}) },
+                };
+            }
+        }
+        const owner = normalizeDashboardUserKey(localStorage.getItem('dashboard_filters_owner'));
+        const legacy = localStorage.getItem('dashboard_dateState');
+        if (legacy && owner && owner === userKey) {
+            const parsed = JSON.parse(legacy);
+            if (parsed && typeof parsed === 'object') {
+                return {
+                    ...fallback,
+                    ...parsed,
+                    leftCalendar: { ...fallback.leftCalendar, ...(parsed.leftCalendar || {}) },
+                    rightCalendar: { ...fallback.rightCalendar, ...(parsed.rightCalendar || {}) },
+                };
+            }
+        }
+    } catch (e) {
+        console.error('Failed to parse dashboard_dateState', e);
+    }
+    return fallback;
+}
 
 function sumCalendarDaily(daily, key) {
     return (Array.isArray(daily) ? daily : []).reduce((acc, row) => acc + (Number(row[key]) || 0), 0);
 }
 
-/** Monthly overview totals always match sum of calendar day chips. */
+/** Prefer server totals when present (history is month-aggregated with empty daily). */
 function normalizeDashboardCalendarPayload(raw) {
     if (raw == null) return { daily: [], totals: null };
     const daily = Array.isArray(raw) ? raw : raw?.daily || [];
-    const totals = {
-        enquiries: sumCalendarDaily(daily, 'Enquiries'),
-        due: sumCalendarDaily(daily, 'Due'),
-        lapsed: sumCalendarDaily(daily, 'Lapsed'),
-        newQuote: sumCalendarDaily(daily, 'NewQuote'),
-        revQuote: sumCalendarDaily(daily, 'RevQuote'),
-        quoted: sumCalendarDaily(daily, 'NewQuote') + sumCalendarDaily(daily, 'RevQuote'),
+    const serverTotals = !Array.isArray(raw) && raw?.totals && typeof raw.totals === 'object' ? raw.totals : null;
+    if (serverTotals) {
+        const enquiries = Number(serverTotals.enquiries) || 0;
+        const due = Number(serverTotals.due) || 0;
+        const lapsed = Number(serverTotals.lapsed) || 0;
+        const newQuote = Number(serverTotals.newQuote) || 0;
+        const revQuote = Number(serverTotals.revQuote) || 0;
+        return {
+            daily,
+            totals: {
+                enquiries,
+                due,
+                lapsed,
+                newQuote,
+                revQuote,
+                quoted: Number(serverTotals.quoted) || newQuote + revQuote,
+            },
+        };
+    }
+    return {
+        daily,
+        totals: {
+            enquiries: sumCalendarDaily(daily, 'Enquiries'),
+            due: sumCalendarDaily(daily, 'Due'),
+            lapsed: sumCalendarDaily(daily, 'Lapsed'),
+            newQuote: sumCalendarDaily(daily, 'NewQuote'),
+            revQuote: sumCalendarDaily(daily, 'RevQuote'),
+            quoted: sumCalendarDaily(daily, 'NewQuote') + sumCalendarDaily(daily, 'RevQuote'),
+        },
     };
-    return { daily, totals };
 }
 
 const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props passed from Main
     const { masters, dashboardRefreshCounter } = useData();
     const { currentUser } = useAuth();
+    const dashboardUserKey = normalizeDashboardUserKey(
+        currentUser?.email || currentUser?.EmailId || getStoredLoginEmail() || ''
+    );
     const dashboardModalDragRef = useRef(null);
     // Use relative path to leverage Vite proxy (targets port 5000), avoids port mismatch
     const API_URL = '/api/dashboard';
 
-    // State
-    const [dateState, setDateState] = useState(() => {
-        const saved = localStorage.getItem('dashboard_dateState');
-        const now = new Date();
-        const mo = now.getMonth() + 1;
-        const yr = now.getFullYear();
-        if (saved) {
-            try {
-                const p = JSON.parse(saved);
-                const legacyM = p.month ?? mo;
-                const legacyY = p.year ?? yr;
-                return {
-                    leftCalendar: p.leftCalendar || { month: legacyM, year: legacyY },
-                    rightCalendar: p.rightCalendar || { month: legacyM, year: legacyY },
-                    selectedDate: p.selectedDate ?? null,
-                    selectedType: p.selectedType ?? 'all',
-                };
-            } catch (e) {
-                console.error("Failed to parse dashboard_dateState", e);
-            }
-        }
-        return {
-            leftCalendar: { month: mo, year: yr },
-            rightCalendar: { month: mo, year: yr },
-            selectedDate: null,
-            selectedType: 'all',
-        };
-    });
+    // State — scoped per login so admin HVAC/SE picks never bleed into another user.
+    const [dateState, setDateState] = useState(() =>
+        readDashboardDateStateForUser(getStoredLoginEmail())
+    );
 
     /** True when filters were loaded from localStorage on first mount (don’t clobber with role defaults). */
     const filtersHydratedFromStorageRef = useRef(false);
@@ -83,25 +175,18 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
     const dashboardRoleDefaultsAppliedRef = useRef(false);
     /** Admin / Management: coordinator defaults (All divisions + All SEs) once per login session. */
     const coordinatorDefaultsAppliedRef = useRef(false);
+    const dashboardFiltersOwnerRef = useRef(normalizeDashboardUserKey(getStoredLoginEmail()));
 
     const [filters, setFilters] = useState(() => {
-        const saved = localStorage.getItem('dashboard_filters');
-        if (saved) {
-            try {
-                filtersHydratedFromStorageRef.current = true;
-                return JSON.parse(saved);
-            } catch (e) {
-                console.error("Failed to parse dashboard_filters", e);
-            }
-        }
-        return {
-            division: 'All',
-            salesEngineer: 'All',
-            mode: 'future',
-            dateType: 'Enquiry Date',
-            status: 'All',
-            search: ''
-        };
+        const email = getStoredLoginEmail();
+        const next = readDashboardFiltersForUser(email);
+        const userKey = normalizeDashboardUserKey(email);
+        const hasScoped = !!userKey && !!localStorage.getItem(dashboardFiltersStorageKey(userKey));
+        const owner = normalizeDashboardUserKey(localStorage.getItem('dashboard_filters_owner'));
+        const hasLegacyForUser =
+            !!localStorage.getItem('dashboard_filters') && owner && owner === userKey;
+        filtersHydratedFromStorageRef.current = hasScoped || hasLegacyForUser;
+        return next;
     });
     useMasterCurrency({
         division:
@@ -110,14 +195,35 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
                 : filters.division || '',
     });
 
-    // -- Persistence --
+    // -- Persistence (per user) --
     useEffect(() => {
-        localStorage.setItem('dashboard_dateState', JSON.stringify(dateState));
-    }, [dateState]);
+        if (!dashboardUserKey) return;
+        localStorage.setItem(dashboardDateStateStorageKey(dashboardUserKey), JSON.stringify(dateState));
+        localStorage.setItem('dashboard_filters_owner', dashboardUserKey);
+    }, [dateState, dashboardUserKey]);
 
     useEffect(() => {
-        localStorage.setItem('dashboard_filters', JSON.stringify(filters));
-    }, [filters]);
+        if (!dashboardUserKey) return;
+        localStorage.setItem(dashboardFiltersStorageKey(dashboardUserKey), JSON.stringify(filters));
+        localStorage.setItem('dashboard_filters_owner', dashboardUserKey);
+        // Drop legacy unscoped copy so the next login cannot inherit this user's picks.
+        localStorage.removeItem('dashboard_filters');
+        localStorage.removeItem('dashboard_dateState');
+    }, [filters, dashboardUserKey]);
+
+    /** If the signed-in user changes in-session, reload that user's filters (or defaults). */
+    useEffect(() => {
+        if (!dashboardUserKey) return;
+        if (dashboardFiltersOwnerRef.current === dashboardUserKey) return;
+        dashboardFiltersOwnerRef.current = dashboardUserKey;
+        filtersHydratedFromStorageRef.current = !!localStorage.getItem(
+            dashboardFiltersStorageKey(dashboardUserKey)
+        );
+        dashboardRoleDefaultsAppliedRef.current = false;
+        coordinatorDefaultsAppliedRef.current = false;
+        setFilters(readDashboardFiltersForUser(dashboardUserKey));
+        setDateState(readDashboardDateStateForUser(dashboardUserKey));
+    }, [dashboardUserKey]);
 
     const [data, setData] = useState({
         calendarLeft: [],
@@ -362,11 +468,82 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
         });
     }, [currentUser, masters.enqItems, masters.users]);
 
+    /**
+     * Clamp division / Concerned SE to this login's access list.
+     * Stops a previous admin's HVAC + Anirudh selection from sticking after user switch.
+     */
+    useEffect(() => {
+        if (!currentUser || !masters?.enqItems?.length || !masters?.users?.length) return;
+
+        const allowedDivisions = getDashboardDivisionOptions(
+            currentUser,
+            masters.enqItems,
+            masters.enquiryFor,
+            masters.users
+        ).filter((d) => d && String(d).trim().toLowerCase() !== 'all');
+        const isCoordinator = isDashboardCoordinatorUser(currentUser, masters.enqItems);
+
+        setFilters((prev) => {
+            let nextDivision = String(prev.division || '').trim() || 'All';
+            const divLower = nextDivision.toLowerCase();
+            if (divLower !== 'all') {
+                const ok = allowedDivisions.some(
+                    (d) => String(d).trim().toLowerCase() === divLower
+                );
+                if (!ok) {
+                    nextDivision = isCoordinator
+                        ? 'All'
+                        : allowedDivisions[0] || 'All';
+                }
+            } else if (!isCoordinator && allowedDivisions.length) {
+                nextDivision = allowedDivisions[0];
+            }
+
+            const allowedSes = getDashboardSeNamesForFilter(
+                nextDivision,
+                currentUser,
+                masters.enqItems,
+                masters.users,
+                masters.enquiryFor
+            );
+            let nextSe = String(prev.salesEngineer || '').trim() || 'All';
+            if (isCoordinator) {
+                if (nextSe.toLowerCase() !== 'all') {
+                    const seOk = allowedSes.some(
+                        (n) => String(n).trim().toLowerCase() === nextSe.toLowerCase()
+                    );
+                    if (!seOk) nextSe = 'All';
+                }
+            } else {
+                const locked = getRegularUserDashboardFilterDefaults(currentUser, masters.users);
+                nextSe = locked.salesEngineer || allowedSes[0] || nextSe;
+            }
+
+            if (prev.division === nextDivision && prev.salesEngineer === nextSe) return prev;
+            return { ...prev, division: nextDivision, salesEngineer: nextSe };
+        });
+    }, [currentUser, masters.enqItems, masters.enquiryFor, masters.users]);
+
+    /**
+     * Coordinators default to All Divisions / All SEs only when there is no saved selection.
+     * Dashboard unmounts on tab switch; do not wipe localStorage-backed division / Concerned SE.
+     */
     useEffect(() => {
         if (!currentUser) return;
         if (coordinatorDefaultsAppliedRef.current) return;
         if (!isAdminRole(currentUser) && !isManagementDepartmentUser(currentUser)) return;
         coordinatorDefaultsAppliedRef.current = true;
+        if (filtersHydratedFromStorageRef.current) return;
+        const email = String(currentUser.email || currentUser.EmailId || '')
+            .trim()
+            .toLowerCase();
+        const sessionKey = `ems_dashboard_coordinator_defaults_${email || 'user'}`;
+        try {
+            if (sessionStorage.getItem(sessionKey) === '1') return;
+            sessionStorage.setItem(sessionKey, '1');
+        } catch {
+            /* ignore quota / private mode */
+        }
         setFilters((prev) => ({
             ...prev,
             division: 'All',

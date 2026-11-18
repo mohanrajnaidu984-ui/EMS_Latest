@@ -10,6 +10,7 @@ const {
     assertFinalApproverRules,
     truthyFinalFlag,
     isFinalApproverApproved,
+    getFinalApproverStep,
 } = require('./approvalWorkflowJson');
 const {
     userHasDepartment,
@@ -2894,6 +2895,141 @@ async function recordQuoteCorrectionRequired({
     };
 }
 
+/**
+ * Final approver may delete an in-flight draft workflow before they approve.
+ * Keeps EnquiryQuotesDraft; clears QuoteApprovalSteps + ApprovalWorkflowJson so Send for Approval can run again.
+ */
+async function deleteDraftApprovalWorkflow({ draftQuoteId, actorEmail, actorName = '' }) {
+    const dId = Number(draftQuoteId);
+    if (!Number.isFinite(dId) || dId <= 0) {
+        throw new Error('draftQuoteId is required');
+    }
+    const email = normalizeApprovalEmail(actorEmail);
+    if (!email) throw new Error('userEmail is required');
+
+    const linked = await resolveLinkedQuoteIdFromDraft(dId);
+    if (linked) {
+        throw new Error('This workflow is already finalized. Delete is not allowed after final approval.');
+    }
+
+    const steps = await fetchApprovalStepsByDraftId(dId);
+    if (!steps.length) {
+        throw new Error('No approval workflow found for this draft');
+    }
+
+    const final = getFinalApproverStep(steps);
+    if (!final) {
+        throw new Error('Final approver is not defined on this workflow');
+    }
+    if (String(final.status || '').toLowerCase() === 'approved' || isFinalApproverApproved(steps)) {
+        throw new Error('Final approver has already approved. Workflow cannot be deleted.');
+    }
+
+    const finalEmail = normalizeApprovalEmail(final.approverEmail);
+    const actorNormName = String(actorName || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ');
+    const finalNormName = String(final.approverName || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ');
+    const emailMatch = finalEmail && email === finalEmail;
+    const nameMatch = !finalEmail && actorNormName && actorNormName === finalNormName;
+    if (!emailMatch && !nameMatch) {
+        throw new Error('Only the final approver can delete this workflow');
+    }
+
+    const draftRes = await sql.query`
+        SELECT TOP 1 ID, RequestNo, ToName, LeadJob, OwnJob, QuoteNumber, Status, Subject, PreparedBy, PreparedByEmail
+        FROM EnquiryQuotesDraft
+        WHERE ID = ${dId}
+    `;
+    const draft = draftRes.recordset?.[0];
+    if (!draft) throw new Error('Quote draft not found');
+
+    const meta = normalizeQuoteMeta({
+        requestNo: draft.RequestNo,
+        customerName: draft.ToName,
+        leadJobName: draft.LeadJob,
+        ownJob: draft.OwnJob,
+        quoteNumber: draft.QuoteNumber,
+    });
+
+    /* Capture recipients + mail fields before steps are removed. */
+    const createdByEmail = await fetchExistingCreatedByEmail({
+        draftQuoteId: dId,
+        meta,
+    });
+    const mailContext = await fetchApprovalMailContext({
+        draftQuoteId: dId,
+        meta,
+        subjectOverride: draft.Subject || '',
+    });
+    const recipientSet = new Set();
+    if (createdByEmail) recipientSet.add(createdByEmail);
+    for (const s of steps) {
+        const em = normalizeApprovalEmail(s.approverEmail);
+        if (em) recipientSet.add(em);
+    }
+    /* Keep initiator even if PreparedByEmail differs from CreatedByEmail. */
+    const preparedByEmail = normalizeApprovalEmail(draft.PreparedByEmail);
+    if (preparedByEmail) recipientSet.add(preparedByEmail);
+
+    const deletedByName =
+        String(actorName || '').trim() ||
+        String(final.approverName || '').trim() ||
+        email;
+
+    await sql.query`
+        DELETE FROM QuoteApprovalSteps
+        WHERE DraftQuoteId = ${dId}
+          AND (QuoteId IS NULL OR QuoteId = 0)
+    `;
+
+    await sql.query`
+        UPDATE EnquiryQuotesDraft
+        SET ApprovalWorkflowJson = NULL,
+            Status = N'Draft',
+            UpdatedAt = ${new Date()}
+        WHERE ID = ${dId}
+    `;
+
+    /* Best-effort: drop pending in-app "Quote Approval" bells for this request (pre-promote quoteId is blank). */
+    try {
+        const rn = String(draft.RequestNo || '').trim();
+        if (rn) {
+            const likeReq = `%"requestNo":"${rn.replace(/"/g, '')}"%`;
+            await sql.query`
+                DELETE FROM Notifications
+                WHERE Type = N'Quote Approval'
+                  AND LinkID LIKE ${likeReq}
+                  AND (
+                    LinkID LIKE N'%"quoteId":""%'
+                    OR LinkID LIKE N'%"quoteId":null%'
+                  )
+            `;
+        }
+    } catch (notifyErr) {
+        console.warn('[deleteDraftApprovalWorkflow] notification cleanup:', notifyErr.message || notifyErr);
+    }
+
+    return {
+        draftQuoteId: dId,
+        requestNo: String(draft.RequestNo || '').trim(),
+        quoteNumber: String(draft.QuoteNumber || '').trim(),
+        steps: [],
+        approvalRequestSent: false,
+        workflowDeleted: true,
+        draftPreserved: true,
+        recipientEmails: Array.from(recipientSet),
+        mailContext,
+        deletedByName,
+        deletedByEmail: email,
+        createdByEmail: createdByEmail || '',
+    };
+}
+
 module.exports = {
     isMissingQuoteApprovalStepsTableError,
     mapDbRowToStep,
@@ -2930,4 +3066,5 @@ module.exports = {
     recordQuoteCorrectionRequired,
     fetchQuoteCorrectionHistory,
     isMissingQuoteApprovalCorrectionsTableError,
+    deleteDraftApprovalWorkflow,
 };

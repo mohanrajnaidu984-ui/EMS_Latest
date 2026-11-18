@@ -71,12 +71,17 @@ const {
     recordQuoteCorrectionRequired,
     fetchQuoteCorrectionHistory,
     isMissingQuoteApprovalCorrectionsTableError,
+    deleteDraftApprovalWorkflow,
 } = require('../lib/quoteApprovalSteps');
 const {
     sendQuoteApprovalRequestEmail,
     sendQuoteApprovedForSubmissionEmails,
     sendQuoteCorrectionRequiredEmails,
+    sendQuoteWorkflowDeletedEmails,
 } = require('../lib/quoteApprovalNotify');
+const {
+    notifyParentJobSEsOnSubjobQuotePromoted,
+} = require('../lib/quoteParentSubjobNotify');
 const {
     notifyQuoteAssignedForApprovalInApp,
     notifyQuoteApprovedForSubmissionInApp,
@@ -1577,7 +1582,42 @@ router.get('/list/search', async (req, res) => {
             const tSql = Date.now();
 
             /* Lightweight list rows from quote SQL — skip mapQuoteListingRows (pricing tree). */
-            const merged = buildQuoteSearchListRowsFromQuotes(quoteRows, divisionTrim);
+            const concernedSeByReq = new Map();
+            const reqNosForSe = [
+                ...new Set(
+                    (quoteRows || [])
+                        .map((r) => String(r.RequestNo || '').trim())
+                        .filter(Boolean)
+                ),
+            ];
+            if (reqNosForSe.length) {
+                const seLit = reqNosForSe.map((n) => `N'${String(n).replace(/'/g, "''")}'`).join(',');
+                try {
+                    const seRes = await sql.query(`
+                        SELECT
+                            cse.RequestNo,
+                            cse.SEName,
+                            cse.accountability,
+                            cse.leadjobcode,
+                            cse.ownjob,
+                            mcs.Department
+                        FROM ConcernedSE cse
+                        LEFT JOIN Master_ConcernedSE mcs
+                            ON UPPER(LTRIM(RTRIM(ISNULL(mcs.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(cse.SEName, N''))))
+                        WHERE cse.RequestNo IN (${seLit})
+                        ORDER BY cse.RequestNo, cse.SEName
+                    `);
+                    for (const r of seRes.recordset || []) {
+                        const req = String(r.RequestNo || '').trim();
+                        if (!req) continue;
+                        if (!concernedSeByReq.has(req)) concernedSeByReq.set(req, []);
+                        concernedSeByReq.get(req).push(r);
+                    }
+                } catch (seErr) {
+                    console.warn('[list/search] ConcernedSE load skipped:', seErr.message);
+                }
+            }
+            const merged = buildQuoteSearchListRowsFromQuotes(quoteRows, divisionTrim, concernedSeByReq);
             const tMap = Date.now();
             const enriched = await enrichQuoteListRowsWithApprovalStatus(merged);
             console.log(
@@ -5486,6 +5526,36 @@ async function promoteDraftToEnquiryQuote(draftQuoteId, nextSteps = []) {
         console.warn('[promoteDraft] parent notify:', nErr.message);
     }
 
+    /* Parent-job SE SMTP: only subjob OwnJob quoting its direct internal parent customer. */
+    setImmediate(() => {
+        notifyParentJobSEsOnSubjobQuotePromoted({
+            requestNo,
+            ownJobName: identity.effectiveOwnJob || draft.OwnJob || '',
+            toName: draft.ToName || '',
+            quoteNumber: newQuoteNumber,
+            quoteDate: draft.QuoteDate || now,
+            revisionNo,
+            subject: draft.Subject || '',
+            projectName: '',
+            preparedByEmail: draft.PreparedByEmail || '',
+            preparedByName: draft.PreparedBy || '',
+        }).then((mailRes) => {
+            if (mailRes?.skipped) {
+                console.log(
+                    `[promoteDraft] parent-subjob email skipped (${mailRes.reason || 'n/a'}) quote=${newQuoteNumber}`
+                );
+            } else if (mailRes?.success) {
+                console.log(
+                    `[promoteDraft] parent-subjob email sent quote=${newQuoteNumber} verb=${mailRes.eventVerb} to=${(mailRes.to || []).length} cc=${(mailRes.cc || []).length}`
+                );
+            } else if (mailRes?.error) {
+                console.warn(`[promoteDraft] parent-subjob email failed: ${mailRes.error}`);
+            }
+        }).catch((mailErr) => {
+            console.warn('[promoteDraft] parent-subjob email:', mailErr.message || mailErr);
+        });
+    });
+
     try {
         await clearPricingRevisionRequiredForQuoteTuple({
             requestNo,
@@ -5737,6 +5807,84 @@ router.get('/approval-corrections', async (req, res) => {
         }
         console.error('[approval-corrections] GET:', err);
         res.status(500).json({ error: 'Failed to load correction history', details: err.message });
+    }
+});
+
+// POST /api/quotes/delete-approval-workflow — final approver deletes in-flight draft workflow (keeps draft)
+router.post('/delete-approval-workflow', async (req, res) => {
+    try {
+        const { draftQuoteId, userEmail, userName = '' } = req.body || {};
+        const normalizedEmail = normalizeApprovalEmail(userEmail);
+        if (!normalizedEmail) {
+            return res.status(400).json({ error: 'userEmail is required' });
+        }
+        const dId =
+            draftQuoteId != null && Number.isFinite(Number(draftQuoteId))
+                ? Number(draftQuoteId)
+                : null;
+        if (!dId) {
+            return res.status(400).json({ error: 'draftQuoteId is required' });
+        }
+
+        let result;
+        try {
+            result = await deleteDraftApprovalWorkflow({
+                draftQuoteId: dId,
+                actorEmail: normalizedEmail,
+                actorName: String(userName || '').trim(),
+            });
+        } catch (e) {
+            return res.status(400).json({ error: e.message || 'Could not delete workflow' });
+        }
+
+        clearPendingApprovalCountCache();
+        res.json({
+            success: true,
+            draftQuoteId: result.draftQuoteId,
+            requestNo: result.requestNo,
+            quoteNumber: result.quoteNumber,
+            steps: [],
+            approvalRequestSent: false,
+            workflowDeleted: true,
+            draftPreserved: true,
+            mailResult: { queued: true },
+        });
+
+        /* Every workflow delete notifies initiator + all approvers (SMTP in background). */
+        setImmediate(() => {
+            void (async () => {
+                try {
+                    const mailRes = await sendQuoteWorkflowDeletedEmails({
+                        toEmails: result.recipientEmails || [],
+                        deletedByName: result.deletedByName || '',
+                        mailContext: result.mailContext || null,
+                    });
+                    if (mailRes?.skipped) {
+                        console.log(
+                            `[delete-approval-workflow] email skipped draft=${dId}: ${mailRes.error || 'n/a'}`
+                        );
+                    } else if (mailRes?.success) {
+                        console.log(
+                            `[delete-approval-workflow] email sent draft=${dId} to=${(mailRes.sentTo || []).length}`
+                        );
+                    } else if (mailRes?.error) {
+                        console.warn(`[delete-approval-workflow] email failed: ${mailRes.error}`);
+                    }
+                } catch (mailErr) {
+                    console.warn('[delete-approval-workflow] email:', mailErr.message || mailErr);
+                }
+            })();
+        });
+        return;
+    } catch (err) {
+        if (isMissingQuoteApprovalStepsTableError(err.message)) {
+            return res.status(503).json({
+                error: 'Quote approval storage is not initialized',
+                hint: 'Run node server/migrations/run_create_quote_approval_steps.js',
+            });
+        }
+        console.error('[delete-approval-workflow] POST:', err);
+        res.status(500).json({ error: 'Failed to delete approval workflow', details: err.message });
     }
 });
 

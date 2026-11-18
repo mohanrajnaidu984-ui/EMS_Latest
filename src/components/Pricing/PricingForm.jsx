@@ -60,6 +60,98 @@ const PRICING_LIST_CATEGORY = {
     SEARCH: 'search',
 };
 
+const PRICING_LIST_STORAGE = {
+    category: 'pricing_listCategory',
+    criteria: 'pricing_listSearchCriteria',
+    dateFrom: 'pricing_listDateFrom',
+    dateTo: 'pricing_listDateTo',
+    division: 'pricing_listDivision',
+};
+
+/** Open enquiry editor (standalone + customer tab) — survives remount when keep-alive is lost. */
+const PRICING_EDITOR_STORAGE = 'pricing_editor_open';
+
+function readStoredPricingEditor() {
+    try {
+        const raw = sessionStorage.getItem(PRICING_EDITOR_STORAGE);
+        if (!raw) return null;
+        const o = JSON.parse(raw);
+        const requestNo = String(o?.requestNo || '').trim();
+        if (!requestNo || o?.standalone !== true) return null;
+        const leadRaw = o.selectedLeadId;
+        const leadNum = leadRaw != null && String(leadRaw).trim() !== '' ? Number(leadRaw) : null;
+        return {
+            requestNo,
+            selectedCustomer: String(o.selectedCustomer || '').trim(),
+            selectedLeadId: Number.isFinite(leadNum) ? leadNum : null,
+        };
+    } catch {
+        return null;
+    }
+}
+
+function writeStoredPricingEditor(payload) {
+    try {
+        if (!payload?.requestNo || payload.standalone !== true) {
+            sessionStorage.removeItem(PRICING_EDITOR_STORAGE);
+            return;
+        }
+        sessionStorage.setItem(
+            PRICING_EDITOR_STORAGE,
+            JSON.stringify({
+                standalone: true,
+                requestNo: String(payload.requestNo).trim(),
+                selectedCustomer: String(payload.selectedCustomer || '').trim(),
+                selectedLeadId:
+                    payload.selectedLeadId != null && String(payload.selectedLeadId).trim() !== ''
+                        ? Number(payload.selectedLeadId)
+                        : null,
+            })
+        );
+    } catch {
+        /* ignore */
+    }
+}
+
+function clearStoredPricingEditor() {
+    try {
+        sessionStorage.removeItem(PRICING_EDITOR_STORAGE);
+    } catch {
+        /* ignore */
+    }
+}
+
+/** Hydrate list search bar across Pricing ↔ other module tab switches (component remounts). */
+function readStoredPricingListSearch() {
+    try {
+        const category =
+            localStorage.getItem(PRICING_LIST_STORAGE.category) === PRICING_LIST_CATEGORY.SEARCH
+                ? PRICING_LIST_CATEGORY.SEARCH
+                : PRICING_LIST_CATEGORY.PENDING;
+        if (category !== PRICING_LIST_CATEGORY.SEARCH) {
+            return {
+                category: PRICING_LIST_CATEGORY.PENDING,
+                criteria: '',
+                dateFrom: '',
+                dateTo: '',
+            };
+        }
+        return {
+            category,
+            criteria: localStorage.getItem(PRICING_LIST_STORAGE.criteria) || '',
+            dateFrom: localStorage.getItem(PRICING_LIST_STORAGE.dateFrom) || '',
+            dateTo: localStorage.getItem(PRICING_LIST_STORAGE.dateTo) || '',
+        };
+    } catch {
+        return {
+            category: PRICING_LIST_CATEGORY.PENDING,
+            criteria: '',
+            dateFrom: '',
+            dateTo: '',
+        };
+    }
+}
+
 /** Normalize EnquiryFor IDs from API (number vs string) for Set/hierarchy lookups */
 const nid = (v) => {
     if (v === null || v === undefined || v === '') return null;
@@ -1217,12 +1309,27 @@ const PricingForm = ({ openContext = null }) => {
 
 
     // Search / list state (aligned with Quote list: category, criteria, price-update date range)
-    const [pricingListCategory, setPricingListCategory] = useState(PRICING_LIST_CATEGORY.PENDING);
-    /** Do not hydrate from localStorage while default category is Pending — stale text looked like an active filter. */
-    const [pricingListSearchCriteria, setPricingListSearchCriteria] = useState('');
-    const [pricingListDateFrom, setPricingListDateFrom] = useState('');
-    const [pricingListDateTo, setPricingListDateTo] = useState('');
+    const initialPricingListSearchRef = useRef(null);
+    if (initialPricingListSearchRef.current == null) {
+        initialPricingListSearchRef.current = readStoredPricingListSearch();
+    }
+    const initialPricingListSearch = initialPricingListSearchRef.current;
+    const [pricingListCategory, setPricingListCategory] = useState(initialPricingListSearch.category);
+    const [pricingListSearchCriteria, setPricingListSearchCriteria] = useState(
+        initialPricingListSearch.criteria
+    );
+    const [pricingListDateFrom, setPricingListDateFrom] = useState(initialPricingListSearch.dateFrom);
+    const [pricingListDateTo, setPricingListDateTo] = useState(initialPricingListSearch.dateTo);
     const [pricingSearchAttempted, setPricingSearchAttempted] = useState(false);
+    /** One-shot: re-run Search Price after remount when stored Search selection exists. */
+    const pricingRestoreSearchRef = useRef(
+        initialPricingListSearch.category === PRICING_LIST_CATEGORY.SEARCH &&
+            (!!String(initialPricingListSearch.criteria || '').trim() ||
+                (!!String(initialPricingListSearch.dateFrom || '').trim() &&
+                    !!String(initialPricingListSearch.dateTo || '').trim()))
+    );
+    /** One-shot: reopen enquiry pricing editor after remount (takes priority over search restore). */
+    const pricingRestoreEditorRef = useRef(readStoredPricingEditor());
     const [suggestions, setSuggestions] = useState([]);
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [searchResults, setSearchResults] = useState([]);
@@ -1245,7 +1352,7 @@ const PricingForm = ({ openContext = null }) => {
     const [pricingListDivisions, setPricingListDivisions] = useState([]);
     const [pricingListDivisionsLoading, setPricingListDivisionsLoading] = useState(false);
     const [pricingListDivision, setPricingListDivision] = useState(
-        () => localStorage.getItem('pricing_listDivision') || ''
+        () => localStorage.getItem(PRICING_LIST_STORAGE.division) || ''
     );
     const { currencyCode: pricingCurrencyCode } = useMasterCurrency({
         division:
@@ -1332,16 +1439,34 @@ const PricingForm = ({ openContext = null }) => {
     const findLeadJobName = (jobOrItemName) =>
         pricingData?.jobs?.length ? findLeadRootLabelForPricingMatch(jobOrItemName, pricingData.jobs) : null;
 
-    // -- Persistence --
+    // -- Persistence (survives Pricing unmount when switching main tabs) --
     useEffect(() => {
-        localStorage.setItem('pricing_listSearchCriteria', pricingListSearchCriteria);
-    }, [pricingListSearchCriteria]);
+        localStorage.setItem(PRICING_LIST_STORAGE.category, pricingListCategory);
+    }, [pricingListCategory]);
+
+    useEffect(() => {
+        if (pricingListCategory === PRICING_LIST_CATEGORY.SEARCH) {
+            localStorage.setItem(PRICING_LIST_STORAGE.criteria, pricingListSearchCriteria);
+        } else {
+            localStorage.removeItem(PRICING_LIST_STORAGE.criteria);
+        }
+    }, [pricingListCategory, pricingListSearchCriteria]);
+
+    useEffect(() => {
+        if (pricingListCategory === PRICING_LIST_CATEGORY.SEARCH) {
+            localStorage.setItem(PRICING_LIST_STORAGE.dateFrom, pricingListDateFrom || '');
+            localStorage.setItem(PRICING_LIST_STORAGE.dateTo, pricingListDateTo || '');
+        } else {
+            localStorage.removeItem(PRICING_LIST_STORAGE.dateFrom);
+            localStorage.removeItem(PRICING_LIST_STORAGE.dateTo);
+        }
+    }, [pricingListCategory, pricingListDateFrom, pricingListDateTo]);
 
     useEffect(() => {
         if (pricingListDivision && pricingListDivision.trim()) {
-            localStorage.setItem('pricing_listDivision', pricingListDivision.trim());
+            localStorage.setItem(PRICING_LIST_STORAGE.division, pricingListDivision.trim());
         } else {
-            localStorage.removeItem('pricing_listDivision');
+            localStorage.removeItem(PRICING_LIST_STORAGE.division);
         }
     }, [pricingListDivision]);
 
@@ -1460,6 +1585,7 @@ const PricingForm = ({ openContext = null }) => {
     }, [resolvePricingUserEmail, pricingListDivision, pricingListDivisions]);
 
     const closePricingEditor = useCallback(() => {
+        clearStoredPricingEditor();
         setPricingEditorStandalone(false);
         setPricingData(null);
         setPricingLoadError(null);
@@ -1472,6 +1598,22 @@ const PricingForm = ({ openContext = null }) => {
         }
         refreshPendingRequests();
     }, [refreshPendingRequests]);
+
+    // Persist open enquiry + customer tab so remount (or shared-Suspense wipe) can restore the editor.
+    useEffect(() => {
+        if (pricingEditorStandalone && selectedEnquiry) {
+            writeStoredPricingEditor({
+                standalone: true,
+                requestNo: selectedEnquiry,
+                selectedCustomer,
+                selectedLeadId,
+            });
+            return;
+        }
+        if (!pricingEditorStandalone) {
+            clearStoredPricingEditor();
+        }
+    }, [pricingEditorStandalone, selectedEnquiry, selectedCustomer, selectedLeadId]);
 
     useEffect(() => {
         const handleClickOutside = (e) => {
@@ -1507,7 +1649,7 @@ const PricingForm = ({ openContext = null }) => {
                 setPricingListDivisions(list);
                 setPricingListDivision(() => {
                     if (!list.length) return '';
-                    const rawSaved = localStorage.getItem('pricing_listDivision');
+                    const rawSaved = localStorage.getItem(PRICING_LIST_STORAGE.division);
                     const saved = parseUserDepartments(rawSaved).filter((s) => list.includes(s));
                     // Single-select: prefer last saved division, else first accessible option.
                     if (saved.length) return saved[0];
@@ -1670,6 +1812,7 @@ const PricingForm = ({ openContext = null }) => {
     };
 
     const handlePricingListClear = () => {
+        clearStoredPricingEditor();
         setPricingEditorStandalone(false);
         setPricingListSearchCriteria('');
         setPricingListDateFrom('');
@@ -1689,10 +1832,51 @@ const PricingForm = ({ openContext = null }) => {
         setSelectedCustomer('');
         setAddingCustomer(false);
         setNewCustomerName('');
+        try {
+            localStorage.setItem(PRICING_LIST_STORAGE.category, PRICING_LIST_CATEGORY.PENDING);
+            localStorage.removeItem(PRICING_LIST_STORAGE.criteria);
+            localStorage.removeItem(PRICING_LIST_STORAGE.dateFrom);
+            localStorage.removeItem(PRICING_LIST_STORAGE.dateTo);
+        } catch {
+            /* ignore */
+        }
         pricingSearchColFiltersClearRef.current?.();
         pricingPendingColFiltersClearRef.current?.();
         refreshPendingRequests();
     };
+
+    // After remount + division bootstrap: restore open enquiry editor, else prior Search Price results.
+    useEffect(() => {
+        if (!pricingDivisionBootstrapDone) return;
+
+        const editor = pricingRestoreEditorRef.current;
+        if (editor?.requestNo) {
+            pricingRestoreEditorRef.current = null;
+            pricingRestoreSearchRef.current = false;
+            setPricingEditorStandalone(true);
+            setPricingLoadError(null);
+            if (editor.selectedLeadId != null) {
+                setSelectedLeadId(editor.selectedLeadId);
+            }
+            if (editor.selectedCustomer) {
+                setSelectedCustomer(editor.selectedCustomer);
+            }
+            void loadPricing(editor.requestNo, editor.selectedCustomer || null, null, {
+                ignoreExistingLeadSelection: editor.selectedLeadId == null,
+            });
+            return;
+        }
+
+        if (!pricingRestoreSearchRef.current) return;
+        if (pricingListCategory !== PRICING_LIST_CATEGORY.SEARCH) {
+            pricingRestoreSearchRef.current = false;
+            return;
+        }
+        pricingRestoreSearchRef.current = false;
+        void handlePricingListSearch();
+        // One-shot restore only — do not re-bind to handlePricingListSearch identity.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [pricingDivisionBootstrapDone, pricingListCategory]);
 
     // Load pricing for selected enquiry
     const loadPricing = async (requestNo, customerName = null, preserveValues = null, loadOptions = null) => {

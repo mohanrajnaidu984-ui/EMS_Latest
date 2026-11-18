@@ -7,6 +7,7 @@ const {
 } = require('./quoteListDivisionFilter');
 const { parseUserDepartments } = require('./userDepartments');
 const { normalizeSearchDateParam } = require('./buildQuoteListSearchExtraWhere');
+const { pickConcernedSeMembersForQuote } = require('./pickConcernedSeMembersForQuote');
 
 function lit(s) {
     return String(s || '').replace(/'/g, "''");
@@ -274,8 +275,16 @@ async function runQuoteListSearchByQuoteDate(
 
 /**
  * Build Quote Search list rows from flat in-range quote SQL rows (no pricing mapper).
+ * @param {Map<string, object[]>|object} [concernedSeByReq] RequestNo → ConcernedSE rows
  */
-function buildQuoteSearchListRowsFromQuotes(quoteRows, divisionFilter = '') {
+function buildQuoteSearchListRowsFromQuotes(quoteRows, divisionFilter = '', concernedSeByReq = null) {
+    const seMap =
+        concernedSeByReq instanceof Map
+            ? concernedSeByReq
+            : concernedSeByReq && typeof concernedSeByReq === 'object'
+              ? new Map(Object.entries(concernedSeByReq))
+              : null;
+
     const groups = new Map();
     for (const raw of quoteRows || []) {
         if (!raw || raw.RequestNo == null) continue;
@@ -286,7 +295,7 @@ function buildQuoteSearchListRowsFromQuotes(quoteRows, divisionFilter = '') {
     }
 
     const out = [];
-    for (const [, rows] of groups) {
+    for (const [reqKey, rows] of groups) {
         rows.sort((a, b) => {
             const ta = a.QuoteDate ? new Date(a.QuoteDate).getTime() : 0;
             const tb = b.QuoteDate ? new Date(b.QuoteDate).getTime() : 0;
@@ -317,16 +326,22 @@ function buildQuoteSearchListRowsFromQuotes(quoteRows, divisionFilter = '') {
             return tb - ta;
         });
 
+        const seRowsForReq = seMap ? seMap.get(reqKey) || [] : [];
         const head = displayQuotes[0] || rows[0];
         const detailLines = displayQuotes.map((q) => {
             const toName = String(q.ToName || '').trim() || '—';
             const ref = String(q.QuoteNumber || '').trim();
             const dt = fmtRowDetailDate(q.QuoteDate);
             const amount = Number(q.TotalAmount) || 0;
+            const seMembers = pickConcernedSeMembersForQuote(q, seRowsForReq);
+            const concernedSe = seMembers.map((m) => m.name).join(', ');
+            const preparedFallback = String(q.PreparedBy || '').trim();
             return {
                 textLine: ref ? `${toName} (${ref} - ${dt})` : `${toName} (${dt})`,
                 bdTotal: amount > 0 ? amount : null,
-                preparedBy: String(q.PreparedBy || '').trim(),
+                seMembers,
+                concernedSe,
+                preparedBy: concernedSe || preparedFallback,
                 quoteDate: q.QuoteDate ?? null,
                 quoteNumber: ref,
                 revisionNo: Number(q.RevisionNo) || 0,
@@ -339,7 +354,11 @@ function buildQuoteSearchListRowsFromQuotes(quoteRows, divisionFilter = '') {
         const maxAmount = amounts.length ? Math.max(...amounts) : null;
         const latestQuoteId = Number(head.QuoteId);
         const prepared = [
-            ...new Set(detailLines.map((ln) => ln.preparedBy).filter(Boolean)),
+            ...new Set(
+                detailLines
+                    .map((ln) => String(ln.concernedSe || ln.preparedBy || '').trim())
+                    .filter(Boolean)
+            ),
         ].join(', ');
 
         out.push({

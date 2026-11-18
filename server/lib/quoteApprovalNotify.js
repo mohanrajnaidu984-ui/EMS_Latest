@@ -90,6 +90,7 @@ const WORKFLOW_STATUS_BADGES = {
     assigned: { bg: '#2563eb', icon: '&#8594;', label: 'Assigned' },
     approved: { bg: '#16a34a', icon: '&#10003;', label: 'Approved' },
     rejected: { bg: '#dc2626', icon: '&#10005;', label: 'Rejected' },
+    deleted: { bg: '#dc2626', icon: '&#10005;', label: 'Deleted' },
 };
 
 function buildWorkflowStatusBadgeHtml(status = 'assigned') {
@@ -449,6 +450,104 @@ function buildQuoteCorrectionRequiredSubject(projectName) {
     return `Quote correction required — Project: ${project}`;
 }
 
+function buildQuoteWorkflowDeletedHtml({ deletedByName = '', ...mailFields } = {}) {
+    const fields = normalizeApprovalMailFields({
+        ...mailFields,
+        workflowStatus: 'deleted',
+    });
+    const tableRows = buildApprovalDetailsTableHtml(fields);
+    const who = escapeHtml(String(deletedByName || '').trim() || 'The final approver');
+
+    return `
+        <div style="font-family: Arial, sans-serif; color: #1e293b; font-size: 14px; line-height: 1.5;">
+            <p style="margin:0 0 8px 0;">Dear Team,</p>
+            <p style="margin:0 0 8px 0;"><strong>${who}</strong> has deleted the approval workflow for the following quote.</p>
+            <p style="margin:0 0 8px 0;">The quote draft is still available. The initiator can create a new approval workflow and send it for approval again.</p>
+            <table cellpadding="0" cellspacing="0" border="0" role="presentation" style="border-collapse:collapse; border-spacing:0; width:100%; max-width:640px; margin:8px 0; table-layout:fixed;">
+                ${tableRows}
+            </table>
+            <p style="margin-top:16px; font-size:12px; color:#64748b; font-style:italic;">* This is an auto generated email from Enquiry Management System *</p>
+        </div>
+    `;
+}
+
+function buildQuoteWorkflowDeletedSubject(projectName) {
+    const project = String(projectName || '').trim() || '—';
+    return `Approval workflow deleted — Project: ${project}`;
+}
+
+async function sendQuoteWorkflowDeletedEmails({
+    toEmails = [],
+    deletedByName = '',
+    mailContext = null,
+}) {
+    const list = Array.isArray(toEmails) ? toEmails : [toEmails];
+    const unique = Array.from(new Set(list.map((e) => String(e || '').trim()).filter(Boolean)));
+    if (!unique.length) {
+        return { success: false, error: 'No recipients for workflow-deleted notification', skipped: true };
+    }
+
+    const fields = mailContext || {};
+    const html = buildQuoteWorkflowDeletedHtml({
+        deletedByName,
+        ...fields,
+        workflowStatus: 'deleted',
+    });
+    const mailSubject = buildQuoteWorkflowDeletedSubject(fields.projectName);
+    const approvalSmtp = getQuoteApprovalSmtpOverrides();
+    const tStart = Date.now();
+
+    try {
+        console.log(
+            `[quoteApprovalNotify] Workflow-deleted to ${unique.length} recipient(s) via ${approvalSmtp.host}:${approvalSmtp.port}`
+        );
+        await sendApprovalMailFast({
+            to: unique.join(';'),
+            subject: mailSubject,
+            html,
+        });
+        return { success: true, via: 'smtp-relay-pool', elapsedMs: Date.now() - tStart, sentTo: unique };
+    } catch (primaryErr) {
+        const primaryMessage = primaryErr?.message || String(primaryErr);
+        console.warn(
+            `[quoteApprovalNotify] Workflow-deleted SMTP failed after ${Date.now() - tStart}ms:`,
+            primaryMessage
+        );
+
+        if (!approvalFallbackEnabled() || isSameSmtpEndpoint(approvalSmtp)) {
+            return {
+                success: false,
+                error: primaryMessage,
+                smtpError: primaryMessage,
+                elapsedMs: Date.now() - tStart,
+            };
+        }
+
+        try {
+            const { sendEnquiryNotificationViaSmtp } = require('./enquiryNotifySmtp');
+            const fastFailExtra = { connectionTimeout: 8000, greetingTimeout: 8000, socketTimeout: 12000 };
+            await sendEnquiryNotificationViaSmtp({
+                to: unique.join(';'),
+                cc: '',
+                subject: mailSubject,
+                html,
+                fromEmail: getSmtpFromEmail(),
+                transportExtra: fastFailExtra,
+            });
+            return { success: true, via: 'smtp-fallback', elapsedMs: Date.now() - tStart, sentTo: unique };
+        } catch (fallbackErr) {
+            const fallbackMessage = fallbackErr?.message || String(fallbackErr);
+            return {
+                success: false,
+                error: `Workflow-deleted email failed: ${primaryMessage}`,
+                smtpError: primaryMessage,
+                fallbackSmtpError: fallbackMessage,
+                elapsedMs: Date.now() - tStart,
+            };
+        }
+    }
+}
+
 async function sendQuoteCorrectionRequiredEmails({
     toEmails = [],
     requesterName = '',
@@ -527,13 +626,16 @@ module.exports = {
     sendQuoteApprovalRequestEmail,
     sendQuoteApprovedForSubmissionEmails,
     sendQuoteCorrectionRequiredEmails,
+    sendQuoteWorkflowDeletedEmails,
     buildQuoteApprovalRequiredHtml,
     buildQuoteApprovedForSubmissionHtml,
     buildQuoteCorrectionRequiredHtml,
+    buildQuoteWorkflowDeletedHtml,
     buildApprovalDetailsTableHtml,
     buildWorkflowStatusBadgeHtml,
     normalizeApprovalMailFields,
     buildApprovalSubject,
     buildQuoteApprovedSubject,
     buildQuoteCorrectionRequiredSubject,
+    buildQuoteWorkflowDeletedSubject,
 };

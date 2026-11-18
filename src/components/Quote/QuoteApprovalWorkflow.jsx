@@ -12,6 +12,7 @@ import {
     resequenceApprovalSteps,
     assertFinalApproverRules,
     isFinalApproverApproved,
+    getFinalApproverStep,
     orderApprovalStepsFinalLast,
     sortApprovalStepsFinalLast,
     formatApprovalActionAt,
@@ -319,6 +320,32 @@ export default function QuoteApprovalWorkflow({
         currentUserName,
     ]);
 
+    /** Final approver only — delete in-flight draft workflow before final approval (keeps quote draft). */
+    const userCanDeleteWorkflow = useMemo(() => {
+        if (!approvalReviewMode) return false;
+        if (!draftQuoteId || quoteId) return false;
+        if (!orderedSteps.length) return false;
+        if (workflowFinalized) return false;
+        const final = getFinalApproverStep(orderedSteps);
+        if (!final) return false;
+        if (String(final.status || '').toLowerCase() === 'approved') return false;
+        const userEmail = normalizeApprovalEmail(currentUserEmail);
+        const stepEmail = normalizeApprovalEmail(final.approverEmail);
+        if (userEmail && stepEmail && userEmail === stepEmail) return true;
+        const norm = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        const userName = norm(currentUserName);
+        const stepName = norm(final.approverName);
+        return userName.length > 0 && userName === stepName;
+    }, [
+        approvalReviewMode,
+        draftQuoteId,
+        quoteId,
+        orderedSteps,
+        workflowFinalized,
+        currentUserEmail,
+        currentUserName,
+    ]);
+
     const updateSteps = (next) => {
         onChange(resequenceApprovalSteps(next));
     };
@@ -571,6 +598,64 @@ export default function QuoteApprovalWorkflow({
             onStepsUpdated?.(previousSteps, { action: 'rollback', optimistic: false });
             console.warn('[QuoteApprovalWorkflow] action failed', e);
             alert('Could not record approval action.');
+        } finally {
+            setActing(false);
+        }
+    };
+
+    const handleDeleteWorkflow = async () => {
+        if (!userCanDeleteWorkflow || acting || !draftQuoteId) return;
+        const email = normalizeApprovalEmail(currentUserEmail);
+        if (!email) {
+            alert('Sign in to delete this workflow.');
+            return;
+        }
+        const confirmed = window.confirm(
+            'Delete this approval workflow?\n\nThe quote draft will be kept. The initiator can create a new workflow and send for approval again.'
+        );
+        if (!confirmed) return;
+
+        setActing(true);
+        try {
+            const res = await fetch(`${apiBase}/api/quotes/delete-approval-workflow`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    draftQuoteId,
+                    userEmail: email,
+                    userName: currentUserName || '',
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                alert(data.error || data.details || 'Could not delete the approval workflow.');
+                return;
+            }
+            onChange([]);
+            onStepsUpdated?.([], {
+                action: 'workflow-deleted',
+                draftQuoteId: draftQuoteId || null,
+                quoteId: null,
+                optimistic: false,
+            });
+            onApprovalSent?.({
+                ...data,
+                workflowDeleted: true,
+                approvalRequestSent: false,
+                approvalUnlocked: true,
+                steps: [],
+                draftQuoteId: draftQuoteId || null,
+            });
+            window.dispatchEvent(
+                new CustomEvent(EMS_PENDING_APPROVALS_CHANGED, {
+                    detail: { delta: -1, skipRefresh: true },
+                })
+            );
+            window.dispatchEvent(new CustomEvent(EMS_PENDING_APPROVALS_CHANGED));
+            alert('Approval workflow deleted. The quote draft is still available — a new workflow can be created.');
+        } catch (e) {
+            console.warn('[QuoteApprovalWorkflow] delete workflow failed', e);
+            alert('Could not delete the approval workflow.');
         } finally {
             setActing(false);
         }
@@ -1133,7 +1218,7 @@ export default function QuoteApprovalWorkflow({
                 );
             })()}
 
-            {userCanAct || userCanRequestCorrection ? (
+            {userCanAct || userCanRequestCorrection || userCanDeleteWorkflow ? (
                 <div
                     style={{
                         display: 'flex',
@@ -1236,6 +1321,32 @@ export default function QuoteApprovalWorkflow({
                                 }}
                             >
                                 <AlertTriangle size={13} /> Correction Required
+                            </button>
+                        ) : null}
+                        {userCanDeleteWorkflow && !showCorrectionForm ? (
+                            <button
+                                type="button"
+                                disabled={acting}
+                                onClick={() => void handleDeleteWorkflow()}
+                                title="Delete this approval workflow (quote draft is kept)"
+                                style={{
+                                    flex: 1,
+                                    minWidth: '130px',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    padding: '6px 8px',
+                                    borderRadius: '4px',
+                                    border: '1px solid #dc2626',
+                                    background: '#fef2f2',
+                                    color: '#b91c1c',
+                                    cursor: acting ? 'wait' : 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '4px',
+                                }}
+                            >
+                                <Trash2 size={13} /> {acting ? 'Deleting…' : 'Delete Workflow'}
                             </button>
                         ) : null}
                         {showCorrectionForm ? (

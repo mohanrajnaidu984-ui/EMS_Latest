@@ -530,6 +530,45 @@ const QUOTE_LIST_CATEGORY = {
     SEARCH: 'search_quote',
 };
 
+const QUOTE_LIST_STORAGE = {
+    category: 'quote_listCategory',
+    criteria: 'quote_listSearchCriteria',
+    dateFrom: 'quote_listDateFrom',
+    dateTo: 'quote_listDateTo',
+    division: 'quote_listDivision',
+};
+
+/** Hydrate list search bar across Quote ↔ other module tab switches (component remounts). */
+function readStoredQuoteListSearch() {
+    try {
+        const category =
+            localStorage.getItem(QUOTE_LIST_STORAGE.category) === QUOTE_LIST_CATEGORY.SEARCH
+                ? QUOTE_LIST_CATEGORY.SEARCH
+                : QUOTE_LIST_CATEGORY.PENDING;
+        if (category !== QUOTE_LIST_CATEGORY.SEARCH) {
+            return {
+                category: QUOTE_LIST_CATEGORY.PENDING,
+                criteria: '',
+                dateFrom: '',
+                dateTo: '',
+            };
+        }
+        return {
+            category,
+            criteria: localStorage.getItem(QUOTE_LIST_STORAGE.criteria) || '',
+            dateFrom: localStorage.getItem(QUOTE_LIST_STORAGE.dateFrom) || '',
+            dateTo: localStorage.getItem(QUOTE_LIST_STORAGE.dateTo) || '',
+        };
+    } catch {
+        return {
+            category: QUOTE_LIST_CATEGORY.PENDING,
+            criteria: '',
+            dateFrom: '',
+            dateTo: '',
+        };
+    }
+}
+
 /** Left sidebar single-line inputs / selects — 28px row height */
 const QUOTE_LEFT_COMPACT_CONTROL = {
     boxSizing: 'border-box',
@@ -8400,15 +8439,29 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const [exportBusyLabel, setExportBusyLabel] = useState('');
     /** If auto-open fails, user can use this real link (second gesture) to open the same mailto: draft. */
     const [quoteEmailDraftHref, setQuoteEmailDraftHref] = useState(null);
-    const [quoteListCategory, setQuoteListCategory] = useState(QUOTE_LIST_CATEGORY.PENDING);
-    const [quoteListSearchCriteria, setQuoteListSearchCriteria] = useState('');
-    const [quoteListDateFrom, setQuoteListDateFrom] = useState('');
-    const [quoteListDateTo, setQuoteListDateTo] = useState('');
+    const initialQuoteListSearchRef = useRef(null);
+    if (initialQuoteListSearchRef.current == null) {
+        initialQuoteListSearchRef.current = readStoredQuoteListSearch();
+    }
+    const initialQuoteListSearch = initialQuoteListSearchRef.current;
+    const [quoteListCategory, setQuoteListCategory] = useState(initialQuoteListSearch.category);
+    const [quoteListSearchCriteria, setQuoteListSearchCriteria] = useState(
+        initialQuoteListSearch.criteria
+    );
+    const [quoteListDateFrom, setQuoteListDateFrom] = useState(initialQuoteListSearch.dateFrom);
+    const [quoteListDateTo, setQuoteListDateTo] = useState(initialQuoteListSearch.dateTo);
+    /** One-shot: re-run Search Quote after remount when stored Search selection exists. */
+    const quoteRestoreSearchRef = useRef(
+        initialQuoteListSearch.category === QUOTE_LIST_CATEGORY.SEARCH &&
+            (!!String(initialQuoteListSearch.criteria || '').trim() ||
+                (!!String(initialQuoteListSearch.dateFrom || '').trim() &&
+                    !!String(initialQuoteListSearch.dateTo || '').trim()))
+    );
     /** Division filter (Master_EnquiryFor.DepartmentName); options from /api/pricing/list/divisions (same rules as Pricing). */
     const [quoteListDivisions, setQuoteListDivisions] = useState([]);
     const [quoteListDivisionsLoading, setQuoteListDivisionsLoading] = useState(false);
     const [quoteListDivision, setQuoteListDivision] = useState(
-        () => localStorage.getItem('quote_listDivision') || ''
+        () => localStorage.getItem(QUOTE_LIST_STORAGE.division) || ''
     );
     const [showEmailModal, setShowEmailModal] = useState(false);
     const [emailSending, setEmailSending] = useState(false);
@@ -8749,11 +8802,33 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
     useEffect(() => {
         if (quoteListDivision && quoteListDivision.trim()) {
-            localStorage.setItem('quote_listDivision', quoteListDivision.trim());
+            localStorage.setItem(QUOTE_LIST_STORAGE.division, quoteListDivision.trim());
         } else {
-            localStorage.removeItem('quote_listDivision');
+            localStorage.removeItem(QUOTE_LIST_STORAGE.division);
         }
     }, [quoteListDivision]);
+
+    useEffect(() => {
+        localStorage.setItem(QUOTE_LIST_STORAGE.category, quoteListCategory);
+    }, [quoteListCategory]);
+
+    useEffect(() => {
+        if (quoteListCategory === QUOTE_LIST_CATEGORY.SEARCH) {
+            localStorage.setItem(QUOTE_LIST_STORAGE.criteria, quoteListSearchCriteria);
+        } else {
+            localStorage.removeItem(QUOTE_LIST_STORAGE.criteria);
+        }
+    }, [quoteListCategory, quoteListSearchCriteria]);
+
+    useEffect(() => {
+        if (quoteListCategory === QUOTE_LIST_CATEGORY.SEARCH) {
+            localStorage.setItem(QUOTE_LIST_STORAGE.dateFrom, quoteListDateFrom || '');
+            localStorage.setItem(QUOTE_LIST_STORAGE.dateTo, quoteListDateTo || '');
+        } else {
+            localStorage.removeItem(QUOTE_LIST_STORAGE.dateFrom);
+            localStorage.removeItem(QUOTE_LIST_STORAGE.dateTo);
+        }
+    }, [quoteListCategory, quoteListDateFrom, quoteListDateTo]);
 
     useEffect(() => {
         const divs = quoteEffectiveDivisions(quoteListDivision, quoteListDivisions);
@@ -8952,9 +9027,36 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         listOpenApprovalQuoteIdRef.current = null;
         setQuoteListCategory(QUOTE_LIST_CATEGORY.PENDING);
         setShowQuoteListSummaryOverQuote(false);
+        try {
+            localStorage.setItem(QUOTE_LIST_STORAGE.category, QUOTE_LIST_CATEGORY.PENDING);
+            localStorage.removeItem(QUOTE_LIST_STORAGE.criteria);
+            localStorage.removeItem(QUOTE_LIST_STORAGE.dateFrom);
+            localStorage.removeItem(QUOTE_LIST_STORAGE.dateTo);
+        } catch {
+            /* ignore */
+        }
         // Pass division explicitly to avoid fetching with a stale/empty division value.
         refetchPendingQuotes(quoteListDivision);
     }, [refetchPendingQuotes, quoteListDivision]);
+
+    // After remount + divisions ready, restore prior Search Quote results.
+    useEffect(() => {
+        if (quoteListDivisionsLoading) return;
+        if (!quoteRestoreSearchRef.current) return;
+        if (quoteListCategory !== QUOTE_LIST_CATEGORY.SEARCH) {
+            quoteRestoreSearchRef.current = false;
+            return;
+        }
+        if (quoteListDivisions.length > 0 && !String(quoteListDivision || '').trim()) return;
+        quoteRestoreSearchRef.current = false;
+        void handleQuoteListSearch();
+    }, [
+        quoteListDivisionsLoading,
+        quoteListDivisions,
+        quoteListDivision,
+        quoteListCategory,
+        handleQuoteListSearch,
+    ]);
 
     /** Enquiry / lead picked but customer not yet — keep right-hand quote panel empty (no default clauses or pricing). */
     const resetQuotePanelPendingCustomer = useCallback(() => {
@@ -9068,7 +9170,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 setQuoteListDivision((previous) => {
                     if (!list.length) return '';
                     if (list.includes(previous)) return previous;
-                    const rawSaved = localStorage.getItem('quote_listDivision');
+                    const rawSaved = localStorage.getItem(QUOTE_LIST_STORAGE.division);
                     const saved = parseUserDepartments(rawSaved).filter((s) => list.includes(s));
                     // Single-select: prefer last saved division, else first accessible option.
                     if (saved.length) return saved[0];
@@ -9736,9 +9838,22 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     /** Browse mode: no saved revision for active tab — blank left + default clauses on right. */
     const applyBrowseNoRevisionDefaults = applyFreshQuoteShellDefaults;
 
+    /**
+     * Cancels in-flight A4 pack / soft-split work. Assigned after pack refs exist.
+     * Customer switches must call this before pricing recalcs against a prior draft's HTML.
+     */
+    const cancelQuotePreviewPackRef = useRef(() => {});
+
     /** Invalidate cached draft scope so the collaborative draft fetch re-runs for enquiry + lead + customer. */
     const requestQuoteDraftScopeReload = useCallback(() => {
         if (browsePreviousQuotesRevisionsRef.current) return;
+        // Prior customer (e.g. Hybrid) may still hold a large draft in TipTap. Leaving that HTML
+        // mounted while Eco Cool (no draft) pricing/pack runs freezes the tab ("Page Unresponsive").
+        cancelQuotePreviewPackRef.current?.();
+        applyFreshQuoteShellDefaults();
+        // Defer Align Page until draft fetch settles (hit → applyRow, miss → defaults again).
+        pendingAutoAlignPreviewRef.current = false;
+        setQuoteDigitalStamps([]);
         quoteDraftScopeKeyRef.current = '';
         quoteDraftForceReloadRef.current = true;
         quoteDraftClausesLockedRef.current = false;
@@ -9748,7 +9863,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         setQuoteDraftHydrated(false);
         setQuoteDraftId(null);
         setQuoteDraftReloadNonce((n) => n + 1);
-    }, []);
+    }, [applyFreshQuoteShellDefaults]);
 
     /** Populated after calculatedTabs / effectiveQuoteTabs (avoids TDZ in early buildQuoteDraftScopeParams). */
     const quoteDraftScopeTabsRef = React.useRef([]);
@@ -10616,6 +10731,19 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const clauseSegmentsFrozenWhileEditingRef = useRef([]);
     /** Per-clause segment cache — exit-edit / load only rebuilds changed clauses. */
     const clauseSegmentBuildCacheRef = useRef(new Map());
+    cancelQuotePreviewPackRef.current = () => {
+        clausePackRunGenRef.current += 1;
+        clausePackAlignGenRef.current += 1;
+        clauseSegmentBuildCacheRef.current.clear();
+        oversizedSoftSplitPartsRef.current.clear();
+        clauseSegmentsFrozenWhileEditingRef.current = [];
+        clausePackSegmentHeightCacheRef.current.clear();
+        lastClausePackSigRef.current = '';
+        lastMeasuredQuotePackRef.current = null;
+        packedGroupsAwaitingPaintRef.current = null;
+        setClauseSegmentPageGroups((prev) => (prev.length ? [] : prev));
+        setQuoteAlignPageBusy((busy) => (busy ? false : busy));
+    };
     const [editingClauseLiveSig, setEditingClauseLiveSig] = useState('');
     /** Checked clauses in UI order (preview + measurement source). */
     const activeClausesList = React.useMemo(() => {
@@ -16876,10 +17004,18 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 }
             }
 
-            // 0. Customer Filter
+            // 0. Customer Filter — mirror Pricing tabScopedCandidates:
+            // named option CustomerName must match the quote customer (do not leak ARAFCON Option2 onto Hybrid/Eco Cool).
             const optCust = normalizeCust(opt.customerName);
             const activeCust = normalizeCust(activeCustomer);
             const mainCust = normalizeCust(enquiryData?.customerName || enquiryData?.CustomerName || '');
+            const jobNameSet = new Set(
+                (jobsPool || [])
+                    .map((j) => normalizeCust(j.itemName || j.DivisionName || ''))
+                    .filter(Boolean)
+            );
+            const activeIsExternalCustomer = !!activeCust && !jobNameSet.has(activeCust);
+            const optIsNamedCustomerRow = !!optCust && optCust !== 'main';
 
             const ownJobRowMatch = (() => {
                 if (ownJobNorms.size === 0) return false;
@@ -16891,22 +17027,38 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 );
             })();
 
-            const isCustomerMatch = (!activeCust || !opt.customerName || optCust === activeCust || optCust === 'main' || optCust === mainCust || ownJobRowMatch || optionHasScopedValueKey(opt) || (() => {
-                const activeJob = jobsPool.find(j => normalizeCust(j.itemName || j.DivisionName) === activeCust);
-                if (activeJob) {
-                    const optJob = jobsPool.find(j => normalizeCust(j.itemName || j.DivisionName) === optCust);
-                    if (optJob) {
-                        const activeId = String(activeJob.id || activeJob.ItemID || '');
-                        if (forEachJobAncestor(optJob, jobsPool, (_job, pid) => pid === activeId)) return true;
+            const isCustomerMatch = (() => {
+                if (!activeCust) return true;
+                /* Exact / fuzzy match on stored CustomerName */
+                if (optIsNamedCustomerRow) {
+                    if (optCust === activeCust || pricingCustomerDimMatch(opt.customerName, activeCustomer)) {
+                        return true;
                     }
+                    /* Internal: option tagged to parent job name while quoting that internal customer */
+                    if (!activeIsExternalCustomer && (optCust === activeCust || jobNameSet.has(optCust))) {
+                        if (optCust === activeCust) return true;
+                        const activeJob = jobsPool.find(
+                            (j) => normalizeCust(j.itemName || j.DivisionName) === activeCust
+                        );
+                        const optJob = jobsPool.find(
+                            (j) => normalizeCust(j.itemName || j.DivisionName) === optCust
+                        );
+                        if (activeJob && optJob) {
+                            const activeId = String(activeJob.id || activeJob.ItemID || '');
+                            if (forEachJobAncestor(optJob, jobsPool, (_job, pid) => pid === activeId)) {
+                                return true;
+                            }
+                        }
+                    }
+                    /* Never admit another external customer's named option via OwnJob/ItemName alone */
+                    return false;
                 }
-                const isExternalCustomer = !jobsPool.some(j => normalizeCust(j.itemName || j.DivisionName) === activeCust);
-                if (isExternalCustomer) {
-                    const optJob = jobsPool.find(j => normalizeCust(j.itemName || j.DivisionName) === optCust);
-                    if (optJob) return true;
-                }
+                /* Blank CustomerName: Pricing keeps these off external tabs */
+                if (activeIsExternalCustomer) return false;
+                if (optCust === 'main' || optCust === mainCust) return true;
+                if (ownJobRowMatch || optionHasScopedValueKey(opt)) return true;
                 return false;
-            })());
+            })();
 
             if (!isCustomerMatch) {
                 if (import.meta.env.DEV) {
@@ -17062,19 +17214,13 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             const scopeJob = jobsPool.find(j => normalizeName(j.itemName || j.DivisionName) === normalizeName(scopeName));
                             if (!scopeJob) return false;
 
-                            const scopeId = scopeJob.id || scopeJob.ItemID;
-                            const checkId = job.id || job.ItemID;
-
-                            // Recursive ancestor check
-                            const isAncestorOf = (ancId, childId) => {
-                                const child = jobsPool.find(j => (j.id || j.ItemID) === childId);
-                                if (!child) return false;
-                                const pid = child.parentId || child.ParentID;
-                                if (pid === ancId) return true;
-                                if (pid && pid !== '0' && pid !== 0) return isAncestorOf(ancId, pid);
-                                return false;
-                            };
-                            return isAncestorOf(scopeId, checkId);
+                            const scopeId = String(scopeJob.id || scopeJob.ItemID || '');
+                            const checkJob = jobsPool.find(
+                                (j) => String(j.id || j.ItemID || '') === String(job.id || job.ItemID || '')
+                            );
+                            // Bounded walk — cyclic ParentID must not freeze the tab.
+                            if (!scopeId || !checkJob) return false;
+                            return forEachJobAncestor(checkJob, jobsPool, (_j, pid) => pid === scopeId);
                         });
                     })();
 
@@ -17206,41 +17352,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                             }
                         }
 
-                        // Strategy 2: GLOBAL SCAN (Step 1136 FIX) - If still 0, look in ANY customer bucket
-                        if (price <= 0) {
-                            for (const bucketKey in data.allValues) {
-                                const vals = getEffectiveBucket(bucketKey);
-                                if (!vals || Object.keys(vals).length === 0) continue;
-
-                                const matchingOpts = data.options
-                                    .filter(o => {
-                                        const oNameNorm = normalizeCust(o.itemName || '');
-                                        const jNameNorm = normalizeCust(job.itemName || '');
-                                        return o.name === opt.name && (oNameNorm === jNameNorm || !o.itemName);
-                                    })
-                                    .sort((a, b) => {
-                                        const aLead = normalizeCust(a.leadJobName);
-                                        const bLead = normalizeCust(b.leadJobName);
-                                        return (aLead === activeLead && bLead !== activeLead) ? -1 : (aLead !== activeLead && bLead === activeLead) ? 1 : 0;
-                                    });
-
-                                for (const iOpt of matchingOpts) {
-                                    const vKey = `${iOpt.id}_${job.id}`;
-                                    const vNameKeyFull = `${iOpt.id}_${job.itemName}`;
-                                    const vNameKeyStrip = `${iOpt.id}_${stripQuoteJobPrefix(job.itemName || '')}`;
-                                    const iVal =
-                                        vals[vKey] || vals[vNameKeyFull] || vals[vNameKeyStrip];
-                                    if (iVal && parsePrice(iVal.Price) > 0) {
-                                        price = parsePrice(iVal.Price);
-                                        if (import.meta.env.DEV) {
-                                        console.log(`[calculateSummary] GLOBAL FALLBACK for job ${job.itemName}: Found price ${price} in bucket ${bucketKey}`);
-                                        }
-                                        break;
-                                    }
-                                }
-                                if (price > 0) break;
-                            }
-                        }
+                        // Do NOT scan other customers' buckets for optional prices
+                        // (e.g. ARAFCON Option2 must not appear for Hybrid / Eco Cool).
                     }
 
                     // DISTRIBUTE TO JOB GROUP (Deduplicated Aggregate per Group)
@@ -31230,12 +31343,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         if (
                                             embeddedApprovalReview &&
                                             (meta?.action === 'approved' ||
-                                                meta?.action === 'rejected') &&
+                                                meta?.action === 'rejected' ||
+                                                meta?.action === 'workflow-deleted') &&
                                             !meta?.optimistic
                                         ) {
                                             queueMicrotask(() => {
                                                 void fetchApprovalStepsFromServerRef.current?.();
                                             });
+                                        }
+                                        if (meta?.action === 'workflow-deleted') {
+                                            setApprovalRequestSent(false);
+                                            return;
                                         }
                                         if (meta?.action === 'rollback') {
                                             if (
@@ -31298,13 +31416,40 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         if (data?.approvalMode) {
                                             setApprovalWorkflowMode(String(data.approvalMode));
                                         }
-                                        if (data?.correctionRequired || data?.approvalUnlocked) {
+                                        if (
+                                            data?.workflowDeleted ||
+                                            data?.correctionRequired ||
+                                            data?.approvalUnlocked
+                                        ) {
                                             setApprovalRequestSent(false);
+                                            if (data?.workflowDeleted) {
+                                                setApprovalWorkflowSteps([]);
+                                            }
                                         } else if (data?.approvalRequestSent) {
                                             setApprovalRequestSent(true);
                                         }
                                         if (data?.draftQuoteId && !quoteDraftId) {
                                             setQuoteDraftId(Number(data.draftQuoteId));
+                                        }
+                                        if (data?.workflowDeleted && embeddedApprovalReview) {
+                                            if (typeof onApprovalActionComplete === 'function') {
+                                                onApprovalActionComplete({
+                                                    action: 'workflow-deleted',
+                                                    quoteId: null,
+                                                    draftQuoteId:
+                                                        data?.draftQuoteId ||
+                                                        approvalWorkflowDraftId ||
+                                                        quoteDraftId ||
+                                                        null,
+                                                    requestNo: String(
+                                                        enquiryData?.enquiry?.RequestNo ||
+                                                            searchTerm ||
+                                                            ''
+                                                    ).trim(),
+                                                    quoteNumber: String(quoteNumber || '').trim(),
+                                                    optimistic: false,
+                                                });
+                                            }
                                         }
                                         if (data?.quoteId) {
                                             setQuoteId(Number(data.quoteId));

@@ -114,7 +114,14 @@ function expandEnquiryRowsForExcel(rows) {
                     ...base,
                     excelQuoteDetails: textOrBlank(ln.textLine),
                     excelQuotedValue: toQuotedAmount(ln.bdTotal),
-                    excelConcernSe: textOrBlank(ln.preparedBy ?? ln.PreparedBy),
+                    excelConcernSe: textOrBlank(
+                        Array.isArray(ln.seMembers) && ln.seMembers.length
+                            ? ln.seMembers
+                                  .map((m) => String(m?.name || '').trim())
+                                  .filter(Boolean)
+                                  .join(', ')
+                            : ln.concernedSe ?? ln.preparedBy ?? ln.PreparedBy
+                    ),
                 });
             }
             continue;
@@ -167,7 +174,7 @@ function expandEnquiryRowsForExcel(rows) {
 const COLUMNS = [
     { key: 'requestNo', header: 'Enquiry No.', width: 18, type: 'text' },
     { key: 'projectName', header: 'Project Name', width: 40, type: 'text' },
-    { key: 'quoteDetails', header: 'To Customer and Quote details', width: 48, type: 'text' },
+    { key: 'quoteDetails', header: 'Customer Name: to whom we quoted', width: 48, type: 'text' },
     { key: 'quotedValue', header: 'Quoted Value', width: 18, type: 'number' },
     { key: 'concernSe', header: 'Concern SE', width: 22, type: 'text' },
     { key: 'dueDate', header: 'Due Date', width: 13, type: 'date' },

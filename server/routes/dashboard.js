@@ -3,6 +3,7 @@ const router = express.Router();
 const { sql } = require('../dbConfig');
 const runQuotedQuoteListQuery = require('../lib/quotedQuoteListQuery');
 const mapQuoteListingRows = require('../lib/mapQuoteListingRows');
+const { pickConcernedSeMembersForQuote } = require('../lib/pickConcernedSeMembersForQuote');
 
 /** Avoid duplicate Master_ConcernedSE / Master_EnquiryFor hits on rapid dashboard + modal calls. */
 const DASHBOARD_ACCESS_CACHE_MS = 90_000;
@@ -14,8 +15,10 @@ const dashboardHistoryCache = new Map();
 const DASHBOARD_HISTORY_CACHE_MAX = 40;
 
 function dashboardHistoryCacheKey(query) {
+    /* v3: New/Rev Quote attributed by ConcernedSE assignment (all SEs), not PreparedBy. */
     const q = query || {};
     return [
+        'v3-se-assigned',
         String(q.userEmail || '').toLowerCase().trim(),
         String(q.userRole || '').toLowerCase().trim(),
         String(q.division || ''),
@@ -162,40 +165,61 @@ async function resolveDashboardAccessMode(userEmail, userRole) {
 }
 
 /**
+ * Quote must belong to the given SE via ConcernedSE assignment (any preparer).
+ * Prefer OwnJob match when ConcernedSE.OwnJob is populated; otherwise any assignment on the enquiry.
+ * @param {'@salesEngineer'|'@currentUserName'} seParamSql
+ */
+function buildSeAssignedQuoteScopeSql(seParamSql) {
+    return `
+            AND EXISTS (
+                SELECT 1
+                FROM ConcernedSE cseQ
+                WHERE cseQ.RequestNo = eq.RequestNo
+                  AND UPPER(LTRIM(RTRIM(ISNULL(cseQ.SEName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(${seParamSql}, N''))))
+                  AND (
+                    NULLIF(LTRIM(RTRIM(ISNULL(cseQ.OwnJob, N''))), N'') IS NULL
+                    OR NULLIF(LTRIM(RTRIM(ISNULL(eq.OwnJob, N''))), N'') IS NULL
+                    OR UPPER(LTRIM(RTRIM(ISNULL(eq.OwnJob, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(cseQ.OwnJob, N''))))
+                    OR UPPER(LTRIM(RTRIM(ISNULL(eq.OwnJob, N'')))) LIKE UPPER(LTRIM(RTRIM(ISNULL(cseQ.OwnJob, N'')))) + N'%'
+                    OR UPPER(LTRIM(RTRIM(ISNULL(cseQ.OwnJob, N'')))) LIKE UPPER(LTRIM(RTRIM(ISNULL(eq.OwnJob, N'')))) + N'%'
+                  )
+            )`;
+}
+
+/**
  * SQL fragment for EnquiryQuotes `eq` in FilteredQuotes / calendar quote chips / day popups.
- * - **Admin/System / Management:** no preparer/dept restriction (optional SE filter only).
- *   They may choose All Divisions and see every division they are entitled to manage.
- * - **Assigned (non–CC):** quote must be prepared by the logged-in user; optional SE filter.
- * - **Department (CC) + All Divisions:** only quotes for divisions the user can access
- *   (CCMailIds on Master_EnquiryFor via OwnJob / DivisionCode, or Master_ConcernedSE.Department,
- *   or prepared by the user) — never other divisions on a shared enquiry.
- *   When a single Division is selected, the caller also ANDs the division-code clause.
+ * New/Rev Quote counts are always by **assigned SE** (ConcernedSE), never by PreparedBy.
+ * - Specific SE filter (all roles): quotes where that SE is assigned (OwnJob match when present).
+ * - Assigned (non–CC) user, All SEs: quotes where the logged-in SE is assigned.
+ * - Department (CC) + All SEs: quotes in divisions the user can access (CCMailIds / dept),
+ *   or prepared by the user — never other divisions on a shared enquiry.
+ * - Admin/Management + All SEs: unrestricted.
  */
 function buildDashboardQuoteScopeFilter(isDeptMode, salesEngineer, options = {}) {
     const unrestricted = options.isAdmin === true || options.isManagementDept === true;
-    const se = salesEngineer && String(salesEngineer).trim() !== '' && String(salesEngineer).trim().toLowerCase() !== 'all';
-    const seFrag = `
-                AND (
-                    UPPER(LTRIM(RTRIM(ISNULL(eq.PreparedBy, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@salesEngineer, ''))))
-                    OR EXISTS (
-                        SELECT 1
-                        FROM Master_ConcernedSE mcs
-                        WHERE UPPER(LTRIM(RTRIM(ISNULL(mcs.FullName, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@salesEngineer, ''))))
-                          AND LOWER(LTRIM(RTRIM(ISNULL(eq.PreparedByEmail, '')))) = LOWER(LTRIM(RTRIM(ISNULL(mcs.EmailId, ''))))
-                    )
-                )`;
+    const seName = String(salesEngineer || '').trim();
+    const seSelected = seName !== '' && seName.toLowerCase() !== 'all';
+
+    /* Any viewer picking an SE: attribute quotes by that SE's ConcernedSE assignment. */
+    if (seSelected) {
+        return buildSeAssignedQuoteScopeSql('@salesEngineer');
+    }
 
     if (unrestricted) {
-        return se ? seFrag : '';
+        return '';
+    }
+
+    /* Regular SE locked to themselves: still attribute by their ConcernedSE assignment. */
+    if (!isDeptMode) {
+        return buildSeAssignedQuoteScopeSql('@currentUserName');
     }
 
     const preparedBySelf = `
                 LOWER(LTRIM(RTRIM(ISNULL(eq.PreparedByEmail, '')))) = LOWER(LTRIM(RTRIM(ISNULL(@currentUserEmail, ''))))
                 OR UPPER(LTRIM(RTRIM(ISNULL(eq.PreparedBy, '')))) = UPPER(LTRIM(RTRIM(ISNULL(@currentUserName, ''))))`;
 
-    if (isDeptMode) {
-        // All Divisions (and any division view): keep quotes inside the user's accessible divisions only.
-        let q = `
+    // CC coordinator, All SEs: keep quotes inside the user's accessible divisions only.
+    return `
             AND (
                 ${preparedBySelf}
                 OR EXISTS (
@@ -236,17 +260,6 @@ function buildDashboardQuoteScopeFilter(isDeptMode, salesEngineer, options = {})
                       )
                 )
             )`;
-        if (se) q += seFrag;
-        return q;
-    }
-
-    let q = `
-            AND (
-                NULLIF(LTRIM(RTRIM(ISNULL(@currentUserEmail, ''))), '') IS NULL
-                OR ${preparedBySelf}
-            )`;
-    if (se) q += seFrag;
-    return q;
 }
 
 /** Options for {@link buildDashboardQuoteScopeFilter} from resolveDashboardAccessMode + role. */
@@ -261,15 +274,72 @@ function quoteScopeOptionsFromResolved(resolved, userRole) {
 const SQL_NO_QUOTE_FOR_ENQUIRY = (emAlias = 'em') =>
     `NOT EXISTS (SELECT 1 FROM EnquiryQuotes eq WHERE eq.RequestNo = ${emAlias}.RequestNo)`;
 
+function sqlNVarCharLiteral(s) {
+    return `N'${String(s || '').replace(/'/g, "''")}'`;
+}
+
+/** QuoteNumber matches any of the given DivisionCode values (pre-resolved; avoids Master_EnquiryFor per row). */
+function sqlQuoteNumberMatchesDivisionCodes(eqAlias, codes) {
+    const list = (Array.isArray(codes) ? codes : [])
+        .map((c) => String(c || '').trim().toUpperCase())
+        .filter(Boolean);
+    if (!list.length) return '1 = 0';
+    return list
+        .map((code) => {
+            const lit = sqlNVarCharLiteral(code);
+            return `(
+                CHARINDEX(N'/' + ${lit} + N'/', UPPER(ISNULL(${eqAlias}.QuoteNumber, N''))) > 0
+                OR CHARINDEX(N'-' + ${lit} + N'/', UPPER(ISNULL(${eqAlias}.QuoteNumber, N''))) > 0
+                OR CHARINDEX(N'/' + ${lit} + N'-', UPPER(ISNULL(${eqAlias}.QuoteNumber, N''))) > 0
+            )`;
+        })
+        .join('\n                OR ');
+}
+
+/** Resolve Master_EnquiryFor.DivisionCode values for a dashboard division label (once per request). */
+async function resolveDashboardDivisionCodes(division) {
+    const div = String(division || '').trim();
+    if (!div || div.toLowerCase() === 'all') return [];
+    try {
+        const result = await sql.query`
+            SELECT DISTINCT LTRIM(RTRIM(ISNULL(DivisionCode, N''))) AS DivisionCode
+            FROM Master_EnquiryFor
+            WHERE (
+                UPPER(LTRIM(RTRIM(ISNULL(DepartmentName, N'')))) = UPPER(LTRIM(RTRIM(${div})))
+                OR UPPER(LTRIM(RTRIM(ISNULL(ItemName, N'')))) = UPPER(LTRIM(RTRIM(${div})))
+            )
+              AND LTRIM(RTRIM(ISNULL(DivisionCode, N''))) <> N''
+        `;
+        return (result.recordset || [])
+            .map((r) => String(r.DivisionCode || '').trim())
+            .filter(Boolean);
+    } catch (err) {
+        console.warn('[dashboard] resolveDashboardDivisionCodes:', err.message);
+        return [];
+    }
+}
+
 /**
  * Division-aware "no quote" gate for Due/Lapsed.
  * When a division is selected, an enquiry remains Due/Lapsed until that division has a quote,
  * even if some other division on the same enquiry already quoted it.
+ * Pass `divisionCodes` when already resolved to skip correlated Master_EnquiryFor lookups.
  */
-function buildDashboardNoQuoteSql(emAlias = 'em', division = '') {
+function buildDashboardNoQuoteSql(emAlias = 'em', division = '', divisionCodes = null) {
     const div = String(division || '').trim();
     if (!div || div.toLowerCase() === 'all') {
         return SQL_NO_QUOTE_FOR_ENQUIRY(emAlias);
+    }
+    const codes = Array.isArray(divisionCodes) ? divisionCodes : null;
+    if (codes && codes.length) {
+        return `NOT EXISTS (
+        SELECT 1
+        FROM EnquiryQuotes eq
+        WHERE eq.RequestNo = ${emAlias}.RequestNo
+          AND (
+                ${sqlQuoteNumberMatchesDivisionCodes('eq', codes)}
+          )
+    )`;
     }
     return `NOT EXISTS (
         SELECT 1
@@ -325,24 +395,29 @@ function extractLCodeFromLeadJobName(s) {
     return '';
 }
 
-function buildDashboardQuoteDetailLine(qt) {
-    const toName = String(qt.ToName || '').trim();
-    const ownJob = String(qt.OwnJob || '').trim();
-    const lCode = extractLCodeFromLeadJobName(qt.LeadJob);
-    let label;
-    if (lCode && toName) label = `${toName} - ${lCode}`;
-    else if (lCode && ownJob) label = `${ownJob} - ${lCode}`;
-    else if (ownJob) label = ownJob;
-    else label = toName || '—';
+/**
+ * Same customer label as Quote Search: EnquiryQuotes.ToName (whom we quoted),
+ * including internal customers like "Civil Project". Never substitute OwnJob/LeadJob.
+ */
+function buildDashboardQuoteDetailLine(qt, seRowsForReq = []) {
     const qn = String(qt.QuoteNumber || '').trim();
+    const toName = String(qt.ToName || '').trim();
+    const lCode =
+        extractLCodeFromLeadJobName(qt.LeadJob) || extractLCodeFromLeadJobName(qn) || '';
+    const label = lCode && toName ? `${toName} - ${lCode}` : toName || '—';
     const textLine = `${label} (${qn} - ${fmtDashboardQuoteDetailDate(qt.QuoteDate)})`;
     const ta = parseFloat(qt.TotalAmount);
     const quoteYmd = String(qt.QuoteYmd || '').trim() || null;
+    const seMembers = pickConcernedSeMembersForQuote(qt, seRowsForReq);
+    const concernedSe = seMembers.map((m) => m.name).join(', ');
     return {
         textLine,
         quoteDate: qt.QuoteDate,
         quoteYmd,
-        preparedBy: String(qt.PreparedBy || '').trim(),
+        /** All assigned SEs for this OwnJob; accountable flagged for bold UI (like Enquiry). */
+        seMembers,
+        concernedSe,
+        preparedBy: concernedSe || String(qt.PreparedBy || '').trim(),
         bdTotal: !Number.isNaN(ta) && ta > 0 ? ta : null,
         revisionNo: Number(qt.RevisionNo) || 0,
     };
@@ -375,8 +450,36 @@ async function fetchDashboardCalendarQuoteRows(request, { calendarEmBaseFilterSq
         ORDER BY em.DueDate ASC, em.RequestNo ASC, eq.RevisionNo ASC
     `;
     const result = await request.query(sqlText);
+    const rows = result.recordset || [];
+    const reqNos = [...new Set(rows.map((r) => String(r.RequestNo || '').trim()).filter(Boolean))];
+    const seByReq = new Map();
+    if (reqNos.length) {
+        const esc = (s) => String(s).replace(/'/g, "''");
+        const inCsv = reqNos.map((id) => `'${esc(id)}'`).join(', ');
+        const seRes = await request.query(`
+            SELECT
+                cse.RequestNo,
+                cse.SEName,
+                cse.accountability,
+                cse.leadjobcode,
+                cse.ownjob,
+                mcs.Department
+            FROM ConcernedSE cse
+            LEFT JOIN Master_ConcernedSE mcs
+                ON UPPER(LTRIM(RTRIM(ISNULL(mcs.FullName, N'')))) = UPPER(LTRIM(RTRIM(ISNULL(cse.SEName, N''))))
+            WHERE cse.RequestNo IN (${inCsv})
+            ORDER BY cse.RequestNo, cse.SEName
+        `);
+        for (const r of seRes.recordset || []) {
+            const req = String(r.RequestNo || '').trim();
+            if (!req) continue;
+            if (!seByReq.has(req)) seByReq.set(req, []);
+            seByReq.get(req).push(r);
+        }
+    }
+
     const byReq = new Map();
-    for (const r of result.recordset || []) {
+    for (const r of rows) {
         const req = String(r.RequestNo || '').trim();
         if (!req) continue;
         if (!byReq.has(req)) {
@@ -388,7 +491,22 @@ async function fetchDashboardCalendarQuoteRows(request, { calendarEmBaseFilterSq
                 ListQuoteDetailLines: [],
             });
         }
-        byReq.get(req).ListQuoteDetailLines.push(buildDashboardQuoteDetailLine(r));
+        byReq.get(req).ListQuoteDetailLines.push(
+            buildDashboardQuoteDetailLine(r, seByReq.get(req) || [])
+        );
+    }
+    for (const row of byReq.values()) {
+        const names = [
+            ...new Set(
+                (row.ListQuoteDetailLines || []).flatMap((ln) => {
+                    if (Array.isArray(ln.seMembers) && ln.seMembers.length) {
+                        return ln.seMembers.map((m) => String(m.name || '').trim()).filter(Boolean);
+                    }
+                    return [String(ln.concernedSe || ln.preparedBy || '').trim()].filter(Boolean);
+                }),
+            ),
+        ];
+        if (names.length) row.ListPreparedBy = names.join(', ');
     }
     return [...byReq.values()];
 }
@@ -421,10 +539,11 @@ function reconcileCalendarTotalsFromDaily(daily, totalsFromSql) {
 }
 
 /** Shared calendar filter SQL + parameter binding (matches legacy GET /calendar). */
-function bindDashboardCalendarFilters(request, query, resolved) {
+function bindDashboardCalendarFilters(request, query, resolved, options = {}) {
     const { division, salesEngineer, userEmail, userName, userRole } = query;
     const effectiveUserName = (resolved.fullName || userName || '').toString().trim();
     const isDeptMode = resolved.accessMode === 'department';
+    const divisionCodes = Array.isArray(options.divisionCodes) ? options.divisionCodes : null;
 
     let baseFilter = '';
     if (division && division !== 'All') {
@@ -461,7 +580,14 @@ function bindDashboardCalendarFilters(request, query, resolved) {
         quoteScopeOptionsFromResolved(resolved, userRole)
     );
     if (division && division !== 'All') {
-        quoteScopeFilter += `
+        if (divisionCodes && divisionCodes.length) {
+            quoteScopeFilter += `
+                AND (
+                    ${sqlQuoteNumberMatchesDivisionCodes('eq', divisionCodes)}
+                )
+            `;
+        } else {
+            quoteScopeFilter += `
                 AND EXISTS (
                     SELECT 1
                     FROM Master_EnquiryFor mefQ
@@ -477,23 +603,53 @@ function bindDashboardCalendarFilters(request, query, resolved) {
                       )
                 )
             `;
+        }
     }
 
     const todayStr = getDashboardTodayYmd(query);
     request.input('today', sql.VarChar(10), todayStr);
 
-    return { baseFilter, quoteScopeFilter, todayStr };
+    return { baseFilter, quoteScopeFilter, todayStr, divisionCodes };
 }
 
-/** Daily grid + monthly totals in one DB round-trip. */
-function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, division = '') {
-    const dueNoQuoteSql = buildDashboardNoQuoteSql('fe', division);
-    /* FilteredQuotes CTE removed (was unused). Date bounds stay on the Dates branches. */
-    const dailyPart = `
+/**
+ * Calendar KPI SQL.
+ * @param {{ groupBy?: 'day'|'month', divisionCodes?: string[] }} [options]
+ * - day: left-panel calendar chips
+ * - month: right-panel history (totals only; much cheaper GROUP BY)
+ * FilteredEnquiries is date-bounded so history does not scan the entire division.
+ */
+function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, division = '', options = {}) {
+    const groupByMonth = options.groupBy === 'month';
+    const divisionCodes = Array.isArray(options.divisionCodes) ? options.divisionCodes : null;
+    const dueNoQuoteSql = buildDashboardNoQuoteSql('fe', division, divisionCodes);
+    const periodExpr = groupByMonth
+        ? `CONVERT(VARCHAR(7), DateVal, 23)`
+        : `CONVERT(VARCHAR(10), DateVal, 23)`;
+    const periodAlias = groupByMonth ? 'YearMonth' : 'Date';
+
+    /* Bound FE to the requested window so 14-month history does not load every enquiry ever. */
+    const feDateBound = `
+                AND (
+                    (em.EnquiryDate IS NOT NULL AND em.EnquiryDate >= @rangeStart AND em.EnquiryDate < @rangeEnd)
+                    OR (em.DueDate IS NOT NULL AND em.DueDate >= @rangeStart AND em.DueDate < @rangeEnd)
+                    OR (em.SiteVisitDate IS NOT NULL AND em.SiteVisitDate >= @rangeStart AND em.SiteVisitDate < @rangeEnd)
+                    OR EXISTS (
+                        SELECT 1
+                        FROM EnquiryQuotes eqFe
+                        WHERE eqFe.RequestNo = em.RequestNo
+                          AND eqFe.QuoteDate IS NOT NULL
+                          AND eqFe.QuoteDate >= @rangeStart
+                          AND eqFe.QuoteDate < @rangeEnd
+                    )
+                )`;
+
+    return `
             WITH FilteredEnquiries AS (
                 SELECT RequestNo, EnquiryDate, DueDate, SiteVisitDate, Status
                 FROM EnquiryMaster em
                 WHERE 1=1 ${baseFilter}
+                ${feDateBound}
             ),
             Dates AS (
                 SELECT EnquiryDate as DateVal, 'Enquiry' as Type FROM FilteredEnquiries WHERE EnquiryDate >= @rangeStart AND EnquiryDate < @rangeEnd
@@ -521,7 +677,7 @@ function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, divi
                   AND eq.QuoteDate >= @rangeStart AND eq.QuoteDate < @rangeEnd
             )
             SELECT
-                CONVERT(VARCHAR(10), DateVal, 23) as Date,
+                ${periodExpr} as ${periodAlias},
                 SUM(CASE WHEN Type = 'Enquiry' THEN 1 ELSE 0 END) as Enquiries,
                 SUM(CASE WHEN Type = 'Due' THEN 1 ELSE 0 END) as Due,
                 SUM(CASE WHEN Type = 'Lapsed' THEN 1 ELSE 0 END) as Lapsed,
@@ -531,9 +687,7 @@ function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, divi
                 SUM(CASE WHEN Type IN ('NewQuote', 'RevQuote') THEN 1 ELSE 0 END) as Quoted
             FROM Dates
             WHERE DateVal IS NOT NULL
-            GROUP BY CONVERT(VARCHAR(10), DateVal, 23)`;
-
-    return dailyPart;
+            GROUP BY ${periodExpr}`;
 }
 
 function splitDashboardCalendarBatchResult(result) {
@@ -556,11 +710,16 @@ function bindCalendarRange(request, fromYear, fromMonth, toYear, toMonth) {
 
 async function runDashboardCalendarMonthQuery(reqQuery, month, year) {
     const resolved = await resolveDashboardAccessMode(reqQuery.userEmail, reqQuery.userRole);
+    const divisionCodes = await resolveDashboardDivisionCodes(reqQuery.division);
     const request = new sql.Request();
-    const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(request, reqQuery, resolved);
+    const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(request, reqQuery, resolved, {
+        divisionCodes,
+    });
     bindCalendarRange(request, Number(year), Number(month), Number(year), Number(month));
     const result = await request.query(
-        buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, reqQuery.division)
+        buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, reqQuery.division, {
+            divisionCodes,
+        })
     );
     return splitDashboardCalendarBatchResult(result);
 }
@@ -897,38 +1056,72 @@ router.get('/calendars-history', async (req, res) => {
         const ordered = monthList
             .slice()
             .sort((a, b) => a.year - b.year || a.month - b.month);
-        const request = new sql.Request();
-        const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(
-            request,
-            req.query,
-            resolved,
-        );
-        bindCalendarRange(
-            request,
-            ordered[0].year,
-            ordered[0].month,
-            ordered.at(-1).year,
-            ordered.at(-1).month,
-        );
-        const result = await request.query(
-            buildDashboardCalendarMergedBatchSql(
-                baseFilter,
-                quoteScopeFilter,
-                req.query.division,
-            ),
+        const divisionCodes = await resolveDashboardDivisionCodes(req.query.division);
+
+        const emptyTotals = reconcileCalendarTotalsFromDaily([], null);
+        const totalsFromMonthRow = (row) => ({
+            enquiries: Number(row?.Enquiries) || 0,
+            due: Number(row?.Due) || 0,
+            lapsed: Number(row?.Lapsed) || 0,
+            newQuote: Number(row?.NewQuote) || 0,
+            revQuote: Number(row?.RevQuote) || 0,
+            quoted: Number(row?.Quoted) || 0,
+            siteVisits: Number(row?.SiteVisits) || 0,
+            _sqlTotals: null,
+        });
+
+        /** Run one history window (month-aggregated). Split long ranges for parallel SQL. */
+        const runHistoryWindow = async (fromMeta, toMeta) => {
+            const request = new sql.Request();
+            request.timeout = 120000;
+            const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(
+                request,
+                req.query,
+                resolved,
+                { divisionCodes },
+            );
+            bindCalendarRange(request, fromMeta.year, fromMeta.month, toMeta.year, toMeta.month);
+            const result = await request.query(
+                buildDashboardCalendarMergedBatchSql(
+                    baseFilter,
+                    quoteScopeFilter,
+                    req.query.division,
+                    { groupBy: 'month', divisionCodes },
+                ),
+            );
+            return result.recordset || [];
+        };
+
+        /*
+         * Split ~14 months into two parallel windows so wall-clock drops ~2× under load.
+         * Right panel only needs month totals (no daily rows).
+         */
+        const mid = Math.ceil(ordered.length / 2) || 1;
+        const windows = [
+            ordered.slice(0, mid),
+            ordered.slice(mid),
+        ].filter((w) => w.length > 0);
+        const windowRows = await Promise.all(
+            windows.map((w) => runHistoryWindow(w[0], w[w.length - 1])),
         );
         const tSql = Date.now();
-        const daily = result.recordset || [];
+        const monthRows = windowRows.flat();
         const monthPayloadByKey = new Map();
+        for (const row of monthRows) {
+            const ym = String(row.YearMonth || '').trim();
+            const m = ym.match(/^(\d{4})-(\d{2})$/);
+            if (!m) continue;
+            const key = dashboardMonthPayloadKey(Number(m[1]), Number(m[2]));
+            monthPayloadByKey.set(key, {
+                daily: [],
+                totals: totalsFromMonthRow(row),
+            });
+        }
         for (const meta of monthList) {
             const key = dashboardMonthPayloadKey(meta.year, meta.month);
-            if (monthPayloadByKey.has(key)) continue;
-            const prefix = `${meta.year}-${String(meta.month).padStart(2, '0')}`;
-            const rows = daily.filter((row) => String(row.Date).startsWith(prefix));
-            monthPayloadByKey.set(key, {
-                daily: rows,
-                totals: reconcileCalendarTotalsFromDaily(rows, null),
-            });
+            if (!monthPayloadByKey.has(key)) {
+                monthPayloadByKey.set(key, { daily: [], totals: emptyTotals });
+            }
         }
 
         const yearTotals = sumDashboardYearTotals(monthPayloadByKey, anchorY);
@@ -940,12 +1133,12 @@ router.get('/calendars-history', async (req, res) => {
                 const row =
                     monthPayloadByKey.get(dashboardMonthPayloadKey(meta.year, meta.month)) || {
                         daily: [],
-                        totals: reconcileCalendarTotalsFromDaily([], null),
+                        totals: emptyTotals,
                     };
                 return {
                     month: meta.month,
                     year: meta.year,
-                    daily: row.daily,
+                    daily: [],
                     totals: row.totals,
                 };
             }),
@@ -958,7 +1151,7 @@ router.get('/calendars-history', async (req, res) => {
         }
 
         console.log(
-            `[dashboard/calendars-history] accessMs=${tAccess - t0} sqlMs=${tSql - tAccess} totalMs=${Date.now() - t0} days=${daily.length} div=${String(req.query.division || '-').slice(0, 24)}`,
+            `[dashboard/calendars-history] accessMs=${tAccess - t0} sqlMs=${tSql - tAccess} totalMs=${Date.now() - t0} months=${monthRows.length} div=${String(req.query.division || '-').slice(0, 24)}`,
         );
         res.json(payload);
     } catch (err) {
@@ -976,13 +1169,21 @@ router.get('/calendars-pair', async (req, res) => {
             return res.status(400).json({ error: 'leftMonth, leftYear, rightMonth, and rightYear are required' });
         }
         const resolved = await resolveDashboardAccessMode(req.query.userEmail, req.query.userRole);
+        const divisionCodes = await resolveDashboardDivisionCodes(req.query.division);
 
         const runOne = async (m, y) => {
             const request = new sql.Request();
-            const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(request, req.query, resolved);
+            const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(
+                request,
+                req.query,
+                resolved,
+                { divisionCodes },
+            );
             bindCalendarRange(request, Number(y), Number(m), Number(y), Number(m));
             const result = await request.query(
-                buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, req.query.division)
+                buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, req.query.division, {
+                    divisionCodes,
+                }),
             );
             return splitDashboardCalendarBatchResult(result);
         };

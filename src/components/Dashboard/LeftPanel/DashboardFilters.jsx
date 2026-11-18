@@ -54,18 +54,28 @@ const DashboardFilters = ({ filters, setFilters, masters, viewMode = 'all' }) =>
         })()
     );
 
-    const lockedDivisionValue =
-        isCoordinator || !regularUserDivisionOptions.length
-            ? filters.division
-            : regularUserDivisionOptions.includes(filters.division)
-              ? filters.division
-              : regularUserDivisionOptions[0];
-    const lockedSeValue =
-        isCoordinator || !regularUserSeOptions.length
-            ? filters.salesEngineer
-            : regularUserSeOptions.includes(filters.salesEngineer)
-              ? filters.salesEngineer
-              : regularUserSeOptions[0];
+    const lockedDivisionValue = (() => {
+        const div = String(filters.division || '').trim();
+        if (isCoordinator) {
+            if (!div || div.toLowerCase() === 'all') return 'All';
+            return regularUserDivisionOptions.includes(div) ? div : 'All';
+        }
+        if (!regularUserDivisionOptions.length) return filters.division;
+        return regularUserDivisionOptions.includes(div)
+            ? div
+            : regularUserDivisionOptions[0];
+    })();
+    const lockedSeValue = (() => {
+        if (!isCoordinator) {
+            if (!regularUserSeOptions.length) return filters.salesEngineer;
+            return regularUserSeOptions.includes(filters.salesEngineer)
+                ? filters.salesEngineer
+                : regularUserSeOptions[0];
+        }
+        const se = String(filters.salesEngineer || '').trim();
+        if (!se || se.toLowerCase() === 'all') return 'All';
+        return dashboardSeOptions.includes(se) ? se : 'All';
+    })();
 
     const canPickDivision = isCoordinator || regularUserDivisionOptions.length > 1;
     const canPickSe = isCoordinator;

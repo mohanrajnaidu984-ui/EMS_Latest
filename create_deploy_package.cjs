@@ -16,7 +16,7 @@ const skipUploads = process.argv.includes('--skip-uploads');
 const withNodeModules = process.argv.includes('--with-node-modules');
 /** Optional: pin puppeteer@19.4.0 for Windows Server 2012 R2 (regenerates package-lock). Default: keep lock in sync. */
 const pinPuppeteer2012R2 = process.argv.includes('--ws2012');
-const BASELINE_VERSION = '2026-11-16-v1';
+const BASELINE_VERSION = '2026-11-18-v2';
 /** Must match server/routes/quotePdf.js quotePdfCssVersion */
 const PDF_CSS_VERSION = '2026-09-13-v7';
 const FRONTEND_BUNDLE_MARKERS = [
