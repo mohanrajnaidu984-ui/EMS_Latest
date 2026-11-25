@@ -4,6 +4,7 @@ const { sql } = require('../dbConfig');
 const runQuotedQuoteListQuery = require('../lib/quotedQuoteListQuery');
 const mapQuoteListingRows = require('../lib/mapQuoteListingRows');
 const { pickConcernedSeMembersForQuote } = require('../lib/pickConcernedSeMembersForQuote');
+const { mapConcernedSEAssignmentsFromRows } = require('../lib/concernedSeAssignments.cjs');
 
 /** Avoid duplicate Master_ConcernedSE / Master_EnquiryFor hits on rapid dashboard + modal calls. */
 const DASHBOARD_ACCESS_CACHE_MS = 90_000;
@@ -13,6 +14,7 @@ const dashboardAccessCache = new Map();
 const DASHBOARD_HISTORY_CACHE_MS = 90_000;
 const dashboardHistoryCache = new Map();
 const DASHBOARD_HISTORY_CACHE_MAX = 40;
+const pendingCalendarScopes = new Map();
 
 function dashboardHistoryCacheKey(query) {
     /* v3: New/Rev Quote attributed by ConcernedSE assignment (all SEs), not PreparedBy. */
@@ -551,7 +553,7 @@ function bindDashboardCalendarFilters(request, query, resolved, options = {}) {
             baseFilter += ` AND EXISTS (
                     SELECT 1
                     FROM EnquiryFor ef
-                    JOIN Master_EnquiryFor mef ON (ef.ItemName = mef.ItemName OR ef.ItemName LIKE '% - ' + mef.ItemName OR ef.ItemName LIKE '% - ' + mef.ItemName)
+                    JOIN Master_EnquiryFor mef ON (ef.ItemName = mef.ItemName OR ef.ItemName LIKE '% - ' + mef.ItemName)
                     WHERE ef.RequestNo = em.RequestNo
                       AND mef.DepartmentName = @division
                 ) `;
@@ -617,7 +619,7 @@ function bindDashboardCalendarFilters(request, query, resolved, options = {}) {
  * @param {{ groupBy?: 'day'|'month', divisionCodes?: string[] }} [options]
  * - day: left-panel calendar chips
  * - month: right-panel history (totals only; much cheaper GROUP BY)
- * FilteredEnquiries is date-bounded so history does not scan the entire division.
+ * Each branch bounds its own date column, so it can use that column's index.
  */
 function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, division = '', options = {}) {
     const groupByMonth = options.groupBy === 'month';
@@ -628,43 +630,20 @@ function buildDashboardCalendarMergedBatchSql(baseFilter, quoteScopeFilter, divi
         : `CONVERT(VARCHAR(10), DateVal, 23)`;
     const periodAlias = groupByMonth ? 'YearMonth' : 'Date';
 
-    /* Bound FE to the requested window so 14-month history does not load every enquiry ever. */
-    const feDateBound = `
-                AND (
-                    (em.EnquiryDate IS NOT NULL AND em.EnquiryDate >= @rangeStart AND em.EnquiryDate < @rangeEnd)
-                    OR (em.DueDate IS NOT NULL AND em.DueDate >= @rangeStart AND em.DueDate < @rangeEnd)
-                    OR (em.SiteVisitDate IS NOT NULL AND em.SiteVisitDate >= @rangeStart AND em.SiteVisitDate < @rangeEnd)
-                    OR EXISTS (
-                        SELECT 1
-                        FROM EnquiryQuotes eqFe
-                        WHERE eqFe.RequestNo = em.RequestNo
-                          AND eqFe.QuoteDate IS NOT NULL
-                          AND eqFe.QuoteDate >= @rangeStart
-                          AND eqFe.QuoteDate < @rangeEnd
-                    )
-                )`;
-
     return `
             WITH FilteredEnquiries AS (
-                SELECT RequestNo, EnquiryDate, DueDate, SiteVisitDate, Status
+                SELECT RequestNo, EnquiryDate, DueDate, SiteVisitDate
                 FROM EnquiryMaster em
                 WHERE 1=1 ${baseFilter}
-                ${feDateBound}
             ),
             Dates AS (
                 SELECT EnquiryDate as DateVal, 'Enquiry' as Type FROM FilteredEnquiries WHERE EnquiryDate >= @rangeStart AND EnquiryDate < @rangeEnd
                 UNION ALL
-                SELECT fe.DueDate as DateVal, 'Due' as Type
+                SELECT fe.DueDate as DateVal,
+                    CASE WHEN CAST(fe.DueDate AS DATE) >= CAST(@today AS DATE) THEN 'Due' ELSE 'Lapsed' END as Type
                 FROM FilteredEnquiries fe
                 WHERE fe.DueDate >= @rangeStart AND fe.DueDate < @rangeEnd
-                  AND CAST(fe.DueDate AS DATE) >= CAST(@today AS DATE)
                   AND ${dueNoQuoteSql}
-                UNION ALL
-                SELECT fe.DueDate as DateVal, 'Lapsed' as Type
-                FROM FilteredEnquiries fe
-                WHERE fe.DueDate >= @rangeStart AND fe.DueDate < @rangeEnd
-                AND CAST(fe.DueDate AS DATE) < CAST(@today AS DATE)
-                AND ${dueNoQuoteSql}
                 UNION ALL
                 SELECT SiteVisitDate as DateVal, 'SiteVisit' as Type FROM FilteredEnquiries WHERE SiteVisitDate >= @rangeStart AND SiteVisitDate < @rangeEnd
                 UNION ALL
@@ -708,9 +687,22 @@ function bindCalendarRange(request, fromYear, fromMonth, toYear, toMonth) {
     request.input('rangeEnd', sql.Date, new Date(Date.UTC(toYear, toMonth, 1)));
 }
 
+/** Concurrent calendar and history requests for the same scope share the master-data lookups. */
+function resolveDashboardCalendarScope({ userEmail, userRole, division }) {
+    const key = JSON.stringify([userEmail, userRole, division]);
+    const pending = pendingCalendarScopes.get(key);
+    if (pending) return pending;
+
+    const scope = Promise.all([
+        resolveDashboardAccessMode(userEmail, userRole),
+        resolveDashboardDivisionCodes(division),
+    ]).finally(() => pendingCalendarScopes.delete(key));
+    pendingCalendarScopes.set(key, scope);
+    return scope;
+}
+
 async function runDashboardCalendarMonthQuery(reqQuery, month, year) {
-    const resolved = await resolveDashboardAccessMode(reqQuery.userEmail, reqQuery.userRole);
-    const divisionCodes = await resolveDashboardDivisionCodes(reqQuery.division);
+    const [resolved, divisionCodes] = await resolveDashboardCalendarScope(reqQuery);
     const request = new sql.Request();
     const { baseFilter, quoteScopeFilter } = bindDashboardCalendarFilters(request, reqQuery, resolved, {
         divisionCodes,
@@ -1043,7 +1035,7 @@ router.get('/calendars-history', async (req, res) => {
             count,
             futureCount,
         );
-        const resolved = await resolveDashboardAccessMode(req.query.userEmail, req.query.userRole);
+        const [resolved, divisionCodes] = await resolveDashboardCalendarScope(req.query);
         const tAccess = Date.now();
 
         const anchorY = parseInt(anchorYear, 10);
@@ -1056,7 +1048,6 @@ router.get('/calendars-history', async (req, res) => {
         const ordered = monthList
             .slice()
             .sort((a, b) => a.year - b.year || a.month - b.month);
-        const divisionCodes = await resolveDashboardDivisionCodes(req.query.division);
 
         const emptyTotals = reconcileCalendarTotalsFromDaily([], null);
         const totalsFromMonthRow = (row) => ({
@@ -1168,8 +1159,7 @@ router.get('/calendars-pair', async (req, res) => {
         if (!leftMonth || !leftYear || !rightMonth || !rightYear) {
             return res.status(400).json({ error: 'leftMonth, leftYear, rightMonth, and rightYear are required' });
         }
-        const resolved = await resolveDashboardAccessMode(req.query.userEmail, req.query.userRole);
-        const divisionCodes = await resolveDashboardDivisionCodes(req.query.division);
+        const [resolved, divisionCodes] = await resolveDashboardCalendarScope(req.query);
 
         const runOne = async (m, y) => {
             const request = new sql.Request();
@@ -1554,6 +1544,50 @@ router.get('/enquiries', async (req, res) => {
                 console.error('Error fetching EnquiryFor jobs for dashboard:', err);
                 enquiries.forEach((row) => {
                     row.EnquiryForJobs = [];
+                });
+            }
+
+            // ConcernedSE assignments (accountability) — same shape as Enquiry Search so
+            // accountable SE names render bold in the Divisions column for multi-SE rows.
+            try {
+                const seReq = new sql.Request();
+                requestNos.forEach((no, i) => {
+                    seReq.input(`se${i}`, sql.NVarChar, String(no));
+                });
+                const sePlaceholders = requestNos.map((_, i) => `@se${i}`).join(', ');
+                const seRes = await seReq.query(`
+                    SELECT RequestNo, SEName, LeadJobCode, Accountability, OwnJob
+                    FROM ConcernedSE
+                    WHERE RequestNo IN (${sePlaceholders})
+                    ORDER BY RequestNo, SEName
+                `);
+                const seByReq = {};
+                (seRes.recordset || []).forEach((r) => {
+                    const k = String(r.RequestNo);
+                    if (!seByReq[k]) seByReq[k] = [];
+                    seByReq[k].push(r);
+                });
+                enquiries.forEach((row) => {
+                    const rowsForReq = seByReq[String(row.RequestNo)] || [];
+                    row.ConcernedSEAssignments = mapConcernedSEAssignmentsFromRows(rowsForReq);
+                    const names = [
+                        ...new Set(
+                            rowsForReq
+                                .map((r) => String(r.SEName || '').trim())
+                                .filter(Boolean)
+                        ),
+                    ];
+                    if (names.length) {
+                        row.SelectedConcernedSEs = names;
+                        if (!String(row.ConcernedSE || '').trim()) {
+                            row.ConcernedSE = names.join(', ');
+                        }
+                    }
+                });
+            } catch (err) {
+                console.error('Error fetching ConcernedSE assignments for dashboard:', err);
+                enquiries.forEach((row) => {
+                    if (!Array.isArray(row.ConcernedSEAssignments)) row.ConcernedSEAssignments = [];
                 });
             }
         }

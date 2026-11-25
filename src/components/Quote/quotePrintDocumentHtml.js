@@ -417,9 +417,9 @@ export function freezeCoverPageLayoutFromLive(liveRoot, cloneRoot) {
  *   compactForPdf — legacy: collapse spacer (causes signatory–footer gap drift; do not use).
  */
 export function applyEqualCoverGaps(letterEl, options = {}) {
-    const { lockSpacerForPdf = false, compactForPdf = false } = options;
+    const { lockSpacerForPdf = false, compactForPdf = false, previewZoom } = options;
     if (!letterEl || typeof window === 'undefined') return null;
-    if (isCoverSignatoryLayoutLocked(letterEl)) {
+    if (previewZoom == null && isCoverSignatoryLayoutLocked(letterEl)) {
         const pb =
             parseFloat(window.getComputedStyle(letterEl).paddingBottom) ||
             COVER_LETTER_PAD_BOTTOM_BASE_PX;
@@ -447,8 +447,9 @@ export function applyEqualCoverGaps(letterEl, options = {}) {
         return { padBottom: COVER_LETTER_PAD_BOTTOM_BASE_PX, extra: 0, gap: 0 };
     }
 
-    const gap1 = letterEl.getBoundingClientRect().top - table.getBoundingClientRect().bottom;
-    const gap2 = signOff.getBoundingClientRect().top - letterEl.getBoundingClientRect().bottom;
+    const zoom = previewZoom || 1;
+    const gap1 = (letterEl.getBoundingClientRect().top - table.getBoundingClientRect().bottom) / zoom;
+    const gap2 = (signOff.getBoundingClientRect().top - letterEl.getBoundingClientRect().bottom) / zoom;
     const targetGap = Math.max(0, Math.round(gap1));
     const pb = parseFloat(window.getComputedStyle(letterEl).paddingBottom) || 0;
     const currentExtra = Math.max(0, pb - COVER_LETTER_PAD_BOTTOM_BASE_PX);
@@ -463,7 +464,7 @@ export function applyEqualCoverGaps(letterEl, options = {}) {
 
     const finalGap2 = Math.max(
         0,
-        Math.round(signOff.getBoundingClientRect().top - letterEl.getBoundingClientRect().bottom)
+        Math.round((signOff.getBoundingClientRect().top - letterEl.getBoundingClientRect().bottom) / zoom)
     );
     sheet0?.style.setProperty('--quote-cover-letter-sign-gap', `${finalGap2}px`);
 
@@ -2454,30 +2455,28 @@ html[data-preview-pdf="1"] .quote-cover-sign-off.quote-preview-panel-shell {
     overflow: visible !important;
 }
 html[data-preview-pdf="1"] .quote-cover-sign-off-for {
+    --quote-cover-signature-gap: calc(1.58em * ${EMS_QUOTE_COVER_SIGN_OFF_FOR_GAP_EM} * ${EMS_QUOTE_COVER_SIGN_OFF_PREVIEW_HEIGHT_SCALE});
+    position: relative !important;
     flex-shrink: 0 !important;
-    margin: 0 0 calc(1.58em * ${EMS_QUOTE_COVER_SIGN_OFF_FOR_GAP_EM} * ${EMS_QUOTE_COVER_SIGN_OFF_PREVIEW_HEIGHT_SCALE}) 0 !important;
+    margin: 0 0 var(--quote-cover-signature-gap) 0 !important;
     font-size: 13px !important;
     line-height: 1.58 !important;
     color: #0f172a !important;
     font-weight: 600 !important;
 }
-html[data-preview-pdf="1"] .quote-cover-signatory-col:has(.quote-cover-approval-sig) .quote-cover-sign-off-for {
-    margin-bottom: 4px !important;
-}
 html[data-preview-pdf="1"] .quote-cover-approval-sig {
-    flex: 0 0 auto !important;
+    position: absolute !important;
+    inset: 100% 0 auto !important;
+    height: var(--quote-cover-signature-gap) !important;
     display: flex !important;
     align-items: center !important;
     justify-content: flex-start !important;
-    min-height: calc(1.58em * ${EMS_QUOTE_COVER_SIGN_OFF_FOR_GAP_EM} * ${EMS_QUOTE_COVER_SIGN_OFF_PREVIEW_HEIGHT_SCALE}) !important;
-    margin: 0 0 2px 0 !important;
-    max-width: 100% !important;
 }
 html[data-preview-pdf="1"] .quote-cover-signatory-col--co .quote-cover-approval-sig {
     justify-content: flex-end !important;
 }
 html[data-preview-pdf="1"] .quote-cover-approval-sig img {
-    max-height: 56px !important;
+    max-height: min(56px, 100%) !important;
     max-width: min(200px, 100%) !important;
     width: auto !important;
     height: auto !important;

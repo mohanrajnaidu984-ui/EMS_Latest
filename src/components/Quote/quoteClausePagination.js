@@ -624,7 +624,13 @@ function splitNumberedProseRow(row, table) {
 function splitTableToRowSegmentHtml(table) {
     const { rows: gridRows, grid } = getOfficePasteTablePaginationGrid(table);
 
-    const tableAttrs = [...table.attributes]
+    // A page fragment keeps its row heights, not the height of the original table.
+    const fragmentTable = table.cloneNode(false);
+    fragmentTable.removeAttribute('height');
+    for (const prop of ['height', 'min-height', 'max-height']) {
+        fragmentTable.style.removeProperty(prop);
+    }
+    const tableAttrs = [...fragmentTable.attributes]
         .map((a) => `${a.name}="${String(a.value).replace(/"/g, '&quot;')}"`)
         .join(' ');
 
@@ -804,11 +810,9 @@ function splitTableToRowSegmentHtml(table) {
         const row = allRows[bodyIdx];
         const proseRows = !isPriceSummary && splitNumberedProseRow(row, table);
         if (proseRows) {
-            const template = table.cloneNode(false);
+            const template = fragmentTable.cloneNode(false);
             template.removeAttribute('data-ems-row-heights');
             template.removeAttribute('data-ems-row-heights-custom');
-            template.removeAttribute('height');
-            for (const prop of ['height', 'min-height', 'max-height']) template.style.removeProperty(prop);
             template.setAttribute('data-ems-table-split', '1');
             // Keep prose fragments separate from neighboring fixed-height rows.
             template.setAttribute('data-ems-split-id', proseRows[0].getAttribute('data-ems-prose-row'));

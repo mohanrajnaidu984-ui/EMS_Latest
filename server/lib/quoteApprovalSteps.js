@@ -332,8 +332,9 @@ async function fetchApprovalMailContext({
     meta = {},
     subjectOverride = '',
     projectNameOverride = '',
+    workflowSnapshot = null,
 }) {
-    const wf = await fetchExistingWorkflowMeta({ quoteId, draftQuoteId, meta });
+    const wf = workflowSnapshot?.meta || await fetchExistingWorkflowMeta({ quoteId, draftQuoteId, meta });
     let subject = String(subjectOverride || '').trim();
     let quoteRef = wf.quoteNumber || wf.quoteRef || '';
 
@@ -374,7 +375,7 @@ async function fetchApprovalMailContext({
         }
     }
 
-    const steps = await fetchApprovalStepsForMailContext({ quoteId, draftQuoteId, meta });
+    const steps = workflowSnapshot?.steps || await fetchApprovalStepsForMailContext({ quoteId, draftQuoteId, meta });
     const hierarchyPath = buildApprovalHierarchyPath(steps);
 
     const dash = (v) => (String(v || '').trim() || 'â€”');
@@ -2899,7 +2900,24 @@ async function recordQuoteCorrectionRequired({
  * Final approver may delete an in-flight draft workflow before they approve.
  * Keeps EnquiryQuotesDraft; clears QuoteApprovalSteps + ApprovalWorkflowJson so Send for Approval can run again.
  */
-async function deleteDraftApprovalWorkflow({ draftQuoteId, actorEmail, actorName = '' }) {
+async function deleteDraftApprovalWorkflow(options) {
+    for (let attempt = 1; ; attempt += 1) {
+        try {
+            return await deleteDraftApprovalWorkflowOnce(options);
+        } catch (err) {
+            if (err.number !== 1205 && err.originalError?.info?.number !== 1205) throw err;
+            if (attempt === 3) {
+                throw Object.assign(new Error('The workflow is busy. Please try deleting it again.'), {
+                    code: 'WORKFLOW_DELETE_BUSY',
+                    cause: err,
+                });
+            }
+            await new Promise((resolve) => setTimeout(resolve, attempt * 100 + Math.random() * 100));
+        }
+    }
+}
+
+async function deleteDraftApprovalWorkflowOnce({ draftQuoteId, actorEmail, actorName = '' }) {
     const dId = Number(draftQuoteId);
     if (!Number.isFinite(dId) || dId <= 0) {
         throw new Error('draftQuoteId is required');
@@ -2956,22 +2974,12 @@ async function deleteDraftApprovalWorkflow({ draftQuoteId, actorEmail, actorName
         quoteNumber: draft.QuoteNumber,
     });
 
-    /* Capture recipients + mail fields before steps are removed. */
-    const createdByEmail = await fetchExistingCreatedByEmail({
+    /* Capture workflow metadata before its rows are removed. */
+    const workflowMeta = await fetchExistingWorkflowMeta({
         draftQuoteId: dId,
         meta,
     });
-    const mailContext = await fetchApprovalMailContext({
-        draftQuoteId: dId,
-        meta,
-        subjectOverride: draft.Subject || '',
-    });
-    const recipientSet = new Set();
-    if (createdByEmail) recipientSet.add(createdByEmail);
-    for (const s of steps) {
-        const em = normalizeApprovalEmail(s.approverEmail);
-        if (em) recipientSet.add(em);
-    }
+    const recipientSet = new Set(buildApprovalCompletionRecipientEmails(steps, workflowMeta.createdByEmail));
     /* Keep initiator even if PreparedByEmail differs from CreatedByEmail. */
     const preparedByEmail = normalizeApprovalEmail(draft.PreparedByEmail);
     if (preparedByEmail) recipientSet.add(preparedByEmail);
@@ -2981,19 +2989,45 @@ async function deleteDraftApprovalWorkflow({ draftQuoteId, actorEmail, actorName
         String(final.approverName || '').trim() ||
         email;
 
-    await sql.query`
-        DELETE FROM QuoteApprovalSteps
-        WHERE DraftQuoteId = ${dId}
-          AND (QuoteId IS NULL OR QuoteId = 0)
-    `;
+    const transaction = new sql.Transaction();
+    await transaction.begin();
+    try {
+        await new sql.Request(transaction)
+            .input('finalStepId', sql.Int, final.id)
+            .input('draftId', sql.Int, dId)
+            .query(`
+            IF NOT EXISTS (
+                SELECT 1 FROM QuoteApprovalSteps WITH (UPDLOCK, HOLDLOCK)
+                WHERE ID = @finalStepId AND DraftQuoteId = @draftId
+                  AND (QuoteId IS NULL OR QuoteId = 0)
+                  AND LOWER(LTRIM(RTRIM(ISNULL(Status, N'')))) <> N'approved'
+            )
+                THROW 50001, 'The workflow has changed. Refresh Approvals and try again.', 1;
 
-    await sql.query`
-        UPDATE EnquiryQuotesDraft
-        SET ApprovalWorkflowJson = NULL,
-            Status = N'Draft',
-            UpdatedAt = ${new Date()}
-        WHERE ID = ${dId}
-    `;
+            DELETE FROM QuoteApprovalSteps
+            WHERE DraftQuoteId = @draftId
+              AND (QuoteId IS NULL OR QuoteId = 0);
+
+            UPDATE EnquiryQuotesDraft
+            SET ApprovalWorkflowJson = NULL,
+                Status = N'Draft',
+                UpdatedAt = SYSUTCDATETIME()
+            WHERE ID = @draftId;
+            IF @@ROWCOUNT = 0
+                THROW 50002, 'Quote draft not found', 1;
+        `);
+        await transaction.commit();
+    } catch (err) {
+        try {
+            await transaction.rollback();
+        } catch (rollbackErr) {
+            // SQL Server already rolls back transactions chosen as deadlock victims.
+            if (rollbackErr.code !== 'EABORT' && rollbackErr.code !== 'ENOTBEGUN') {
+                console.warn('[deleteDraftApprovalWorkflow] rollback:', rollbackErr.message);
+            }
+        }
+        throw err;
+    }
 
     /* Best-effort: drop pending in-app "Quote Approval" bells for this request (pre-promote quoteId is blank). */
     try {
@@ -3023,10 +3057,14 @@ async function deleteDraftApprovalWorkflow({ draftQuoteId, actorEmail, actorName
         workflowDeleted: true,
         draftPreserved: true,
         recipientEmails: Array.from(recipientSet),
-        mailContext,
+        loadMailContext: () => fetchApprovalMailContext({
+            meta,
+            subjectOverride: draft.Subject || '',
+            workflowSnapshot: { meta: workflowMeta, steps },
+        }),
         deletedByName,
         deletedByEmail: email,
-        createdByEmail: createdByEmail || '',
+        createdByEmail: workflowMeta.createdByEmail || '',
     };
 }
 

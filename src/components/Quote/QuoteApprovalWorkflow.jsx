@@ -92,6 +92,7 @@ export default function QuoteApprovalWorkflow({
     const [hierarchiesLoading, setHierarchiesLoading] = useState(false);
     const [hierarchyModalOpen, setHierarchyModalOpen] = useState(false);
     const [acting, setActing] = useState(false);
+    const [deletingWorkflow, setDeletingWorkflow] = useState(false);
     const [sending, setSending] = useState(false);
     const [comments, setComments] = useState('');
     const [corrections, setCorrections] = useState([]);
@@ -519,34 +520,6 @@ export default function QuoteApprovalWorkflow({
 
         const trimmedComments = String(comments || '').trim();
         const actionNorm = String(action || '').trim().toLowerCase();
-        const actedSequence = Number(pendingStep.sequence);
-        const previousSteps = Array.isArray(steps) ? steps.map((s) => ({ ...s })) : [];
-
-        /* Optimistic UI — show Approved/Rejected immediately; do not wait on SMTP/promote. */
-        const optimisticSteps = (previousSteps.length ? previousSteps : orderedSteps).map((s) => {
-            const seq = Number(s.sequence);
-            if (seq !== actedSequence) return s;
-            return {
-                ...s,
-                status: actionNorm === 'rejected' ? 'rejected' : 'approved',
-                actionAt: new Date().toISOString(),
-                comments: trimmedComments || s.comments || '',
-            };
-        });
-        onChange(optimisticSteps);
-        onStepsUpdated?.(optimisticSteps, {
-            action: actionNorm,
-            quoteId: quoteId || null,
-            draftQuoteId: draftQuoteId || null,
-            optimistic: true,
-        });
-        /* Badge: decrement now (list already drops via parent). Skip recount until API commits. */
-        window.dispatchEvent(
-            new CustomEvent(EMS_PENDING_APPROVALS_CHANGED, {
-                detail: { delta: -1, skipRefresh: true },
-            })
-        );
-
         setActing(true);
         try {
             const url = quoteId
@@ -565,11 +538,13 @@ export default function QuoteApprovalWorkflow({
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                onChange(previousSteps);
-                onStepsUpdated?.(previousSteps, { action: 'rollback', optimistic: false });
+                window.dispatchEvent(new CustomEvent(EMS_PENDING_APPROVALS_CHANGED));
                 alert(data.error || data.details || 'Could not record approval action.');
                 return;
             }
+            window.dispatchEvent(
+                new CustomEvent(EMS_PENDING_APPROVALS_CHANGED, { detail: { delta: -1 } })
+            );
             if (Array.isArray(data.steps)) {
                 onChange(data.steps);
                 onStepsUpdated?.(data.steps, {
@@ -587,15 +562,13 @@ export default function QuoteApprovalWorkflow({
                     quoteFinalized: true,
                     editLocked: true,
                 });
-                if (data.quoteNumber) {
+                if (data.quoteNumber && !approvalReviewMode) {
                     alert(`Quote finalized: ${data.quoteNumber}`);
                 }
             }
-            window.dispatchEvent(new CustomEvent(EMS_PENDING_APPROVALS_CHANGED));
             setComments('');
         } catch (e) {
-            onChange(previousSteps);
-            onStepsUpdated?.(previousSteps, { action: 'rollback', optimistic: false });
+            window.dispatchEvent(new CustomEvent(EMS_PENDING_APPROVALS_CHANGED));
             console.warn('[QuoteApprovalWorkflow] action failed', e);
             alert('Could not record approval action.');
         } finally {
@@ -615,6 +588,7 @@ export default function QuoteApprovalWorkflow({
         );
         if (!confirmed) return;
 
+        setDeletingWorkflow(true);
         setActing(true);
         try {
             const res = await fetch(`${apiBase}/api/quotes/delete-approval-workflow`, {
@@ -631,6 +605,11 @@ export default function QuoteApprovalWorkflow({
                 alert(data.error || data.details || 'Could not delete the approval workflow.');
                 return;
             }
+            window.dispatchEvent(
+                new CustomEvent(EMS_PENDING_APPROVALS_CHANGED, {
+                    detail: userCanAct ? { delta: -1 } : undefined,
+                })
+            );
             onChange([]);
             onStepsUpdated?.([], {
                 action: 'workflow-deleted',
@@ -646,17 +625,11 @@ export default function QuoteApprovalWorkflow({
                 steps: [],
                 draftQuoteId: draftQuoteId || null,
             });
-            window.dispatchEvent(
-                new CustomEvent(EMS_PENDING_APPROVALS_CHANGED, {
-                    detail: { delta: -1, skipRefresh: true },
-                })
-            );
-            window.dispatchEvent(new CustomEvent(EMS_PENDING_APPROVALS_CHANGED));
-            alert('Approval workflow deleted. The quote draft is still available — a new workflow can be created.');
         } catch (e) {
             console.warn('[QuoteApprovalWorkflow] delete workflow failed', e);
             alert('Could not delete the approval workflow.');
         } finally {
+            setDeletingWorkflow(false);
             setActing(false);
         }
     };
@@ -717,6 +690,8 @@ export default function QuoteApprovalWorkflow({
             setActing(false);
         }
     };
+
+    if (deletingWorkflow) return null;
 
     return (
         <div

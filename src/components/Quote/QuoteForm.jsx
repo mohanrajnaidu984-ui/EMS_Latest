@@ -10696,8 +10696,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     const [quotePackIntegrityFailed, setQuotePackIntegrityFailed] = useState(false);
     /** Dev-only: allow PDF download despite a failing integrity gate (after confirm). */
     const [quotePackDownloadAnyway, setQuotePackDownloadAnyway] = useState(false);
-    /** One-shot: bump pack bottom reserve after a visibility failure, then give up. */
-    const packVisibilityRecoveryRef = useRef(0);
+    /** Additional packing reserve for one recovery pass after measuring the visible pages. */
+    const packVisibilityRecoveryRef = useRef(null);
     /** Live overlap-peel epoch — pack apply aborts if peel advanced during measure. */
     const livePeelEpochRef = useRef(0);
     /** Soft-split parts for units that alone exceed one page (keyed by segment key). */
@@ -10740,6 +10740,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         clausePackSegmentHeightCacheRef.current.clear();
         lastClausePackSigRef.current = '';
         lastMeasuredQuotePackRef.current = null;
+        packVisibilityRecoveryRef.current = null;
+        setQuotePackIntegrityFailed(false);
         packedGroupsAwaitingPaintRef.current = null;
         setClauseSegmentPageGroups((prev) => (prev.length ? [] : prev));
         setQuoteAlignPageBusy((busy) => (busy ? false : busy));
@@ -11163,6 +11165,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         const applyPack = () => {
             if (cancelled) return;
+            const recovery = packVisibilityRecoveryRef.current;
+            const packReservePx = PACK_HEIGHT_SAFETY_PX +
+                (recovery?.key === quotePackInputKey ? recovery.extraReservePx : 0);
             const packStartedAt = performance.now();
             const peelEpochAtStart = livePeelEpochRef.current;
             const previewRoot = quotePreviewLayoutRef.current;
@@ -11311,7 +11316,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
              */
             const measureFitFixedBox = (groupIndices, continuationPageIdx = 0) => {
                 const usable = usablePxForContinuationPage(continuationPageIdx);
-                const limitPx = Math.max(usable - PACK_HEIGHT_SAFETY_PX, 200);
+                const limitPx = Math.max(usable - packReservePx, 200);
                 if (!groupIndices?.length || !measureContent) {
                     return {
                         ok: true,
@@ -11333,7 +11338,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 void measureContent.offsetHeight;
                 const fit = measureLiveContentFit(measureContent, {
                     usablePx: usable,
-                    reservePx: PACK_HEIGHT_SAFETY_PX,
+                    reservePx: packReservePx,
                 });
                 return {
                     ok: fit.ok,
@@ -11363,7 +11368,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                       segments: clauseSegmentsForPagination,
                       measureFit: measureFitCached,
                       usablePx: portraitContUsablePx,
-                      reservePx: PACK_HEIGHT_SAFETY_PX,
+                      reservePx: packReservePx,
                   });
             if (!continuation.length) {
                 continuation = reflowContinuationPagesTopDown(
@@ -11603,24 +11608,46 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
     useLayoutEffect(() => {
         if (!isQuotePreviewVisible || expandedClause || skipOverflowPeelRef.current) return;
         const root = quotePreviewLayoutRef.current;
-        if (!root || !sanitizedClauseSegmentPageGroups.length) return;
+        if (!sanitizedClauseSegmentPageGroups.length) {
+            setQuotePackIntegrityFailed(false);
+            setQuotePackDownloadAnyway(false);
+            return;
+        }
+        if (!root) return;
         const visibility = assertSegmentVisibilityOnSheets(
             root, sanitizedClauseSegmentPageGroups, clauseSegmentsForPagination.length,
             { reservePx: CONTENT_END_GAP_PX,
               usablePx: EMS_QUOTE_CONT_USABLE_PX_FALLBACK,
               segments: clauseSegmentsForPagination }
         );
-        setQuotePackIntegrityFailed(!visibility.ok);
         const measured = lastMeasuredQuotePackRef.current;
-        if (measured?.key === quotePackInputKey &&
-            segmentPageGroupsEqual(measured.groups, sanitizedClauseSegmentPageGroups)) {
+        const measuredPagesPainted = measured?.key === quotePackInputKey &&
+            segmentPageGroupsEqual(measured.groups, sanitizedClauseSegmentPageGroups);
+        if (!visibility.ok && !measuredPagesPainted) return;
+        if (!visibility.ok && packVisibilityRecoveryRef.current?.key !== quotePackInputKey) {
+            const extraReservePx = visibility.clipped.reduce((reserve, failure) => {
+                const group = sanitizedClauseSegmentPageGroups[failure.sheet - 1];
+                if (!group || group.length < 2 || failure.reason === 'extends-above-content-start') {
+                    return reserve;
+                }
+                return Math.max(reserve, Math.min(120, Math.ceil(failure.overshootPx) + 8));
+            }, 0);
+            if (extraReservePx > 0) {
+                packVisibilityRecoveryRef.current = { key: quotePackInputKey, extraReservePx };
+                lastMeasuredQuotePackRef.current = null;
+                setQuoteAlignPageBusy(true);
+                setClausePackRetryNonce((nonce) => nonce + 1);
+                return;
+            }
+        }
+        setQuotePackIntegrityFailed(!visibility.ok);
+        if (measuredPagesPainted) {
             if (visibility.ok) measured.paintSignature = JSON.stringify(visibility.diagnostics?.map(d =>
                 [Math.round(d.lastBottomPx), d.clientHeight, d.usablePx]));
             setQuoteAlignPageBusy(false);
         }
         if (visibility.ok) {
             setQuotePackDownloadAnyway(false);
-            packVisibilityRecoveryRef.current = 0;
         }
     }, [sanitizedClauseSegmentPageGroups, clauseSegmentsForPagination,
         isQuotePreviewVisible, expandedClause, footerClipPeelKick, quotePackInputKey]);
@@ -13053,7 +13080,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         const reqNo = enquiryData?.enquiry?.RequestNo ?? enquiryData?.RequestNo;
         const cxName = String(toName || '').trim();
         if (!reqNo || !cxName) return resolveLiveOwnjobTotalForQuotePersist();
-        const freshPd = await loadPricingData(reqNo, cxName, { forcePricingClauseUpdate: true });
+        // Saving uses current pricing for the sidebar total and preserves the clause snapshot.
+        const freshPd = await loadPricingData(reqNo, cxName, { preservePricingTerms: true });
         return resolveLiveOwnjobTotalForQuotePersist(freshPd || pricingData);
     }, [
         enquiryData?.enquiry?.RequestNo,
@@ -16380,6 +16408,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                           : allJobs;
                     calculateSummary(pData, jobsForSummary, cxName, undefined, {
                         forcePricingClauseUpdate: options.forcePricingClauseUpdate === true,
+                        preservePricingTerms: options.preservePricingTerms === true,
                     });
                 } else if (awaitingRowCustomerBootstrap) {
                     setPricingSummary([]);
@@ -17856,12 +17885,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         console.log('[calculateSummary] Saving summary to state:', summary.length, 'groups');
         }
 
+        // When force=true (Update Price), only the draft lock blocks overwrite — Update Price clears the lock first.
+        // When force=false, keep saved draft / browse / in-flight hydrate PricingTerms.
         const skipPricingClauseOverwrite =
+            calcOpts.preservePricingTerms === true ||
             embeddedApprovalReview ||
-            (!forcePricingClauseUpdate &&
-                (browsePreviousQuotesRevisionsRef.current ||
-                    shouldKeepDraftPricingTerms() ||
-                    quoteDraftFetchInFlightRef.current));
+            (forcePricingClauseUpdate
+                ? quoteDraftClausesLockedRef.current === true
+                : browsePreviousQuotesRevisionsRef.current ||
+                  shouldKeepDraftPricingTerms() ||
+                  quoteDraftFetchInFlightRef.current);
         if (!skipPricingClauseOverwrite) {
             setClauseContent((prev) => {
                 if (prev && prev.pricingTerms === pricingTermsFull) return prev;
@@ -18328,7 +18361,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                 setQuoteDraftId(qRowId !== undefined ? qRowId : null);
             }
             setQuoteId(null);
-            setQuoteNumber('');
+            // Keep stored draft QuoteNumber (e.g. …/DRAFT) so sidebar + preview still identify the in-flight draft
+            // after Send for Approval / intermediate approvals (before final promote).
+            setQuoteNumber(String(quote.QuoteNumber ?? quote.quoteNumber ?? '').trim());
             const draftQn = Number(quote.QuoteNo ?? quote.quoteNo ?? 0);
             setRevisionSourceQuoteNoBoth(Number.isFinite(draftQn) && draftQn > 0 ? draftQn : 0);
         } else {
@@ -22935,6 +22970,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         }
         lastClausePackSigRef.current = '';
         clausePackMeasureRetryRef.current = 0;
+        packVisibilityRecoveryRef.current = null;
         /* Fast/dense pack — fine-split caused blank pages; full multi-fill was multi-second. */
         clausePackAlignGenRef.current += 1;
         clausePackTightFitRef.current = false;
@@ -24922,8 +24958,9 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             setSaving(true);
         }
         try {
-            const liveTotal = await ensureLatestOwnjobTotalForQuotePersist();
+            // Snapshot clause HTML before any EPV refresh so Draft Save never persists a live overwrite.
             const saveMerge = resolveMergedClauseContentForDraftSave();
+            const liveTotal = await ensureLatestOwnjobTotalForQuotePersist();
             const draftSnapshot = buildQuoteDraftFingerprintPayload(saveMerge);
             const {
                 tabRegistry: _tabRegistry,
@@ -25378,16 +25415,20 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         if (!pricingStableSig) return;
 
         const live = clauseContentRef.current || {};
-        const rowPtLen = String(row.PricingTerms ?? row.pricingTerms ?? '').trim().length;
-        const livePtLen = String(live.pricingTerms ?? '').trim().length;
+        const rowPt = String(row.PricingTerms ?? row.pricingTerms ?? '').trim();
+        const livePt = String(live.pricingTerms ?? '').trim();
+        const rowPtLen = rowPt.length;
+        const livePtLen = livePt.length;
         const rowSowLen = String(row.ScopeOfWork ?? row.scopeOfWork ?? '').trim().length;
         const liveSowLen = String(live.scopeOfWork ?? '').trim().length;
-        /* Draft already painted — only nudge Align Page; skip full clause re-parse. */
-        if (
-            quoteDraftClausesLockedRef.current &&
+        const amountsMatch =
             rowPtLen > 0 &&
             livePtLen > 0 &&
-            Math.abs(rowPtLen - livePtLen) < 8 &&
+            pricingFooterAmountsSig(rowPt) === pricingFooterAmountsSig(livePt);
+        /* Draft already painted with matching amounts — only nudge Align Page. */
+        if (
+            quoteDraftClausesLockedRef.current &&
+            amountsMatch &&
             rowSowLen === liveSowLen
         ) {
             quoteDraftPendingClauseReapplyRef.current = false;
@@ -25400,9 +25441,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
             lockDraftClauses: true,
             isDraftRow: true,
         });
+        // Prevent the live auto-table injector from treating draft HTML as stale structure.
+        lastInjectedAutoTableSigRef.current = pricingAutoTableSignature || lastInjectedAutoTableSigRef.current;
         quoteDraftPendingClauseReapplyRef.current = false;
         pendingAutoAlignPreviewRef.current = true;
-    }, [browsePreviousQuotesRevisions, pricingStableSig, applyQuoteClauseBundleFromRow]);
+    }, [
+        browsePreviousQuotesRevisions,
+        pricingStableSig,
+        applyQuoteClauseBundleFromRow,
+        pricingAutoTableSignature,
+    ]);
 
     const saveQuote = useCallback(async (isAutoSave = false, suppressCollisionAlert = false) => {
         if (!enquiryData) return null;
@@ -26451,24 +26499,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         quoteId,
     ]);
 
-    /**
-     * Grow Dear Sir padding-bottom until gap above matches gap below.
-     * Observe cover-only nodes — not the full preview root (clause pagination must not move signatory).
-     * Lock when a digital signature exists on page 1 so user placement is preserved.
-     */
+    /** Mark signed covers for export while keeping live spacing independent of stamps. */
+    /** Grow Dear Sir padding to equalize cover gaps without observing continuation pages. */
     useLayoutEffect(() => {
         const hasCoverStamps = quotePreviewDigitalStamps.some((s) => Number(s.sheetIndex) === 1);
         syncCoverSignatoryLockDom(hasCoverStamps);
+    }, [isQuotePreviewVisible, quotePreviewDigitalStamps, syncCoverSignatoryLockDom]);
 
+    useLayoutEffect(() => {
         const letter = quoteCoverLetterRef.current;
         if (!isQuotePreviewVisible || !letter) {
-            if (!coverSignatoryLayoutLockedRef.current) {
-                setCoverLetterExtraPadPx(0);
-            }
-            return undefined;
-        }
-
-        if (coverSignatoryLayoutLockedRef.current) {
+            setCoverLetterExtraPadPx(0);
             return undefined;
         }
 
@@ -26480,8 +26521,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
         let raf2 = 0;
         const runEqualCoverGaps = () => {
-            if (coverSignatoryLayoutLockedRef.current) return;
-            const result = applyEqualCoverGaps(letter);
+            const result = applyEqualCoverGaps(letter, { previewZoom: getQuotePreviewZoomFactor(letter) });
             if (!result) {
                 setCoverLetterExtraPadPx(0);
                 return;
@@ -26510,8 +26550,6 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         isQuotePreviewVisible,
         enquiryData?.leadJobPrefix,
         toName,
-        quotePreviewDigitalStamps,
-        syncCoverSignatoryLockDom,
     ]);
 
     /** Profile menu → Manage signatures → Place on page (when Quote tab is active). */
@@ -27926,31 +27964,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
         quotePreviewDigitalStamps,
     ]);
 
-    /** Cover page has a placed digital stamp (sheet 1) — used for layout spacer + name fallback. */
-    const coverHasDigitalStamp = React.useMemo(
-        () =>
-            (quotePreviewDigitalStamps || []).some(
-                (s) => Number(s.sheetIndex) === 1 && s.imageDataUrl
-            ),
-        [quotePreviewDigitalStamps]
-    );
-
-    /** Printed cover Signatory name — fall back to cover-stamp caption if the row Signatory is blank.
-     *  Always shown in the formal Signatory line (Previous Quotes / Approvals / draft). */
-    const coverSignatoryNameDisplay = React.useMemo(() => {
-        const fromRow = String(
-            subjobQuoteA4HeaderDisplay?.signatory ?? signatory ?? ''
-        ).trim();
-        if (fromRow) return fromRow;
-        const coverStamp = (quotePreviewDigitalStamps || []).find(
-            (s) => Number(s.sheetIndex) === 1 && String(s.displayName || '').trim()
-        );
-        return String(coverStamp?.displayName || '').trim();
-    }, [
-        subjobQuoteA4HeaderDisplay?.signatory,
-        signatory,
-        quotePreviewDigitalStamps,
-    ]);
+    const coverSignatoryNameDisplay = String(subjobQuoteA4HeaderDisplay?.signatory ?? signatory ?? '').trim();
 
     const coverCoSignatoryNameDisplay = React.useMemo(() => {
         const fromRow = String(
@@ -29562,6 +29576,41 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
 
                                                 let filteredQuotes = getFilteredQuotesForPreviousQuotesTab(activeTabObj.id);
                                                 // Strict behavior: when a tab has no matching tuple rows, keep it blank.
+                                                // Draft Mode exception: EnquiryQuotes is empty until final approval promotes the draft.
+                                                // Surface the active EnquiryQuotesDraft so mid-workflow drafts stay visible in the tab list.
+                                                if (!browsePreviousQuotesRevisions && filteredQuotes.length === 0) {
+                                                    const draftRow = quoteDraftLoadedRowRef.current;
+                                                    const draftId =
+                                                        quoteDraftId != null && String(quoteDraftId).trim() !== ''
+                                                            ? quoteDraftId
+                                                            : quoteRowId(draftRow);
+                                                    if (draftId != null && String(draftId).trim() !== '') {
+                                                        const draftQuoteNumber = String(
+                                                            draftRow?.QuoteNumber ??
+                                                                draftRow?.quoteNumber ??
+                                                                quoteNumber ??
+                                                                ''
+                                                        ).trim();
+                                                        filteredQuotes = [
+                                                            {
+                                                                ...(draftRow && typeof draftRow === 'object' ? draftRow : {}),
+                                                                ID: draftId,
+                                                                QuoteNumber: draftQuoteNumber || 'Draft',
+                                                                Status: String(draftRow?.Status || 'Draft').trim() || 'Draft',
+                                                                RevisionNo: Number(draftRow?.RevisionNo ?? draftRow?.revisionNo ?? 0) || 0,
+                                                                TotalAmount: Number(
+                                                                    draftRow?.TotalAmount ?? draftRow?.totalAmount ?? 0
+                                                                ),
+                                                                QuoteDate:
+                                                                    draftRow?.QuoteDate ??
+                                                                    draftRow?.QuoteDateYmd ??
+                                                                    null,
+                                                                UpdatedAt: draftRow?.UpdatedAt ?? draftRow?.updatedAt ?? null,
+                                                                __isActiveDraft: true,
+                                                            },
+                                                        ];
+                                                    }
+                                                }
 
                                                 // Group revisions
                                                 const quoteGroups = filteredQuotes.reduce((acc, q) => {
@@ -29584,6 +29633,16 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                         // Checkbox OFF => force collapsed view (single row only).
                                                         const isExpanded = browsePreviousQuotesRevisions && expandedGroups[quoteNo];
                                                         const hasHistory = sorted.length > 1;
+                                                        const latestRowId = String(quoteRowId(latest) ?? '');
+                                                        const isActiveDraftCard = latest?.__isActiveDraft === true;
+                                                        const isSelectedQuoteRow =
+                                                            (latestRowId !== '' && latestRowId === String(quoteId ?? '')) ||
+                                                            (isActiveDraftCard &&
+                                                                latestRowId !== '' &&
+                                                                latestRowId === String(quoteDraftId ?? ''));
+                                                        // In-flight draft card stays fully visible in Draft Mode (not dimmed).
+                                                        const draftModeListInteractive =
+                                                            browsePreviousQuotesRevisions || isActiveDraftCard;
 
                                                         return (
                                                             <div key={quoteNo} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -29597,12 +29656,12 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                     }}
                                                                     style={{
                                                                         padding: '8px',
-                                                                        background: String(quoteRowId(latest) ?? '') === String(quoteId ?? '') ? '#f0f9ff' : 'white',
-                                                                        border: `1px solid ${String(quoteRowId(latest) ?? '') === String(quoteId ?? '') ? '#0ea5e9' : '#e2e8f0'}`,
+                                                                        background: isSelectedQuoteRow ? '#f0f9ff' : 'white',
+                                                                        border: `1px solid ${isSelectedQuoteRow ? '#0ea5e9' : '#e2e8f0'}`,
                                                                         borderRadius: '8px',
-                                                                        cursor: browsePreviousQuotesRevisions ? 'pointer' : 'not-allowed',
+                                                                        cursor: browsePreviousQuotesRevisions ? 'pointer' : 'default',
                                                                         position: 'relative',
-                                                                        opacity: browsePreviousQuotesRevisions ? 1 : 0.55,
+                                                                        opacity: draftModeListInteractive ? 1 : 0.55,
                                                                         pointerEvents: browsePreviousQuotesRevisions ? 'auto' : 'none',
                                                                     }}
                                                                 >
@@ -29660,10 +29719,23 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                                 padding: '2px 6px',
                                                                                 borderRadius: '4px',
                                                                                 flexShrink: 0,
-                                                                                background: latest.Status === 'Draft' ? '#f1f5f9' : '#dcfce7',
+                                                                                background:
+                                                                                    isActiveDraftCard || latest.Status === 'Draft'
+                                                                                        ? '#fef3c7'
+                                                                                        : '#dcfce7',
+                                                                                color:
+                                                                                    isActiveDraftCard || latest.Status === 'Draft'
+                                                                                        ? '#92400e'
+                                                                                        : undefined,
                                                                             }}
                                                                         >
-                                                                            {latest.Status}
+                                                                            {isActiveDraftCard
+                                                                                ? (String(latest?.ApprovalWorkflowJson || '').trim() ||
+                                                                                  (approvalWorkflowDraftId &&
+                                                                                    String(approvalWorkflowDraftId) === latestRowId)
+                                                                                    ? 'Pending Approval'
+                                                                                    : 'Draft')
+                                                                                : latest.Status}
                                                                         </span>
                                                                     </div>
                                                                     <div
@@ -31343,8 +31415,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         if (
                                             embeddedApprovalReview &&
                                             (meta?.action === 'approved' ||
-                                                meta?.action === 'rejected' ||
-                                                meta?.action === 'workflow-deleted') &&
+                                                meta?.action === 'rejected') &&
                                             !meta?.optimistic
                                         ) {
                                             queueMicrotask(() => {
@@ -31450,6 +31521,7 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                     optimistic: false,
                                                 });
                                             }
+                                            return;
                                         }
                                         if (data?.quoteId) {
                                             setQuoteId(Number(data.quoteId));
@@ -33702,30 +33774,28 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         width: 100%;
                                     }
                                     .quote-cover-sign-off-for {
+                                        --quote-cover-signature-gap: calc(1.58em * ${EMS_QUOTE_COVER_SIGN_OFF_FOR_GAP_EM});
+                                        position: relative;
                                         flex-shrink: 0;
-                                        margin: 0 0 calc(1.58em * 3.15) 0;
+                                        margin: 0 0 var(--quote-cover-signature-gap) 0;
                                         font-size: 13px;
                                         line-height: 1.58;
                                         color: #0f172a;
                                         font-weight: 600;
                                     }
-                                    .quote-cover-signatory-col:has(.quote-cover-approval-sig) .quote-cover-sign-off-for {
-                                        margin-bottom: 4px;
-                                    }
                                     .quote-cover-approval-sig {
-                                        flex: 0 0 auto;
+                                        position: absolute;
+                                        inset: 100% 0 auto;
+                                        height: var(--quote-cover-signature-gap);
                                         display: flex;
                                         align-items: center;
                                         justify-content: flex-start;
-                                        min-height: calc(1.58em * 3.15);
-                                        margin: 0 0 2px 0;
-                                        max-width: 100%;
                                     }
                                     .quote-cover-signatory-col--co .quote-cover-approval-sig {
                                         justify-content: flex-end;
                                     }
                                     .quote-cover-approval-sig img {
-                                        max-height: 56px;
+                                        max-height: min(56px, 100%);
                                         max-width: min(200px, 100%);
                                         width: auto;
                                         height: auto;
@@ -34162,10 +34232,8 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                         margin-bottom: ${EMS_QUOTE_COVER_SIGNATORY_LIFT_PX}px !important;
                                     }
                                     #quote-preview .quote-cover-sign-off-for {
-                                        margin-bottom: calc(1.58em * ${EMS_QUOTE_COVER_SIGN_OFF_FOR_GAP_EM} * ${EMS_QUOTE_COVER_SIGN_OFF_PREVIEW_HEIGHT_SCALE}) !important;
-                                    }
-                                    #quote-preview .quote-cover-signatory-col:has(.quote-cover-approval-sig) .quote-cover-sign-off-for {
-                                        margin-bottom: 4px !important;
+                                        --quote-cover-signature-gap: calc(1.58em * ${EMS_QUOTE_COVER_SIGN_OFF_FOR_GAP_EM} * ${EMS_QUOTE_COVER_SIGN_OFF_PREVIEW_HEIGHT_SCALE});
+                                        margin-bottom: var(--quote-cover-signature-gap) !important;
                                     }
                                     #quote-preview .quote-cover-signatory-block {
                                         margin-bottom: ${EMS_QUOTE_COVER_SIGNATORY_BLOCK_BOTTOM_OFFSET} !important;
@@ -35120,20 +35188,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                     )}
                                                                 <div className="quote-cover-signatory-block">
                                                                     <div className="quote-cover-signatory-col">
-                                                                        <p className="quote-cover-sign-off-for">For {quoteCoverOfferCompanyName},</p>
-                                                                        {/* Reserve in-flow height when a cover digital stamp is present (approval overlay is suppressed
-                                                                            to avoid a double image). Without this spacer the printed Signatory name sits under the
-                                                                            absolute stamp and looks missing in Previous Quotes / Approvals. */}
-                                                                        {approvalCoverSignatureImages.signatory || coverHasDigitalStamp ? (
-                                                                            <div className="quote-cover-approval-sig" aria-hidden="true">
-                                                                                {approvalCoverSignatureImages.signatory ? (
+                                                                        <p className="quote-cover-sign-off-for">
+                                                                            For {quoteCoverOfferCompanyName},
+                                                                            {approvalCoverSignatureImages.signatory ? (
+                                                                                <span className="quote-cover-approval-sig" aria-hidden="true">
                                                                                     <img
                                                                                         src={approvalCoverSignatureImages.signatory}
                                                                                         alt=""
                                                                                     />
-                                                                                ) : null}
-                                                                            </div>
-                                                                        ) : null}
+                                                                                </span>
+                                                                            ) : null}
+                                                                        </p>
                                                                         <div className="quote-cover-signatory-line">
                                                                             {coverSignatoryNameDisplay || '\u00A0'}
                                                                         </div>
@@ -35147,15 +35212,17 @@ const QuoteForm = ({ openContext = null, embeddedApprovalReview = false, onAppro
                                                                     </div>
                                                                     {coverCoSignatoryNameDisplay ? (
                                                                         <div className="quote-cover-signatory-col quote-cover-signatory-col--co">
-                                                                            <p className="quote-cover-sign-off-for">For {quoteCoverOfferCompanyName},</p>
-                                                                            {approvalCoverSignatureImages.coSignatory ? (
-                                                                                <div className="quote-cover-approval-sig" aria-hidden="true">
-                                                                                    <img
-                                                                                        src={approvalCoverSignatureImages.coSignatory}
-                                                                                        alt=""
-                                                                                    />
-                                                                                </div>
-                                                                            ) : null}
+                                                                            <p className="quote-cover-sign-off-for">
+                                                                                For {quoteCoverOfferCompanyName},
+                                                                                {approvalCoverSignatureImages.coSignatory ? (
+                                                                                    <span className="quote-cover-approval-sig" aria-hidden="true">
+                                                                                        <img
+                                                                                            src={approvalCoverSignatureImages.coSignatory}
+                                                                                            alt=""
+                                                                                        />
+                                                                                    </span>
+                                                                                ) : null}
+                                                                            </p>
                                                                             <div className="quote-cover-signatory-line">
                                                                                 {coverCoSignatoryNameDisplay}
                                                                             </div>

@@ -36,8 +36,10 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
 
   useEffect(() => {
     let cancelled = false;
+    let countRequest = 0;
 
     const fetchPendingApprovalCount = async () => {
+      const request = ++countRequest;
       if (!userEmail) {
         if (!cancelled) setPendingApprovalCount(0);
         return;
@@ -49,7 +51,7 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
         );
         if (!res.ok) return;
         const data = await res.json();
-        if (!cancelled) setPendingApprovalCount(Number(data.count) || 0);
+        if (!cancelled && request === countRequest) setPendingApprovalCount(Number(data.count) || 0);
       } catch (err) {
         console.warn('[Header] pending approval count', err);
       }
@@ -64,8 +66,10 @@ const Header = ({ activeTab, onNavigate, onOpenEnquiry }) => {
       if (Number.isFinite(delta) && delta !== 0) {
         setPendingApprovalCount((prev) => Math.max(0, (Number(prev) || 0) + delta));
       }
-      // Optimistic approve/reject: badge moves now; wait for API before recount.
-      if (detail.skipRefresh) return;
+      if (detail.skipRefresh) {
+        countRequest++;
+        return;
+      }
       void fetchPendingApprovalCount();
     };
     window.addEventListener(EMS_PENDING_APPROVALS_CHANGED, onApprovalsChanged);

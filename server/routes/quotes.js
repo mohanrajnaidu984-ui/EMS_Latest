@@ -4027,6 +4027,9 @@ async function findQuoteDraftByTuple(requestNo, leadJob, toName, ownJob = '', op
     if (useDepartmentForOwnJob && sessionDivision) {
         const divHit = rows.find((r) => ownJobsMatchForDraft(r.OwnJob, sessionDivision));
         if (divHit) return divHit;
+        // Admin / mismatched session division: if exactly one active draft remains for
+        // RequestNo + ToName (+ LeadJob), return it instead of a false miss.
+        if (rows.length === 1) return rows[0];
         return null;
     }
 
@@ -4824,8 +4827,10 @@ router.delete('/form-drafts/:id', async (req, res) => {
 // GET /api/quotes/list/pending-approvals/count — badge count for current approver
 const pendingApprovalCountCache = new Map(); // email → { count, at }
 const PENDING_COUNT_CACHE_MS = 15000;
+let pendingApprovalCountGeneration = 0;
 
 router.get('/list/pending-approvals/count', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
     try {
         const userEmail = normalizeUserEmail(req.query.userEmail);
         if (!userEmail) {
@@ -4836,8 +4841,11 @@ router.get('/list/pending-approvals/count', async (req, res) => {
         if (hit && Date.now() - hit.at < PENDING_COUNT_CACHE_MS) {
             return res.json({ count: hit.count, cached: true });
         }
+        const generation = pendingApprovalCountGeneration;
         const count = await countPendingApprovalsForUser(userEmail);
-        pendingApprovalCountCache.set(key, { count, at: Date.now() });
+        if (generation === pendingApprovalCountGeneration) {
+            pendingApprovalCountCache.set(key, { count, at: Date.now() });
+        }
         res.json({ count });
     } catch (err) {
         if (isMissingQuoteApprovalStepsTableError(err.message)) {
@@ -4849,11 +4857,13 @@ router.get('/list/pending-approvals/count', async (req, res) => {
 });
 
 function clearPendingApprovalCountCache() {
+    pendingApprovalCountGeneration++;
     pendingApprovalCountCache.clear();
 }
 
 // GET /api/quotes/list/pending-approvals — quotes awaiting this user's approval
 router.get('/list/pending-approvals', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
     try {
         const userEmail = normalizeUserEmail(req.query.userEmail);
         if (!userEmail) {
@@ -5722,6 +5732,7 @@ router.post('/draft-approval-action', async (req, res) => {
             return res.status(400).json({ error: e.message || 'Invalid approval action' });
         }
 
+        clearPendingApprovalCountCache();
         let promoted = null;
         const actedStep = (nextSteps || []).find((s) => Number(s.sequence) === Number(stepSequence));
         const finalJustApproved =
@@ -5834,6 +5845,9 @@ router.post('/delete-approval-workflow', async (req, res) => {
                 actorName: String(userName || '').trim(),
             });
         } catch (e) {
+            if (e.code === 'WORKFLOW_DELETE_BUSY') {
+                return res.status(503).json({ error: e.message });
+            }
             return res.status(400).json({ error: e.message || 'Could not delete workflow' });
         }
 
@@ -5857,7 +5871,7 @@ router.post('/delete-approval-workflow', async (req, res) => {
                     const mailRes = await sendQuoteWorkflowDeletedEmails({
                         toEmails: result.recipientEmails || [],
                         deletedByName: result.deletedByName || '',
-                        mailContext: result.mailContext || null,
+                        mailContext: await result.loadMailContext(),
                     });
                     if (mailRes?.skipped) {
                         console.log(

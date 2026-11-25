@@ -63,9 +63,9 @@ export default function SalesTopWon({ url, formatValue, expanded=false, onToggle
         catch{setExportError('Excel export failed. Please try again.');}
         finally{setExporting(false);}
     };
-    return <section className="sr-cell sr-top-won card border-0 shadow-sm" aria-label="Top 10 won details">
+    return <section className="sr-cell sr-top-won card border-0 shadow-sm" aria-label="Top 10 (Booking) won details">
         <div className="sr-top-won-heading sr-report-table-title sr-report-table-title--toolbar">
-            <strong>Top 10</strong>
+            <strong>Top 10 (Booking)</strong>
             <div className="sr-top-won-buttons" role="group" aria-label="Rank won jobs by">
                 {['Project','Customer','Client'].map(label=><button key={label} type="button" aria-pressed={mode===label} onClick={()=>setMode(label)}>{label}</button>)}
             </div>

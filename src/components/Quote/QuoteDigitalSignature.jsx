@@ -933,8 +933,10 @@ export function computeCoverStampAnchor(sheetEl, clientX, clientY) {
     const box = signOff.getBoundingClientRect();
     const mmPerPx = quoteSheetMmPerPx(sheetEl);
     if (!box.width || !mmPerPx) return null;
-    const dxMm = (clientX - box.left) * mmPerPx;
-    const dyMm = (clientY - box.top) * mmPerPx;
+    // Absolute positioning starts at the padding edge, inside the panel border.
+    const mmPerLayoutPx = 25.4 / 96;
+    const dxMm = (clientX - box.left) * mmPerPx - signOff.clientLeft * mmPerLayoutPx;
+    const dyMm = (clientY - box.top) * mmPerPx - signOff.clientTop * mmPerLayoutPx;
     const heightMm = box.height * mmPerPx;
     if (dyMm < -COVER_STAMP_ANCHOR_REACH_MM || dyMm > heightMm + COVER_STAMP_ANCHOR_REACH_MM) return null;
     return {

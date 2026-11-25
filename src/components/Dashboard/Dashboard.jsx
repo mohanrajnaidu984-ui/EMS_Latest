@@ -230,7 +230,6 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
         calendarTotalsLeft: null,
         historyMonths: [],
         historyYearTotals: null,
-        summary: {},
         table: [],
     });
 
@@ -551,24 +550,16 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
         }));
     }, [currentUser]);
 
-    // Fetch calendars + summary (one paired calendar HTTP + merged SQL per month on server).
-    const fetchCalendarSummary = useCallback(
+    // Fetch the calendar and monthly history independently so either can render first.
+    const fetchCalendars = useCallback(
         async (signal) => {
             if (!currentUser) return;
             setLoading(true);
             setHistoryLoading(true);
             try {
-                const salesEngineerForApi = resolveEffectiveSalesEngineerFilter({
-                    salesEngineer: filters.salesEngineer,
-                    division: filters.division,
-                    enqItems: masters.enqItems,
-                    users: masters.users,
-                    currentUserEmail: currentUser?.email || currentUser?.EmailId || '',
-                    currentUser,
-                });
                 const baseParams = {
                     division: filters.division,
-                    salesEngineer: salesEngineerForApi,
+                    salesEngineer: resolveEffectiveSalesEngineerFilter({ salesEngineer: filters.salesEngineer }),
                     userEmail: currentUser.email || currentUser.EmailId || '',
                     userName: currentUser.name || '',
                     userRole: currentUser.role || currentUser.Roles || 'User',
@@ -582,7 +573,6 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
                     return `${y}-${m}-${day}`;
                 })();
 
-                const sumParams = new URLSearchParams({ ...baseParams, today: todayParam });
                 const calLeftParams = new URLSearchParams({
                     ...baseParams,
                     month: dateState.leftCalendar.month,
@@ -600,29 +590,35 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
 
                 const fetchOpts = signal ? { signal, cache: 'no-store' } : { cache: 'no-store' };
 
-                /*
-                 * Progressive load: left calendar (~0.5s) unblocks the shell first.
-                 * History (~multi-month) and summary fill in without holding the spinner.
-                 */
                 const leftPromise = fetch(`${API_URL}/calendar?${calLeftParams}`, fetchOpts).then(
                     async (r) => (r.ok ? r.json() : null),
                 );
                 const historyPromise = fetch(`${API_URL}/calendars-history?${historyParams}`, fetchOpts).then(
                     async (r) => (r.ok ? r.json() : null),
                 );
-                const sumPromise = fetch(`${API_URL}/summary?${sumParams}`, fetchOpts).then((r) =>
-                    r.ok ? r.json() : {},
-                );
 
-                const leftRaw = await leftPromise;
-                if (signal?.aborted) return;
-                const leftCal = normalizeDashboardCalendarPayload(leftRaw);
-                setData((prev) => ({
-                    ...prev,
-                    calendarLeft: leftCal.daily,
-                    calendarTotalsLeft: leftCal.totals,
-                }));
-                setLoading(false);
+                const settleCalendar = leftPromise
+                    .then((leftRaw) => {
+                        if (signal?.aborted) return;
+                        const leftCal = normalizeDashboardCalendarPayload(leftRaw);
+                        setData((prev) => ({
+                            ...prev,
+                            calendarLeft: leftCal.daily,
+                            calendarTotalsLeft: leftCal.totals,
+                        }));
+                    })
+                    .catch((err) => {
+                        if (signal?.aborted || err?.name === 'AbortError') return;
+                        console.error('Dashboard calendar fetch error:', err);
+                        setData((prev) => ({
+                            ...prev,
+                            calendarLeft: [],
+                            calendarTotalsLeft: null,
+                        }));
+                    })
+                    .finally(() => {
+                        if (!signal?.aborted) setLoading(false);
+                    });
 
                 const settleHistory = historyPromise
                     .then((historyRaw) => {
@@ -659,22 +655,9 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
                         if (!signal?.aborted) setHistoryLoading(false);
                     });
 
-                const settleSummary = sumPromise
-                    .then((sumParsed) => {
-                        if (signal?.aborted) return;
-                        setData((prev) => ({
-                            ...prev,
-                            summary: sumParsed || {},
-                        }));
-                    })
-                    .catch((sumErr) => {
-                        if (sumErr?.name === 'AbortError') return;
-                        console.error('Dashboard summary fetch error:', sumErr);
-                    });
-
-                await Promise.all([settleHistory, settleSummary]);
+                await Promise.all([settleCalendar, settleHistory]);
             } catch (err) {
-                if (err?.name === 'AbortError') return;
+                if (signal?.aborted || err?.name === 'AbortError') return;
                 console.error('Dashboard calendar fetch error:', err);
                 setData((prev) => ({
                     ...prev,
@@ -682,12 +665,9 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
                     calendarTotalsLeft: null,
                     historyMonths: [],
                     historyYearTotals: null,
-                    summary: {},
                 }));
-                if (!signal?.aborted) {
-                    setLoading(false);
-                    setHistoryLoading(false);
-                }
+                setLoading(false);
+                setHistoryLoading(false);
             }
         },
         [
@@ -696,8 +676,6 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
             filters.salesEngineer,
             dateState.leftCalendar.month,
             dateState.leftCalendar.year,
-            masters.enqItems,
-            masters.users,
             dashboardRefreshCounter,
         ],
     );
@@ -892,13 +870,13 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
     useEffect(() => {
         const ac = new AbortController();
         const timer = setTimeout(() => {
-            fetchCalendarSummary(ac.signal);
+            fetchCalendars(ac.signal);
         }, 50);
         return () => {
             clearTimeout(timer);
             ac.abort();
         };
-    }, [fetchCalendarSummary]);
+    }, [fetchCalendars]);
 
     useEffect(() => {
         if (!resultsModalOpen) {
@@ -1029,20 +1007,7 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
 
             {/* Two equal calendar dashboards; enquiry list opens in a modal (Search Enquiry–style grid) */}
             <div className="flex-grow-1 d-flex flex-column" style={{ minHeight: 0 }}>
-                <div
-                    className={`dashboard-content-shell flex-grow-1 d-flex flex-column${loading ? ' dashboard-content-shell--loading' : ''}`}
-                    aria-busy={loading}
-                >
-                    {loading ? (
-                        <div className="dashboard-content-loading" aria-live="polite" aria-label="Loading dashboard">
-                            <span
-                                className="spinner-border text-primary dashboard-content-loading__spinner"
-                                role="status"
-                                aria-hidden="true"
-                            />
-                            <span className="dashboard-content-loading__text">Updating dashboard…</span>
-                        </div>
-                    ) : null}
+                <div className="dashboard-content-shell flex-grow-1 d-flex flex-column">
                 <div className="dashboard-split-container dashboard-calendars-row">
                     <div className="dashboard-half-panel">
                         <div className="px-3 py-2 dashboard-filter-bar-row dashboard-filter-bar-strip">
@@ -1053,7 +1018,16 @@ const Dashboard = ({ onNavigate, onOpenEnquiry }) => { // Assuming these props p
                                 viewMode="division_se"
                             />
                         </div>
-                        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                        <div
+                            className={`dashboard-calendar-shell d-flex flex-column flex-grow-1${loading ? ' dashboard-calendar-shell--loading' : ''}`}
+                            aria-busy={loading}
+                        >
+                            {loading && (
+                                <div className="dashboard-content-loading" role="status">
+                                    <span className="spinner-border text-primary dashboard-content-loading__spinner" aria-hidden="true" />
+                                    <span className="dashboard-content-loading__text">Updating calendar…</span>
+                                </div>
+                            )}
                             <div className="dashboard-calendar-gutter d-flex flex-column flex-grow-1" style={{ minHeight: 0, overflow: 'hidden' }}>
                                 <div className="dashboard-calendar-combined d-flex flex-column flex-grow-1">
                                     <CalendarBarChart

@@ -449,8 +449,17 @@ const EnquiryTable = ({ data, onRowClick, filters, setFilters, selectedDate, sel
 
                                         <td style={cellStyle} {...hoverEvents('Division')}>
                                             {jobLines.map((ln, li) => {
-                                                const sePart = ln.se ? ` (${ln.se})` : '';
                                                 const isSub = ln.depth > 0;
+                                                const seMembers = Array.isArray(ln.seMembers)
+                                                    ? ln.seMembers
+                                                          .map((m) => ({
+                                                              name: String(m?.name || '').trim(),
+                                                              isAccountable: !!(m?.isAccountable),
+                                                          }))
+                                                          .filter((m) => m.name)
+                                                    : [];
+                                                // Match Enquiry Search: accountable bold. If none flagged (legacy rows), bold all.
+                                                const anyAccountable = seMembers.some((m) => m.isAccountable);
                                                 return (
                                                     <div
                                                         key={`jd-${row.RequestNo}-${li}`}
@@ -468,8 +477,30 @@ const EnquiryTable = ({ data, onRowClick, filters, setFilters, selectedDate, sel
                                                             </span>
                                                         ) : null}
                                                         <span style={{ fontWeight: ln.depth === 0 ? 600 : 400 }}>{ln.label}</span>
-                                                        {ln.se ? (
-                                                            <span style={{ color: '#9f1239', fontWeight: 400, fontSize: '81%' }}>{sePart}</span>
+                                                        {seMembers.length > 0 ? (
+                                                            <span style={{ color: '#9f1239', fontSize: '81%' }}>
+                                                                {' ('}
+                                                                {seMembers.map((m, mi) => (
+                                                                    <span key={`${m.name}-${mi}`}>
+                                                                        {mi > 0 ? ', ' : ''}
+                                                                        <span
+                                                                            style={{
+                                                                                fontWeight:
+                                                                                    m.isAccountable || !anyAccountable
+                                                                                        ? 700
+                                                                                        : 400,
+                                                                            }}
+                                                                        >
+                                                                            {m.name}
+                                                                        </span>
+                                                                    </span>
+                                                                ))}
+                                                                {')'}
+                                                            </span>
+                                                        ) : ln.se ? (
+                                                            <span style={{ color: '#9f1239', fontWeight: 700, fontSize: '81%' }}>
+                                                                {` (${ln.se})`}
+                                                            </span>
                                                         ) : null}
                                                     </div>
                                                 );

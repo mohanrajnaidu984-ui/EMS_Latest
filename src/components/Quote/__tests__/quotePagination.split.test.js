@@ -18,6 +18,25 @@ function buildBoqTableHtml(rowCount) {
 }
 
 describe('table split / rejoin', () => {
+    it('preserves row heights without imposing the full saved table height on each fragment', () => {
+        const html = `<table height="1244" style="height:1244px;min-height:1200px;max-height:1300px;width:646px" data-ems-row-heights="18,32">
+            <tbody><tr style="height:18px"><td>First</td></tr><tr style="height:32px"><td>Second</td></tr></tbody>
+        </table>`;
+        const parts = splitClauseHtmlToSegments(html, { splitTableMinRows: 2 });
+        expect(parts).toHaveLength(2);
+        parts.forEach((part, index) => {
+            const doc = new DOMParser().parseFromString(part, 'text/html');
+            const table = doc.querySelector('table');
+            expect(table.hasAttribute('height')).toBe(false);
+            expect(table.style.height).toBe('');
+            expect(table.style.minHeight).toBe('');
+            expect(table.style.maxHeight).toBe('');
+            expect(table.style.width).toBe('646px');
+            expect(table.rows[0].style.height).toBe(index === 0 ? '18px' : '32px');
+            expect(table.textContent.trim()).toBe(index === 0 ? 'First' : 'Second');
+        });
+    });
+
     it('splits a 100-row BOQ into body-row segments and preserves order', () => {
         const html = buildBoqTableHtml(100);
         const parts = splitClauseHtmlToSegments(html, {

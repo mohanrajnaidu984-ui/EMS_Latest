@@ -1680,6 +1680,14 @@ const tsvPlainToHtmlTable = (plain) => {
     return `<table cellspacing="0" cellpadding="0"><tbody>${body}</tbody></table>`;
 };
 
+const buildPlainClipboardTable = (plain) => {
+    const table = tsvPlainToHtmlTable(plain).replace(
+        '<table ',
+        `<table ${OFFICE_PASTE_TABLE_ATTR}="${OFFICE_PASTE_TABLE_VALUE}" data-ems-excel-paste="1" class="ems-office-paste-table" `
+    );
+    return sanitizePastedHtmlString(table);
+};
+
 /** Excel/Word put both text/html and image/png on the clipboard; Jodit's uploader prefers the PNG. */
 const clipboardHasOfficeTableData = (dataTransfer, jodit = null) => {
     let html = '';
@@ -1819,12 +1827,7 @@ const extractOfficeTableHtmlFromClipboard = (dataTransfer, jodit = null) => {
     }
 
     if (plain.includes('\t')) {
-        const tsvTable = tsvPlainToHtmlTable(plain);
-        const marked = tsvTable.replace(
-            '<table ',
-            `<table ${OFFICE_PASTE_TABLE_ATTR}="${OFFICE_PASTE_TABLE_VALUE}" data-ems-excel-paste="1" class="ems-office-paste-table" `
-        );
-        return sanitizePastedHtmlString(marked);
+        return buildPlainClipboardTable(plain);
     }
     return '';
 };
@@ -2323,26 +2326,30 @@ const ClauseEditor = ({
                       return '';
                   }
               })();
-        if (clipboardHasOfficeTableData(dt, jodit)) {
-            const fromClipboard = extractOfficeTableHtmlFromClipboard(dt, jodit);
-            if (fromClipboard?.trim()) {
-                return maybeConvertPastedTableHtmlToList(fromClipboard, plain);
+        try {
+            if (clipboardHasOfficeTableData(dt, jodit)) {
+                const fromClipboard = extractOfficeTableHtmlFromClipboard(dt, jodit);
+                if (fromClipboard?.trim()) {
+                    return maybeConvertPastedTableHtmlToList(fromClipboard, plain);
+                }
             }
-        }
-        if (typeof text !== 'string') return undefined;
-        if (!/<[a-z][\s>]/i.test(text)) return undefined;
-        const isOfficeHtml =
-            clipboardHasOfficeHtml(text) ||
-            /<table[\s>]/i.test(text) ||
-            /Word\.Document|schemas-microsoft-com:office|mso-/i.test(text);
-        if (isOfficeHtml) {
-            const listOrProse = buildOfficeFormattedHtmlFromClipboard(text, plain);
-            if (listOrProse?.trim() && !/<table[\s>]/i.test(listOrProse)) {
-                return listOrProse;
+            if (typeof text !== 'string' || !/<[a-z][\s>]/i.test(text)) return undefined;
+            const isOfficeHtml =
+                clipboardHasOfficeHtml(text) ||
+                /<table[\s>]/i.test(text) ||
+                /Word\.Document|schemas-microsoft-com:office|mso-/i.test(text);
+            if (isOfficeHtml) {
+                const listOrProse = buildOfficeFormattedHtmlFromClipboard(text, plain);
+                if (listOrProse?.trim() && !/<table[\s>]/i.test(listOrProse)) {
+                    return listOrProse;
+                }
             }
+            const processed = isOfficeHtml ? applyOfficeClipboardHtml(text, { plainText: plain }) : text;
+            return sanitizePastedHtmlString(maybeConvertPastedTableHtmlToList(processed, plain));
+        } catch (err) {
+            console.warn('[EMS] Clipboard formatting failed:', err);
+            return plain ? escapeHtmlText(plain).replace(/\r\n?|\n/g, '<br>') : '';
         }
-        const processed = isOfficeHtml ? applyOfficeClipboardHtml(text, { plainText: plain }) : text;
-        return sanitizePastedHtmlString(maybeConvertPastedTableHtmlToList(processed, plain));
     }, []);
 
     const promptFillImagesFromXlsx = useCallback((jodit) => {
@@ -2475,10 +2482,18 @@ const ClauseEditor = ({
                         return '';
                     }
                 })();
-            let html = maybeConvertPastedTableHtmlToList(
-                extractOfficeTableHtmlFromClipboard(dt, joditEarly),
-                plain
-            );
+            let html;
+            try {
+                html = maybeConvertPastedTableHtmlToList(
+                    extractOfficeTableHtmlFromClipboard(dt, joditEarly),
+                    plain
+                );
+            } catch (err) {
+                console.warn('[EMS] Office clipboard formatting failed:', err);
+            }
+            if (!html?.trim() && plain.includes('\t')) {
+                html = buildPlainClipboardTable(plain);
+            }
             if (!html || !html.trim()) return false;
             const jodit = resolveJoditInstance(editor, joditInstRef);
             if (!isJoditAlive(jodit)) return false;
@@ -2559,9 +2574,12 @@ const ClauseEditor = ({
                 htmlNeedsOfficeImageRepair(html);
 
             if (needsImageRepair) {
-                void repairOfficeHtmlImagesFromClipboard(html, dt).then((repaired) => {
-                    insertHtml(repaired || html);
-                });
+                void repairOfficeHtmlImagesFromClipboard(html, dt)
+                    .catch((err) => {
+                        console.warn('[EMS] Office clipboard image repair failed:', err);
+                        return html;
+                    })
+                    .then((repaired) => insertHtml(repaired || html));
                 return true;
             }
 

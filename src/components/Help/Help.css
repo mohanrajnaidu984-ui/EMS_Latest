@@ -1,0 +1,209 @@
+.ems-help {
+  --manual-ink: #25364e;
+  --manual-blue: #20396d;
+  --manual-muted: #52647e;
+  --manual-line: #dce4ef;
+  --manual-accent: #ed1364;
+  display: grid;
+  grid-template-columns: minmax(170px, 218px) minmax(0, 1fr) max-content;
+  grid-template-areas: "contents sheet actions";
+  align-items: start;
+  gap: clamp(14px, 2vw, 30px);
+  max-width: 1340px;
+  margin: 0 auto;
+  padding: 26px clamp(0px, 1.6vw, 24px) 48px;
+  color: var(--manual-ink);
+}
+
+.ems-help-contents,
+.ems-help-sheet {
+  background: #fff;
+  border: 1px solid var(--manual-line);
+  border-radius: 20px;
+}
+
+.ems-help-contents {
+  grid-area: contents;
+  position: sticky;
+  top: 18px;
+  padding: 18px 10px 10px;
+}
+
+.ems-help-contents h2 {
+  margin: 0 10px 10px;
+  color: var(--manual-blue);
+  font-size: .95rem;
+  font-weight: 400;
+}
+
+.ems-help-contents nav {
+  max-height: calc(100vh - 160px);
+  overflow: auto;
+}
+
+.ems-help-contents ol {
+  margin: 0;
+  padding: 2px;
+  list-style: none;
+}
+
+.ems-help-contents a {
+  display: block;
+  border-radius: 8px;
+  color: var(--manual-muted);
+  padding: 8px 10px;
+  font-size: .875rem;
+  line-height: 1.4;
+  text-decoration: none;
+}
+
+.ems-help-contents a:hover,
+.ems-help-contents a:focus-visible {
+  color: var(--manual-blue);
+  background: #edf3fc;
+}
+
+.ems-help-actions {
+  grid-area: actions;
+  position: sticky;
+  top: 18px;
+  justify-self: end;
+}
+
+.ems-help-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 10px;
+  padding: 11px 15px;
+  color: #fff;
+  background: var(--manual-blue);
+  box-shadow: 0 5px 14px rgb(32 57 109 / 20%);
+  font-size: .875rem;
+  font-weight: 400;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.ems-help-download:hover {
+  color: #fff;
+  background: #294d8c;
+}
+
+.ems-help-sheet {
+  grid-area: sheet;
+  min-width: 0;
+  padding: clamp(18px, 4vw, 48px);
+  box-shadow: 0 14px 36px rgb(32 57 109 / 7%);
+}
+
+.ems-help-brand {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--manual-line);
+}
+
+.ems-help-brand img {
+  width: auto;
+  max-width: min(46%, 210px);
+  height: auto;
+  max-height: 46px;
+  object-fit: contain;
+}
+
+.ems-help-sheet h1 {
+  margin: 28px 0 10px;
+  color: var(--manual-blue);
+  font-size: clamp(1.9rem, 4vw, 3rem);
+  font-weight: 400;
+  letter-spacing: -.04em;
+  line-height: 1.08;
+}
+
+.ems-help-intro {
+  margin: 0 0 30px;
+  color: var(--manual-muted);
+  font-size: 1.025rem;
+  line-height: 1.65;
+}
+
+.ems-help-copy {
+  padding-top: clamp(22px, 3vw, 32px);
+  border-top: 1px solid var(--manual-line);
+  line-height: 1.62;
+  overflow-wrap: anywhere;
+}
+
+.ems-help-copy + .ems-help-copy {
+  margin-top: clamp(26px, 3.5vw, 38px);
+}
+
+.ems-help-copy h2 {
+  margin: 0 0 18px;
+  border-inline-start: 3px solid var(--manual-accent);
+  padding-inline-start: 10px;
+  color: var(--manual-blue);
+  font-size: clamp(1.18rem, 2vw, 1.45rem);
+  font-weight: 400;
+  letter-spacing: -.015em;
+  scroll-margin-top: 28px;
+}
+
+.ems-help-copy .text-secondary {
+  color: var(--manual-ink) !important;
+}
+
+.ems-help-copy p {
+  margin: 0 0 .8rem;
+}
+
+.ems-help-copy p:has(+ :is(ol, ul)) {
+  margin-bottom: .35rem;
+}
+
+.ems-help-copy :is(ol, ul) {
+  margin: 0 0 1rem;
+}
+
+.ems-help-copy li > :is(ol, ul) {
+  margin: .3rem 0 .5rem;
+}
+
+.ems-help-copy li + li {
+  margin-top: .25rem;
+}
+
+@media (max-width: 1000px) {
+  .ems-help {
+    grid-template-columns: minmax(150px, 195px) minmax(0, 1fr);
+    grid-template-areas:
+      ". actions"
+      "contents sheet";
+  }
+
+  .ems-help-actions {
+    position: static;
+  }
+}
+
+@media (max-width: 680px) {
+  .ems-help {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "actions"
+      "contents"
+      "sheet";
+    gap: 14px;
+  }
+
+  .ems-help-contents {
+    position: static;
+  }
+
+  .ems-help-contents nav {
+    max-height: 9rem;
+  }
+}

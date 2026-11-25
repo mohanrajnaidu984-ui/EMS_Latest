@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
 import { format } from 'date-fns';
 import { useAuth } from '../../context/AuthContext';
 import DashboardQuoteSummaryTable, { getQuoteListRowKey } from '../Dashboard/DashboardQuoteSummaryTable';
@@ -470,14 +469,6 @@ export default function QuoteApprovalPage({ openContext = null }) {
               ? correctionLoading
               : pendingLoading;
 
-    const notifyPendingApprovalsChanged = useCallback((detail) => {
-        window.dispatchEvent(
-            new CustomEvent(EMS_PENDING_APPROVALS_CHANGED, {
-                detail: detail && typeof detail === 'object' ? detail : undefined,
-            })
-        );
-    }, []);
-
     const refetchPending = useCallback(async () => {
         if (!userEmail) {
             setPendingRows([]);
@@ -497,8 +488,8 @@ export default function QuoteApprovalPage({ openContext = null }) {
                 `${API_BASE}/api/quotes/list/pending-approvals?${params.toString()}`,
                 { cache: 'no-store', signal: ac.signal }
             );
-            if (seq !== pendingFetchSeqRef.current) return;
             const data = res.ok ? await res.json() : [];
+            if (seq !== pendingFetchSeqRef.current || ac.signal.aborted) return;
             const mapped = (Array.isArray(data) ? data : []).map(mapPendingApprovalToTableRow);
             const dismissed = dismissedPendingKeysRef.current;
             const filtered = dismissed.size
@@ -521,6 +512,14 @@ export default function QuoteApprovalPage({ openContext = null }) {
                 }
             }
             setPendingRows(filtered);
+            if (res.ok && Array.isArray(data)) {
+                setSelectedPreview((current) => {
+                    if (current?.listTab !== LIST_TAB.PENDING) return current;
+                    const id = current.quoteId ? String(current.quoteId)
+                        : current.draftQuoteId ? `d-${current.draftQuoteId}` : '';
+                    return id && !filtered.some((row) => row.ListPendingPvId === id) ? null : current;
+                });
+            }
         } catch (e) {
             if (e?.name === 'AbortError') return;
             console.warn('[QuoteApprovalPage] pending list', e);
@@ -535,13 +534,6 @@ export default function QuoteApprovalPage({ openContext = null }) {
 
     const handleApprovalActionComplete = useCallback(
         (meta = {}) => {
-            if (meta?.action === 'rollback') {
-                dismissedPendingKeysRef.current.clear();
-                void refetchPending();
-                notifyPendingApprovalsChanged();
-                return;
-            }
-
             const qid = meta?.quoteId || selectedPreview?.quoteId || null;
             const did = meta?.draftQuoteId || selectedPreview?.draftQuoteId || null;
             const rn = String(meta?.requestNo || selectedPreview?.requestNo || '').trim();
@@ -568,26 +560,13 @@ export default function QuoteApprovalPage({ openContext = null }) {
                 dismissedPendingTimerRef.current = null;
             }, 20000);
 
-            /* Same paint: drop left-list row and clear right preview together. */
-            flushSync(() => {
-                setPendingRows((prev) =>
-                    prev.filter((r) => !pendingRowMatchesDismissal(r, dismissedPendingKeysRef.current))
-                );
-                setSelectedPreview(null);
-            });
-
-            /* Optimistic path: list dismissed locally; badge delta comes from workflow event. */
-            if (meta?.optimistic) {
-                return;
-            }
-
-            notifyPendingApprovalsChanged();
+            setPendingRows((prev) =>
+                prev.filter((r) => !pendingRowMatchesDismissal(r, dismissedPendingKeysRef.current))
+            );
+            setSelectedPreview((current) => (current === selectedPreview ? null : current));
             void refetchApproved();
-            window.setTimeout(() => {
-                void refetchPending();
-            }, 600);
         },
-        [refetchPending, refetchApproved, selectedPreview, notifyPendingApprovalsChanged]
+        [refetchApproved, selectedPreview]
     );
 
     useEffect(() => {
@@ -756,7 +735,7 @@ export default function QuoteApprovalPage({ openContext = null }) {
                     setSelectedPreview(null);
                     return;
                 }
-                setSelectedPreview(sel);
+                setSelectedPreview({ ...sel, listTab });
             } catch (e) {
                 console.warn('[QuoteApprovalPage] resolve preview', e);
                 setSelectedPreview(null);
@@ -764,7 +743,7 @@ export default function QuoteApprovalPage({ openContext = null }) {
                 setResolvingPreview(false);
             }
         },
-        [userEmail]
+        [userEmail, listTab]
     );
 
     useEffect(() => {
